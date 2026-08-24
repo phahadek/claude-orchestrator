@@ -6,6 +6,9 @@ import {
   upsertArm,
   getLaneHealthRollup,
   listFlowHealthRegressionSnapshotHistory,
+  getGateVerifyAutoCommitPolicy,
+  listGateVerifyAutoCommitPolicy,
+  upsertGateVerifyAutoCommitPolicy,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { FLOW_IDS, isFlowId } from '../orchestration/flowArm';
@@ -17,6 +20,11 @@ import {
   fileFlakyInvestigationTask,
   FlakyInvestigationFilingError,
 } from '../audit/flakyRemediationFiling';
+import {
+  GATE_VERIFY_AUTO_COMMIT_DISPOSITION_CLASSES,
+  isGateVerifyAutoCommitDispositionClass,
+  sweepGateVerifyAutoCommitBacklogForMilestone,
+} from './stagedIntents';
 
 /** FlakyInvestigationFilingError.reason -> HTTP status. */
 const FLAKY_INVESTIGATION_ERROR_STATUS: Record<
@@ -99,6 +107,82 @@ export function createMilestonesRouter(): Router {
 
       res.json({ milestoneId, flow, armed: getArm(milestoneId, flow) });
     },
+  );
+
+  // GET /api/milestones/:milestoneId/auto-commit-policy -> effective
+  // per-disposition-class gate.verify auto-commit policy state.
+  router.get(
+    '/milestones/:milestoneId/auto-commit-policy',
+    (req: Request, res: Response) => {
+      const milestoneId = String(req.params.milestoneId);
+      const rows = listGateVerifyAutoCommitPolicy(milestoneId);
+      const armedByClass = new Map(
+        rows.map((r) => [r.disposition_class, r.armed === 1]),
+      );
+      const result: Record<string, { armed: boolean }> = {};
+      for (const cls of GATE_VERIFY_AUTO_COMMIT_DISPOSITION_CLASSES) {
+        result[cls] = { armed: armedByClass.get(cls) ?? false };
+      }
+      res.json(result);
+    },
+  );
+
+  // PUT /api/milestones/:milestoneId/auto-commit-policy/:class { armed }
+  // Arms/disarms auto-commit for a gate.verify disposition class. Arming
+  // (armed: true) immediately sweeps and commits every already-staged/
+  // approved gate.verify verdict matching the class for this milestone —
+  // a policy grant must relieve the existing backlog, not just intents
+  // staged afterward (see sweepGateVerifyAutoCommitBacklogForMilestone).
+  router.put(
+    '/milestones/:milestoneId/auto-commit-policy/:class',
+    asyncHandler(async (req: Request, res: Response) => {
+      const milestoneId = String(req.params.milestoneId);
+      const dispositionClass = String(req.params.class);
+      if (!isGateVerifyAutoCommitDispositionClass(dispositionClass)) {
+        res.status(400).json({
+          error: `class must be one of: ${GATE_VERIFY_AUTO_COMMIT_DISPOSITION_CLASSES.join(', ')}`,
+        });
+        return;
+      }
+      const body = req.body as { armed?: unknown };
+      if (typeof body.armed !== 'boolean') {
+        res.status(400).json({ error: 'armed must be a boolean' });
+        return;
+      }
+
+      const { previous } = upsertGateVerifyAutoCommitPolicy(
+        milestoneId,
+        dispositionClass,
+        body.armed,
+        Date.now(),
+      );
+      recordEvent({
+        event_type: 'gate_verify_auto_commit_policy_changed',
+        actor_type: 'human',
+        payload: {
+          milestone: milestoneId,
+          dispositionClass,
+          armed: body.armed,
+          previous,
+        },
+      });
+
+      let sweptCommittedIds: string[] = [];
+      if (body.armed) {
+        const swept = await sweepGateVerifyAutoCommitBacklogForMilestone(
+          milestoneId,
+          dispositionClass,
+        );
+        sweptCommittedIds = swept.committedIds;
+      }
+
+      res.json({
+        milestoneId,
+        dispositionClass,
+        armed: getGateVerifyAutoCommitPolicy(milestoneId, dispositionClass),
+        sweptCommittedIds,
+      });
+    }),
   );
 
   // GET /api/milestones/:project/lane-health -> project-scoped test-lane

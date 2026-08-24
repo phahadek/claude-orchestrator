@@ -1914,6 +1914,25 @@ export function runMigrations(target: Database.Database): void {
     );
   `);
 
+  // gate_verify_auto_commit_policy: sibling to flow_arm — per
+  // (milestone, disposition class) operator opt-in to commit a staged
+  // gate.verify verdict immediately, without waiting on manual disposition.
+  // Absent row means "not armed" (no DEFAULT_ARM-style default table needed;
+  // the read path treats an absent row as false). disposition_class is one
+  // of GateVerifyDisposition's four verifier-report values (pass/fail/
+  // needs-setup/not-yet-triggerable) — never 'deferred', which only a
+  // mirror's operator-supplied disposition can produce, and mirrors never
+  // auto-commit (see gateReconciler's mirror-suppression widening).
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS gate_verify_auto_commit_policy (
+      milestone_id      TEXT    NOT NULL,
+      disposition_class TEXT    NOT NULL,
+      armed             INTEGER NOT NULL,
+      updated_at        INTEGER NOT NULL,
+      PRIMARY KEY (milestone_id, disposition_class)
+    );
+  `);
+
   // milestones.wrapped_at: nullable Done marker, set once /milestone-wrap
   // closes out a milestone. Convergence and the milestone list read filter
   // wrapped_at IS NULL to scope to active + in-planning milestones — the

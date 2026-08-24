@@ -9,9 +9,9 @@ import { getProjectDeployedSha } from '../deploy/deployService';
 import {
   countLivePlanningSessions,
   countLiveVerifySessions,
-  findActiveGateVerifyMirrorForItem,
   getArm,
   getGateItemsWithPendingCapabilityRequest,
+  hasLiveGateVerifyIntentForItem,
   hasLiveVerifySessionForGateItem,
   listActiveGateVerifyMirrors,
   type GateVerifyMirrorOrigin,
@@ -898,9 +898,12 @@ function retireReasonFor(origin: GateItemMirrorOrigin, item: GateItem): string {
  * Level-triggered, not edge-triggered: re-evaluated every reconcile tick
  * (not just on the open->runnable or pass->pending-approval transition) so
  * an item accreted directly into either state is still caught. Idempotent
- * via findActiveGateVerifyMirrorForItem's per-origin dedup lookup — a
- * gate_item with an already-live mirror of that origin is never re-staged.
- * The companion retire pass rescans every live mirror of both origins each
+ * via hasLiveGateVerifyIntentForItem — a gate_item with ANY already-live
+ * gate.verify intent (a verdict or a mirror of either origin) is never
+ * re-staged, not just one with a same-origin mirror already live; a fresh
+ * verdict superseding a live mirror still works in the other direction via
+ * the shared `gate-item:<id>` staging dedup key (extractTaskId), unaffected
+ * by this widening. The companion retire pass rescans every live mirror of both origins each
  * tick (rather than hooking the direct GateReadinessPanel/consent routes
  * individually) so a mirror is retired however the underlying item left the
  * matching state — resolved via the direct panel path, approved/rejected
@@ -933,7 +936,7 @@ export function reconcileHumanObservationMirrors(): GateItemMirrorReconcileResul
   ];
   for (const [origin, matches] of candidatesByOrigin) {
     for (const shallowItem of allItems.filter(matches)) {
-      if (findActiveGateVerifyMirrorForItem(shallowItem.id, origin)) continue;
+      if (hasLiveGateVerifyIntentForItem(shallowItem.id)) continue;
       const item = gateStore.getItem(shallowItem.id);
       if (!item) continue;
       sink.stageMirror(item, origin);
