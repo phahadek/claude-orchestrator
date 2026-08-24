@@ -12571,7 +12571,8 @@ export function insertMigrationReservation(
 export function insertMigrationReservationEvent(
   row: NewMigrationReservationEventRow,
 ): void {
-  _stmtInsertMigrationReservationEvent ??= db.prepare<NewMigrationReservationEventRow>(`
+  _stmtInsertMigrationReservationEvent ??=
+    db.prepare<NewMigrationReservationEventRow>(`
     INSERT INTO migration_reservation_event
       (migration_reservation_id, event_type, payload, at)
     VALUES

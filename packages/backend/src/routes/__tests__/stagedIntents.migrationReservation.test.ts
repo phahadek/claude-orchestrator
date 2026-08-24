@@ -57,8 +57,7 @@ function codeGroomingGate(migrationRaw: string) {
 
 function migrationBody(migrationRaw: string) {
   return (
-    '## Summary\nClean.\n\n' +
-    `## Files / paths affected\n- ${migrationRaw}\n`
+    '## Summary\nClean.\n\n' + `## Files / paths affected\n- ${migrationRaw}\n`
   );
 }
 
