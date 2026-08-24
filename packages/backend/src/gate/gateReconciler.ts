@@ -14,6 +14,7 @@ import {
   getGateItemsWithPendingCapabilityRequest,
   hasLiveVerifySessionForGateItem,
   listActiveGateVerifyMirrors,
+  type GateVerifyMirrorOrigin,
 } from '../db/queries';
 import * as gateStore from './gateStore';
 import type { GateItem } from './gateStore';
@@ -793,8 +794,15 @@ export async function reattachOutstandingGateVerifications(): Promise<void> {
  * routeVerificationResult/defaultFollowupFiler from this module, so a static
  * import in the other direction would be a cycle.
  */
-/** The two gate-item states this reconciler surfaces into the Decision Inbox — see reconcileHumanObservationMirrors. */
-type GateItemMirrorOrigin = 'mirror' | 'consent';
+/**
+ * The gate-item states/conditions this reconciler surfaces into the
+ * Decision Inbox — see reconcileHumanObservationMirrors. `'unresolved-source'`
+ * is staged elsewhere (gateMergeConsumer.ts's catchUpMergeCommits, once a
+ * source's merge-commit lookup has failed past its escalation ceiling) but
+ * retired here, alongside `'mirror'`/`'consent'`, by the same level-triggered
+ * scan — see isUnresolvedSourceStillLive below.
+ */
+type GateItemMirrorOrigin = GateVerifyMirrorOrigin;
 
 export interface GateItemMirrorSink {
   /**
@@ -837,8 +845,33 @@ function isConsentCandidate(item: GateItem): boolean {
   );
 }
 
+/** Terminal gate_item states — no longer blocks anything, including an unresolved-source escalation. */
+const TERMINAL_GATE_ITEM_STATES = new Set(['pass', 'deferred', 'discarded']);
+
+/**
+ * True while an escalated item's source still lacks a merge_commit —
+ * the `'unresolved-source'` mirror's "still live" condition. Unlike
+ * `isMirrorCandidate`/`isConsentCandidate`, this isn't also this origin's
+ * staging trigger: staging happens in gateMergeConsumer.ts's
+ * catchUpMergeCommits, keyed off its own in-memory attempt count, not off a
+ * DB-queryable item shape. This predicate only decides retirement — once
+ * every source has a merge_commit (a later catchUpMergeCommits pass filled
+ * it) or the item resolved another way, the mirror is stale.
+ */
+function isUnresolvedSourceStillLive(item: GateItem): boolean {
+  return (
+    !TERMINAL_GATE_ITEM_STATES.has(item.state) &&
+    item.sources.some((s) => !s.mergeCommit)
+  );
+}
+
 /** The withdrawal reason for a mirror whose backing item left the classification/state that earned it a mirror of the given origin. */
 function retireReasonFor(origin: GateItemMirrorOrigin, item: GateItem): string {
+  if (origin === 'unresolved-source') {
+    return item.sources.every((s) => s.mergeCommit)
+      ? 'source merge commit resolved'
+      : `gate_item resolved to ${item.state}`;
+  }
   const expectedClassification: GateItemClassification =
     origin === 'mirror' ? 'Human-Observation' : 'Prod-Mutating';
   if (item.classification !== expectedClassification) {
@@ -912,6 +945,7 @@ export function reconcileHumanObservationMirrors(): GateItemMirrorReconcileResul
   > = {
     mirror: isMirrorCandidate,
     consent: isConsentCandidate,
+    'unresolved-source': isUnresolvedSourceStillLive,
   };
   for (const [origin, stillLive] of Object.entries(stillLiveByOrigin) as [
     GateItemMirrorOrigin,
