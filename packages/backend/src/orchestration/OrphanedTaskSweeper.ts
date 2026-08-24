@@ -15,11 +15,12 @@ import {
   hasNonTerminalPlanningSessionForTask,
   isSessionAwaitingCapabilityDisposition,
   isNoOpSuppressed,
-  getPRBySessionId,
+  getPRByNotionTaskId,
   getLocalBranchBySession,
   setSessionPauseReason,
   getSessionLastActivityMs,
   upsertPullRequest,
+  getTaskRepoAssignment,
 } from '../db/queries';
 import { sessionDidWork } from '../session/sessionLifecycle';
 import { isUsageAdmitted } from './usageAdmission';
@@ -244,47 +245,60 @@ export class OrphanedTaskSweeper {
 
     // Resolve the authoritative project ID: prefer the session's own project_id
     // so that tasks from project "polimarket" aren't attributed to "claude-dashboard"
-    // just because that project's loop encountered the task first.
-    const effectiveProjectId = latestSession?.project_id ?? projectId;
+    // just because that project's loop encountered the task first. Once the
+    // session row is gone (deleted anchor), fall back to the task's own
+    // durable repo assignment before the sweep loop's current project.
+    const effectiveProjectId =
+      latestSession?.project_id ??
+      getTaskRepoAssignment(taskId)?.project_id ??
+      projectId;
 
-    if (latestSession !== undefined) {
-      const pr = getPRBySessionId(latestSession.session_id);
-      // If the task has an open PR, the session did its job — skip revert.
-      // (Merged/closed PRs fall through to the Done path below.)
-      // Exception: an idle session with a parked/stalled open PR should still be
-      // nudged — the StalledPRReconciler re-drives the review, but the idle
-      // session may need a prompt to act on the incoming feedback.
-      if (pr && pr.state !== 'merged' && pr.state !== 'closed') {
-        // The docs execution flow's never-auto-merged gate: an open
-        // human_merge_only PR is legitimately waiting for a human merge —
-        // it runs no review session, so there is no incoming feedback to
-        // nudge the idle session about. Skip the stalled-PR nudge entirely.
-        if (
-          !pr.human_merge_only &&
-          latestSession.status === 'idle' &&
-          !latestSession.archived
-        ) {
-          await this.maybeNudgeIdleSession(
-            latestSession,
-            taskId,
-            effectiveProjectId,
-            openPrNudgeMessage(pr),
-          );
-        }
-        return;
+    // Resolve the task's PR by the task's own id — not solely via
+    // latestSession.session_id — so an open PR still protects the task once
+    // its implementing session row has been deleted (see the session-anchor-
+    // durability fix; pull_requests.task_id survives a session-row deletion
+    // that pull_requests.session_id alone can no longer be joined through).
+    const taskPR = getPRByNotionTaskId(taskId);
+
+    // If the task has an open PR, the session did its job — skip revert.
+    // (Merged/closed PRs fall through to the Done path below.)
+    // Exception: an idle session with a parked/stalled open PR should still be
+    // nudged — the StalledPRReconciler re-drives the review, but the idle
+    // session may need a prompt to act on the incoming feedback.
+    if (taskPR && taskPR.state !== 'merged' && taskPR.state !== 'closed') {
+      // The docs execution flow's never-auto-merged gate: an open
+      // human_merge_only PR is legitimately waiting for a human merge —
+      // it runs no review session, so there is no incoming feedback to
+      // nudge the idle session about. Skip the stalled-PR nudge entirely.
+      // A nudge also requires a live session to nudge — none of that
+      // applies once the session row is gone; the open PR alone is enough
+      // to protect the task from revert.
+      if (
+        latestSession !== undefined &&
+        !taskPR.human_merge_only &&
+        latestSession.status === 'idle' &&
+        !latestSession.archived
+      ) {
+        await this.maybeNudgeIdleSession(
+          latestSession,
+          taskId,
+          effectiveProjectId,
+          openPrNudgeMessage(taskPR),
+        );
       }
+      return;
     }
 
     // If the task's PR is already merged or closed, mark Done rather than
     // reverting to Ready — re-dispatching a merged task would re-assign finished work.
+    // taskPR reaching here is either null or already merged/closed (the open
+    // case returned above), so no fresh getPRBySessionId lookup is needed.
     const prMergedOrClosed =
-      latestSession !== undefined &&
-      (() => {
-        const pr = getPRBySessionId(latestSession.session_id);
-        if (pr && (pr.state === 'merged' || pr.state === 'closed')) return true;
-        const lb = getLocalBranchBySession(latestSession.session_id);
-        return lb?.status === 'merged';
-      })();
+      (taskPR !== null &&
+        (taskPR.state === 'merged' || taskPR.state === 'closed')) ||
+      (latestSession !== undefined &&
+        getLocalBranchBySession(latestSession.session_id)?.status ===
+          'merged');
 
     if (prMergedOrClosed) {
       await this.revertTask(

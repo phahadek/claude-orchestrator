@@ -391,3 +391,20 @@ describe('relaunchFixerForPR() no session_id on the PR', () => {
     expect(queries.getSession).not.toHaveBeenCalled();
   });
 });
+
+describe('relaunchFixerForPR() session id present but no sessions row (deleted anchor)', () => {
+  it('returns a distinguishable typed outcome, not the plain null idle-with-no-worktree returns', async () => {
+    vi.mocked(queries.getSession).mockReturnValue(undefined);
+
+    const sm = new SessionManager();
+    const result = await sm.relaunchFixerForPR(PR, 'gate failure feedback');
+
+    expect(result).not.toBeNull();
+    expect(result).toEqual({ outcome: 'session_row_missing' });
+    expect(queries.setSessionPauseReason).not.toHaveBeenCalled();
+    expect(queries.updateSessionStatus).not.toHaveBeenCalledWith(
+      SESSION_ID,
+      'running',
+    );
+  });
+});

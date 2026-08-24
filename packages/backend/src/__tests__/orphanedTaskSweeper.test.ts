@@ -32,7 +32,8 @@ vi.mock('../db/queries.js', () => ({
   hasActiveSessionForTask: vi.fn(),
   hasNonTerminalPlanningSessionForTask: vi.fn(() => false),
   isSessionAwaitingCapabilityDisposition: vi.fn(() => false),
-  getPRBySessionId: vi.fn(() => null),
+  getPRByNotionTaskId: vi.fn(() => null),
+  getTaskRepoAssignment: vi.fn(() => undefined),
   getLocalBranchBySession: vi.fn(() => undefined),
   setSessionPauseReason: vi.fn(),
   getSessionLastActivityMs: vi.fn(() => null),
@@ -70,7 +71,7 @@ import {
   hasActiveSessionForTask,
   hasNonTerminalPlanningSessionForTask,
   isSessionAwaitingCapabilityDisposition,
-  getPRBySessionId,
+  getPRByNotionTaskId,
   getLocalBranchBySession,
   setSessionPauseReason,
   getSessionLastActivityMs,
@@ -79,6 +80,7 @@ import {
   getSession,
   listStagedIntentsBySession,
   isNoOpSuppressed,
+  getTaskRepoAssignment,
 } from '../db/queries.js';
 import {
   recordEvent,
@@ -177,7 +179,7 @@ describe('OrphanedTaskSweeper', () => {
     vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
     vi.mocked(hasNonTerminalPlanningSessionForTask).mockReturnValue(false);
     vi.mocked(isSessionAwaitingCapabilityDisposition).mockReturnValue(false);
-    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(getPRByNotionTaskId).mockReturnValue(null);
     vi.mocked(getLocalBranchBySession).mockReturnValue(undefined);
     vi.mocked(setSessionPauseReason).mockClear();
     vi.mocked(recordEvent).mockClear();
@@ -197,6 +199,7 @@ describe('OrphanedTaskSweeper', () => {
     vi.mocked(listStagedIntentsBySession).mockReset().mockReturnValue([]);
     vi.mocked(isUsageAdmitted).mockReset().mockReturnValue({ allowed: true });
     vi.mocked(isNoOpSuppressed).mockReset().mockReturnValue(false);
+    vi.mocked(getTaskRepoAssignment).mockReset().mockReturnValue(undefined);
     broadcast.mockClear();
   });
 
@@ -394,13 +397,13 @@ describe('OrphanedTaskSweeper', () => {
         typeof getLatestCodeSessionByNotionTaskId
       >,
     );
-    vi.mocked(getPRBySessionId).mockReturnValue({
+    vi.mocked(getPRByNotionTaskId).mockReturnValue({
       id: 1,
       pr_number: 504,
       pr_url: 'https://github.com/o/r/pull/504',
       session_id: 'sess-1',
       state: 'merged',
-    } as ReturnType<typeof getPRBySessionId>);
+    } as ReturnType<typeof getPRByNotionTaskId>);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
       listProjects: () => [
@@ -425,13 +428,13 @@ describe('OrphanedTaskSweeper', () => {
         typeof getLatestCodeSessionByNotionTaskId
       >,
     );
-    vi.mocked(getPRBySessionId).mockReturnValue({
+    vi.mocked(getPRByNotionTaskId).mockReturnValue({
       id: 2,
       pr_number: 505,
       pr_url: 'https://github.com/o/r/pull/505',
       session_id: 'sess-1',
       state: 'closed',
-    } as ReturnType<typeof getPRBySessionId>);
+    } as ReturnType<typeof getPRByNotionTaskId>);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
       listProjects: () => [
@@ -453,7 +456,7 @@ describe('OrphanedTaskSweeper', () => {
       >,
     );
     // No GitHub PR, but local branch is merged
-    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(getPRByNotionTaskId).mockReturnValue(null);
     vi.mocked(getLocalBranchBySession).mockReturnValue({
       id: 1,
       session_id: 'sess-1',
@@ -485,13 +488,13 @@ describe('OrphanedTaskSweeper', () => {
         typeof getLatestCodeSessionByNotionTaskId
       >,
     );
-    vi.mocked(getPRBySessionId).mockReturnValue({
+    vi.mocked(getPRByNotionTaskId).mockReturnValue({
       id: 3,
       pr_number: 506,
       pr_url: 'https://github.com/o/r/pull/506',
       session_id: 'sess-1',
       state: 'open',
-    } as ReturnType<typeof getPRBySessionId>);
+    } as ReturnType<typeof getPRByNotionTaskId>);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
       listProjects: () => [
@@ -561,7 +564,7 @@ describe('OrphanedTaskSweeper', () => {
       >,
     );
     vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
-    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(getPRByNotionTaskId).mockReturnValue(null);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
       listProjects: () => [
@@ -1129,6 +1132,76 @@ describe('OrphanedTaskSweeper', () => {
     );
   });
 
+  // Session-anchor-durability: an open PR references the task even after its
+  // implementing session row has been deleted entirely (not merely absent
+  // from the "latest" lookup — getLatestCodeSessionByNotionTaskId returns
+  // undefined because there is truly no row left in `sessions`). Resolving
+  // the PR by the task's own id (not solely via latestSession.session_id)
+  // must still protect the task from revert.
+  it('does not revert a task with an open PR when its session row has been deleted', async () => {
+    const backend = makeBackend([
+      makeTask('notion:abc', '🔄 In Progress', '💻 Code'),
+    ]);
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(undefined);
+    vi.mocked(getPRByNotionTaskId).mockReturnValue({
+      id: 4,
+      pr_number: 1031,
+      pr_url: 'https://github.com/o/r/pull/1031',
+      task_id: 'notion:abc',
+      session_id: 'deleted-session-1',
+      state: 'open',
+    } as ReturnType<typeof getPRByNotionTaskId>);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_reverted' }),
+    );
+  });
+
+  // Companion to the "records the correct projectId from session.project_id"
+  // test above, for the case that project_id source (latestSession) no
+  // longer exists: the task's own durable repo assignment must be preferred
+  // over the sweep loop's current project, not just latestSession.project_id.
+  it('records the project from task_repo_assignments, not the loop project, when no session row is available', async () => {
+    const backend = makeBackend([
+      makeTask('notion:abc', '🔄 In Progress', '💻 Code'),
+    ]);
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(undefined);
+    vi.mocked(getTaskRepoAssignment).mockReturnValue({
+      task_id: 'notion:abc',
+      project_id: 'polimarket',
+      repo: 'o/r',
+      assigned_by: 'auto_launcher',
+      assigned_at: Date.now(),
+    });
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'claude-dashboard' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'task_orphan_reverted',
+        project_id: 'polimarket',
+      }),
+    );
+  });
+
   it('skips a task whose only session is a parked (idle) planning session', async () => {
     // getLatestCodeSessionByNotionTaskId/hasActiveSessionForTask only ever see
     // 'standard' sessions, so they report nothing for a task whose only
@@ -1478,7 +1551,7 @@ describe('OrphanedTaskSweeper', () => {
       >,
     );
     vi.mocked(hasNonTerminalPlanningSessionForTask).mockReturnValue(false);
-    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(getPRByNotionTaskId).mockReturnValue(null);
     vi.mocked(getLocalBranchBySession).mockReturnValue(undefined);
     vi.mocked(getSession).mockReturnValue({
       session_id: 'sess-1',
@@ -1515,7 +1588,7 @@ describe('OrphanedTaskSweeper', () => {
       >,
     );
     vi.mocked(hasNonTerminalPlanningSessionForTask).mockReturnValue(false);
-    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(getPRByNotionTaskId).mockReturnValue(null);
     vi.mocked(getLocalBranchBySession).mockReturnValue(undefined);
     vi.mocked(getSession).mockReturnValue({
       session_id: 'sess-1',
@@ -1551,14 +1624,14 @@ describe('OrphanedTaskSweeper', () => {
       >,
     );
     vi.mocked(hasNonTerminalPlanningSessionForTask).mockReturnValue(false);
-    vi.mocked(getPRBySessionId).mockReturnValue({
+    vi.mocked(getPRByNotionTaskId).mockReturnValue({
       id: 9,
       pr_number: 512,
       pr_url: 'https://github.com/o/r/pull/512',
       session_id: 'sess-1',
       state: 'open',
       human_merge_only: 1,
-    } as ReturnType<typeof getPRBySessionId>);
+    } as ReturnType<typeof getPRByNotionTaskId>);
     const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
@@ -1612,7 +1685,7 @@ describe('OrphanedTaskSweeper', () => {
       >,
     );
     vi.mocked(hasNonTerminalPlanningSessionForTask).mockReturnValue(false);
-    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(getPRByNotionTaskId).mockReturnValue(null);
     vi.mocked(getLocalBranchBySession).mockReturnValue(undefined);
     vi.mocked(getSession).mockReturnValue({
       session_id: 'sess-1',
@@ -1681,7 +1754,7 @@ describe('OrphanedTaskSweeper', () => {
         typeof getLatestCodeSessionByNotionTaskId
       >,
     );
-    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(getPRByNotionTaskId).mockReturnValue(null);
     vi.mocked(getLocalBranchBySession).mockReturnValue({
       id: 1,
       session_id: 'sess-1',
@@ -1751,7 +1824,7 @@ describe('OrphanedTaskSweeper', () => {
         typeof getLatestCodeSessionByNotionTaskId
       >,
     );
-    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(getPRByNotionTaskId).mockReturnValue(null);
     vi.mocked(getLocalBranchBySession).mockReturnValue({
       id: 1,
       session_id: 'sess-1',
@@ -1816,7 +1889,7 @@ describe('OrphanedTaskSweeper', () => {
         typeof getLatestCodeSessionByNotionTaskId
       >,
     );
-    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(getPRByNotionTaskId).mockReturnValue(null);
     vi.mocked(getLocalBranchBySession).mockReturnValue({
       id: 1,
       session_id: 'sess-1',
@@ -1864,13 +1937,13 @@ describe('OrphanedTaskSweeper', () => {
         typeof getLatestCodeSessionByNotionTaskId
       >,
     );
-    vi.mocked(getPRBySessionId).mockReturnValue({
+    vi.mocked(getPRByNotionTaskId).mockReturnValue({
       id: 7,
       pr_number: 510,
       pr_url: 'https://github.com/o/r/pull/510',
       session_id: 'sess-1',
       state: 'open',
-    } as ReturnType<typeof getPRBySessionId>);
+    } as ReturnType<typeof getPRByNotionTaskId>);
     const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
@@ -1904,14 +1977,14 @@ describe('OrphanedTaskSweeper', () => {
         typeof getLatestCodeSessionByNotionTaskId
       >,
     );
-    vi.mocked(getPRBySessionId).mockReturnValue({
+    vi.mocked(getPRByNotionTaskId).mockReturnValue({
       id: 8,
       pr_number: 511,
       pr_url: 'https://github.com/o/r/pull/511',
       session_id: 'sess-1',
       state: 'open',
       human_merge_only: 1,
-    } as ReturnType<typeof getPRBySessionId>);
+    } as ReturnType<typeof getPRByNotionTaskId>);
     const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
