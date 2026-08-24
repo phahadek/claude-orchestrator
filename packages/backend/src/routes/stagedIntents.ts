@@ -6248,6 +6248,61 @@ const BLOCKED_STATES: StagedIntentState[] = [
   'pending_verification',
 ];
 
+/**
+ * Auto-pushes a staged-intent group's live members back to their originating
+ * session, through the same transition + feedback-inbox mechanism the
+ * operator-initiated group pushback (`/group/:groupId/reject`) uses — reused
+ * by the Tier-3 'flagged' semantic-advisory auto-route-back
+ * (deferralClassifier.ts) rather than a second side-channel. Only ever
+ * meaningful pre-commit, while the group's members are still live
+ * (staged/approved): a `committed` row has no legal outgoing transition
+ * (STAGED_INTENT_TRANSITIONS' `committed: []`), so a post-commit caller must
+ * never reach this — that gate lives in the caller (classifyReadyProposal),
+ * not here.
+ */
+export async function pushBackGroupToOriginatingSession(
+  groupId: string,
+  reason: string,
+  planningOrchestrator: PlanningOrchestrator | undefined,
+  sessionManager: SessionManager | undefined,
+): Promise<void> {
+  const live = listStagedIntentsByGroup(groupId).filter((r) =>
+    ACTIVE_STATES.includes(r.state),
+  );
+  if (live.length === 0) return;
+
+  const cache = createRowToApiCache();
+  const forGroupDisposition: StagedIntentRow[] = [];
+  for (const row of live) {
+    const { intent: rejectedIntent, row: rejectedRow } = transitionRejectedIntent(
+      row,
+      'pushback',
+      reason,
+      'auto',
+      cache,
+    );
+    if (rejectedIntent.kind === 'session.requestCapability') {
+      await resumeCapabilityRequester(
+        sessionManager,
+        rejectedIntent,
+        'pushback',
+        reason,
+        'auto',
+      );
+    } else {
+      forGroupDisposition.push(rejectedRow);
+    }
+  }
+  if (forGroupDisposition.length > 0) {
+    await planningOrchestrator?.handleGroupDisposition({
+      intents: forGroupDisposition,
+      disposition: 'pushback',
+      reason,
+      groupId,
+    });
+  }
+}
+
 /** Active + blocked — the decision-inbox visibility surface: a blocked member must stay visible so the operator can decline it, not vanish the instant it falls out of ACTIVE_STATES. */
 const VISIBLE_STATES: StagedIntentState[] = [
   ...ACTIVE_STATES,
@@ -6992,6 +7047,8 @@ export async function routeStageTimeBlock(
 async function verifyGroup(
   groupId: string,
   sessionId: string | null,
+  planningOrchestrator?: PlanningOrchestrator,
+  sessionManager?: SessionManager,
 ): Promise<GroupVerificationOutcome> {
   const members = listStagedIntentsByGroup(groupId).filter(
     (row) => row.state === 'staged',
@@ -7041,8 +7098,14 @@ async function verifyGroup(
     // Advisory-only: never awaited into the gate. classifyReadyProposal
     // fails open internally, but the `.catch` guards against an unhandled
     // rejection (e.g. a body-fetch error) crashing the process — either way
-    // this can never block or delay group surfacing.
-    void classifyReadyProposal(groupId).catch(() => {});
+    // this can never block or delay group surfacing. preCommit: true — group
+    // members are still live (staged) here, so a 'flagged' verdict's
+    // auto-route-back can legally transition them.
+    void classifyReadyProposal(groupId, {
+      preCommit: true,
+      planningOrchestrator,
+      sessionManager,
+    }).catch(() => {});
     return { groupId, sessionId, passed: true, escalated: false, errors };
   }
 
@@ -7082,6 +7145,8 @@ async function verifyGroup(
  */
 export async function verifyDispatchedGroupsForSession(
   sessionId: string,
+  planningOrchestrator?: PlanningOrchestrator,
+  sessionManager?: SessionManager,
 ): Promise<GroupVerificationOutcome[]> {
   const groupIds = [
     ...new Set(
@@ -7094,7 +7159,9 @@ export async function verifyDispatchedGroupsForSession(
 
   const outcomes: GroupVerificationOutcome[] = [];
   for (const groupId of groupIds) {
-    outcomes.push(await verifyGroup(groupId, sessionId));
+    outcomes.push(
+      await verifyGroup(groupId, sessionId, planningOrchestrator, sessionManager),
+    );
   }
   return outcomes;
 }
@@ -7915,7 +7982,14 @@ export async function commitGroupIntents(
   // verifyGroup's idle-park-only invocation. classifyReadyProposal is
   // idempotent per intent id, so a group that also passed through
   // verifyGroup earlier in the same turn still classifies each intent once.
-  void classifyReadyProposal(groupId).catch(() => {});
+  // preCommit: false — members are already `committed` here (no legal
+  // outgoing transition), so a 'flagged' verdict still counts against the
+  // route-back cap but must never attempt the pushback transition.
+  void classifyReadyProposal(groupId, {
+    preCommit: false,
+    planningOrchestrator,
+    sessionManager,
+  }).catch(() => {});
 
   recordEvent({
     event_type: 'staged_intent_group_committed',

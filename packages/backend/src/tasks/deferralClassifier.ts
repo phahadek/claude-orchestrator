@@ -25,6 +25,7 @@ import {
   DEFERRAL_PHRASES,
 } from './readinessGate';
 import {
+  incrementRouteBackCount,
   listStagedIntentsByGroup,
   setStagedIntentAdvisory,
 } from '../db/queries';
@@ -35,6 +36,9 @@ import { placeSessionPid } from '../session/sessionCgroup';
 import { logger } from '../logger';
 import { getCachedType } from './TaskWriteCommands';
 import { recordObservedUsageLimit } from '../orchestration/usageAdmission';
+import { pushBackGroupToOriginatingSession } from '../routes/stagedIntents';
+import type { PlanningOrchestrator } from '../orchestration/PlanningOrchestrator';
+import type { SessionManager } from '../session/SessionManager';
 
 interface AdvisoryFinding {
   detail: string;
@@ -495,6 +499,22 @@ async function computeGroupProposedBody(
   return composeProposedBody(stored, payload.sections);
 }
 
+export interface ClassifyReadyProposalOptions {
+  /**
+   * True only at the pre-commit call site (verifyGroup, where group members
+   * are still staged/approved and a pushback transition is legal). False (or
+   * omitted) at the post-commit call site (commitGroupIntents' fire-and-
+   * forget call, where members are already `committed` and have no legal
+   * outgoing transition — STAGED_INTENT_TRANSITIONS' `committed: []`). A
+   * 'flagged' verdict still calls incrementRouteBackCount either way, for
+   * signal/escalation tracking; only the actual route-back transition is
+   * gated on this flag.
+   */
+  preCommit?: boolean;
+  planningOrchestrator?: PlanningOrchestrator;
+  sessionManager?: SessionManager;
+}
+
 /**
  * Runs the Tier-3 classifier over each Ready-flip target in a proposal
  * group: gated on the deterministic tiers not already hard-blocking, and
@@ -502,8 +522,19 @@ async function computeGroupProposedBody(
  * into the target intent's `advisory` field and records an audit event
  * (mirroring `readiness_override`) so an operator returning from an
  * unattended run sees what happened.
+ *
+ * A genuine 'flagged' verdict drives the automatic route-back the
+ * architecture record describes: incrementRouteBackCount(groupId) is always
+ * called, and — pre-commit, while under the cap — the group is pushed back
+ * to its originating session through the existing feedback-inbox pushback
+ * mechanism (pushBackGroupToOriginatingSession), the same path an
+ * operator-initiated group pushback takes. Once escalated, or post-commit,
+ * the group is left for ordinary operator disposition instead.
  */
-export async function classifyReadyProposal(groupId: string): Promise<void> {
+export async function classifyReadyProposal(
+  groupId: string,
+  opts: ClassifyReadyProposalOptions = {},
+): Promise<void> {
   const groupRows = listStagedIntentsByGroup(groupId);
   const readyFlips = groupRows.filter(isReadyFlip);
   if (readyFlips.length === 0) {
@@ -513,7 +544,7 @@ export async function classifyReadyProposal(groupId: string): Promise<void> {
     return;
   }
 
-  await Promise.all(
+  const advisories = await Promise.all(
     readyFlips.map(async (row) => {
       const payload = JSON.parse(row.payload) as SetStatusPayload;
       const taskType = getCachedType(payload.taskId);
@@ -573,6 +604,32 @@ export async function classifyReadyProposal(groupId: string): Promise<void> {
           groupId,
         },
       });
+
+      return advisory;
     }),
   );
+
+  if (!advisories.some((a) => a?.status === 'flagged')) return;
+
+  const { escalated } = incrementRouteBackCount(groupId);
+  if (escalated || !opts.preCommit) {
+    logger.info(
+      `[deferralClassifier] flagged groupId=${groupId} escalated=${escalated} ` +
+        `preCommit=${Boolean(opts.preCommit)} — leaving for operator disposition`,
+    );
+    return;
+  }
+
+  await pushBackGroupToOriginatingSession(
+    groupId,
+    'Tier-3 semantic advisory flagged a paraphrased deferral in this ' +
+      "group's proposed body — revise to resolve the flagged decision " +
+      'before re-proposing Ready.',
+    opts.planningOrchestrator,
+    opts.sessionManager,
+  ).catch((err) => {
+    logger.error(
+      `[deferralClassifier] auto-route-back failed groupId=${groupId}: ${(err as Error).message}`,
+    );
+  });
 }
