@@ -10,6 +10,7 @@ const GIT_CONFIG_LOCK_RE =
   /could not lock config file .*\.git[/\\]config: File exists/;
 
 import { recordEvent } from '../audit/AuditLog';
+import type { WorktreeTeardownRefusedPayload } from '../audit/types';
 import { scrubSecrets } from '../security/scrubSecrets';
 import {
   AgentSession,
@@ -2622,7 +2623,7 @@ export class SessionManager extends EventEmitter {
               source: 'cleanupPartialWorktree',
               expected: classification.expected,
               reason: classification.reason,
-            },
+            } satisfies WorktreeTeardownRefusedPayload,
           });
         }
       }
@@ -3769,7 +3770,7 @@ export class SessionManager extends EventEmitter {
             source: 'cleanupWorktree',
             expected: classification.expected,
             reason: classification.reason,
-          },
+          } satisfies WorktreeTeardownRefusedPayload,
         });
       }
       return;
