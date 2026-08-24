@@ -52,7 +52,7 @@ describe('getTaskBackend(projectId)', () => {
     expect((backend as AuditingTaskBackend).inner).toBeInstanceOf(
       LocalTaskBackend,
     );
-    expect(backend.type).toBe('local');
+    expect(backend.type).toBe('yaml');
   });
 
   it('returns an AuditingTaskBackend wrapping JiraTaskSourceProvider when project.task_source === "jira"', () => {

@@ -340,8 +340,8 @@ describe('LocalTaskBackend (milestone schema)', () => {
     });
   });
 
-  it('has type === "local"', () => {
-    expect(backend.type).toBe('local');
+  it('has type === "yaml"', () => {
+    expect(backend.type).toBe('yaml');
   });
 
   describe('listTasksByStatus()', () => {
