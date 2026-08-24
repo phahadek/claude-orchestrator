@@ -305,6 +305,28 @@ export interface TaskBackend {
   archive?(taskId: string, options?: TaskWriteOptions): Promise<void>;
 }
 
+/**
+ * Thrown when an optional TaskBackend method (createTask, setDependsOn,
+ * updateBody, updateBodyRaw, patchBodySection, setType, setProperties,
+ * archive) is invoked against a backend that doesn't implement it — Jira and
+ * GitHub currently implement none of these. Distinguishes a deliberate scope
+ * boundary from an ordinary bug, and lets callers (e.g. moveTask's
+ * precondition check) recognize the refusal without string-matching a
+ * message.
+ */
+export class UnsupportedTaskBackendMethodError extends Error {
+  constructor(
+    public readonly layer: string,
+    public readonly method: string,
+    public readonly backendType: string,
+  ) {
+    super(
+      `[${layer}] ${method} is not supported by backend type "${backendType}"`,
+    );
+    this.name = 'UnsupportedTaskBackendMethodError';
+  }
+}
+
 // ── AuditingTaskBackend ──────────────────────────────────────────────────────
 
 /**
@@ -412,8 +434,10 @@ export class AuditingTaskBackend implements TaskBackend {
     options?: TaskWriteOptions,
   ): Promise<string> {
     if (!this.inner.createTask) {
-      throw new Error(
-        `[AuditingTaskBackend] createTask is not supported by backend type "${this.inner.type}"`,
+      throw new UnsupportedTaskBackendMethodError(
+        'AuditingTaskBackend',
+        'createTask',
+        this.inner.type,
       );
     }
     const taskId = await this.inner.createTask(fields);
@@ -435,8 +459,10 @@ export class AuditingTaskBackend implements TaskBackend {
     options?: TaskWriteOptions,
   ): Promise<void> {
     if (!this.inner.setDependsOn) {
-      throw new Error(
-        `[AuditingTaskBackend] setDependsOn is not supported by backend type "${this.inner.type}"`,
+      throw new UnsupportedTaskBackendMethodError(
+        'AuditingTaskBackend',
+        'setDependsOn',
+        this.inner.type,
       );
     }
     await this.inner.setDependsOn(taskId, dependsOn);
@@ -457,8 +483,10 @@ export class AuditingTaskBackend implements TaskBackend {
     options?: TaskWriteOptions,
   ): Promise<void> {
     if (!this.inner.updateBody) {
-      throw new Error(
-        `[AuditingTaskBackend] updateBody is not supported by backend type "${this.inner.type}"`,
+      throw new UnsupportedTaskBackendMethodError(
+        'AuditingTaskBackend',
+        'updateBody',
+        this.inner.type,
       );
     }
     await this.inner.updateBody(taskId, sections);
@@ -479,8 +507,10 @@ export class AuditingTaskBackend implements TaskBackend {
     options?: TaskWriteOptions,
   ): Promise<void> {
     if (!this.inner.updateBodyRaw) {
-      throw new Error(
-        `[AuditingTaskBackend] updateBodyRaw is not supported by backend type "${this.inner.type}"`,
+      throw new UnsupportedTaskBackendMethodError(
+        'AuditingTaskBackend',
+        'updateBodyRaw',
+        this.inner.type,
       );
     }
     await this.inner.updateBodyRaw(taskId, markdown);
@@ -502,8 +532,10 @@ export class AuditingTaskBackend implements TaskBackend {
     options?: TaskWriteOptions,
   ): Promise<void> {
     if (!this.inner.patchBodySection) {
-      throw new Error(
-        `[AuditingTaskBackend] patchBodySection is not supported by backend type "${this.inner.type}"`,
+      throw new UnsupportedTaskBackendMethodError(
+        'AuditingTaskBackend',
+        'patchBodySection',
+        this.inner.type,
       );
     }
     await this.inner.patchBodySection(taskId, section, operation);
@@ -524,8 +556,10 @@ export class AuditingTaskBackend implements TaskBackend {
     options?: TaskWriteOptions,
   ): Promise<void> {
     if (!this.inner.setType) {
-      throw new Error(
-        `[AuditingTaskBackend] setType is not supported by backend type "${this.inner.type}"`,
+      throw new UnsupportedTaskBackendMethodError(
+        'AuditingTaskBackend',
+        'setType',
+        this.inner.type,
       );
     }
     await this.inner.setType(taskId, type);
@@ -546,8 +580,10 @@ export class AuditingTaskBackend implements TaskBackend {
     options?: TaskWriteOptions,
   ): Promise<void> {
     if (!this.inner.setProperties) {
-      throw new Error(
-        `[AuditingTaskBackend] setProperties is not supported by backend type "${this.inner.type}"`,
+      throw new UnsupportedTaskBackendMethodError(
+        'AuditingTaskBackend',
+        'setProperties',
+        this.inner.type,
       );
     }
     await this.inner.setProperties(taskId, patch);
@@ -564,8 +600,10 @@ export class AuditingTaskBackend implements TaskBackend {
 
   async archive(taskId: string, options?: TaskWriteOptions): Promise<void> {
     if (!this.inner.archive) {
-      throw new Error(
-        `[AuditingTaskBackend] archive is not supported by backend type "${this.inner.type}"`,
+      throw new UnsupportedTaskBackendMethodError(
+        'AuditingTaskBackend',
+        'archive',
+        this.inner.type,
       );
     }
     await this.inner.archive(taskId);
