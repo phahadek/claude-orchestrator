@@ -132,6 +132,7 @@ type EventType =
   | 'capability_disposition_investigation_filed'
   | 'flaky_investigation_task_filed'
   | 'stuck_session_notify_checked'
+  | 'task_display_status_changed'
   | 'stuck_session_heartbeat_tick'
   | 'session_map_entry_dropped'
   | 'planning_sessions_liveness_reconciled'

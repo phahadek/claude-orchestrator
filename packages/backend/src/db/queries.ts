@@ -5776,6 +5776,31 @@ export function resetTaskCrashCount(taskId: string): void {
   db.prepare(`DELETE FROM task_crash_counts WHERE task_id = ?`).run(taskId);
 }
 
+// ─── task_display_status_log ───────────────────────────────────────────────
+
+/** Last displayStatus recorded for a task, or null if none has been recorded yet. */
+export function getLastRecordedDisplayStatus(taskId: string): string | null {
+  const row = db
+    .prepare<{
+      task_id: string;
+    }>(`SELECT display_status FROM task_display_status_log WHERE task_id = @task_id`)
+    .get({ task_id: taskId }) as { display_status: string } | undefined;
+  return row?.display_status ?? null;
+}
+
+export function setLastRecordedDisplayStatus(
+  taskId: string,
+  displayStatus: string,
+): void {
+  db.prepare(
+    `INSERT INTO task_display_status_log (task_id, display_status, updated_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(task_id) DO UPDATE SET
+       display_status = excluded.display_status,
+       updated_at = excluded.updated_at`,
+  ).run(taskId, displayStatus, Date.now());
+}
+
 // ─── session_poke_retry_counts ─────────────────────────────────────────────
 
 function getSessionPokeRetryCount(sessionId: string): number {

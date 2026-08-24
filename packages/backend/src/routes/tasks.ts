@@ -23,7 +23,10 @@ import { recordEvent } from '../audit/AuditLog';
 import { typedGetSetting } from '../config/settings';
 import type { TaskAggregateRow } from '../db/queries';
 import { planMove, MoveTaskError } from '../orchestration/moveTask';
-import { deriveDisplayStatus } from '../tasks/TaskStatusEngine';
+import {
+  deriveDisplayStatus,
+  recordDisplayStatusTransition,
+} from '../tasks/TaskStatusEngine';
 import type { NotionTask } from '../notion/types';
 import { DependencyResolver } from '../notion/DependencyResolver';
 import type { PRReviewResult } from '../github/PRReviewService';
@@ -370,6 +373,9 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
   const taskPauseStruct = getTaskPauseReason(row.task_id);
   const effectivePauseStruct = taskPauseStruct ?? pauseStruct;
 
+  const flakeRecoveryAttempts = row.pr_flake_recovery_attempts ?? 0;
+  const flakeRecoveryMaxRetries = typedGetSetting('flake_recovery_max_retries');
+
   const displayStatus = deriveDisplayStatus({
     notionStatus,
     codeSessionStatus: row.code_session_status ?? null,
@@ -379,8 +385,15 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     reviewIterationCount: row.pr_review_iteration ?? 0,
     reviewIterationCap: cap,
     pauseReason: pauseStruct,
-    flakeRecoveryAttempts: row.pr_flake_recovery_attempts ?? 0,
-    flakeRecoveryMaxRetries: typedGetSetting('flake_recovery_max_retries'),
+    flakeRecoveryAttempts,
+    flakeRecoveryMaxRetries,
+  });
+
+  recordDisplayStatusTransition(row.task_id, displayStatus, {
+    notionStatus,
+    pauseReason: pauseStruct,
+    flakeRecoveryAttempts,
+    flakeRecoveryMaxRetries,
   });
 
   const totalTokens = {

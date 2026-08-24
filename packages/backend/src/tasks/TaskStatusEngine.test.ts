@@ -1,7 +1,18 @@
-import { describe, it, expect } from 'vitest';
-import { deriveDisplayStatus } from './TaskStatusEngine';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+vi.mock('../db/db.js', async () => {
+  const { setupTestDb } = await import('../../test/helpers/setupTestDb.js');
+  return { db: setupTestDb() };
+});
+
+import { db } from '../db/db';
+import {
+  deriveDisplayStatus,
+  recordDisplayStatusTransition,
+} from './TaskStatusEngine';
 import type { TaskStatusInput } from './TaskStatusEngine';
 import { pauseReasonFromCanonical } from '../db/pauseReason';
+import { setLastRecordedDisplayStatus } from '../db/queries';
 
 function makeInput(overrides: Partial<TaskStatusInput> = {}): TaskStatusInput {
   return {
@@ -505,5 +516,123 @@ describe('deriveDisplayStatus', () => {
         }),
       ),
     ).toBe('needs_attention');
+  });
+});
+
+describe('recordDisplayStatusTransition', () => {
+  beforeEach(() => {
+    db.prepare('DELETE FROM audit_log').run();
+    db.prepare('DELETE FROM task_display_status_log').run();
+  });
+
+  function getEvents(taskId: string): Array<{ payload: string }> {
+    return db
+      .prepare(
+        `SELECT payload FROM audit_log WHERE event_type = 'task_display_status_changed' AND task_id = ? ORDER BY id ASC`,
+      )
+      .all(taskId) as Array<{ payload: string }>;
+  }
+
+  it('emits an event when the derived displayStatus changes from one value to another', () => {
+    recordDisplayStatusTransition('task-1', 'in_progress', {
+      notionStatus: '🔄 In Progress',
+      pauseReason: null,
+      flakeRecoveryAttempts: 0,
+      flakeRecoveryMaxRetries: 0,
+    });
+    recordDisplayStatusTransition('task-1', 'in_review', {
+      notionStatus: '👀 In Review',
+      pauseReason: null,
+      flakeRecoveryAttempts: 0,
+      flakeRecoveryMaxRetries: 0,
+    });
+
+    const events = getEvents('task-1');
+    expect(events).toHaveLength(2);
+    expect(JSON.parse(events[0].payload)).toMatchObject({
+      from: null,
+      to: 'in_progress',
+    });
+    expect(JSON.parse(events[1].payload)).toMatchObject({
+      from: 'in_progress',
+      to: 'in_review',
+    });
+  });
+
+  it('emits no event when the derived value is unchanged across repeated calls', () => {
+    for (let i = 0; i < 5; i++) {
+      recordDisplayStatusTransition('task-2', 'ready', {
+        notionStatus: '🗂️ Ready',
+        pauseReason: null,
+        flakeRecoveryAttempts: 0,
+        flakeRecoveryMaxRetries: 0,
+      });
+    }
+
+    expect(getEvents('task-2')).toHaveLength(1);
+  });
+
+  it('carries the deciding inputs alongside from/to in the payload', () => {
+    recordDisplayStatusTransition('task-3', 'needs_attention', {
+      notionStatus: '🔄 In Progress',
+      pauseReason: pauseReasonFromCanonical('merge_conflict'),
+      flakeRecoveryAttempts: 2,
+      flakeRecoveryMaxRetries: 3,
+    });
+
+    const events = getEvents('task-3');
+    expect(events).toHaveLength(1);
+    expect(JSON.parse(events[0].payload)).toMatchObject({
+      from: null,
+      to: 'needs_attention',
+      notion_status: '🔄 In Progress',
+      pause_reason: 'merge_conflict',
+      pause_severity: 'needs_attention',
+      retry_strategy: 'manual_action',
+      flake_recovery_attempts: 2,
+      flake_recovery_max_retries: 3,
+    });
+  });
+
+  it('records the auto_recovering -> needs_attention transition when flake_recovery_attempts reaches the max', () => {
+    recordDisplayStatusTransition('task-4', 'auto_recovering', {
+      notionStatus: '🔄 In Progress',
+      pauseReason: pauseReasonFromCanonical('ci_failing'),
+      flakeRecoveryAttempts: 1,
+      flakeRecoveryMaxRetries: 2,
+    });
+    recordDisplayStatusTransition('task-4', 'needs_attention', {
+      notionStatus: '🔄 In Progress',
+      pauseReason: pauseReasonFromCanonical('ci_failing'),
+      flakeRecoveryAttempts: 2,
+      flakeRecoveryMaxRetries: 2,
+    });
+
+    const events = getEvents('task-4');
+    expect(events).toHaveLength(2);
+    expect(JSON.parse(events[1].payload)).toMatchObject({
+      from: 'auto_recovering',
+      to: 'needs_attention',
+      flake_recovery_attempts: 2,
+      flake_recovery_max_retries: 2,
+    });
+  });
+
+  it('produces zero rows for a task whose display status never changes across many view builds', () => {
+    // Prime the last-recorded value so every subsequent call is a no-op —
+    // simulating a task already settled at 'backlog' before this window of
+    // repeated view builds begins.
+    setLastRecordedDisplayStatus('task-5', 'backlog');
+
+    for (let i = 0; i < 50; i++) {
+      recordDisplayStatusTransition('task-5', 'backlog', {
+        notionStatus: '🔲 Backlog',
+        pauseReason: null,
+        flakeRecoveryAttempts: 0,
+        flakeRecoveryMaxRetries: 0,
+      });
+    }
+
+    expect(getEvents('task-5')).toHaveLength(0);
   });
 });
