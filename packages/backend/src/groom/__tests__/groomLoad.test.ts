@@ -25,7 +25,11 @@ import {
 } from '../groomLoad';
 import { toExternalId } from '../../tasks/taskId';
 import { bindingConstraintIdsForRegions } from '../constraintCatalog';
-import { insertProject, insertMilestone, updateProject } from '../../db/queries';
+import {
+  insertProject,
+  insertMilestone,
+  updateProject,
+} from '../../db/queries';
 import { createUnit } from '../../architecture/ArchUnitStore';
 import { SIZE_TYPE_CHECK } from '../../planning/procedureCore';
 
