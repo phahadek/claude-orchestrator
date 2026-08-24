@@ -377,9 +377,33 @@ For every item in the pulled batch:
 ## Step 4 — Loop
 
 Repeat Steps 2–3 for the next tier/batch until `readiness` reports `green`,
-or until the human wants to stop for the session (leaving remaining items
+or until the operator interrupts to stop the session (leaving remaining items
 `open`/`runnable` for a later pass — nothing is lost, the state persists
-server-side).
+server-side). The session itself does not propose stopping — see the
+completion contract below.
+
+### Completion contract
+
+A gate run dispositions **every item it pulls** before it reports anything.
+Running out of items — not running out of appetite — is the only stopping
+condition available to the session:
+
+- **Never ask the operator whether to continue.** No "want me to keep going?",
+  no continue/stop menu, no "continuing unless you'd rather I stop." The
+  operator interrupts the session if they want to stop; the session never
+  solicits that interrupt.
+- **Never emit mid-run progress reports.** A status update between batches is
+  a hand-back in disguise — it invites the operator to weigh in on something
+  that isn't theirs to weigh in on yet. Report once, at the end, per the
+  Reporting discipline below.
+- **Context budget, batch size, and elapsed effort are the session's own
+  constraints to manage.** They are never a reason to check in — pull the
+  next tier/batch and keep going.
+- **Genuine operator-only questions are collected, not asked as they arise.**
+  `Prod-Mutating` consent, a `Human-Observation` item, or any decision that is
+  actually the operator's to make — hold it, keep dispositioning everything
+  else, and raise every held question once, together, alongside the final
+  report.
 
 ### Reporting discipline
 
