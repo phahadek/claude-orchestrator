@@ -693,6 +693,7 @@ export class PRMergeWatcher extends EventEmitter {
           sessionId: null,
           runOrigin: 'pr_pipeline',
           producer: 'pr_gate',
+          runKind: 'full',
         });
         testResult = getLatestTestRequestRun(project.id, contentHash, 'full');
       }
