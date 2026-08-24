@@ -50,8 +50,29 @@ function toReservation(row: MigrationReservationRow): MigrationReservation {
   };
 }
 
-function isUniqueConstraintError(err: unknown): boolean {
-  return err instanceof Error && /UNIQUE constraint failed/i.test(err.message);
+/**
+ * better-sqlite3 surfaces a UNIQUE violation with the offending column names
+ * in the message (e.g. "UNIQUE constraint failed: migration_reservation.task_id,
+ * migration_reservation.dir, migration_reservation.suffix") — classified here
+ * so the two constraints on migration_reservation get two different
+ * remedies: a (project, number) collision means "the number is taken, try
+ * the next one"; a (task_id, dir, suffix) collision means "someone else
+ * already reserved this exact placeholder, read their reservation back"
+ * (see reserveMigrationNumber).
+ */
+function classifyUniqueConstraintError(
+  err: unknown,
+): 'project_number' | 'task_placeholder' | 'other' {
+  if (!(err instanceof Error) || !/UNIQUE constraint failed/i.test(err.message)) {
+    return 'other';
+  }
+  if (/migration_reservation\.task_id/i.test(err.message)) {
+    return 'task_placeholder';
+  }
+  if (/migration_reservation\.project/i.test(err.message)) {
+    return 'project_number';
+  }
+  return 'other';
 }
 
 export interface ReserveMigrationNumberInput {
@@ -78,10 +99,15 @@ const MAX_RESERVE_ATTEMPTS = 20;
  * no-await-between-read-and-write guarantee the tasks.yaml write path
  * relies on (see SessionManager's pendingStarts reservation). That's the
  * primary safety net for same-process concurrent Ready-flip applies; the
- * UNIQUE(project, number) constraint is the backstop for any writer outside
- * that guarantee (e.g. a second process sharing the same sqlite file). On a
- * collision this retries with the next number rather than surfacing the
- * race to the caller.
+ * table's two UNIQUE constraints are the backstop for any writer outside
+ * that guarantee (e.g. a second process sharing the same sqlite file), and
+ * each gets a different remedy on collision: UNIQUE(project, number) means
+ * a sibling allocation beat this one to that number, so this retries with
+ * the next one; UNIQUE(task_id, dir, suffix) means a sibling allocation for
+ * this *exact* placeholder landed between this call's initial existence
+ * check and its own insert, so this reads that reservation back and returns
+ * it rather than minting (and silently orphaning) a second number for the
+ * same placeholder.
  */
 export function reserveMigrationNumber(
   input: ReserveMigrationNumberInput,
@@ -117,7 +143,16 @@ export function reserveMigrationNumber(
         });
       })();
     } catch (err) {
-      if (isUniqueConstraintError(err)) continue;
+      const kind = classifyUniqueConstraintError(err);
+      if (kind === 'project_number') continue;
+      if (kind === 'task_placeholder') {
+        const race = getMigrationReservationByTaskDirSuffix(
+          input.taskId,
+          input.dir,
+          input.suffix,
+        );
+        if (race) return toReservation(race);
+      }
       throw err;
     }
     recordEvent({

@@ -207,6 +207,41 @@ describe('reserveMigrationNumber', () => {
     expect(second.number).toBe(2);
     spy.mockRestore();
   });
+
+  it('idempotently returns the existing reservation on a (task_id, dir, suffix) race instead of minting a second number', () => {
+    // Simulate a race window: a first call already committed a reservation
+    // for this exact placeholder, but the idempotency existence check
+    // answers as if none exists yet — the UNIQUE(task_id, dir, suffix)
+    // backstop this test exercises. Without it, this would silently mint a
+    // second, different number for the same *(new)* migration entry.
+    const first = reserveMigrationNumber({
+      project: 'proj-placeholder-race',
+      taskId: 'notion:task-race-same',
+      dir: 'packages/backend/migrations/',
+      suffix: 'same.sql',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    const spy = vi
+      .spyOn(queries, 'getMigrationReservationByTaskDirSuffix')
+      .mockReturnValueOnce(undefined);
+
+    const second = reserveMigrationNumber({
+      project: 'proj-placeholder-race',
+      taskId: 'notion:task-race-same',
+      dir: 'packages/backend/migrations/',
+      suffix: 'same.sql',
+      at: '2026-01-01T00:00:01Z',
+    });
+
+    expect(second.id).toBe(first.id);
+    expect(second.number).toBe(first.number);
+    const rows = db
+      .prepare('SELECT COUNT(*) AS n FROM migration_reservation WHERE task_id = ?')
+      .get('notion:task-race-same') as { n: number };
+    expect(rows.n).toBe(1);
+    spy.mockRestore();
+  });
 });
 
 describe('getReservationForTask / getReservationByNumber', () => {

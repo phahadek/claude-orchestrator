@@ -3165,9 +3165,14 @@ export function runMigrations(target: Database.Database): void {
   // One row per (project, number) pair, reserved at Ready-flip apply time for
   // the task whose *(new)* Files/paths migration entry claimed it. Mirrors
   // the arch_unit/gate_item shape: a materialized current-state row per
-  // reservation, plus an append-only event log for its history. UNIQUE
-  // (project, number) is the concurrent-write backstop behind the
-  // synchronous read-then-write allocation in migrationReservation.ts.
+  // reservation, plus an append-only event log for its history. Two UNIQUE
+  // constraints back the two invariants migrationReservation.ts's synchronous
+  // read-then-write allocation otherwise only holds by the same-process
+  // no-await guarantee (safe within one process, not across a second writer
+  // sharing the same sqlite file): (project, number) — no two reservations
+  // ever claim the same number — and (task_id, dir, suffix) — a given
+  // placeholder is idempotently reserved at most once, never allocated two
+  // different numbers by two racing writers.
   target.exec(`
     CREATE TABLE IF NOT EXISTS migration_reservation (
       id         TEXT    PRIMARY KEY,
@@ -3178,7 +3183,8 @@ export function runMigrations(target: Database.Database): void {
       suffix     TEXT    NOT NULL,
       created_at TEXT    NOT NULL,
       updated_at TEXT    NOT NULL,
-      UNIQUE(project, number)
+      UNIQUE(project, number),
+      UNIQUE(task_id, dir, suffix)
     );
     CREATE INDEX IF NOT EXISTS idx_migration_reservation_project ON migration_reservation(project);
     CREATE INDEX IF NOT EXISTS idx_migration_reservation_task_id ON migration_reservation(task_id);
