@@ -8350,6 +8350,41 @@ export function updateSeedItemSourceMergeCommit(
   });
 }
 
+/**
+ * Every seed_item id sourced from a task, across every project — the
+ * merge-completion consumer's fan-out from a merged `notion_task_id` to the
+ * seed_item rows that need their source filled and commit recomputed.
+ */
+export function listSeedItemIdsBySourceTask(sourceTaskId: string): string[] {
+  return (
+    db
+      .prepare<{
+        source_task_id: string;
+      }>(
+        `SELECT DISTINCT seed_item_id AS id FROM seed_item_source WHERE source_task_id = @source_task_id`,
+      )
+      .all({ source_task_id: normalizeTaskId(sourceTaskId) }) as {
+      id: string;
+    }[]
+  ).map((row) => row.id);
+}
+
+/**
+ * Every distinct source_task_id still missing seed_item_source.merge_commit —
+ * the seed reconciler catch-up net's candidate set. Callers cross-check each
+ * against local_branches (getMergeCommitForTask) to find the ones that are
+ * actually merged already.
+ */
+export function listUnfilledSeedItemSourceTaskIds(): string[] {
+  return (
+    db
+      .prepare(
+        `SELECT DISTINCT source_task_id AS id FROM seed_item_source WHERE merge_commit IS NULL`,
+      )
+      .all() as { id: string }[]
+  ).map((row) => row.id);
+}
+
 export function listSeedItemEvents(seedItemId: string): SeedItemEventRow[] {
   _stmtListSeedItemEvents ??= db.prepare<{ seed_item_id: string }>(
     `SELECT * FROM seed_item_event WHERE seed_item_id = @seed_item_id ORDER BY id ASC`,

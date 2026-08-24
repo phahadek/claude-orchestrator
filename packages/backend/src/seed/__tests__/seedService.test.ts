@@ -102,6 +102,19 @@ describe('getSeedReadiness', () => {
     });
   });
 
+  it('is unchanged by min_deployed_commit being populated — readiness is deliberately not deploy-gated', () => {
+    const item = makeItem({ spec: 'not yet deployed' });
+
+    const before = getSeedReadiness('polimarket-analyser', 'M12');
+
+    setMinDeployedCommit(item.id, 'sha1', new Date(1).toISOString());
+
+    const after = getSeedReadiness('polimarket-analyser', 'M12');
+    expect(after).toEqual(before);
+    expect(after.status).toBe('blocked');
+    expect(after.blocking).toHaveLength(1);
+  });
+
   it('returns per-state counts summing to the milestone item total', () => {
     const confirmed = makeItem({ spec: 'a' });
     makeItem({ spec: 'b' });

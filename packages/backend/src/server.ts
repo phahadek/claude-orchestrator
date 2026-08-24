@@ -91,6 +91,7 @@ import {
   registerGateMergeConsumer,
   configureUnresolvedSourceEscalationSink,
 } from './gate/gateMergeConsumer';
+import { registerSeedMergeConsumer } from './seed/seedMergeConsumer';
 import { latestDispositionEvidence } from './gate/gateService';
 import { SessionGateItemVerifier } from './gate/gateItemVerifier';
 import { register as registerInvestigationReconciler } from './investigation/investigationReconciler';
@@ -327,6 +328,8 @@ prMergeWatcher.setPRReviewService(prReviewService);
 prMergeWatcher.setReviewOrchestrator(reviewOrchestrator);
 // Gate consumes the merge-completion signal; PRMergeWatcher stays unaware of gate state.
 registerGateMergeConsumer(prMergeWatcher);
+// Seed store consumes the same signal, independently of the gate.
+registerSeedMergeConsumer(prMergeWatcher);
 prReviewService.setAutoMerger(autoMerger);
 reviewOrchestrator.setAutoMerger(autoMerger);
 setAutoMerger(autoMerger);

@@ -24,6 +24,7 @@ import {
   advanceState,
   setSourceMergeCommit,
   setMinDeployedCommit,
+  recomputeMinDeployedCommit,
   addSource,
   getAccretionMarker,
   recordAccretionMarker,
@@ -194,6 +195,36 @@ describe('seedStore', () => {
     setMinDeployedCommit(created.id, 'deadbeef', new Date(1).toISOString());
 
     expect(getItem(created.id)?.minDeployedCommit).toBe('deadbeef');
+  });
+
+  it("recomputes min_deployed_commit from the item's sources' merge commits, and leaves it unset when no source has merged", () => {
+    const created = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      spec: 'Recompute check',
+      sources: [
+        { sourceTaskId: 'notion:r1', sourceTaskTitle: 'First source' },
+        { sourceTaskId: 'notion:r2', sourceTaskTitle: 'Second source' },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+
+    expect(
+      recomputeMinDeployedCommit(created.id, new Date(1).toISOString()),
+    ).toBeUndefined();
+    expect(getItem(created.id)?.minDeployedCommit).toBeUndefined();
+
+    setSourceMergeCommit(created.id, 'notion:r1', 'sha-r1');
+    expect(
+      recomputeMinDeployedCommit(created.id, new Date(2).toISOString()),
+    ).toBe('sha-r1');
+    expect(getItem(created.id)?.minDeployedCommit).toBe('sha-r1');
+
+    setSourceMergeCommit(created.id, 'notion:r2', 'sha-r2');
+    expect(
+      recomputeMinDeployedCommit(created.id, new Date(3).toISOString()),
+    ).toBe('sha-r2');
+    expect(getItem(created.id)?.minDeployedCommit).toBe('sha-r2');
   });
 
   it('fills merge_commit on a source at source-task merge time', () => {
