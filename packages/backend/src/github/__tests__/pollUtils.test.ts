@@ -85,3 +85,88 @@ describe('classifyStalledPR — gate_failed', () => {
     expect(classifyStalledPR(pr, null)?.kind).not.toBe('gate_failed');
   });
 });
+
+describe('classifyStalledPR — pre_review_interrupted', () => {
+  it('does not classify as pre_review_interrupted while the pre-review pipeline is in flight', () => {
+    const pr = makePR({
+      review_result: null,
+      pending_push: 0,
+      pre_review_stage: 'verify',
+    });
+
+    const result = classifyStalledPR(
+      pr,
+      null,
+      null,
+      false,
+      null,
+      Infinity,
+      false,
+      true, // isPreReviewPipelineInFlight
+    );
+
+    expect(result?.kind).not.toBe('pre_review_interrupted');
+  });
+
+  it('still classifies as pre_review_interrupted for a stale post-restart pre_review_stage with no live pipeline', () => {
+    const pr = makePR({
+      review_result: null,
+      pending_push: 0,
+      pre_review_stage: 'verify',
+    });
+
+    const result = classifyStalledPR(
+      pr,
+      null,
+      null,
+      false,
+      null,
+      Infinity,
+      false,
+      false, // isPreReviewPipelineInFlight — false after a restart, Set is empty
+    );
+
+    expect(result).toEqual({ kind: 'pre_review_interrupted' });
+  });
+});
+
+describe('classifyStalledPR — errored_review_session', () => {
+  it('does not classify as errored_review_session when a complete verdict exists for the current head_sha', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'needs_changes' }),
+      review_session_id: 'dead-session',
+      head_sha: 'sha1',
+      last_reviewed_sha: 'sha1',
+    });
+
+    expect(classifyStalledPR(pr, 'error')?.kind).not.toBe(
+      'errored_review_session',
+    );
+  });
+
+  it('still classifies as errored_review_session with no verdict', () => {
+    const pr = makePR({
+      review_result: null,
+      review_session_id: 'dead-session',
+      head_sha: 'sha1',
+      last_reviewed_sha: null,
+    });
+
+    expect(classifyStalledPR(pr, 'killed')).toEqual({
+      kind: 'errored_review_session',
+    });
+  });
+
+  it('still classifies as errored_review_session when the verdict is for a superseded head_sha', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'needs_changes' }),
+      review_session_id: 'dead-session',
+      head_sha: 'sha2',
+      last_reviewed_sha: 'sha1',
+    });
+
+    expect(classifyStalledPR(pr, 'error')).toEqual({
+      kind: 'errored_review_session',
+    });
+  });
+});

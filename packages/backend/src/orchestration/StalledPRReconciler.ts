@@ -260,6 +260,10 @@ export class StalledPRReconciler {
         ? sessionAwaitingOperatorDecision(pr.session_id)
         : false;
 
+      const isPreReviewPipelineInFlight =
+        this.reviewOrchestrator?.isReviewInFlight(pr.pr_number, pr.repo) ??
+        false;
+
       const stalled = classifyStalledPR(
         effectivePr,
         reviewSessionStatus,
@@ -269,6 +273,7 @@ export class StalledPRReconciler {
         inertThresholdMs,
         isBusyInFlightToolCall,
         isAwaitingOperatorDecision,
+        isPreReviewPipelineInFlight,
       );
       if (!stalled) continue;
 
