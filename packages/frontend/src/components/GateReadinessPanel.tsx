@@ -15,7 +15,6 @@ import type {
   SeedItemClassification,
   SeedItemEventOutcome,
   SeedReadiness,
-  SeedMilestoneReadiness,
 } from '../api/seed';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
@@ -399,10 +398,6 @@ export function GateReadinessPanel({
   >(new Set());
   const [dispositionError, setDispositionError] = useState<string | null>(null);
 
-  const [seedMilestones, setSeedMilestones] = useState<
-    SeedMilestoneReadiness[]
-  >([]);
-
   const [seedReadiness, setSeedReadiness] = useState<SeedReadiness | null>(
     null,
   );
@@ -445,24 +440,6 @@ export function GateReadinessPanel({
       .finally(() => {
         if (cancelled) return;
         setMilestonesLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeProjectId]);
-
-  // Load config-seed milestone readiness alongside gate readiness.
-  useEffect(() => {
-    let cancelled = false;
-    seedApi
-      .listSeedMilestoneReadiness(activeProjectId ?? undefined)
-      .then((result) => {
-        if (cancelled) return;
-        setSeedMilestones(result);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setSeedMilestones([]);
       });
     return () => {
       cancelled = true;
