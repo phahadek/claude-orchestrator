@@ -57,7 +57,10 @@ import type { DiffSource } from './DiffSource';
 import { GitHubDiffSource, LocalDiffSource } from './DiffSource';
 import { formatReviewFeedback, formatCIFailureFeedback } from './reviewUtils';
 import type { DispositionsParsedPayload } from './types';
-import { runVerifyAsGate, type VerifyResult } from '../orchestration/verifyRunner';
+import {
+  runVerifyAsGate,
+  type VerifyResult,
+} from '../orchestration/verifyRunner';
 import {
   filterVerifyFailureByBaseHealth,
   renderBaseAttributableFilterDigest,

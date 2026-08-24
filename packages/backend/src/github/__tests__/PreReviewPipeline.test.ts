@@ -77,12 +77,10 @@ vi.mock('../../orchestration/verifyRunner', () => ({
   runVerifyAsGate: (...args: unknown[]) => mockRunVerifyAsGate(...args),
 }));
 
-const mockFilterBaseAttributableFailuresForF2Gate = vi
-  .fn()
-  .mockResolvedValue({
-    result: { outcome: 'unfiltered', passed: false },
-    guardBlocked: [],
-  });
+const mockFilterBaseAttributableFailuresForF2Gate = vi.fn().mockResolvedValue({
+  result: { outcome: 'unfiltered', passed: false },
+  guardBlocked: [],
+});
 const mockFilterVerifyFailureByBaseHealth = vi.fn().mockResolvedValue(null);
 const mockRenderBaseAttributableFilterDigest = vi
   .fn()

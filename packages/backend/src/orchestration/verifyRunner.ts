@@ -1,6 +1,9 @@
 import { spawn } from 'child_process';
 import type { StructuredTestResult } from '../db/types';
-import { clearReportFiles, collectStructuredTestResult } from '../session/test-runner';
+import {
+  clearReportFiles,
+  collectStructuredTestResult,
+} from '../session/test-runner';
 
 export interface VerifyResult {
   passed: boolean;
