@@ -78,7 +78,9 @@ function seedVerifySession(sessionId: string, gateItemId: string) {
   });
 }
 
-function makeRunnableGateItem(overrides: Partial<Parameters<typeof insertItem>[0]> = {}) {
+function makeRunnableGateItem(
+  overrides: Partial<Parameters<typeof insertItem>[0]> = {},
+) {
   const item = insertItem({
     project: 'proj-auto-commit',
     milestone: 'M12',
@@ -88,7 +90,9 @@ function makeRunnableGateItem(overrides: Partial<Parameters<typeof insertItem>[0
     updatedAt: new Date(0).toISOString(),
     ...overrides,
   });
-  db.prepare(`UPDATE gate_item SET state = 'runnable' WHERE id = ?`).run(item.id);
+  db.prepare(`UPDATE gate_item SET state = 'runnable' WHERE id = ?`).run(
+    item.id,
+  );
   return item;
 }
 
@@ -148,7 +152,11 @@ describe('gate.verify auto-commit — staging-time attempt', () => {
     // explicit call; autoCommitGateVerifyIntent's in-flight guard makes
     // whichever wins the only one that actually applies/commits, so
     // awaiting this call is sufficient to observe the outcome either way.
-    await autoCommitGateVerifyIntent(staged as any, sm as any, planningOrchestrator);
+    await autoCommitGateVerifyIntent(
+      staged as any,
+      sm as any,
+      planningOrchestrator,
+    );
 
     const row = db
       .prepare('SELECT state, annotation FROM staged_intent WHERE id = ?')
@@ -268,13 +276,24 @@ describe('gate.verify auto-commit — backlog sweep on policy arm', () => {
       null,
     );
     expect(
-      (db.prepare('SELECT state FROM staged_intent WHERE id = ?').get(staged1.id) as any).state,
+      (
+        db
+          .prepare('SELECT state FROM staged_intent WHERE id = ?')
+          .get(staged1.id) as any
+      ).state,
     ).toBe('staged');
     expect(
-      (db.prepare('SELECT state FROM staged_intent WHERE id = ?').get(staged2.id) as any).state,
+      (
+        db
+          .prepare('SELECT state FROM staged_intent WHERE id = ?')
+          .get(staged2.id) as any
+      ).state,
     ).toBe('staged');
 
-    const swept = await sweepGateVerifyAutoCommitBacklogForMilestone('M12', 'pass');
+    const swept = await sweepGateVerifyAutoCommitBacklogForMilestone(
+      'M12',
+      'pass',
+    );
     // Arming with no policy row yet armed should sweep nothing — arm first.
     expect(swept.committedIds).toEqual([]);
 
@@ -288,10 +307,18 @@ describe('gate.verify auto-commit — backlog sweep on policy arm', () => {
       [staged1.id, staged2.id].sort(),
     );
     expect(
-      (db.prepare('SELECT state FROM staged_intent WHERE id = ?').get(staged1.id) as any).state,
+      (
+        db
+          .prepare('SELECT state FROM staged_intent WHERE id = ?')
+          .get(staged1.id) as any
+      ).state,
     ).toBe('committed');
     expect(
-      (db.prepare('SELECT state FROM staged_intent WHERE id = ?').get(staged2.id) as any).state,
+      (
+        db
+          .prepare('SELECT state FROM staged_intent WHERE id = ?')
+          .get(staged2.id) as any
+      ).state,
     ).toBe('committed');
     expect(getSession('verify-session-backlog-1')?.status).toBe('done');
     expect(getSession('verify-session-backlog-2')?.status).toBe('done');
@@ -305,7 +332,10 @@ describe('gate.verify auto-commit — backlog sweep on policy arm', () => {
     const planningOrchestrator = new PlanningOrchestrator(sm as any);
     const stagedApp = express();
     stagedApp.use(express.json());
-    stagedApp.use('/api', createStagedIntentsRouter(planningOrchestrator, sm as any));
+    stagedApp.use(
+      '/api',
+      createStagedIntentsRouter(planningOrchestrator, sm as any),
+    );
 
     const staged = stageIntent(
       'gate.verify',
@@ -320,7 +350,11 @@ describe('gate.verify auto-commit — backlog sweep on policy arm', () => {
       null,
     );
     expect(
-      (db.prepare('SELECT state FROM staged_intent WHERE id = ?').get(staged.id) as any).state,
+      (
+        db
+          .prepare('SELECT state FROM staged_intent WHERE id = ?')
+          .get(staged.id) as any
+      ).state,
     ).toBe('staged');
 
     const milestonesApp = express();

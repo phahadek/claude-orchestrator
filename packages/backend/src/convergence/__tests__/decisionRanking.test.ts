@@ -353,9 +353,7 @@ describe('rankDecisions', () => {
     expect(rankedIds.indexOf(mirror.id)).toBeLessThan(
       rankedIds.indexOf(needsSetup.id),
     );
-    expect(rankedIds.indexOf(fail.id)).toBeLessThan(
-      rankedIds.indexOf(pass.id),
-    );
+    expect(rankedIds.indexOf(fail.id)).toBeLessThan(rankedIds.indexOf(pass.id));
     expect(rankedIds.indexOf(fail.id)).toBeLessThan(
       rankedIds.indexOf(needsSetup.id),
     );

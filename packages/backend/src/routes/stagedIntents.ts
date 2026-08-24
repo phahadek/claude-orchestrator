@@ -5341,7 +5341,10 @@ export function isGateVerifyAutoCommitEligible(row: StagedIntentRow): boolean {
   }
   if (payload.origin) return false;
   if (payload.reclassify) return false;
-  if (!payload.disposition || !isGateVerifyAutoCommitDispositionClass(payload.disposition)) {
+  if (
+    !payload.disposition ||
+    !isGateVerifyAutoCommitDispositionClass(payload.disposition)
+  ) {
     return false;
   }
   return getGateVerifyAutoCommitPolicy(row.milestone, payload.disposition);
@@ -8495,13 +8498,15 @@ export function createStagedIntentsRouter(
         (row.state === 'staged' || row.state === 'approved'),
     );
     for (const row of gateVerifyRows) {
-      void autoCommitGateVerifyIntent(row, sessionManager, planningOrchestrator).catch(
-        (err) => {
-          logger.error(
-            `[stagedIntents] gate.verify auto-commit retry failed for ${row.id}: ${err instanceof Error ? err.message : err}`,
-          );
-        },
-      );
+      void autoCommitGateVerifyIntent(
+        row,
+        sessionManager,
+        planningOrchestrator,
+      ).catch((err) => {
+        logger.error(
+          `[stagedIntents] gate.verify auto-commit retry failed for ${row.id}: ${err instanceof Error ? err.message : err}`,
+        );
+      });
     }
   });
 
