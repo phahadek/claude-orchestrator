@@ -804,9 +804,8 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
 
   it('refuses a design dispatch (no session launched) when the loader reports a non-Notion task source', async () => {
     const { loadDesignContext } = await import('../../design/designLoad.js');
-    const { GroomTaskSourceUnsupportedError } = await import(
-      '../../planning/errors.js'
-    );
+    const { GroomTaskSourceUnsupportedError } =
+      await import('../../planning/errors.js');
     (loadDesignContext as ReturnType<typeof vi.fn>).mockRejectedValue(
       new GroomTaskSourceUnsupportedError('proj-1', 'yaml'),
     );
@@ -830,9 +829,8 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
 
   it('refuses a docs dispatch (no session launched) when the loader reports a non-Notion task source', async () => {
     const { loadDocsContext } = await import('../../docs/docsLoad.js');
-    const { GroomTaskSourceUnsupportedError } = await import(
-      '../../planning/errors.js'
-    );
+    const { GroomTaskSourceUnsupportedError } =
+      await import('../../planning/errors.js');
     (loadDocsContext as ReturnType<typeof vi.fn>).mockRejectedValue(
       new GroomTaskSourceUnsupportedError('proj-1', 'yaml'),
     );

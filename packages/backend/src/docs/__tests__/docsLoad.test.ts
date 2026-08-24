@@ -18,7 +18,11 @@ vi.mock('../../db/db.js', async () => {
 });
 
 import { db } from '../../db/db.js';
-import { insertProject, insertMilestone, updateProject } from '../../db/queries.js';
+import {
+  insertProject,
+  insertMilestone,
+  updateProject,
+} from '../../db/queries.js';
 import { loadDocsContext } from '../docsLoad.js';
 import { GroomTaskSourceUnsupportedError } from '../../planning/errors.js';
 
@@ -87,7 +91,11 @@ beforeEach(() => {
               },
             ]
           : [];
-      return jsonResponse({ results: rows, has_more: false, next_cursor: null });
+      return jsonResponse({
+        results: rows,
+        has_more: false,
+        next_cursor: null,
+      });
     }
 
     const blocksMatch = u.match(/\/blocks\/([^/]+)\/children/);

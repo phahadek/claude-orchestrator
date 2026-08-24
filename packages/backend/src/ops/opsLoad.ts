@@ -315,9 +315,7 @@ export async function loadOpsContext(
       `ops-load: milestone ${milestoneId} belongs to project ${milestone.project_id}, not ${opts.project}`,
     );
   }
-  const projectRowForSourceCheck = ProjectService.getById(
-    milestone.project_id,
-  );
+  const projectRowForSourceCheck = ProjectService.getById(milestone.project_id);
   if (
     projectRowForSourceCheck &&
     projectRowForSourceCheck.taskSource !== 'notion'
