@@ -2080,10 +2080,42 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         `[AgentSession] worktree content hash failed for PR gate: ${(e as Error).message}`,
       );
     }
-    const latestRun = contentHash
-      ? getLatestTestRequestRun(this.projectId, contentHash)
+    const fullRun = contentHash
+      ? getLatestTestRequestRun(this.projectId, contentHash, 'full')
       : undefined;
-    if (!latestRun || latestRun.state !== 'passed') {
+    const scopedRun = contentHash
+      ? getLatestTestRequestRun(this.projectId, contentHash, 'scoped')
+      : undefined;
+    // A scoped pass whose base_sha is set (base-relative scoping) only
+    // satisfies the gate if it still matches the branch's current base —
+    // otherwise it was computed against a since-superseded base. A scoped
+    // pass with base_sha unset (base-independent scoping) is unaffected by
+    // base drift. Best-effort: a failed lookup here just makes a base-sha'd
+    // scoped row not satisfy the gate, falling back to requiring a full pass.
+    let currentBaseSha: string | null = null;
+    if (scopedRun?.state === 'passed' && scopedRun.base_sha != null) {
+      try {
+        execSync(`git fetch origin ${baseBranch}`, {
+          cwd: this.worktreePath,
+          encoding: 'utf-8',
+          stdio: 'pipe',
+        });
+        currentBaseSha = execSync(`git rev-parse origin/${baseBranch}`, {
+          cwd: this.worktreePath,
+          encoding: 'utf-8',
+          stdio: 'pipe',
+        }).trim();
+      } catch (e) {
+        logger.warn(
+          `[AgentSession] base sha resolution failed for scoped test-request gate check: ${(e as Error).message}`,
+        );
+      }
+    }
+    const scopedPasses =
+      scopedRun?.state === 'passed' &&
+      (scopedRun.base_sha == null || scopedRun.base_sha === currentBaseSha);
+    const gatePasses = fullRun?.state === 'passed' || scopedPasses;
+    if (!gatePasses) {
       sessionLog(
         this.sessionId,
         'PR creation blocked: no passing test.request cache entry for the current tree',
