@@ -31,6 +31,7 @@ import type { DepthReviewDimension } from '../github/DepthReviewService';
 import { GitHubDiffSource } from '../github/DiffSource';
 import type { PRMergeWatcher } from '../github/PRMergeWatcher';
 import type { AutoMerger } from '../github/AutoMerger';
+import { formatReviewFeedback } from '../github/reviewUtils';
 import type { SessionManager } from '../session/SessionManager';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
@@ -810,7 +811,44 @@ export function createPrsRouter(
           verdict: result.verdict,
           summary: result.summary,
         });
-        res.json(result);
+
+        // Route feedback to the implementing session the same way the
+        // automatic review path does (ReviewOrchestrator.executeReview) —
+        // this route is the operator's manual escape hatch, reached
+        // precisely when the automatic path is stuck, so its verdict must
+        // not be silently dropped. resetReviewIteration above stays
+        // unconditional: it only forgives the iteration count going into
+        // this one operator-triggered review, it does not exempt anything
+        // downstream — incrementReviewIteration still fires inside
+        // reviewPR() on every call (manual or automatic), and the cap in
+        // ReviewOrchestrator.executeReview is checked fresh against the
+        // live counter on every subsequent automatic dispatch, so a
+        // needs_changes verdict routed from here re-enters the same
+        // bounded fix-and-re-review loop as normal.
+        let feedbackRouted = false;
+        if (
+          result.verdict === 'needs_changes' ||
+          result.verdict === 'incomplete'
+        ) {
+          const freshPrRow = getPRByNumber(prNumber, repo);
+          if (freshPrRow?.session_id) {
+            await sessionManager.enqueueFeedback(
+              freshPrRow.session_id,
+              'ai-reviewer',
+              formatReviewFeedback(result, 0, {
+                conflicted: freshPrRow.merge_state === 'dirty',
+                baseBranch: freshPrRow.base_branch ?? undefined,
+              }),
+            );
+            feedbackRouted = true;
+          } else {
+            logger.warn(
+              `[prs] re-review: PR #${prNumber} (${repo}) has no resolvable implementing session — feedback not routed`,
+            );
+          }
+        }
+
+        res.json({ ...result, feedbackRouted });
       } catch (err) {
         if (err instanceof Error && err.message === 'Review timed out') {
           res.status(504).json({ error: 'Review timed out' });

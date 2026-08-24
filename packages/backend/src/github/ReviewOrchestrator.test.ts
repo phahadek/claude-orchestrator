@@ -1691,6 +1691,50 @@ describe('ReviewOrchestrator — iteration cap escalation', () => {
       messages.find((m: any) => m.type === 'review_escalated'),
     ).toBeUndefined();
   });
+
+  it('an operator re-review resetting review_iteration to 0 does not exempt later automatic dispatches from the cap', async () => {
+    // Simulates the operator-facing re-review route's resetReviewIteration
+    // call: the counter is back at 0 (as if just reset), so the automatic
+    // dispatcher should run this one normally...
+    vi.mocked(getPRByNumber).mockReturnValueOnce({
+      ...basePRRow,
+      review_iteration: 0,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
+
+    // ...but once further automatic needs_changes iterations bring the
+    // counter back up to the cap, the loop is still bounded — the reset
+    // only forgave iterations up to that point, it did not raise or
+    // disable the cap itself.
+    const maxIterations = 3;
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      review_iteration: maxIterations,
+    } as any);
+
+    const messages: object[] = [];
+    sm.on('message', (msg: object) => messages.push(msg));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce(); // still just the one call from before the cap was reached
+    expect(
+      messages.find((m: any) => m.type === 'review_escalated'),
+    ).toMatchObject({
+      type: 'review_escalated',
+      prNumber: 1,
+      repo: 'owner/repo',
+    });
+  });
 });
 
 // ── Incomplete verdict handling ───────────────────────────────────────────────
