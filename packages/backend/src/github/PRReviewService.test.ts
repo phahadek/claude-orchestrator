@@ -3633,7 +3633,11 @@ describe('overrideFilesPathsDimension()', () => {
     summary: 's',
     reviewedAt: '2024-01-01T00:00:00Z',
     dimensions: [
-      { name: 'Title and description vs task Summary', passed: true, notes: 'ok' },
+      {
+        name: 'Title and description vs task Summary',
+        passed: true,
+        notes: 'ok',
+      },
       { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
       { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
       {
@@ -3688,7 +3692,11 @@ describe('PRReviewService — migration-renumber override wired into reviewPR()'
     '- migrations/postgres/0099_daemon_roster_canary.sql *(new)*\n';
 
   const dimsFailingFilesOnly = [
-    { name: 'Title and description vs task Summary', passed: true, notes: 'ok' },
+    {
+      name: 'Title and description vs task Summary',
+      passed: true,
+      notes: 'ok',
+    },
     { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
     { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
     {
@@ -3773,7 +3781,11 @@ describe('PRReviewService — migration-renumber override wired into reviewPR()'
 
   it('an unlisted non-migration file still fails the dimension — tolerance is scoped to migrations', async () => {
     const dims = [
-      { name: 'Title and description vs task Summary', passed: true, notes: 'ok' },
+      {
+        name: 'Title and description vs task Summary',
+        passed: true,
+        notes: 'ok',
+      },
       { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
       { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
       {
@@ -3828,7 +3840,8 @@ describe('PRReviewService — migration-renumber override wired into reviewPR()'
       {
         verdict: 'approved',
         dimensions: dimsAllPassed,
-        summary: 'All core files match the spec list, migration renumbered as explained.',
+        summary:
+          'All core files match the spec list, migration renumbered as explained.',
       },
       ['migrations/postgres/0050_unrelated.sql'],
     );
