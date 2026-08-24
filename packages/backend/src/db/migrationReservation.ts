@@ -197,3 +197,20 @@ export function getReservationByNumber(
   const row = getMigrationReservationByNumber(project, number);
   return row ? toReservation(row) : undefined;
 }
+
+/**
+ * The reservation a given task holds for one specific *(new)* migration
+ * placeholder entry, identified by (dir, suffix) — the same idempotency key
+ * `reserveMigrationNumber` allocates against. The review-gate dimension
+ * override (PRReviewService.ts) reads this to get the entry's authoritative
+ * reserved number, independent of whichever number the entry's raw text
+ * currently carries.
+ */
+export function getReservationForTaskDirSuffix(
+  taskId: string,
+  dir: string,
+  suffix: string,
+): MigrationReservation | undefined {
+  const row = getMigrationReservationByTaskDirSuffix(taskId, dir, suffix);
+  return row ? toReservation(row) : undefined;
+}
