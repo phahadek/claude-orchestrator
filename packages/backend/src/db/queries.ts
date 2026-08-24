@@ -8029,7 +8029,7 @@ export function listSeedItemsFiltered(
   const { clause, params } = buildSeedItemWhereClause(filter);
   const orderClause =
     order === 'not-done-first'
-      ? `CASE WHEN state = 'confirmed' THEN 1 ELSE 0 END ASC, updated_at DESC, id ASC`
+      ? `CASE WHEN state IN ('confirmed', 'discarded') THEN 1 ELSE 0 END ASC, updated_at DESC, id ASC`
       : `updated_at DESC, id ASC`;
   const stmt = db.prepare(
     `SELECT * FROM seed_item ${clause} ORDER BY ${orderClause} LIMIT @limit OFFSET @offset`,

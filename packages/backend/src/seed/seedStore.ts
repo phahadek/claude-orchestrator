@@ -228,8 +228,9 @@ export function appendEvent(seedItemId: string, event: SeedItemEvent): void {
 }
 
 /**
- * Advances the single-field state — pending -> applied -> confirmed | blocked.
- * There is no current_disposition; the outcome lives on the event log.
+ * Advances the single-field state — pending -> applied -> confirmed | blocked
+ * | discarded. There is no current_disposition; the outcome lives on the
+ * event log.
  */
 export function advanceState(
   seedItemId: string,

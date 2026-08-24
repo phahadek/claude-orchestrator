@@ -650,8 +650,19 @@ export type NewDeployRunEventRow = Omit<DeployRunEventRow, 'id'>;
 
 // ─── seed_item ────────────────────────────────────────────────────────────
 
-/** Single-field lifecycle: pending -> applied -> confirmed | blocked. */
-export type SeedItemState = 'pending' | 'applied' | 'confirmed' | 'blocked';
+/**
+ * Single-field lifecycle: pending -> applied -> confirmed | blocked | discarded.
+ * `discarded` is the sanctioned void/re-homed disposition: terminal and
+ * non-blocking, for a seed item that turned out un-appliable or was moved to
+ * another milestone — distinct from `confirmed`, which asserts the seed was
+ * actually applied and reconciled.
+ */
+export type SeedItemState =
+  | 'pending'
+  | 'applied'
+  | 'confirmed'
+  | 'blocked'
+  | 'discarded';
 
 /**
  * Mirrors GateItemClassification's schema-vs-data split for a seed
@@ -706,6 +717,7 @@ export type SeedItemEventOutcome =
   | 'applied'
   | 'confirmed'
   | 'blocked'
+  | 'discarded'
   | 'reopened';
 
 export interface SeedItemEventRow {
