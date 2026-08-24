@@ -1107,6 +1107,7 @@ export async function runGateReconcilerTick(
       );
     }
 
+    const armedMilestones: { project: string; milestone: string }[] = [];
     for (const { project, milestone } of projectMilestones.values()) {
       await yieldToEventLoop();
 
@@ -1123,6 +1124,48 @@ export async function runGateReconcilerTick(
         throw err;
       }
       if (!getArm(milestoneRow.id, 'gate-verify')) continue;
+      armedMilestones.push({ project, milestone });
+    }
+
+    // Pass 1: backoff-elapsed `pending` items get first claim on the shared
+    // dispatch budget, across every armed project/milestone, before any
+    // runnable-tier item is dispatched. An item that has already waited out
+    // its backoff has a stronger claim on a slot than a freshly-runnable
+    // one — and pulling it second (as before) meant a double-digit
+    // runnable backlog anywhere in the loop reliably starved it to zero,
+    // every tick. See nextPendingGateItems.
+    for (const { project, milestone } of armedMilestones) {
+      await yieldToEventLoop();
+
+      const pendingBatch = nextPendingGateItems(project, milestone, {
+        limit,
+      });
+      for (const item of pendingBatch) {
+        await yieldToEventLoop();
+
+        if (dispatchBudget <= 0) {
+          skippedForBudget++;
+          continue;
+        }
+        const outcome = await processItem(
+          item,
+          verifier,
+          followupFiler,
+          deployShaByProject[item.project] ?? null,
+          options.concurrency,
+        );
+        if (outcome) {
+          processed.push(outcome);
+          dispatchBudget--;
+        }
+      }
+    }
+
+    // Pass 2: the AUTO_RUN_TIERS loop over nextRunnableGateItems spends
+    // whatever budget pass 1 left behind.
+    for (const { project, milestone } of armedMilestones) {
+      await yieldToEventLoop();
+
       for (const classification of AUTO_RUN_TIERS) {
         const batch = nextRunnableGateItems(project, milestone, {
           classification,
@@ -1149,31 +1192,6 @@ export async function runGateReconcilerTick(
             processed.push(outcome);
             dispatchBudget--;
           }
-        }
-      }
-
-      // Backoff-elapsed `pending` items — the not-yet-triggerable re-check
-      // pull, mirroring the AUTO_RUN_TIERS loop above but over `pending`
-      // state rather than a classification tier (pending is orthogonal to
-      // classification; see nextPendingGateItems).
-      const pendingBatch = nextPendingGateItems(project, milestone, { limit });
-      for (const item of pendingBatch) {
-        await yieldToEventLoop();
-
-        if (dispatchBudget <= 0) {
-          skippedForBudget++;
-          continue;
-        }
-        const outcome = await processItem(
-          item,
-          verifier,
-          followupFiler,
-          deployShaByProject[item.project] ?? null,
-          options.concurrency,
-        );
-        if (outcome) {
-          processed.push(outcome);
-          dispatchBudget--;
         }
       }
     }
