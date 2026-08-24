@@ -3,12 +3,6 @@ import os from 'os';
 import path from 'path';
 import { runtimeSettings } from '../config';
 import { logger } from '../logger';
-import {
-  getTestRequestRunById,
-  getSession,
-  TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED,
-} from '../db/queries';
-import { recordEvent } from '../audit/AuditLog';
 
 const CGROUP_ROOT = '/sys/fs/cgroup';
 const MAIN_LEAF = 'main';
@@ -573,8 +567,23 @@ function listTestRunCgroupPids(runId: string): number[] {
  * mean nothing is still using this cluster. A run whose session is still
  * non-terminal is left alone: a temp postgres cluster legitimately outlives
  * individual test files within one still-running session.
+ *
+ * db/queries is required lazily, not at module top level: a top-level
+ * import would transitively load db/db.ts, which opens the process-wide
+ * sqlite handle as an import-time side effect. This module is imported by
+ * spawning code (CliSessionRunner et al.) well before any caller has had a
+ * chance to validate DB_PATH — a top-level import here would make merely
+ * importing sessionCgroup.ts (e.g. to spawn a session) eagerly open that
+ * handle, which is exactly what dbIsolation.test.ts's CliSessionRunner
+ * spawn-env test guards against.
  */
 function isTestRunReapable(runId: string): boolean {
+  const {
+    getTestRequestRunById,
+    getSession,
+    TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED,
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+  } = require('../db/queries') as typeof import('../db/queries');
   const run = getTestRequestRunById(runId);
   if (!run || !run.session_id) return true;
   const session = getSession(run.session_id);
@@ -638,6 +647,12 @@ export function reapOrphanedTestsCgroupProcesses(
   }
 
   if (reaped > 0) {
+    // Lazy require, not a top-level import — see isTestRunReapable's doc
+    // comment: audit/AuditLog also transitively loads db/db.ts.
+    const {
+      recordEvent,
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+    } = require('../audit/AuditLog') as typeof import('../audit/AuditLog');
     recordEvent({
       event_type: 'orphan_processes_reaped',
       actor_type: 'system',
