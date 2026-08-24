@@ -22,7 +22,7 @@ vi.mock('../../db/queries', () => ({
   getSession: vi.fn(),
   TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED: new Set([
     'done',
-    'failed',
+    'error',
     'killed',
     'superseded',
   ]),
@@ -35,6 +35,7 @@ vi.mock('../../audit/AuditLog', () => ({
 import fs from 'fs';
 import { logger } from '../../logger';
 import { recordEvent } from '../../audit/AuditLog';
+import { getTestRequestRunById, getSession } from '../../db/queries';
 import {
   computeSessionCgroupLimits,
   setupSessionCgroup,
@@ -48,6 +49,7 @@ import {
   removeTestRunCgroup,
   reapOrphanedMainCgroupProcesses,
   reapOrphanedTestsCgroupProcesses,
+  reapTestsCgroupOrphans,
   _resetForTesting,
   _setSessionsPathForTesting,
   _setTestsPathForTesting,
@@ -752,74 +754,62 @@ describe('reapOrphanedTestsCgroupProcesses', () => {
     vi.clearAllMocks();
   });
 
-  it('kills a ppid=1 process in the tests cgroup whose owning session row is terminal, and records an audit event naming the count', () => {
+  it('kills a ppid=1 process in a run directory the caller marks reapable', () => {
     _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
     const killed: number[] = [];
 
-    const reaped = reapOrphanedTestsCgroupProcesses({
+    const reaped = reapOrphanedTestsCgroupProcesses(() => true, {
       ownPid: 100,
       listTestRunDirs: () => ['run-1'],
       listRunCgroupPids: (runId) => (runId === 'run-1' ? [42424] : []),
       readPpid: () => 1,
-      isRunReapable: () => true,
       kill: (pid) => killed.push(pid),
     });
 
     expect(killed).toEqual([42424]);
     expect(reaped).toBe(1);
-    expect(recordEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event_type: 'orphan_processes_reaped',
-        payload: expect.objectContaining({ reaped_count: 1 }),
-      }),
-    );
   });
 
-  it('does not select a process whose owning session is non-terminal', () => {
+  it('does not select a process in a run directory the caller marks not reapable', () => {
     _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
     const killed: number[] = [];
 
-    const reaped = reapOrphanedTestsCgroupProcesses({
+    const reaped = reapOrphanedTestsCgroupProcesses(() => false, {
       ownPid: 100,
       listTestRunDirs: () => ['run-1'],
       listRunCgroupPids: () => [42424],
       readPpid: () => 1,
-      isRunReapable: () => false,
       kill: (pid) => killed.push(pid),
     });
 
     expect(killed).toEqual([]);
     expect(reaped).toBe(0);
-    expect(recordEvent).not.toHaveBeenCalled();
   });
 
   it('never selects the backend own pid, even when its ppid resolves to 1', () => {
     _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
     const killed: number[] = [];
 
-    reapOrphanedTestsCgroupProcesses({
+    reapOrphanedTestsCgroupProcesses(() => true, {
       ownPid: 100,
       listTestRunDirs: () => ['run-1'],
       listRunCgroupPids: () => [100],
       readPpid: () => 1,
-      isRunReapable: () => true,
       kill: (pid) => killed.push(pid),
     });
 
     expect(killed).toEqual([]);
-    expect(recordEvent).not.toHaveBeenCalled();
   });
 
   it('leaves a process alone whose parent is still alive (ppid other than 1)', () => {
     _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
     const killed: number[] = [];
 
-    const reaped = reapOrphanedTestsCgroupProcesses({
+    const reaped = reapOrphanedTestsCgroupProcesses(() => true, {
       ownPid: 100,
       listTestRunDirs: () => ['run-1'],
       listRunCgroupPids: () => [555],
       readPpid: () => 642755,
-      isRunReapable: () => true,
       kill: (pid) => killed.push(pid),
     });
 
@@ -829,10 +819,81 @@ describe('reapOrphanedTestsCgroupProcesses', () => {
 
   it('is a no-op when the delegated tests/ subtree was never set up', () => {
     const kill = vi.fn();
-    const reaped = reapOrphanedTestsCgroupProcesses({ kill });
+    const reaped = reapOrphanedTestsCgroupProcesses(() => true, { kill });
     expect(reaped).toBe(0);
     expect(kill).not.toHaveBeenCalled();
+  });
+});
+
+describe('reapTestsCgroupOrphans', () => {
+  beforeEach(() => {
+    _resetForTesting();
+    vi.clearAllMocks();
+  });
+
+  function mockTestsCgroupFs(pid: number) {
+    vi.spyOn(fs, 'readdirSync').mockReturnValue([
+      { name: 'run-1', isDirectory: () => true },
+    ] as unknown as fs.Dirent[]);
+    vi.spyOn(fs, 'readFileSync').mockImplementation((p) => {
+      const pathStr = String(p);
+      if (pathStr.endsWith('cgroup.procs')) return `${pid}\n`;
+      if (pathStr === `/proc/${pid}/stat`) {
+        return `${pid} (postgres) S 1 ${pid} ${pid} 0 -1 4194304`;
+      }
+      throw new Error(`unexpected read: ${pathStr}`);
+    });
+  }
+
+  it('kills a ppid=1 process in the tests cgroup whose owning session row is terminal, and records an audit event naming the count', async () => {
+    _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
+    mockTestsCgroupFs(42424);
+    vi.mocked(getTestRequestRunById).mockReturnValue({
+      session_id: 'sess-1',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'killed' } as any);
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    const reaped = await reapTestsCgroupOrphans();
+
+    expect(killSpy).toHaveBeenCalledWith(42424, 'SIGKILL');
+    expect(reaped).toBe(1);
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'orphan_processes_reaped',
+        payload: expect.objectContaining({ reaped_count: 1 }),
+      }),
+    );
+  });
+
+  it('does not select a process whose owning session is non-terminal, and records no audit event', async () => {
+    _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
+    mockTestsCgroupFs(42424);
+    vi.mocked(getTestRequestRunById).mockReturnValue({
+      session_id: 'sess-1',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as any);
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    const reaped = await reapTestsCgroupOrphans();
+
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(reaped).toBe(0);
     expect(recordEvent).not.toHaveBeenCalled();
+  });
+
+  it('treats a run with no owning session as reapable', async () => {
+    _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
+    mockTestsCgroupFs(42424);
+    vi.mocked(getTestRequestRunById).mockReturnValue({
+      session_id: null,
+    } as any);
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    const reaped = await reapTestsCgroupOrphans();
+
+    expect(killSpy).toHaveBeenCalledWith(42424, 'SIGKILL');
+    expect(reaped).toBe(1);
   });
 });
 

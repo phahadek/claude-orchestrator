@@ -162,7 +162,7 @@ import {
 import { asyncErrorBoundary } from './routes/asyncHandler';
 import {
   setupSessionCgroup,
-  reapOrphanedTestsCgroupProcesses,
+  reapTestsCgroupOrphans,
 } from './session/sessionCgroup';
 
 runMigrations(db);
@@ -736,15 +736,15 @@ scheduler.register({
 // other test-lane subprocess) spawned under tests/<runId>/ whose owning
 // pytest/test-request worker dies before teardown re-parents to init but is
 // invisible to main_cgroup_orphan_sweep, which only ever scans main/. See
-// reapOrphanedTestsCgroupProcesses for the additional owning-session check
-// this sweep applies that the main/ one doesn't need.
+// reapTestsCgroupOrphans for the additional owning-session check this sweep
+// applies that the main/ one doesn't need.
 scheduler.register({
   name: 'tests_cgroup_orphan_sweep',
   intervalMs: 10 * 60_000,
   runOnBoot: false,
   concurrency: 'skip-if-running',
   run: async () => {
-    const reaped = reapOrphanedTestsCgroupProcesses();
+    const reaped = await reapTestsCgroupOrphans();
     return { items_processed: reaped };
   },
 });

@@ -559,42 +559,10 @@ function listTestRunCgroupPids(runId: string): number[] {
   }
 }
 
-/**
- * Whether the test run leaf named `runId` (a tests/<runId>/ sub-cgroup) has
- * no live owning session — i.e. is safe to reap. A run with no DB row, or
- * no session_id (e.g. a base-health-probe or pr-pipeline run with no
- * originating session), or whose session row has already gone terminal, all
- * mean nothing is still using this cluster. A run whose session is still
- * non-terminal is left alone: a temp postgres cluster legitimately outlives
- * individual test files within one still-running session.
- *
- * db/queries is required lazily, not at module top level: a top-level
- * import would transitively load db/db.ts, which opens the process-wide
- * sqlite handle as an import-time side effect. This module is imported by
- * spawning code (CliSessionRunner et al.) well before any caller has had a
- * chance to validate DB_PATH — a top-level import here would make merely
- * importing sessionCgroup.ts (e.g. to spawn a session) eagerly open that
- * handle, which is exactly what dbIsolation.test.ts's CliSessionRunner
- * spawn-env test guards against.
- */
-function isTestRunReapable(runId: string): boolean {
-  const {
-    getTestRequestRunById,
-    getSession,
-    TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED,
-  } = require('../db/queries') as typeof import('../db/queries');
-  const run = getTestRequestRunById(runId);
-  if (!run || !run.session_id) return true;
-  const session = getSession(run.session_id);
-  if (!session) return true;
-  return TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED.has(session.status);
-}
-
 export interface TestsCgroupOrphanReapDeps {
   listTestRunDirs: () => string[];
   listRunCgroupPids: (runId: string) => number[];
   readPpid: (pid: number) => number | null;
-  isRunReapable: (runId: string) => boolean;
   kill: (pid: number) => void;
   ownPid: number;
 }
@@ -607,21 +575,23 @@ export interface TestsCgroupOrphanReapDeps {
  * which only ever scans main/. Same ppid=1 safety signal, plus one more
  * check the main/ sweep doesn't need: a cluster legitimately outlives
  * individual test files within one still-running session, so a leaf is
- * only reaped once isTestRunReapable confirms its owning session (if any)
- * has already gone terminal.
+ * only reaped once `isRunReapable` confirms its owning session (if any) has
+ * already gone terminal — deliberately caller-supplied rather than defaulted
+ * here, so this module stays free of any DB dependency (see
+ * reapTestsCgroupOrphans below for why).
  *
  * A pid that is not re-parented (ppid still resolves and isn't 1) is left
  * alone — it may be a legitimate subprocess still attached to a live
  * parent within the same run.
  */
 export function reapOrphanedTestsCgroupProcesses(
+  isRunReapable: (runId: string) => boolean,
   deps: Partial<TestsCgroupOrphanReapDeps> = {},
 ): number {
   if (!testsCgroupPath) return 0;
   const listRunDirs = deps.listTestRunDirs ?? listTestRunDirNames;
   const listRunPids = deps.listRunCgroupPids ?? listTestRunCgroupPids;
   const getPpid = deps.readPpid ?? readPpid;
-  const isRunReapable = deps.isRunReapable ?? isTestRunReapable;
   const kill = deps.kill ?? ((pid: number) => process.kill(pid, 'SIGKILL'));
   const ownPid = deps.ownPid ?? process.pid;
 
@@ -645,11 +615,45 @@ export function reapOrphanedTestsCgroupProcesses(
     }
   }
 
+  return reaped;
+}
+
+/**
+ * Scheduler-facing entry point for the tests/ cgroup sweep: supplies the
+ * real DB-backed ownership check to reapOrphanedTestsCgroupProcesses (a run
+ * with no DB row, no session_id — e.g. a base-health-probe or pr-pipeline
+ * run with no originating session — or whose session row has already gone
+ * terminal, are all reapable; a run whose session is still non-terminal is
+ * left alone) and records an audit event naming the reaped pid count,
+ * mirroring sessionLivenessReconciler's orphan_processes_reaped event, only
+ * when at least one process was actually reaped.
+ *
+ * db/queries and audit/AuditLog are imported dynamically here rather than
+ * at module top level: a top-level import of either would transitively load
+ * db/db.ts, which opens the process-wide sqlite handle as an import-time
+ * side effect. This module is imported by spawning code (CliSessionRunner
+ * et al.) well before any caller has had a chance to validate DB_PATH — a
+ * top-level import here would make merely importing sessionCgroup.ts (e.g.
+ * to spawn a session) eagerly open that handle, which is exactly what
+ * dbIsolation.test.ts's CliSessionRunner spawn-env test guards against.
+ */
+export async function reapTestsCgroupOrphans(): Promise<number> {
+  const {
+    getTestRequestRunById,
+    getSession,
+    TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED,
+  } = await import('../db/queries');
+
+  const reaped = reapOrphanedTestsCgroupProcesses((runId) => {
+    const run = getTestRequestRunById(runId);
+    if (!run || !run.session_id) return true;
+    const session = getSession(run.session_id);
+    if (!session) return true;
+    return TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED.has(session.status);
+  });
+
   if (reaped > 0) {
-    // Lazy require, not a top-level import — see isTestRunReapable's doc
-    // comment: audit/AuditLog also transitively loads db/db.ts.
-    const { recordEvent } =
-      require('../audit/AuditLog') as typeof import('../audit/AuditLog');
+    const { recordEvent } = await import('../audit/AuditLog');
     recordEvent({
       event_type: 'orphan_processes_reaped',
       actor_type: 'system',
