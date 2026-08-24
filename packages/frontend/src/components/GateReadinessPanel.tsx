@@ -15,7 +15,6 @@ import type {
   SeedItemClassification,
   SeedItemEventOutcome,
   SeedReadiness,
-  SeedMilestoneReadiness,
 } from '../api/seed';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
@@ -27,6 +26,7 @@ import {
   GATE_DONE_STATES,
   REOPEN_BLOCKED_STATES,
 } from './gateStateVocabulary';
+import { useMilestoneConvergence } from '../hooks/useMilestoneConvergence';
 
 interface Props {
   activeProjectId: string | null;
@@ -398,10 +398,6 @@ export function GateReadinessPanel({
   >(new Set());
   const [dispositionError, setDispositionError] = useState<string | null>(null);
 
-  const [seedMilestones, setSeedMilestones] = useState<
-    SeedMilestoneReadiness[]
-  >([]);
-
   const [seedReadiness, setSeedReadiness] = useState<SeedReadiness | null>(
     null,
   );
@@ -444,24 +440,6 @@ export function GateReadinessPanel({
       .finally(() => {
         if (cancelled) return;
         setMilestonesLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeProjectId]);
-
-  // Load config-seed milestone readiness alongside gate readiness.
-  useEffect(() => {
-    let cancelled = false;
-    seedApi
-      .listSeedMilestoneReadiness(activeProjectId ?? undefined)
-      .then((result) => {
-        if (cancelled) return;
-        setSeedMilestones(result);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setSeedMilestones([]);
       });
     return () => {
       cancelled = true;
@@ -1001,18 +979,13 @@ export function GateReadinessPanel({
   const totalPages = Math.max(1, Math.ceil(itemsTotal / PAGE_SIZE));
   const seedTotalPages = Math.max(1, Math.ceil(seedItemsTotal / PAGE_SIZE));
 
-  const seedForSelected = selectedMilestone
-    ? seedMilestones.find((m) => m.milestone === selectedMilestone)
-    : undefined;
-  const gateForSelected = selectedMilestone
-    ? milestones.find((m) => m.milestone === selectedMilestone)
-    : undefined;
-  const compositeStatus: 'green' | 'blocked' | null =
-    gateForSelected && seedForSelected
-      ? gateForSelected.status === 'green' && seedForSelected.status === 'green'
-        ? 'green'
-        : 'blocked'
-      : null;
+  const { convergence } = useMilestoneConvergence({
+    projectId: activeProjectId,
+    milestoneId: selectedMilestone,
+  });
+  const compositeStatus: 'green' | 'blocked' | null = convergence
+    ? convergence.status
+    : null;
 
   return (
     <div className={styles.panel} data-testid="gate-readiness-panel">
@@ -1028,7 +1001,7 @@ export function GateReadinessPanel({
             data-testid="composite-readiness-status"
           >
             {compositeStatus === 'green'
-              ? '✅ Milestone complete (gate + seed)'
+              ? '✅ Milestone complete'
               : '🚫 Milestone incomplete'}
           </div>
         )}
