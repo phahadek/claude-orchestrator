@@ -55,6 +55,7 @@ vi.mock('../config/settings.js', () => ({
 
 vi.mock('../session/sessionLifecycle.js', () => ({
   sessionBusyInFlightToolCall: vi.fn(() => false),
+  sessionAwaitingOperatorDecision: vi.fn(() => false),
 }));
 
 import {
