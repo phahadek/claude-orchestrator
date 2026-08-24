@@ -37,7 +37,6 @@ export type CanonicalPauseReason =
   | 'diverged_branch_unresolved'
   | 'analyze_failing'
   | 'rate_limit'
-  | 'stalled_reconcile_cap'
   | 'needs_repo'
   | 'autofix_git_infra_failure'
   | 'autofix_tool_infra_failure'
@@ -219,11 +218,6 @@ export const PAUSE_REASON_REGISTRY: Record<
     source: 'session',
     severity: 'recoverable',
     retry_strategy: 'automatic',
-  },
-  stalled_reconcile_cap: {
-    source: 'review',
-    severity: 'needs_attention',
-    retry_strategy: 'manual_action',
   },
   needs_repo: {
     source: 'launch',
@@ -461,7 +455,6 @@ const RECOVERY_ACTION_MAP: Record<
   autofix_git_infra_failure: 'rerun',
   autofix_tool_infra_failure: 'rerun',
   ci_billing_blocked: 'rerun',
-  stalled_reconcile_cap: 'rerun',
   auto_merge_failed: 'rerun',
   // resume: sendOrResume + nudge
   review_failed: 'resume',

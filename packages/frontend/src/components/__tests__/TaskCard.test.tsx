@@ -599,14 +599,14 @@ describe('TaskCard', () => {
     expect(badge.getAttribute('data-pause-source')).toBe('merge');
   });
 
-  // ── stalled_reconcile_cap: pauseDetail rendering ──────────────────────────
+  // ── pauseDetail rendering ─────────────────────────────────────────────────
 
-  it('appends pauseDetail to the badge title for stalled_reconcile_cap', () => {
+  it('appends pauseDetail to the badge title when present', () => {
     render(
       <TaskCard
         task={makeTask({
           displayStatus: 'needs_attention',
-          pauseReason: 'stalled_reconcile_cap',
+          pauseReason: 'launch_failed',
           pauseDetail: 'gate_failed — 2 fixer attempts exhausted',
         })}
         selected={false}
@@ -626,7 +626,7 @@ describe('TaskCard', () => {
       <TaskCard
         task={makeTask({
           displayStatus: 'needs_attention',
-          pauseReason: 'stalled_reconcile_cap',
+          pauseReason: 'stuck_timeout',
         })}
         selected={false}
         onClick={vi.fn()}

@@ -53,15 +53,19 @@ vi.mock('../../orchestration/testRequestLane', () => ({
   admitTestRequest: mockAdmitTestRequest,
 }));
 
-vi.mock('../../orchestration/baseAttributableFilter', async (importOriginal) => {
-  const actual = await importOriginal<
-    typeof import('../../orchestration/baseAttributableFilter')
-  >();
-  return {
-    ...actual,
-    filterBaseAttributableFailures: mockFilterBaseAttributableFailures,
-  };
-});
+vi.mock(
+  '../../orchestration/baseAttributableFilter',
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import('../../orchestration/baseAttributableFilter')
+      >();
+    return {
+      ...actual,
+      filterBaseAttributableFailures: mockFilterBaseAttributableFailures,
+    };
+  },
+);
 
 import { db } from '../../db/db';
 import {

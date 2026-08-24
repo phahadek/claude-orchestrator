@@ -213,7 +213,7 @@ describe('PRMergeWatcher — approved verdict clears terminal flags', () => {
     expect(mockClearTerminalPRFlags).not.toHaveBeenCalled();
   });
 
-  it('clears stalled_reconcile_cap via head_sha_advance as soon as a new push is confirmed, before the verdict is known', async () => {
+  it('clears reconcile_exhausted via head_sha_advance as soon as a new push is confirmed, before the verdict is known', async () => {
     const github = {
       // Fresh fetch reports a head_sha that differs from the stored one —
       // a fix was actually pushed.
@@ -256,8 +256,7 @@ describe('PRMergeWatcher — approved verdict clears terminal flags', () => {
     watcher.setReviewOrchestrator(reviewOrchestrator);
 
     const pr = makePRRow({
-      pause_reason:
-        '{"reason":"stalled_reconcile_cap","source":"review","severity":"needs_attention","retry_strategy":"manual_action"}',
+      reconcile_exhausted: 1,
     });
     await watcher.handlePushDetected(pr);
 

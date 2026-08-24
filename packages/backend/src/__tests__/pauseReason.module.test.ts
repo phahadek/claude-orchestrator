@@ -15,8 +15,8 @@ const ALL_REASONS = Object.keys(
 ) as CanonicalPauseReason[];
 
 describe('PAUSE_REASON_REGISTRY', () => {
-  it('contains exactly 48 canonical reasons', () => {
-    expect(ALL_REASONS).toHaveLength(48);
+  it('contains exactly 47 canonical reasons', () => {
+    expect(ALL_REASONS).toHaveLength(47);
   });
 
   it('includes depth_review_pending as a recoverable, automatic reason, distinct from depth_review_escalation', () => {
@@ -268,7 +268,6 @@ describe('deriveRecoveryDescriptor', () => {
     ['autofix_git_infra_failure', 'rerun', 'Rerun'],
     ['autofix_tool_infra_failure', 'rerun', 'Rerun'],
     ['ci_billing_blocked', 'rerun', 'Rerun'],
-    ['stalled_reconcile_cap', 'rerun', 'Rerun'],
     ['auto_merge_failed', 'rerun', 'Rerun'],
   ] as const)('%s → rerun', (reason, action, label) => {
     const d = deriveRecoveryDescriptor(reason);
@@ -481,7 +480,7 @@ describe('isMergeBlockingPause', () => {
     expect(isMergeBlockingPause(serialized)).toBe(false);
   });
 
-  it.each(['merge_conflict', 'max_reviews', 'stalled_reconcile_cap'] as const)(
+  it.each(['merge_conflict', 'max_reviews'] as const)(
     '%s remains merge-blocking',
     (reason) => {
       expect(isMergeBlockingPause(reason)).toBe(true);

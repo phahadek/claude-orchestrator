@@ -20,6 +20,7 @@ import {
   getSessionLastActivityMs,
   setStalledRetryBaseExhausted,
   resetStalledPRRetryCountForBaseRecovery,
+  setReconcileExhausted,
 } from '../db/queries';
 import { parsePauseReason } from '../db/pauseReason';
 import { getProjectByGithubRepo } from '../config';
@@ -86,8 +87,9 @@ const BASE_ATTRIBUTABLE_ESCALATION_KINDS: ReadonlySet<StalledPRKind> = new Set([
  *    session_events for the tool's whole duration and be misread as inert
  *
  * Retry bound: after DEFAULT_RETRY_CAP attempts per head_sha the PR is escalated
- * to pause_reason='stalled_reconcile_cap' and left for human intervention.
- * The counter resets automatically when setHeadSha() records a new push.
+ * by setting the orthogonal reconcile_exhausted flag (see db/types.ts) and left
+ * for human intervention. The counter resets automatically when setHeadSha()
+ * records a new push.
  *
  * Runs periodically via Scheduler and also at boot via reconcileOnce().
  */
@@ -156,13 +158,16 @@ export class StalledPRReconciler {
       // reconcile this PR fresh this cycle. Scoped to this PR alone — never
       // a blanket reset of every escalated PR's counter.
       const existing = parsePauseReason(pr.pause_reason);
-      if (existing?.reason === 'stalled_reconcile_cap') {
+      if (pr.reconcile_exhausted) {
         if (pr.stalled_retry_base_exhausted) {
           const project = getProjectByGithubRepo(pr.repo);
           if (
             project &&
             (await isProjectBaseHealthy(project)) &&
-            (await hasBaseTotalFailSince(project, pr.pause_reason_set_at ?? 0))
+            (await hasBaseTotalFailSince(
+              project,
+              pr.reconcile_exhausted_set_at ?? 0,
+            ))
           ) {
             resetStalledPRRetryCountForBaseRecovery(pr.pr_number, pr.repo);
             clearTerminalPRFlags(pr.pr_number, pr.repo, 'base_recovery');
@@ -478,12 +483,7 @@ export class StalledPRReconciler {
       `[StalledPRReconciler] PR #${prNumber} (${repo}): escalating as orphaned — task_id is null and could not be re-derived from head_branch`,
     );
 
-    setPauseReason(
-      prNumber,
-      repo,
-      'stalled_reconcile_cap',
-      'orphaned — no task link (task_id null, re-derivation from head_branch failed)',
-    );
+    setReconcileExhausted(prNumber, repo, true);
 
     recordEvent({
       event_type: 'stalled_pr_escalated',
@@ -856,8 +856,7 @@ export class StalledPRReconciler {
       `[StalledPRReconciler] PR #${prNumber} (${repo}): escalating to needs_attention (kind=${kind}, retryCount=${retryCount})`,
     );
 
-    const detail = `${kind} — ${retryCount} fixer attempts exhausted`;
-    setPauseReason(prNumber, repo, 'stalled_reconcile_cap', detail);
+    setReconcileExhausted(prNumber, repo, true);
 
     recordEvent({
       event_type: 'stalled_pr_escalated',

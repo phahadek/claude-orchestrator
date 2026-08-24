@@ -880,13 +880,14 @@ export function createPrsRouter(
       };
       setPRReviewResult(prNumber, repo, JSON.stringify(result));
 
-      // If the PR is cap-escalated, clear the pause and re-run the pre-review gate.
-      // If it's paused on the code-enforced baseline floor, a manual approve IS
-      // the human sign-off the floor demands — clear it, but do not re-run
-      // review: the floor is diff-driven, not verdict-driven, so re-reviewing
-      // the same diff would just re-escalate it immediately.
+      // If the PR is reconcile_exhausted-escalated, clear the flag and
+      // re-run the pre-review gate. If it's paused on the code-enforced
+      // baseline floor, a manual approve IS the human sign-off the floor
+      // demands — clear it, but do not re-run review: the floor is
+      // diff-driven, not verdict-driven, so re-reviewing the same diff would
+      // just re-escalate it immediately.
       const pauseStruct = parsePauseReason(prRow.pause_reason ?? null);
-      if (pauseStruct?.reason === 'stalled_reconcile_cap') {
+      if (prRow.reconcile_exhausted) {
         clearTerminalPRFlags(prNumber, repo, 'human_unpark');
         if (reviewOrchestrator) {
           void reviewOrchestrator

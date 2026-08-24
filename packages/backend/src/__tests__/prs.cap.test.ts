@@ -1,6 +1,6 @@
 /**
- * Tests for cap-escalated PR recovery:
- * - POST /prs/:n/approve clears stalled_reconcile_cap pause and re-enqueues
+ * Tests for reconcile_exhausted-escalated PR recovery:
+ * - POST /prs/:n/approve clears reconcile_exhausted and re-enqueues
  * - POST /prs/:n/unpark clears cap-pause and re-enqueues pipeline
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -87,13 +87,6 @@ import type { GitHubClient } from '../github/GitHubClient.js';
 import type { PRReviewService } from '../github/PRReviewService.js';
 import type { SessionManager } from '../session/SessionManager.js';
 
-const CAP_PAUSE_JSON = JSON.stringify({
-  reason: 'stalled_reconcile_cap',
-  source: 'review',
-  severity: 'needs_attention',
-  retry_strategy: 'manual_action',
-});
-
 function makeCapPRRow(overrides: Record<string, unknown> = {}) {
   return {
     id: 1,
@@ -123,12 +116,13 @@ function makeCapPRRow(overrides: Record<string, unknown> = {}) {
     merge_state_checked_at: null,
     failing_checks: null,
     pending_push: 0,
-    pause_reason: CAP_PAUSE_JSON,
+    pause_reason: null,
     pre_review_stage: 'blocked_autofix',
     pause_reason_set_at: null,
     conflict_nudge_sha: null,
     ci_remediation_attempted_sha: null,
     autofix_shas: null,
+    reconcile_exhausted: 1,
     ...overrides,
   };
 }
@@ -169,7 +163,7 @@ describe('POST /prs/:owner/:repoName/:prNumber/approve — cap-escalated PR', ()
     vi.clearAllMocks();
   });
 
-  it('calls clearTerminalPRFlags when PR has stalled_reconcile_cap pause', async () => {
+  it('calls clearTerminalPRFlags when PR has reconcile_exhausted set', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(makeCapPRRow() as never);
 
     const runAutofixPipeline = vi
@@ -240,7 +234,7 @@ describe('POST /prs/:owner/:repoName/:prNumber/approve — cap-escalated PR', ()
 
   it('does NOT call clearTerminalPRFlags when PR has no cap pause', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(
-      makeCapPRRow({ pause_reason: null }) as never,
+      makeCapPRRow({ reconcile_exhausted: 0 }) as never,
     );
 
     const runAutofixPipeline = vi
@@ -326,7 +320,10 @@ describe('POST /prs/:owner/:repoName/:prNumber/approve — baseline_escalation_f
 
   it('clears the pause (human sign-off) without re-running the review pipeline', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(
-      makeCapPRRow({ pause_reason: BASELINE_FLOOR_PAUSE_JSON }) as never,
+      makeCapPRRow({
+        pause_reason: BASELINE_FLOOR_PAUSE_JSON,
+        reconcile_exhausted: 0,
+      }) as never,
     );
 
     const runAutofixPipeline = vi
@@ -362,7 +359,10 @@ describe('POST /prs/:owner/:repoName/:prNumber/approve — baseline_escalation_f
 
   it('does NOT clear the pause for merge_conflict — approval cannot resolve an unmergeable PR', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(
-      makeCapPRRow({ pause_reason: MERGE_CONFLICT_PAUSE_JSON }) as never,
+      makeCapPRRow({
+        pause_reason: MERGE_CONFLICT_PAUSE_JSON,
+        reconcile_exhausted: 0,
+      }) as never,
     );
 
     const app = express();

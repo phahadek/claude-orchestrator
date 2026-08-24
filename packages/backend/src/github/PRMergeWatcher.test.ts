@@ -236,6 +236,7 @@ function makePRRow(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
     pending_push: 0,
     pause_reason: null,
     ci_remediation_attempted_sha: null,
+    reconcile_exhausted: 0,
     ...overrides,
   };
 }
@@ -1562,15 +1563,16 @@ describe('PRMergeWatcher becomes-clean re-drive', () => {
     expect(vi.mocked(autoMerger.attempt)).not.toHaveBeenCalled();
   });
 
-  it('considers (re-drives) a PR carrying a non-CI pause reaching clean, without clearing the pause (#1449 scenario)', async () => {
-    // stalled_reconcile_cap is a non-CI, terminal pause that poll() skips
+  it('considers (re-drives) a PR carrying reconcile_exhausted reaching clean, without clearing the flag (#1449 scenario)', async () => {
+    // reconcile_exhausted is a non-CI, terminal flag that poll() skips
     // entirely via isTerminalStalePR — so this row is only ever reconsidered
     // through the escalated-stale sweep. The transition hook must still fire
-    // attempt() so the row is "considered", but must not clear the pause —
-    // AutoMerger's own pause_reason guard blocks the actual merge until the
-    // pause is cleared through a trusted channel.
+    // attempt() so the row is "considered", but must not clear the flag —
+    // AutoMerger's own pause_reason guard blocks the actual merge until a
+    // live cause is cleared through a trusted channel.
     const pr = makePRRow({
-      pause_reason: 'stalled_reconcile_cap',
+      pause_reason: null,
+      reconcile_exhausted: 1,
       merge_state: 'unknown',
       mergeable: 0,
     });
@@ -3449,6 +3451,64 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
     expect(sent).not.toContain('/pull/42/checks');
     // GitHub mergeability was NOT consulted — returned early after test gate
     expect(vi.mocked(github.categorizeMergeability)).not.toHaveBeenCalled();
+  });
+
+  it('still pauses with ci_failing when reconcile_exhausted is set but no live blocking cause exists (#1037 regression)', async () => {
+    // reconcile_exhausted is orthogonal to pause_reason and must never
+    // suppress the F2 gate's own CI-failure detection. Exercised via
+    // checkMergeabilityNow — the direct-call path PRReviewService uses right
+    // after a review completes, bypassing poll()'s isTerminalStalePR
+    // quota-conserving skip — since that's the actual call site that
+    // previously discarded #1037's verify_failed via TERMINAL_MERGE_PAUSE_REASONS.
+    const pr = makePRRow({
+      head_sha: 'sha-fail',
+      session_id: 'coding-session',
+      ci_remediation_attempted_sha: null,
+      pause_reason: null,
+      reconcile_exhausted: 1,
+    });
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+    const github = makeMockGitHub();
+    mockCategorizeClean(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-1',
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
+      state: 'failed',
+      output: 'FAIL src/foo.test.ts\n  ● test name\n    expected 1 to equal 2',
+      started_at: 1000,
+      finished_at: 2000,
+    } as any);
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.checkMergeabilityNow(42, 'owner/repo');
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'ci_failing',
+      'FAIL src/foo.test.ts\n  ● test name\n    expected 1 to equal 2',
+    );
   });
 
   it('proceeds to review/merge when latest-SHA test passes (no gate)', async () => {

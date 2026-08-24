@@ -26,12 +26,10 @@ import {
   clearTerminalPRFlags,
   setPauseReason,
   setPreReviewStage,
+  setReconcileExhausted,
   upsertPullRequest,
 } from '../db/queries.js';
-import {
-  isMergeBlockingPause,
-  parsePauseReasonSet,
-} from '../db/pauseReason.js';
+import { isMergeBlockingPause } from '../db/pauseReason.js';
 
 const NOW = '2024-01-01T00:00:00Z';
 
@@ -67,7 +65,7 @@ function insertPR(prNumber: number, repo = 'owner/repo'): void {
 function getPRRow(prNumber: number, repo = 'owner/repo') {
   return db
     .prepare<{ pr_number: number; repo: string }>(
-      `SELECT pause_reason, pause_reason_set_at, pre_review_stage
+      `SELECT pause_reason, pause_reason_set_at, pre_review_stage, reconcile_exhausted
        FROM pull_requests
        WHERE pr_number = @pr_number AND repo = @repo`,
     )
@@ -76,6 +74,7 @@ function getPRRow(prNumber: number, repo = 'owner/repo') {
         pause_reason: string | null;
         pause_reason_set_at: number | null;
         pre_review_stage: string | null;
+        reconcile_exhausted: number;
       }
     | undefined;
 }
@@ -124,29 +123,30 @@ describe('clearTerminalPRFlags — DB helper', () => {
     );
   });
 
-  it('does NOT clear pause_reason when stalled_reconcile_cap and trigger is review_verdict', () => {
+  it('does NOT clear reconcile_exhausted when trigger is review_verdict, but still discharges a live cause', () => {
     insertPR(4);
-    setPauseReason(4, 'owner/repo', 'stalled_reconcile_cap');
+    setReconcileExhausted(4, 'owner/repo', true);
+    setPauseReason(4, 'owner/repo', 'review_failed');
 
     clearTerminalPRFlags(4, 'owner/repo', 'review_verdict');
 
     const after = getPRRow(4);
-    expect(after?.pause_reason).not.toBeNull();
-    const set = parsePauseReasonSet(after?.pause_reason ?? null);
-    expect(set).toHaveLength(1);
-    expect(set[0].reason).toBe('stalled_reconcile_cap');
+    expect(after?.reconcile_exhausted).toBe(1);
+    // pause_reason clearing is orthogonal to reconcile_exhausted gating —
+    // the live cause is still discharged.
+    expect(after?.pause_reason).toBeNull();
   });
 
   it.each(['merged', 'closed', 'head_sha_advance', 'human_unpark'] as const)(
-    'clears stalled_reconcile_cap when trigger is %s',
+    'clears reconcile_exhausted when trigger is %s',
     (trigger) => {
       insertPR(5);
-      setPauseReason(5, 'owner/repo', 'stalled_reconcile_cap');
+      setReconcileExhausted(5, 'owner/repo', true);
 
       clearTerminalPRFlags(5, 'owner/repo', trigger);
 
       const after = getPRRow(5);
-      expect(after?.pause_reason).toBeNull();
+      expect(after?.reconcile_exhausted).toBe(0);
     },
   );
 
