@@ -38,6 +38,7 @@ export const ALL_TOP_VIEWS: readonly TopView[] = [
   'architecture',
   'milestone',
   'settings',
+  'tests',
 ];
 
 /** Every TopView must resolve to a declaration (or explicitly null, for views with no ring). */
@@ -64,6 +65,7 @@ export function resolvePanelKeyboardDeclaration(
     case 'architecture':
     case 'milestone':
     case 'settings':
+    case 'tests':
       return registry[view];
     default: {
       const exhaustive: never = view;
