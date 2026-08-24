@@ -18,6 +18,8 @@ vi.mock('../db/queries.js', () => ({
   getSession: vi.fn().mockReturnValue(null),
   getPRIntentForPR: vi.fn().mockReturnValue(null),
   setPauseReason: vi.fn(),
+  getMergedPRForTask: vi.fn().mockReturnValue(null),
+  getMergedLocalBranchForTaskId: vi.fn().mockReturnValue(undefined),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -30,6 +32,7 @@ vi.mock('../tasks/TaskWriteCommands.js', () => ({
 
 vi.mock('../db/migrationReservation.js', () => ({
   getReservationForTaskDirSuffix: vi.fn(),
+  getReservationByNumber: vi.fn(),
 }));
 
 import {
