@@ -1492,7 +1492,7 @@ describe('POST /api/tasks/:taskId/recover', () => {
       );
     });
 
-    it('baseline_escalation_floor resolves to a resume action instead of 422', async () => {
+    it('baseline_escalation_floor resolves to 422 (deliberate none, no recovery action)', async () => {
       vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
         makeAggregate('task-1', '⚠️ Needs Attention', {
           pr_pause_reason: 'baseline_escalation_floor',
@@ -1500,19 +1500,14 @@ describe('POST /api/tasks/:taskId/recover', () => {
           code_session_status: 'idle',
         }),
       ]);
-      const sendOrResume = vi.fn().mockResolvedValue('sess-1');
-      const app = buildAppWithServices({ sendOrResume });
-
-      const res = await supertest(app).post(
+      const res = await supertest(buildApp()).post(
         '/api/tasks/task-1/recover?projectId=proj-1',
       );
-      expect(res.status).toBe(200);
-      expect(res.body).toMatchObject({ ok: true, action: 'resume' });
-      expect(queries.clearTerminalPRFlags).toHaveBeenCalledWith(
-        99,
-        'owner/repo',
-        'human_unpark',
-      );
+      expect(res.status).toBe(422);
+      expect(res.body).toMatchObject({
+        error: 'No recovery action available for this task',
+        pauseReason: 'baseline_escalation_floor',
+      });
     });
   });
 });
