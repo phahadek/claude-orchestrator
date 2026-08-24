@@ -1296,7 +1296,7 @@ describe('resolvePreGrantCapabilities', () => {
   });
 });
 
-describe('this repo\'s own .claude-orchestrator.yml capability_pre_grants', () => {
+describe("this repo's own .claude-orchestrator.yml capability_pre_grants", () => {
   // The M15 pre-grant mechanism is inert unless this repo's own config
   // carries a non-empty, well-formed capability_pre_grants block. These
   // assertions load the real file (not a fixture) so a regression here —
@@ -1308,9 +1308,7 @@ describe('this repo\'s own .claude-orchestrator.yml capability_pre_grants', () =
 
   it('is non-empty', () => {
     expect(config.capability_pre_grants).toBeDefined();
-    expect(Object.keys(config.capability_pre_grants).length).toBeGreaterThan(
-      0,
-    );
+    expect(Object.keys(config.capability_pre_grants).length).toBeGreaterThan(0);
   });
 
   it('uses only keys from PRE_GRANT_SESSION_KINDS', () => {
