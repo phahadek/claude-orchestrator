@@ -632,7 +632,8 @@ export function findAutomaticGateRecoveryEntry(
 ): PauseReasonStruct | null {
   return (
     entries.find(
-      (entry) => entry.source === source && entry.retry_strategy === 'automatic',
+      (entry) =>
+        entry.source === source && entry.retry_strategy === 'automatic',
     ) ?? null
   );
 }

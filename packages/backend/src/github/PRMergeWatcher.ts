@@ -1054,7 +1054,10 @@ export class PRMergeWatcher extends EventEmitter {
     // 'manual_action') — a mergeability-category change never discharges
     // that one, only a genuinely automatic ci pause like ci_failing.
     if (
-      !findAutomaticGateRecoveryEntry(parsePauseReasonSet(pr.pause_reason), 'ci')
+      !findAutomaticGateRecoveryEntry(
+        parsePauseReasonSet(pr.pause_reason),
+        'ci',
+      )
     )
       return;
     // Trigger recovery for any non-CI-failing, non-conflict category.
