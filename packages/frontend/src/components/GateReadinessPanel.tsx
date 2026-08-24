@@ -58,7 +58,6 @@ const SEED_CLASSIFICATION_OPTIONS: SeedItemClassification[] = [
   'needs-triage',
 ];
 
-
 /**
  * Extracts the leading milestone short-token (e.g. "M12") from a board name
  * like "M12 — Orchestrator-run Planning" so it can be matched against a
@@ -1641,7 +1640,9 @@ export function GateReadinessPanel({
                                 )}
                                 data-testid={`seed-item-${outcome}-${item.id}`}
                               >
-                                {outcome === 'applied' ? 'Applied' : 'Confirmed'}
+                                {outcome === 'applied'
+                                  ? 'Applied'
+                                  : 'Confirmed'}
                               </button>
                             );
                           })}

@@ -20,7 +20,10 @@ import {
  * distinct from `confirmed`, which asserts the seed was actually applied and
  * reconciled.
  */
-const RESOLVED_STATES: ReadonlySet<string> = new Set(['confirmed', 'discarded']);
+const RESOLVED_STATES: ReadonlySet<string> = new Set([
+  'confirmed',
+  'discarded',
+]);
 
 /**
  * The closed outcome vocabulary an event may carry. Anything outside this
