@@ -80,7 +80,14 @@ export function isTerminalStalePR(pr: PullRequestRow): boolean {
  * by the caller — and, like sessionBusyInFlightToolCall, suppresses the
  * session_inert fallback: a session correctly waiting on an answer only the
  * operator can give must never be misread as inert purely because it hasn't
- * emitted a session_events row recently.
+ * emitted a session_events row recently. isPreReviewPipelineInFlight reports
+ * whether ReviewOrchestrator.isReviewInFlight currently sees this PR's key
+ * set — true for the whole duration of both the queue-driven review path and
+ * the push-triggered runAutofixPipeline/runTestPipeline path. It is an
+ * in-memory Set that starts empty on every backend restart, so it is false
+ * for a genuinely-stale post-restart pre_review_stage even though that flag
+ * is still set — preserving the boot-recovery case pre_review_interrupted
+ * exists for.
  */
 export function classifyStalledPR(
   pr: PullRequestRow,
@@ -91,6 +98,7 @@ export function classifyStalledPR(
   inertThresholdMs = Infinity,
   sessionBusyInFlightToolCall = false,
   isAwaitingOperatorDecision = false,
+  isPreReviewPipelineInFlight = false,
 ): { kind: StalledPRKind } | null {
   // The docs execution flow's never-auto-merged gate: an open, un-merged
   // human_merge_only PR waits indefinitely for a human to merge it — that is
@@ -175,15 +183,27 @@ export function classifyStalledPR(
   // review): no verdict, no pending push, and no live/errored session holding
   // the slot. reviewSessionStatus is null when review_session_id is absent or
   // the session row is gone — exactly the cases that fall through everything
-  // else and need a fresh enqueueReview.
-  if (!pr.review_result && !pr.pending_push && !reviewSessionStatus) {
+  // else and need a fresh enqueueReview. Excludes a pre-review pipeline that
+  // is currently in flight (isPreReviewPipelineInFlight) — pre_review_stage
+  // reads 'autofix'/'verify'/'tests' while it runs, but that alone can't
+  // distinguish "running" from "stale after a restart," so the in-memory
+  // in-flight signal (which is false after a restart) does instead.
+  if (
+    !pr.review_result &&
+    !pr.pending_push &&
+    !reviewSessionStatus &&
+    !isPreReviewPipelineInFlight
+  ) {
     return { kind: 'pre_review_interrupted' };
   }
 
-  // Errored or killed review session
+  // Errored or killed review session — unless a complete verdict already
+  // exists for the current head (head_sha === last_reviewed_sha), meaning
+  // the review actually finished before its session was later reaped.
   if (
     pr.review_session_id &&
-    (reviewSessionStatus === 'error' || reviewSessionStatus === 'killed')
+    (reviewSessionStatus === 'error' || reviewSessionStatus === 'killed') &&
+    pr.head_sha !== pr.last_reviewed_sha
   ) {
     return { kind: 'errored_review_session' };
   }

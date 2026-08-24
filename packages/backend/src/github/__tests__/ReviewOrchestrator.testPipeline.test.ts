@@ -19,9 +19,10 @@ vi.mock('../../audit/AuditLog', () => ({ recordEvent: vi.fn() }));
 vi.mock('../../session/filePollutionCheck', () => ({
   runFilePollutionCheck: vi.fn().mockResolvedValue({ revertCommitSha: null }),
 }));
+const mockLoadAutofixCommands = vi.fn().mockReturnValue([]);
 vi.mock('../../session/autofix-runner', () => ({
-  loadAutofixCommands: vi.fn().mockReturnValue([]),
-  runAutofix: vi.fn().mockResolvedValue({ success: true, summary: 'no diff' }),
+  loadAutofixCommands: (...args: unknown[]) => mockLoadAutofixCommands(...args),
+  runAutofix: (...args: unknown[]) => mockRunAutofix(...args),
 }));
 
 const PROJECT = { id: 'proj-1', projectDir: '/project' };
@@ -70,6 +71,11 @@ vi.mock('../../session/analyzeGating', () => ({
   computeTriggerContentHash: vi.fn().mockResolvedValue(null),
 }));
 
+// autofix-runner mock — controllable per-test for the overlap regression test below
+const mockRunAutofix = vi
+  .fn()
+  .mockResolvedValue({ success: true, summary: 'no diff' });
+
 // test-runner mock — used only on the "no content hash" fallback path
 const mockRunTestCommands = vi
   .fn()
@@ -117,6 +123,15 @@ vi.mock('../../session/orchestrator-config', () => ({
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
 import { ReviewOrchestrator } from '../ReviewOrchestrator';
+import { getPRByNumber, getSession } from '../../db/queries';
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -317,6 +332,83 @@ describe('ReviewOrchestrator.runTestPipeline — re-run on new content hash', ()
       runOrigin: 'pr_pipeline',
       producer: 'pr_gate',
     });
+  });
+});
+
+describe('ReviewOrchestrator.runTestPipeline — inFlightPRKeys visibility', () => {
+  it('reports isReviewInFlight true while runTestPipeline is executing, false once it settles', async () => {
+    let sawInFlight = false;
+    mockRunProjectTestRequest.mockImplementationOnce(async () => {
+      sawInFlight = orch.isReviewInFlight(9, 'org/repo');
+      return { passed: true, output: 'ok' };
+    });
+
+    const sm = makeSessionManager();
+    const rs = makeReviewService();
+    const orch = new ReviewOrchestrator(rs, sm, true);
+
+    expect(orch.isReviewInFlight(9, 'org/repo')).toBe(false);
+
+    await orch.runTestPipeline(
+      9,
+      'org/repo',
+      'sha-inflight',
+      '/worktree',
+      ['npm test'],
+      300,
+    );
+
+    expect(sawInFlight).toBe(true);
+    expect(orch.isReviewInFlight(9, 'org/repo')).toBe(false);
+  });
+
+  it('stays in-flight for a PR while runAutofixPipeline and runTestPipeline overlap, and only clears once both settle', async () => {
+    mockGetProjectByGithubRepo.mockReturnValue(PROJECT);
+    mockLoadAutofixCommands.mockReturnValue(['npm run lint']);
+    vi.mocked(getPRByNumber).mockReturnValue({
+      session_id: 'sess-1',
+      base_branch: 'dev',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/worktree',
+    } as any);
+
+    const autofixGate = deferred<{ success: boolean; summary: string }>();
+    mockRunAutofix.mockImplementationOnce(() => autofixGate.promise);
+
+    const testGate = deferred<{ passed: boolean; output: string }>();
+    mockRunProjectTestRequest.mockImplementationOnce(() => testGate.promise);
+
+    const sm = makeSessionManager();
+    const rs = makeReviewService();
+    const orch = new ReviewOrchestrator(rs, sm, true);
+
+    const autofixDone = orch.runAutofixPipeline(9, 'org/repo', null);
+    const testsDone = orch.runTestPipeline(
+      9,
+      'org/repo',
+      'sha-overlap',
+      '/worktree',
+      ['npm test'],
+      300,
+    );
+
+    // Let both calls run past their synchronous setup and acquire the shared
+    // in-flight key before either gate resolves.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(orch.isReviewInFlight(9, 'org/repo')).toBe(true);
+
+    // The autofix pipeline finishes first — with ref-counting, the shared
+    // key must stay in-flight because the test pipeline is still running.
+    autofixGate.resolve({ success: true, summary: 'done' });
+    await autofixDone;
+    expect(orch.isReviewInFlight(9, 'org/repo')).toBe(true);
+
+    // Only once the last holder releases does the key clear.
+    testGate.resolve({ passed: true, output: 'ok' });
+    await testsDone;
+    expect(orch.isReviewInFlight(9, 'org/repo')).toBe(false);
   });
 });
 

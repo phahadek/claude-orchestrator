@@ -3613,6 +3613,31 @@ describe('ReviewOrchestrator — runAutofixPipeline helper', () => {
     expect(completeIdx).toBeGreaterThan(startIdx);
   });
 
+  it('reports isReviewInFlight true while runAutofixPipeline is executing, false once it settles', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+
+    let sawInFlight = false;
+    vi.mocked(runAutofix).mockImplementationOnce(async () => {
+      sawInFlight = orch.isReviewInFlight(1, 'owner/repo');
+      return { success: true, summary: 'done' };
+    });
+
+    expect(orch.isReviewInFlight(1, 'owner/repo')).toBe(false);
+
+    await orch.runAutofixPipeline(1, 'owner/repo', 'task-xyz');
+
+    expect(sawInFlight).toBe(true);
+    expect(orch.isReviewInFlight(1, 'owner/repo')).toBe(false);
+  });
+
   it('does nothing when no autofix commands are configured', async () => {
     vi.mocked(loadAutofixCommands).mockReturnValue([]);
 

@@ -112,6 +112,16 @@ export class ReviewOrchestrator {
   private inFlightPRKeys = new Set<string>();
   /** Start timestamps (ms) for in-flight reviews keyed by "prNumber:repo" — used by stall detector. */
   private inFlightStartTimes = new Map<string, number>();
+  /**
+   * Reference counts backing inFlightPRKeys/inFlightStartTimes — three
+   * independent call sites (drain/executeReview, runAutofixPipeline,
+   * runTestPipeline) can hold the same PR key concurrently (e.g. a
+   * push-triggered re-verify pipeline overlapping a queue-driven review for
+   * the same PR). Without counting, whichever site finishes first would
+   * delete the key out from under the other, making isReviewInFlight report
+   * false while a sibling holder is still genuinely running.
+   */
+  private inFlightRefCounts = new Map<string, number>();
   /** In-flight post-revert worktree sync promises, keyed by "prNumber:repo". */
   private pendingSyncs = new Map<string, Promise<void>>();
   /** Resolves once all incomplete pending_review_sync rows from the previous run are retried. */
@@ -200,6 +210,7 @@ export class ReviewOrchestrator {
           );
           this.inFlightPRKeys.delete(key);
           this.inFlightStartTimes.delete(key);
+          this.inFlightRefCounts.delete(key);
           this.running = Math.max(0, this.running - 1);
           void this.drain();
         }
@@ -332,6 +343,28 @@ export class ReviewOrchestrator {
     return `${prJob.prNumber}:${prJob.repo}`;
   }
 
+  /** Marks `key` in-flight, ref-counted across overlapping holders (see inFlightRefCounts). */
+  private acquireInFlight(key: string): void {
+    const count = this.inFlightRefCounts.get(key) ?? 0;
+    this.inFlightRefCounts.set(key, count + 1);
+    if (count === 0) {
+      this.inFlightPRKeys.add(key);
+      this.inFlightStartTimes.set(key, Date.now());
+    }
+  }
+
+  /** Releases one holder's claim on `key`; only clears in-flight state once every holder has released. */
+  private releaseInFlight(key: string): void {
+    const count = this.inFlightRefCounts.get(key) ?? 0;
+    if (count <= 1) {
+      this.inFlightRefCounts.delete(key);
+      this.inFlightPRKeys.delete(key);
+      this.inFlightStartTimes.delete(key);
+    } else {
+      this.inFlightRefCounts.set(key, count - 1);
+    }
+  }
+
   async drain(): Promise<void> {
     await this.bootReady;
     while (
@@ -354,8 +387,7 @@ export class ReviewOrchestrator {
 
       this.running++;
       if (key !== null) {
-        this.inFlightPRKeys.add(key);
-        this.inFlightStartTimes.set(key, Date.now());
+        this.acquireInFlight(key);
       }
 
       if (job.type === 'local_branch') {
@@ -393,8 +425,7 @@ export class ReviewOrchestrator {
         } finally {
           this.running--;
           if (key !== null) {
-            this.inFlightPRKeys.delete(key);
-            this.inFlightStartTimes.delete(key);
+            this.releaseInFlight(key);
           }
           void this.drain();
         }
@@ -419,6 +450,28 @@ export class ReviewOrchestrator {
     if (autofixCommands.length === 0)
       return { success: true, summary: 'no autofix commands — skipped' };
 
+    const key = `${prNumber}:${repo}`;
+    this.acquireInFlight(key);
+    try {
+      return await this.runAutofixPipelineInner(
+        prNumber,
+        repo,
+        taskId,
+        project,
+        autofixCommands,
+      );
+    } finally {
+      this.releaseInFlight(key);
+    }
+  }
+
+  private async runAutofixPipelineInner(
+    prNumber: number,
+    repo: string,
+    taskId: string | null,
+    project: ProjectConfig,
+    autofixCommands: string[],
+  ): Promise<{ success: boolean; summary: string }> {
     const autofixConfig = loadOrchestratorConfig(project.projectDir);
 
     this.sessionManager.emit('message', {
@@ -563,6 +616,34 @@ export class ReviewOrchestrator {
     const project = getProjectByGithubRepo(repo);
     if (!project) return;
 
+    const key = `${prNumber}:${repo}`;
+    this.acquireInFlight(key);
+    try {
+      await this.runTestPipelineInner(
+        prNumber,
+        headSha,
+        worktreePath,
+        commands,
+        timeoutSec,
+        maxRssMb,
+        failFast,
+        project,
+      );
+    } finally {
+      this.releaseInFlight(key);
+    }
+  }
+
+  private async runTestPipelineInner(
+    prNumber: number,
+    headSha: string,
+    worktreePath: string,
+    commands: string[],
+    timeoutSec: number,
+    maxRssMb: number,
+    failFast: boolean,
+    project: ProjectConfig,
+  ): Promise<void> {
     const contentHash = await computeWholeTreeContentHash(worktreePath);
     if (contentHash && getLatestTestRequestRun(project.id, contentHash)) {
       logger.info(
