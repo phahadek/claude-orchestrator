@@ -118,6 +118,19 @@ export function getSeedItemDetail(
   return seedStore.getItemDetail(id);
 }
 
+/**
+ * Moves a single seed_item to a target milestone by item id, independent of
+ * its source task — for when the source task must not itself be moved (e.g.
+ * it's already ✅ Done on the closing milestone). Preserves sources and
+ * event history; only the item's milestone changes.
+ */
+export function rehomeSeedItem(
+  id: string,
+  targetMilestone: string,
+): SeedItem {
+  return seedStore.rehomeItemById(id, targetMilestone, new Date().toISOString());
+}
+
 const DEFAULT_LIST_LIMIT = 20;
 const MAX_LIST_LIMIT = 100;
 

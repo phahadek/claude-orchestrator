@@ -8081,6 +8081,29 @@ export function rehomeSeedItemsBySourceTask(
   return ids;
 }
 
+let _stmtRehomeSeedItemById: Database.Statement | null = null;
+
+/**
+ * Re-homes a single seed_item by id onto a target milestone, independent of
+ * its source task — for moving an item whose source task must stay put (e.g.
+ * a ✅ Done task on a closing milestone). min_deployed_commit is untouched:
+ * it's commit-based and project-scoped, not milestone-scoped.
+ */
+export function rehomeSeedItemById(
+  id: string,
+  milestone: string,
+  updatedAt: string,
+): void {
+  _stmtRehomeSeedItemById ??= db.prepare<{
+    id: string;
+    milestone: string;
+    updated_at: string;
+  }>(
+    `UPDATE seed_item SET milestone = @milestone, updated_at = @updated_at WHERE id = @id`,
+  );
+  _stmtRehomeSeedItemById.run({ id, milestone, updated_at: updatedAt });
+}
+
 export function listSeedItemSources(seedItemId: string): SeedItemSourceRow[] {
   _stmtListSeedItemSources ??= db.prepare<{ seed_item_id: string }>(
     `SELECT * FROM seed_item_source WHERE seed_item_id = @seed_item_id ORDER BY id ASC`,

@@ -10,6 +10,7 @@ import {
   appendSeedItemEvent,
   reopenSeedItem,
   backfillSeedTask,
+  rehomeSeedItem,
 } from '../seed/seedService';
 import type { SeedItemEventOutcome } from '../db/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -228,6 +229,36 @@ export function createSeedStateRouter(): Router {
       res.status(400).json({
         error: err instanceof Error ? err.message : 'seed item reopen failed',
       });
+    }
+  });
+
+  // POST /api/seed/items/:id/rehome  { milestone }
+  router.post('/seed/items/:id/rehome', (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const body = req.body as { milestone?: unknown };
+    const milestone =
+      typeof body.milestone === 'string' ? body.milestone : null;
+    if (!milestone) {
+      res.status(400).json({ error: 'milestone is required' });
+      return;
+    }
+    const existing = getSeedItem(id);
+    if (!existing) {
+      res.status(404).json({ error: `no seed item ${id}` });
+      return;
+    }
+    try {
+      const resolvedMilestone = resolveMilestoneForProject(
+        existing.project,
+        milestone,
+      );
+      res.json(rehomeSeedItem(id, resolvedMilestone));
+    } catch (err) {
+      if (err instanceof UnknownMilestoneError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
     }
   });
 
