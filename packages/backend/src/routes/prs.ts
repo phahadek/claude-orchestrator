@@ -826,7 +826,10 @@ export function createPrsRouter(
         // needs_changes verdict routed from here re-enters the same
         // bounded fix-and-re-review loop as normal.
         let feedbackRouted = false;
-        if (result.verdict === 'needs_changes' || result.verdict === 'incomplete') {
+        if (
+          result.verdict === 'needs_changes' ||
+          result.verdict === 'incomplete'
+        ) {
           const freshPrRow = getPRByNumber(prNumber, repo);
           if (freshPrRow?.session_id) {
             await sessionManager.enqueueFeedback(

@@ -1727,9 +1727,13 @@ describe('ReviewOrchestrator — iteration cap escalation', () => {
     await new Promise((r) => setTimeout(r, 30));
 
     expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce(); // still just the one call from before the cap was reached
-    expect(messages.find((m: any) => m.type === 'review_escalated')).toMatchObject(
-      { type: 'review_escalated', prNumber: 1, repo: 'owner/repo' },
-    );
+    expect(
+      messages.find((m: any) => m.type === 'review_escalated'),
+    ).toMatchObject({
+      type: 'review_escalated',
+      prNumber: 1,
+      repo: 'owner/repo',
+    });
   });
 });
 
