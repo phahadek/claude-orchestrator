@@ -3,6 +3,11 @@ import { recordEvent } from '../audit/AuditLog';
 import { setPauseReason } from '../db/queries';
 import { ORCHESTRATOR_BOT_EMAIL } from '../session/autofix-runner';
 import type { GitHubClient } from './GitHubClient';
+import { GitHubRateLimitError } from './types';
+import {
+  isGitHubRateLimitActive,
+  recordGitHubRateLimit,
+} from './rateLimitBackoff';
 
 /** Matches the AI-Authored-By trailer in a commit message. */
 export const AI_TRAILER_REGEX = /^AI-Authored-By:/m;
@@ -35,13 +40,20 @@ export async function checkCommitAttribution(
   taskId: string | null,
   isCorporateMode: boolean,
 ): Promise<AttributionCheckResult> {
+  if (isGitHubRateLimitActive()) {
+    return { checked: 0, missing: 0, paused: false };
+  }
   let commits: CommitInfo[];
   try {
     commits = await client.getCommitsForPR(repo, prNumber);
   } catch (err) {
-    logger.warn(
-      `[CommitAttributionWatcher] failed to fetch commits for PR #${prNumber} in ${repo}: ${(err as Error).message}`,
-    );
+    if (err instanceof GitHubRateLimitError) {
+      recordGitHubRateLimit(err, '[CommitAttributionWatcher]');
+    } else {
+      logger.warn(
+        `[CommitAttributionWatcher] failed to fetch commits for PR #${prNumber} in ${repo}: ${(err as Error).message}`,
+      );
+    }
     return { checked: 0, missing: 0, paused: false };
   }
 

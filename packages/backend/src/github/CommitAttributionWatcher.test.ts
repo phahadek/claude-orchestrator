@@ -17,6 +17,8 @@ import {
 import { ORCHESTRATOR_BOT_EMAIL } from '../session/autofix-runner';
 import { recordEvent } from '../audit/AuditLog';
 import { setPauseReason } from '../db/queries';
+import { GitHubRateLimitError } from './types';
+import { __resetGitHubRateLimitForTests } from './rateLimitBackoff';
 import type { GitHubClient } from './GitHubClient';
 
 function makeClient(
@@ -29,6 +31,7 @@ function makeClient(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __resetGitHubRateLimitForTests();
 });
 
 describe('AI_TRAILER_REGEX', () => {
@@ -326,5 +329,57 @@ describe('checkCommitAttribution()', () => {
       expect.objectContaining({ event_type: 'attribution_missing' }),
     );
     expect(result.missing).toBe(0);
+  });
+});
+
+describe('checkCommitAttribution() — GitHub rate-limit backoff', () => {
+  it('backs off instead of treating a rate-limit 403 as a generic fetch failure', async () => {
+    const resetAt = new Date(Date.now() + 60_000);
+    const client = {
+      getCommitsForPR: vi
+        .fn()
+        .mockRejectedValue(
+          new GitHubRateLimitError('rate limited', resetAt, 5000, 5000),
+        ),
+    } as unknown as GitHubClient;
+
+    const result = await checkCommitAttribution(
+      client,
+      'owner/repo',
+      11,
+      's1',
+      null,
+      null,
+      false,
+    );
+
+    expect(result).toEqual({ checked: 0, missing: 0, paused: false });
+    expect(vi.mocked(recordEvent)).not.toHaveBeenCalled();
+  });
+
+  it('skips the GitHub call entirely while a shared rate-limit pause is active', async () => {
+    const resetAt = new Date(Date.now() + 60_000);
+    const first = {
+      getCommitsForPR: vi
+        .fn()
+        .mockRejectedValue(
+          new GitHubRateLimitError('rate limited', resetAt, 5000, 5000),
+        ),
+    } as unknown as GitHubClient;
+    await checkCommitAttribution(first, 'owner/repo', 12, 's1', null, null, false);
+
+    const second = makeClient([{ sha: 'h1', message: 'feat: x' }]);
+    const result = await checkCommitAttribution(
+      second,
+      'owner/repo',
+      13,
+      's1',
+      null,
+      null,
+      false,
+    );
+
+    expect(second.getCommitsForPR).not.toHaveBeenCalled();
+    expect(result).toEqual({ checked: 0, missing: 0, paused: false });
   });
 });

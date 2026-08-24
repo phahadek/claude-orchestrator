@@ -31,6 +31,10 @@ import {
 } from '../db/queries';
 import type { GitHubClient, PRReviewDecision } from './GitHubClient';
 import { GitHubApiError, GitHubRateLimitError } from './types';
+import {
+  isGitHubRateLimitActive,
+  recordGitHubRateLimit,
+} from './rateLimitBackoff';
 import { getCorporateMode } from '../config/corporateMode';
 import {
   pauseReasonFromCanonical,
@@ -70,8 +74,6 @@ const CONFLICT_NUDGE_SWEEP_INTERVAL_MS = 120_000;
 export class AutoMerger {
   /** In-flight auto-merge loops keyed by `${repo}#${prNumber}` to prevent double-runs. */
   private active = new Set<string>();
-  private pausedUntil: Date | null = null;
-  private rateLimitBroadcasted = false;
 
   constructor(
     private github: GitHubClient,
@@ -87,19 +89,7 @@ export class AutoMerger {
   }
 
   private handleRateLimit(err: GitHubRateLimitError): void {
-    this.pausedUntil = err.resetAt;
-    if (!this.rateLimitBroadcasted) {
-      this.rateLimitBroadcasted = true;
-      logger.warn(
-        `[AutoMerger] GitHub rate-limited; backing off until ${err.resetAt.toISOString()}`,
-      );
-      this.broadcast({
-        type: 'github_rate_limit_hit',
-        resetAt: err.resetAt.toISOString(),
-        limit: err.limit,
-        used: err.used,
-      });
-    }
+    recordGitHubRateLimit(err, '[AutoMerger]', this.broadcast);
   }
 
   /**
@@ -163,8 +153,7 @@ export class AutoMerger {
    */
   async conflictNudgeSweep(): Promise<void> {
     if (!this.sessions) return;
-    if (this.pausedUntil !== null && Date.now() < this.pausedUntil.getTime())
-      return;
+    if (isGitHubRateLimitActive(this.broadcast)) return;
     const candidates = getConflictNudgeCandidates();
     if (candidates.length === 0) return;
 
@@ -268,12 +257,7 @@ export class AutoMerger {
    * only the PR-attempt path above is otherwise undriven between events.
    */
   async pollOnce(): Promise<void> {
-    if (this.pausedUntil !== null) {
-      if (Date.now() < this.pausedUntil.getTime()) return;
-      this.pausedUntil = null;
-      this.rateLimitBroadcasted = false;
-      this.broadcast({ type: 'github_rate_limit_cleared' });
-    }
+    if (isGitHubRateLimitActive(this.broadcast)) return;
     const approvedPRs = getApprovedOpenPRs();
     for (const pr of approvedPRs) {
       // run() checks pause_reason too, but filtering here avoids spawning the

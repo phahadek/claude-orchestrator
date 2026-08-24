@@ -30,7 +30,8 @@ import { parseDiffFiles } from './GitHubClient';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import type { SessionManager } from '../session/SessionManager';
-import { GitHubApiError } from './types';
+import { GitHubApiError, GitHubRateLimitError } from './types';
+import { recordGitHubRateLimit } from './rateLimitBackoff';
 import type { PullRequest, PRDiff } from './types';
 import type { ServerMessage } from '../ws/types';
 import type { SessionEvent } from '../db/types';
@@ -889,10 +890,17 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       updatePRDraftStatus(prNumber, repo, 0);
       draftTransitioned = true;
     } catch (e) {
-      logger.warn(
-        `[PRReviewService] markPRReady skipped for PR #${prNumber}:`,
-        e,
-      );
+      if (e instanceof GitHubRateLimitError) {
+        recordGitHubRateLimit(e, '[PRReviewService]');
+      } else {
+        logger.warn(
+          `[PRReviewService] markPRReady skipped for PR #${prNumber}:`,
+          e,
+        );
+      }
+      // Left as draft — PRMergeWatcher's draft-ready sweep re-attempts
+      // markPRReady for any PR whose review_result is approved but is still
+      // draft, so a rate-limit 403 here is recoverable rather than terminal.
       recordEvent({
         event_type: 'review_side_effect_failed',
         actor_type: 'system',
