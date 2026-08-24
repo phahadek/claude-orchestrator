@@ -59,9 +59,7 @@ describe('WrapSection launch gating', () => {
       refetch: () => {},
     });
 
-    render(
-      <WrapSection activeProjectId="proj-1" closingMilestoneId="M12" />,
-    );
+    render(<WrapSection activeProjectId="proj-1" closingMilestoneId="M12" />);
     fillInputs();
 
     const reviewButton = await screen.findByTestId('wrap-review-button');
@@ -89,9 +87,7 @@ describe('WrapSection launch gating', () => {
       refetch: () => {},
     });
 
-    render(
-      <WrapSection activeProjectId="proj-1" closingMilestoneId="M12" />,
-    );
+    render(<WrapSection activeProjectId="proj-1" closingMilestoneId="M12" />);
     fillInputs();
 
     const reviewButton = await screen.findByTestId('wrap-review-button');
@@ -125,9 +121,7 @@ describe('WrapSection launch gating', () => {
       refetch: () => {},
     });
 
-    render(
-      <WrapSection activeProjectId="proj-1" closingMilestoneId="M12" />,
-    );
+    render(<WrapSection activeProjectId="proj-1" closingMilestoneId="M12" />);
 
     const blockingAxes = await screen.findByTestId('wrap-blocking-axes');
     expect(blockingAxes.textContent).toContain('tasks');

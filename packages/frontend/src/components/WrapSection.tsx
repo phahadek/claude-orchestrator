@@ -41,10 +41,7 @@ const WRAP_PLAN: DeployPlanStep[] = [
   { id: WRAP_STEP_CUT_RELEASE, description: 'Cut release tag' },
 ];
 
-const AXIS_LABELS: Record<
-  keyof MilestoneConvergence['axes'],
-  string
-> = {
+const AXIS_LABELS: Record<keyof MilestoneConvergence['axes'], string> = {
   tasks: 'tasks',
   gate: 'gate',
   seed: 'seed',
@@ -55,7 +52,9 @@ const AXIS_LABELS: Record<
 /** The specific axis keys (of the real 5-axis convergence read) not currently green — used to name what's blocking a wrap launch. */
 function blockingAxisNames(convergence: MilestoneConvergence | null): string[] {
   if (!convergence) return [];
-  return (Object.keys(convergence.axes) as (keyof MilestoneConvergence['axes'])[])
+  return (
+    Object.keys(convergence.axes) as (keyof MilestoneConvergence['axes'])[]
+  )
     .filter((key) => convergence.axes[key].status !== 'green')
     .map((key) => AXIS_LABELS[key]);
 }
@@ -266,7 +265,10 @@ export function WrapSection({ activeProjectId, closingMilestoneId }: Props) {
               {wrapLogExpanded ? 'Hide' : 'Show'} raw log ({wrapEvents.length})
             </button>
             {wrapLogExpanded && (
-              <ul className={styles.wrapEventList} data-testid="wrap-run-events">
+              <ul
+                className={styles.wrapEventList}
+                data-testid="wrap-run-events"
+              >
                 {wrapEvents.map((ev) => (
                   <li key={ev.id}>
                     {ev.step}: {ev.event_type}
