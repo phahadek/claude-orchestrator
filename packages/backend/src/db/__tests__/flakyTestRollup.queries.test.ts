@@ -349,9 +349,9 @@ describe('pruneGhostFlaggedFlakyTests microsecond/millisecond unit normalization
       2,
       nowMs - EIGHT_DAYS_MS + 1000,
     );
-    expect(
-      getFlaggedFlakyTestsRollup('proj-1').map((t) => t.testId),
-    ).toEqual(['test-stale-micros']);
+    expect(getFlaggedFlakyTestsRollup('proj-1').map((t) => t.testId)).toEqual([
+      'test-stale-micros',
+    ]);
 
     // A present-day tick: the row's updated_at is well outside the 7-day
     // window measured from `nowMs`.
@@ -378,9 +378,9 @@ describe('pruneGhostFlaggedFlakyTests microsecond/millisecond unit normalization
     );
     replaceFlaggedFlakyTestsRollup('proj-1', 20, 2, nowMs);
 
-    expect(
-      getFlaggedFlakyTestsRollup('proj-1').map((t) => t.testId),
-    ).toEqual(['test-fresh-micros']);
+    expect(getFlaggedFlakyTestsRollup('proj-1').map((t) => t.testId)).toEqual([
+      'test-fresh-micros',
+    ]);
   });
 });
 

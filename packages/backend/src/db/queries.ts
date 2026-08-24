@@ -9975,7 +9975,9 @@ function hasGhostFlaggedFlakyTests(
   `);
   const row = _stmtHasGhostFlaggedFlakyTests.get({
     project_id: projectId,
-    stale_before: toDigestMicros(computedAt - FLAGGED_FLAKY_ROLLUP_GHOST_STALE_MS),
+    stale_before: toDigestMicros(
+      computedAt - FLAGGED_FLAKY_ROLLUP_GHOST_STALE_MS,
+    ),
     unit_threshold: MS_VS_US_THRESHOLD,
   }) as { has_ghost: number };
   return row.has_ghost === 1;
@@ -10014,7 +10016,9 @@ function pruneGhostFlaggedFlakyTests(
   `);
   const result = _stmtPruneGhostFlaggedFlakyTests.run({
     project_id: projectId,
-    stale_before: toDigestMicros(computedAt - FLAGGED_FLAKY_ROLLUP_GHOST_STALE_MS),
+    stale_before: toDigestMicros(
+      computedAt - FLAGGED_FLAKY_ROLLUP_GHOST_STALE_MS,
+    ),
     unit_threshold: MS_VS_US_THRESHOLD,
   });
   return result.changes;
