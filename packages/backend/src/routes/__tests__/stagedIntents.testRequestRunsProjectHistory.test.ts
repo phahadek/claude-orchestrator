@@ -95,7 +95,13 @@ describe('GET /api/test-request-runs/project', () => {
       false,
     );
     // A different project's run must never appear in proj-1's feed.
-    insertTestRequestRun('run-other-project', 'proj-2', 'hash-other', null, 500);
+    insertTestRequestRun(
+      'run-other-project',
+      'proj-2',
+      'hash-other',
+      null,
+      500,
+    );
 
     const agent = supertest(makeApp());
     const res = await agent
@@ -109,7 +115,9 @@ describe('GET /api/test-request-runs/project', () => {
       'run-queued',
     ]);
 
-    const queued = res.body.runs.find((r: { id: string }) => r.id === 'run-queued');
+    const queued = res.body.runs.find(
+      (r: { id: string }) => r.id === 'run-queued',
+    );
     expect(queued).toMatchObject({
       state: 'queued',
       producer: 'session_request',
@@ -117,7 +125,9 @@ describe('GET /api/test-request-runs/project', () => {
       outcomeCounts: null,
     });
 
-    const running = res.body.runs.find((r: { id: string }) => r.id === 'run-running');
+    const running = res.body.runs.find(
+      (r: { id: string }) => r.id === 'run-running',
+    );
     expect(running).toMatchObject({
       state: 'running',
       producer: 'pr_gate',
@@ -126,7 +136,9 @@ describe('GET /api/test-request-runs/project', () => {
       outcomeCounts: null,
     });
 
-    const finished = res.body.runs.find((r: { id: string }) => r.id === 'run-finished');
+    const finished = res.body.runs.find(
+      (r: { id: string }) => r.id === 'run-finished',
+    );
     expect(finished).toMatchObject({
       state: 'passed',
       producer: 'base_health',

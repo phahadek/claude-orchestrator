@@ -8266,49 +8266,44 @@ export function createStagedIntentsRouter(
   // when extraction has already produced one. Unlike
   // /test-request-runs/history (session-scoped, Tests-tab detail), this is
   // project-wide — it is not gated to one session's own runs.
-  router.get(
-    '/test-request-runs/project',
-    (req: Request, res: Response) => {
-      const projectId =
-        typeof req.query.projectId === 'string' ? req.query.projectId : null;
-      const limit =
-        typeof req.query.limit === 'string' ? Number(req.query.limit) : 100;
-      if (!projectId) {
-        res.status(400).json({ error: 'projectId is required' });
-        return;
-      }
+  router.get('/test-request-runs/project', (req: Request, res: Response) => {
+    const projectId =
+      typeof req.query.projectId === 'string' ? req.query.projectId : null;
+    const limit =
+      typeof req.query.limit === 'string' ? Number(req.query.limit) : 100;
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId is required' });
+      return;
+    }
 
-      const rows = listTestRequestRunsForProject(
-        projectId,
-        Number.isFinite(limit) && limit > 0 ? limit : 100,
-      );
+    const rows = listTestRequestRunsForProject(
+      projectId,
+      Number.isFinite(limit) && limit > 0 ? limit : 100,
+    );
 
-      res.json({
-        runs: rows.map(({ run, outcomeCounts }) => {
-          const classification = classifyTestRunOutcome(run);
-          return {
-            id: run.id,
-            projectId: run.project_id,
-            sessionId: run.session_id,
-            contentHash: run.content_hash,
-            state: run.state,
-            producer: run.producer,
-            runOrigin: run.run_origin,
-            requestedAt: run.requested_at,
-            startedAt: run.started_at,
-            finishedAt: run.finished_at,
-            durationMs:
-              run.finished_at != null
-                ? run.finished_at - run.started_at
-                : null,
-            outcome: classification.outcome,
-            nextAction: classification.nextAction,
-            outcomeCounts,
-          };
-        }),
-      });
-    },
-  );
+    res.json({
+      runs: rows.map(({ run, outcomeCounts }) => {
+        const classification = classifyTestRunOutcome(run);
+        return {
+          id: run.id,
+          projectId: run.project_id,
+          sessionId: run.session_id,
+          contentHash: run.content_hash,
+          state: run.state,
+          producer: run.producer,
+          runOrigin: run.run_origin,
+          requestedAt: run.requested_at,
+          startedAt: run.started_at,
+          finishedAt: run.finished_at,
+          durationMs:
+            run.finished_at != null ? run.finished_at - run.started_at : null,
+          outcome: classification.outcome,
+          nextAction: classification.nextAction,
+          outcomeCounts,
+        };
+      }),
+    });
+  });
 
   router.get('/staged-intents', (req: Request, res: Response) => {
     const projectId =

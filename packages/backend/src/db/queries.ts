@@ -8754,7 +8754,7 @@ export function listTestRequestRunsForSession(
 /** One test_request_runs row plus its test_run_summaries outcome breakdown, when extracted. */
 export interface ProjectTestRunHistoryRow {
   run: TestRequestRunRow;
-  outcomeCounts: TestOutcomeCounts & { total: number } | null;
+  outcomeCounts: (TestOutcomeCounts & { total: number }) | null;
 }
 
 /**

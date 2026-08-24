@@ -630,7 +630,10 @@ export function recoverInterruptedTestRequestRuns(): void {
   // lived only in the crashed process's in-memory Semaphore, so it can never
   // acquire a permit on its own — mark it failed rather than leaving it
   // silently queued forever.
-  const stranded = [...listRunningTestRequestRuns(), ...listQueuedTestRequestRuns()];
+  const stranded = [
+    ...listRunningTestRequestRuns(),
+    ...listQueuedTestRequestRuns(),
+  ];
   for (const run of stranded) {
     logger.warn(
       `[testRequestLane] recovering interrupted run ${run.id} (project ${run.project_id}) as failed`,
