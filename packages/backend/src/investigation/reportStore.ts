@@ -1,7 +1,10 @@
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import { db } from '../db/db';
 import { recordEvent } from '../audit/AuditLog';
 import { TERMINAL_SESSION_STATUSES } from '../db/queries';
+import { getDataDir } from '../config/dataDir';
 
 /**
  * Closed vocabulary for investigation_report.state. There is no persisted
@@ -46,6 +49,7 @@ export interface InvestigationReportRow {
   source: InvestigationReportSource;
   origin_session_id: string | null;
   origin_task_id: string | null;
+  image_path: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -227,6 +231,69 @@ export function updateReportFields(
   if (!updated) {
     throw new Error(
       `investigation_report: failed to read back report ${id} after field update`,
+    );
+  }
+  return updated;
+}
+
+const REPORT_IMAGES_DIRNAME = 'investigation-report-images';
+
+/**
+ * Backend-owned filesystem directory holding screenshot attachment bytes —
+ * not a SQLite BLOB and not an operator-supplied path reference (see the
+ * "Design screenshot attachment for investigation reports" task). Resolved
+ * fresh on every call (mirrors logger.ts/dependencyCachePool.ts's own
+ * getDataDir() usage) rather than cached, so a test pointing getDataDir()
+ * at a tmp dir (e.g. via XDG_DATA_HOME) takes effect without any
+ * module-reload dance.
+ */
+export function getReportImagesDir(): string {
+  return path.join(getDataDir(), REPORT_IMAGES_DIRNAME);
+}
+
+function reportImageFilePath(reportId: string, extension: string): string {
+  return path.join(getReportImagesDir(), `${reportId}${extension}`);
+}
+
+/**
+ * Writes screenshot bytes to backend-owned storage and records the result
+ * on investigation_report.image_path. The directory is created on first
+ * write (fs.mkdirSync({recursive:true}), mirroring planningScratchDir.ts's
+ * own precedent) rather than assumed to pre-exist.
+ *
+ * Ordering guards against a report referencing a missing image file: the
+ * file is written before the row update commits, and rolled back if the
+ * row update then fails — so a crash or disk-full mid-write can never leave
+ * a committed row pointing at a file that isn't there.
+ */
+export function writeReportImage(
+  reportId: string,
+  imageBytes: Buffer,
+  extension: string,
+  updatedAt: string,
+): InvestigationReportRow {
+  const row = getReport(reportId);
+  if (!row) {
+    throw new Error(
+      `investigation_report: no report ${reportId} to attach an image to`,
+    );
+  }
+  fs.mkdirSync(getReportImagesDir(), { recursive: true });
+  const filePath = reportImageFilePath(reportId, extension);
+  fs.writeFileSync(filePath, imageBytes);
+  try {
+    db.prepare(
+      `UPDATE investigation_report SET image_path = ?, updated_at = ? WHERE id = ?`,
+    ).run(filePath, updatedAt, reportId);
+  } catch (err) {
+    fs.rmSync(filePath, { force: true });
+    throw err;
+  }
+  const updated = getReport(reportId);
+  if (!updated) {
+    fs.rmSync(filePath, { force: true });
+    throw new Error(
+      `investigation_report: failed to read back report ${reportId} after image update`,
     );
   }
   return updated;
