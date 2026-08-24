@@ -556,6 +556,52 @@ describe('runGateReconcilerTick', () => {
     expect(getItem(item.id)?.state).toBe('pending');
   });
 
+  it('still pulls and processes a backoff-elapsed pending item even when the runnable tiers alone would consume the entire dispatch budget', async () => {
+    typedSetSetting('max_concurrent_planning_sessions', 1);
+    typedSetSetting('human_reserve', 0);
+    typedSetSetting('max_concurrent_verify_sessions', 1);
+    // available = 1 — exactly enough for one dispatch this tick. A runnable
+    // item alone would consume all of it if the runnable tiers were pulled
+    // first, as they were before pending got first claim on the budget.
+    const runnable = await makeRunnableItem({
+      text: 'freshly runnable, competing for the same budget',
+      classification: 'Read-Only',
+    });
+    const pending = await makeRunnableItem({
+      text: 'not yet triggerable, now elapsed',
+      classification: 'Read-Only',
+    });
+    appendGateItemEvent(pending.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'still waiting',
+    });
+    expect(getItem(pending.id)?.state).toBe('pending');
+    schedulePendingAttempt(
+      pending.id,
+      new Date(Date.now() - 1000).toISOString(),
+      1,
+      new Date().toISOString(),
+    );
+
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(getItem(pending.id)?.state).toBe('pass');
+    expect(getItem(runnable.id)?.state).toBe('runnable');
+    expect(result.skippedForBudget).toBe(1);
+
+    // Restore defaults — settings persist across tests in this file (see
+    // other describe blocks below), and leaving these narrowed would starve
+    // later tests' dispatch budgets of their expected headroom.
+    typedSetSetting('max_concurrent_planning_sessions', 5);
+    typedSetSetting('human_reserve', 1);
+    typedSetSetting('max_concurrent_verify_sessions', 5);
+  });
+
   it('files a follow-up fix task on failure, attaches it as a new source, and re-opens the item', async () => {
     const item = await makeRunnableItem({ classification: 'Read-Only' });
     const verifier: GateItemVerifier = {
