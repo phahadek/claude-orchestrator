@@ -105,6 +105,9 @@ const TYPE_DISPLAY: Record<string, string> = {
   Gate: '🚦 Gate',
 };
 
+/** The exact heading text bodyRender.ts writes for the section. */
+const IMPLEMENTATION_NOTES_SECTION = 'Implementation notes';
+
 function toDisplayStatus(status: string): string {
   return STATUS_DISPLAY[status] ?? status;
 }
@@ -443,6 +446,21 @@ export class LocalTaskBackend implements TaskBackend {
     const file = this.readFile();
     const found = this.findTaskById(file, externalId);
     if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    if (found.task.body !== undefined) {
+      const removed = splicePatchBodySection(
+        found.task.body,
+        IMPLEMENTATION_NOTES_SECTION,
+        { operation: 'remove' },
+      );
+      const result = splicePatchBodySection(
+        removed.applied ? removed.body : found.task.body,
+        IMPLEMENTATION_NOTES_SECTION,
+        { operation: 'append', content: notes },
+      );
+      found.task.body = result.body;
+      this.writeFile(file);
+      return;
+    }
     found.task.notes = notes;
     this.writeFile(file);
   }
@@ -452,6 +470,16 @@ export class LocalTaskBackend implements TaskBackend {
     const file = this.readFile();
     const found = this.findTaskById(file, externalId);
     if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    if (found.task.body !== undefined) {
+      const result = splicePatchBodySection(
+        found.task.body,
+        IMPLEMENTATION_NOTES_SECTION,
+        { operation: 'append', content: note },
+      );
+      found.task.body = result.body;
+      this.writeFile(file);
+      return;
+    }
     const existing = found.task.notes ?? '';
     found.task.notes = existing ? `${existing}\n${note}` : note;
     this.writeFile(file);
