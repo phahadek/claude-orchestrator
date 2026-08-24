@@ -27,6 +27,7 @@ import {
   GATE_DONE_STATES,
   REOPEN_BLOCKED_STATES,
 } from './gateStateVocabulary';
+import { useMilestoneConvergence } from '../hooks/useMilestoneConvergence';
 
 interface Props {
   activeProjectId: string | null;
@@ -1001,18 +1002,13 @@ export function GateReadinessPanel({
   const totalPages = Math.max(1, Math.ceil(itemsTotal / PAGE_SIZE));
   const seedTotalPages = Math.max(1, Math.ceil(seedItemsTotal / PAGE_SIZE));
 
-  const seedForSelected = selectedMilestone
-    ? seedMilestones.find((m) => m.milestone === selectedMilestone)
-    : undefined;
-  const gateForSelected = selectedMilestone
-    ? milestones.find((m) => m.milestone === selectedMilestone)
-    : undefined;
-  const compositeStatus: 'green' | 'blocked' | null =
-    gateForSelected && seedForSelected
-      ? gateForSelected.status === 'green' && seedForSelected.status === 'green'
-        ? 'green'
-        : 'blocked'
-      : null;
+  const { convergence } = useMilestoneConvergence({
+    projectId: activeProjectId,
+    milestoneId: selectedMilestone,
+  });
+  const compositeStatus: 'green' | 'blocked' | null = convergence
+    ? convergence.status
+    : null;
 
   return (
     <div className={styles.panel} data-testid="gate-readiness-panel">
@@ -1028,7 +1024,7 @@ export function GateReadinessPanel({
             data-testid="composite-readiness-status"
           >
             {compositeStatus === 'green'
-              ? '✅ Milestone complete (gate + seed)'
+              ? '✅ Milestone complete'
               : '🚫 Milestone incomplete'}
           </div>
         )}
