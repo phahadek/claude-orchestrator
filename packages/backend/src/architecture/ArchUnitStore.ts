@@ -179,7 +179,6 @@ export function updateUnit(
   if (!row) {
     throw new Error(`arch_unit: no unit ${id} to update`);
   }
-  const before = toArchUnit(row);
   const next = {
     ...row,
     title: fields.title ?? row.title,
