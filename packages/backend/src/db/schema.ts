@@ -2411,6 +2411,17 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+  // Idempotent: markers column for pre-existing test_run_results tables —
+  // nullable JSON array of marker/tag strings (e.g. '["slow"]'), populated
+  // only when the JUnit XML carried a `markers`-named <property> for that
+  // testcase (see extractMarkers in session/test-runner.ts). NULL for every
+  // existing row and for any project whose test runner emits no such
+  // property — purely additive, no backfill.
+  try {
+    target.exec(`ALTER TABLE test_run_results ADD COLUMN markers TEXT`);
+  } catch {
+    /* already exists */
+  }
   // Replaces the getFlakyRollupCandidates/getCandidates join through
   // test_request_runs with a direct project-scoped range scan — see the
   // comment above those functions in queries.ts/flakyTestRollupWorker.ts.
@@ -2528,6 +2539,11 @@ export function runMigrations(target: Database.Database): void {
     `ALTER TABLE test_perf_baselines ADD COLUMN name TEXT NOT NULL DEFAULT ''`,
     `ALTER TABLE test_perf_baselines ADD COLUMN recent_outcomes TEXT NOT NULL DEFAULT '[]'`,
     `ALTER TABLE test_perf_baselines ADD COLUMN recent_durations TEXT NOT NULL DEFAULT '[]'`,
+    // Nullable JSON array of marker/tag strings from the most recent sample
+    // that carried any (see recordTestPerfDigestSample) — mirrors
+    // test_run_results.markers so a test's slow/fast tier is queryable from
+    // its rolling baseline too, without a join. NULL for every existing row.
+    `ALTER TABLE test_perf_baselines ADD COLUMN markers TEXT`,
   ]) {
     try {
       target.exec(columnDdl);

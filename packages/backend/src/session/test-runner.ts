@@ -554,6 +554,7 @@ interface JUnitTestCase {
   durationMs: number;
   failureMessage?: string;
   failureTraceExcerpt?: string;
+  markers?: string[];
 }
 
 /**
@@ -600,6 +601,37 @@ export function isTestIdTouchedByChangedFiles(
     );
   });
   return { touched, confident: true };
+}
+
+/** Matches a testcase's `<properties>` child block, if present (pytest's record_property/user_properties, vitest's analogous custom-properties mechanism). */
+const PROPERTIES_RE = /<properties>([\s\S]*?)<\/properties>/;
+const PROPERTY_RE = /<property\b([^>]*?)(?:\/>|>([\s\S]*?)<\/property>)/g;
+
+/**
+ * Extracts marker/tag metadata from a testcase's `<properties>` child, if
+ * present — a `<property name="markers" value="slow,db"/>` becomes
+ * `["slow", "db"]`. Returns undefined when there's no `<properties>` block
+ * or no `markers`-named property in it, so a testcase with no marker
+ * metadata parses exactly as it did before this property was introduced.
+ */
+function extractMarkers(caseContent: string): string[] | undefined {
+  const propsMatch = caseContent.match(PROPERTIES_RE);
+  if (!propsMatch) return undefined;
+
+  const markers: string[] = [];
+  PROPERTY_RE.lastIndex = 0;
+  let propMatch: RegExpExecArray | null;
+  while ((propMatch = PROPERTY_RE.exec(propsMatch[1])) !== null) {
+    const attrs = parseXmlAttrs(propMatch[1]);
+    if (attrs.name !== 'markers') continue;
+    const value =
+      attrs.value ?? decodeXmlEntities(stripCData(propMatch[2] ?? '')).trim();
+    for (const part of value.split(',')) {
+      const trimmed = part.trim();
+      if (trimmed) markers.push(trimmed);
+    }
+  }
+  return markers.length > 0 ? markers : undefined;
 }
 
 interface JUnitSuite {
@@ -653,6 +685,8 @@ export function parseJUnitXml(xml: string): JUnitSuite[] {
         failureMessage = childOutcome.message;
       }
 
+      const markers = extractMarkers(caseContent);
+
       tests.push({
         id,
         name,
@@ -660,6 +694,7 @@ export function parseJUnitXml(xml: string): JUnitSuite[] {
         durationMs,
         ...(failureMessage ? { failureMessage } : {}),
         ...(failureTraceExcerpt ? { failureTraceExcerpt } : {}),
+        ...(markers ? { markers } : {}),
       });
     }
 
