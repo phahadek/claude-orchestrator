@@ -37,6 +37,12 @@ import { formatTaskId } from '../tasks/taskId';
 import { bindingConstraintIdsForRegions } from './constraintCatalog';
 import type { FilesPathsEntry, DependsOnTaskRef } from './groomGate';
 import { ProjectService } from '../projects/ProjectService';
+import type { ProjectMilestone } from '../projects/ProjectService';
+import {
+  resolveMilestoneRowForProject,
+  canonicalMilestoneKey,
+  UnknownMilestoneError,
+} from '../projects/milestoneResolver';
 import { selectUnitsFromStore } from '../architecture/selectiveInjection';
 import { SIZE_TYPE_CHECK } from '../planning/procedureCore';
 
@@ -674,6 +680,32 @@ export function parseFilesPathsEntries(
   return entries;
 }
 
+/**
+ * How many preceding (by display_order) milestones on the same project groom
+ * loads as neighbour boards, when resolving from the milestones table.
+ * Deliberately kept at 1 — matching the manifest's historical single-
+ * neighbour shape — rather than mirroring opsLoad's default of 3: widening
+ * this multiplies the Notion board fetches and rowsByNormId entries a groom
+ * load pays for, a cost/latency change this task does not make.
+ */
+const GROOM_NEIGHBOUR_LIMIT = 1;
+
+/** Mirrors opsLoad.ts's DB-derived neighbour-board resolution (by display_order, same project). */
+function deriveNeighboursFromRow(
+  row: ProjectMilestone,
+): { id: string; board: string }[] {
+  const project = ProjectService.getById(row.projectId);
+  if (!project) return [];
+  const priorSiblings = project.milestones
+    .filter((m) => m.id !== row.id && m.sourceId)
+    .filter((m) => m.displayOrder < row.displayOrder)
+    .sort((a, b) => a.displayOrder - b.displayOrder);
+  return priorSiblings.slice(-GROOM_NEIGHBOUR_LIMIT).map((m) => ({
+    id: canonicalMilestoneKey(m),
+    board: m.sourceId as string,
+  }));
+}
+
 // ─── main ───────────────────────────────────────────────────────────────
 
 export async function loadGroomContext(
@@ -692,13 +724,32 @@ export async function loadGroomContext(
 
   const repoRoot = opts?.repoRoot ?? config.projectDir;
   const manifest = opts?.manifest ?? loadManifest(repoRoot);
-  const milestoneCfg = manifest.milestones?.[milestone];
-  if (!milestoneCfg) {
+  const manifestCfg = manifest.milestones?.[milestone];
+
+  let row: ProjectMilestone | undefined;
+  if (opts?.projectId) {
+    try {
+      row = resolveMilestoneRowForProject(opts.projectId, milestone);
+    } catch (err) {
+      if (!(err instanceof UnknownMilestoneError)) throw err;
+    }
+  }
+
+  const boardId = row?.sourceId ?? manifestCfg?.board;
+  if (!boardId) {
     throw new Error(
-      `groomLoad: milestone "${milestone}" is not registered in the grooming manifest ` +
+      `groomLoad: milestone "${milestone}" has no resolvable board — no milestones-table row with a source_id` +
+        (opts?.projectId
+          ? ` for project "${opts.projectId}"`
+          : ' (no projectId supplied)') +
+        `, and not registered in the grooming manifest ` +
         `(registered: ${Object.keys(manifest.milestones ?? {}).join(', ') || 'none'}).`,
     );
   }
+
+  const neighbours: { id: string; board: string }[] = row
+    ? deriveNeighboursFromRow(row)
+    : (manifestCfg?.neighbours ?? []);
 
   const integrationBranch =
     opts?.integrationBranch ?? manifest.integration_branch ?? 'dev';
@@ -716,10 +767,7 @@ export async function loadGroomContext(
   const baselineSha = baseline.stdout;
 
   const skipCache = opts?.skipCache ?? false;
-  const boardResolved = await notion.fetchReadyTasks(
-    milestoneCfg.board,
-    skipCache,
-  );
+  const boardResolved = await notion.fetchReadyTasks(boardId, skipCache);
   const board: TaskRow[] = boardResolved.map((r) => rowFromTask(r.task));
   const dependsOnById = new Map(
     boardResolved.map((r) => [r.task.id, r.task.dependsOn ?? []] as const),
@@ -731,7 +779,7 @@ export async function loadGroomContext(
   );
 
   const neighbourBoards: TaskRow[] = [];
-  for (const n of milestoneCfg.neighbours ?? []) {
+  for (const n of neighbours) {
     const rows = await notion.fetchReadyTasks(n.board, skipCache);
     for (const r of rows) {
       rowsByNormId.set(stripHyphens(r.task.id), r.task);
