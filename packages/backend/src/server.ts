@@ -114,9 +114,11 @@ import {
 import {
   createDeployRouter,
   createDeployBuildShaRouter,
+  createWrapRouter,
   setDeployScheduler,
   setDeploySessionManager,
   resumeActiveDeployRuns,
+  resumeActiveWrapRuns,
 } from './routes/deploy';
 import { createPlanUsageRouter, setPlanUsagePoller } from './routes/planUsage';
 import {
@@ -249,6 +251,18 @@ try {
 } catch (err) {
   logger.error(
     `[server] boot deploy-run resume failed: ${err instanceof Error ? err.message : String(err)}`,
+  );
+}
+
+// Same reasoning as the deploy-run resume above, for the independent
+// (project, 'wrap') exclusivity lock: an interrupted wrap run left
+// `running` would otherwise sit orphaned forever, permanently blocking any
+// future wrap launch for that project.
+try {
+  resumeActiveWrapRuns(listProjectRows());
+} catch (err) {
+  logger.error(
+    `[server] boot wrap-run resume failed: ${err instanceof Error ? err.message : String(err)}`,
   );
 }
 
@@ -389,6 +403,7 @@ app.use('/api', createGateStateRouter());
 app.use('/api', createReportStateRouter());
 app.use('/api', createInvestigateRouter(sessionManager));
 app.use('/api', createDeployRouter());
+app.use('/api', createWrapRouter());
 app.use('/api', createSeedStateRouter());
 app.use('/api', createConvergenceRouter(sessionManager));
 app.use('/api', createArchitectureRouter());

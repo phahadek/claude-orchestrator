@@ -15,6 +15,7 @@ import type {
   DeployRunRow,
   DeployRunEventRow,
   DeployRunStatus,
+  DeployRunKind,
 } from '../db/types';
 
 /**
@@ -31,31 +32,36 @@ export function getProjectDeployedSha(projectId: string): string | null {
   return getProjectDeployedShaRow(projectId)?.sha ?? null;
 }
 
-/** Raised by startDeployRun when the project already has an in-flight run. */
+/** Raised by startDeployRun when the project already has an in-flight run of the same kind. */
 export class DeployRunConflictError extends Error {
-  constructor(project: string) {
-    super(`deploy_run: project "${project}" already has an active run`);
+  constructor(project: string, kind: DeployRunKind = 'deploy') {
+    super(`deploy_run: project "${project}" already has an active ${kind} run`);
     this.name = 'DeployRunConflictError';
   }
 }
 
 export interface StartDeployRunInput {
   project: string;
+  /** Defaults to 'deploy' — pass 'wrap' to start a milestone-wrap run instead. */
+  kind?: DeployRunKind;
   targetSha: string;
   startedAt: string;
   runId?: string;
 }
 
 /**
- * Starts a new deploy_run. Relies on idx_deploy_run_active_per_project (a
- * partial unique index on project WHERE status = 'running') to enforce the
- * at-most-one-active-run-per-project constraint atomically — no read-then-write
- * race between the check and the insert.
+ * Starts a new deploy_run. Relies on idx_deploy_run_active_per_project_kind
+ * (a partial unique index on (project, kind) WHERE status = 'running') to
+ * enforce the at-most-one-active-run-per-(project,kind) constraint
+ * atomically — no read-then-write race between the check and the insert. A
+ * deploy and a wrap run for the same project don't conflict with each other.
  */
 export function startDeployRun(input: StartDeployRunInput): DeployRunRow {
+  const kind = input.kind ?? 'deploy';
   const row: DeployRunRow = {
     run_id: input.runId ?? randomUUID(),
     project: input.project,
+    kind,
     target_sha: input.targetSha,
     current_step: null,
     status: 'running',
@@ -66,7 +72,7 @@ export function startDeployRun(input: StartDeployRunInput): DeployRunRow {
     insertDeployRun(row);
   } catch (err) {
     if (err instanceof Error && /UNIQUE constraint failed/.test(err.message)) {
-      throw new DeployRunConflictError(input.project);
+      throw new DeployRunConflictError(input.project, kind);
     }
     throw err;
   }
@@ -77,16 +83,22 @@ export function getDeployRun(runId: string): DeployRunRow | undefined {
   return getDeployRunRow(runId);
 }
 
-/** The project's in-flight run, or undefined if it has none. */
-export function getActiveDeployRun(project: string): DeployRunRow | undefined {
-  return getActiveDeployRunForProject(project);
+/** The project's in-flight run of the given kind, or undefined if it has none. */
+export function getActiveDeployRun(
+  project: string,
+  kind: DeployRunKind = 'deploy',
+): DeployRunRow | undefined {
+  return getActiveDeployRunForProject(project, kind);
 }
 
-/** The project's active run, or (if none) its most recent terminal run. */
-export function getLatestDeployRun(project: string): DeployRunRow | undefined {
+/** The project's active run of the given kind, or (if none) its most recent terminal run of that kind. */
+export function getLatestDeployRun(
+  project: string,
+  kind: DeployRunKind = 'deploy',
+): DeployRunRow | undefined {
   return (
-    getActiveDeployRunForProject(project) ??
-    getLatestDeployRunForProject(project)
+    getActiveDeployRunForProject(project, kind) ??
+    getLatestDeployRunForProject(project, kind)
   );
 }
 

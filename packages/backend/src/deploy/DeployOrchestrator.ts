@@ -26,7 +26,7 @@ import {
   reportProjectDeploy,
   getProjectDeployedSha,
 } from './deployService';
-import type { DeployRunRow } from '../db/types';
+import type { DeployRunRow, DeployRunKind } from '../db/types';
 
 /**
  * Conventional step id for the step that restarts this project's own backend
@@ -475,6 +475,14 @@ export class DeployOrchestrator {
     private readonly project: string,
     private readonly projectDir: string,
     private readonly deps: DeployOrchestratorDeps,
+    /**
+     * 'deploy' (default) drives this project's production deploy playbook;
+     * 'wrap' drives the orchestrator-owned milestone-wrap playbook. Each
+     * kind gets its own exclusivity lock (idx_deploy_run_active_per_project_kind
+     * is scoped to (project, kind)), so a deploy and a wrap can run
+     * concurrently for the same project.
+     */
+    private readonly kind: DeployRunKind = 'deploy',
   ) {
     this.loadPlaybook = deps.loadPlaybook ?? loadDeployPlaybook;
     this.loadBindings = deps.loadDeployBindings ?? loadDeployBindings;
@@ -529,6 +537,7 @@ export class DeployOrchestrator {
       targetSha ?? (await this.resolveDeployTarget(this.projectDir));
     const run = startDeployRun({
       project: this.project,
+      kind: this.kind,
       targetSha: resolvedSha,
       startedAt: this.now(),
     });
@@ -549,7 +558,7 @@ export class DeployOrchestrator {
    * project has no active run.
    */
   async resume(): Promise<void> {
-    const active = getActiveDeployRun(this.project);
+    const active = getActiveDeployRun(this.project, this.kind);
     if (!active) return;
     const loaded = this.loadPlaybook(this.projectDir);
     if (!loaded.ok) {
@@ -793,7 +802,12 @@ export class DeployOrchestrator {
       });
     }
 
-    reportProjectDeploy(this.project, targetSha);
+    // A wrap run's target_sha is the milestone being closed (or the dev SHA
+    // it's promoting), never a build this project's runtime is now serving
+    // — only a 'deploy' run's success actually changes what's deployed.
+    if (this.kind === 'deploy') {
+      reportProjectDeploy(this.project, targetSha);
+    }
     completeDeployRun(runId, 'succeeded', this.now());
   }
 

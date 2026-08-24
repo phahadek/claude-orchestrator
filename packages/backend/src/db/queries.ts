@@ -77,6 +77,7 @@ import type {
   GateAccretionRow,
   GateItemClassification,
   DeployRunRow,
+  DeployRunKind,
   DeployRunEventRow,
   NewDeployRunEventRow,
   SeedItemRow,
@@ -5656,41 +5657,56 @@ export function getDeployRunAsOf(
   return result as DeployRunAsOf;
 }
 
-/** The project's in-flight run, if any — relies on the at-most-one-active-run-per-project index. */
+/**
+ * The project's in-flight run of the given kind, if any — relies on the
+ * at-most-one-active-run-per-(project,kind) index. `kind` defaults to
+ * 'deploy' so existing callers (a plain project deploy) are unaffected; a
+ * wrap run is looked up by passing kind: 'wrap' explicitly.
+ */
 export function getActiveDeployRunForProject(
   project: string,
+  kind: DeployRunKind = 'deploy',
 ): DeployRunRow | undefined {
-  _stmtGetActiveDeployRunForProject ??= db.prepare<{ project: string }>(
-    `SELECT * FROM deploy_run WHERE project = @project AND status = 'running'`,
+  _stmtGetActiveDeployRunForProject ??= db.prepare<{
+    project: string;
+    kind: string;
+  }>(
+    `SELECT * FROM deploy_run WHERE project = @project AND kind = @kind AND status = 'running'`,
   );
-  return _stmtGetActiveDeployRunForProject.get({ project }) as
+  return _stmtGetActiveDeployRunForProject.get({ project, kind }) as
     | DeployRunRow
     | undefined;
 }
 
-/** The project's most recently started run (running or terminal), if any. */
+/** The project's most recently started run (running or terminal) of the given kind, if any. */
 export function getLatestDeployRunForProject(
   project: string,
+  kind: DeployRunKind = 'deploy',
 ): DeployRunRow | undefined {
-  _stmtGetLatestDeployRunForProject ??= db.prepare<{ project: string }>(
-    `SELECT * FROM deploy_run WHERE project = @project ORDER BY started_at DESC LIMIT 1`,
+  _stmtGetLatestDeployRunForProject ??= db.prepare<{
+    project: string;
+    kind: string;
+  }>(
+    `SELECT * FROM deploy_run WHERE project = @project AND kind = @kind ORDER BY started_at DESC LIMIT 1`,
   );
-  return _stmtGetLatestDeployRunForProject.get({ project }) as
+  return _stmtGetLatestDeployRunForProject.get({ project, kind }) as
     | DeployRunRow
     | undefined;
 }
 
 /**
  * Inserts a new deploy_run row. Throws (SQLITE_CONSTRAINT_UNIQUE) if the
- * project already has a run with status = 'running' — enforced by
- * idx_deploy_run_active_per_project rather than a read-then-write check.
+ * project already has a run of the same kind with status = 'running' —
+ * enforced by idx_deploy_run_active_per_project_kind rather than a
+ * read-then-write check. A deploy and a wrap run for the same project don't
+ * conflict with each other.
  */
 export function insertDeployRun(row: DeployRunRow): void {
   _stmtInsertDeployRun ??= db.prepare<DeployRunRow>(`
     INSERT INTO deploy_run
-      (run_id, project, target_sha, current_step, status, started_at, completed_at)
+      (run_id, project, kind, target_sha, current_step, status, started_at, completed_at)
     VALUES
-      (@run_id, @project, @target_sha, @current_step, @status, @started_at, @completed_at)
+      (@run_id, @project, @kind, @target_sha, @current_step, @status, @started_at, @completed_at)
   `);
   _stmtInsertDeployRun.run(row);
 }

@@ -110,6 +110,20 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
     reason: 'deploy launch button',
   },
 
+  // -- deploy.ts (milestone wrap) -------------------------------------------
+  'POST /api/wrap/launch': {
+    audience: 'known-gap',
+    reason:
+      'wrap button UI (WrapSection.tsx) is a sibling task, not landed yet',
+    fixTask: 'Add the milestone-wrap frontend section (sibling task)',
+  },
+  'POST /api/wrap/confirm': {
+    audience: 'known-gap',
+    reason:
+      "wrap's confirm-gate UI (WrapSection.tsx) is a sibling task, not landed yet",
+    fixTask: 'Add the milestone-wrap frontend section (sibling task)',
+  },
+
   // -- setup.ts ------------------------------------------------------------
   'POST /api/setup/validate': {
     audience: 'operator',

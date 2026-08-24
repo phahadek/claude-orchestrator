@@ -249,6 +249,7 @@ describe('deploy_run.status instrumentation', () => {
     insertDeployRun({
       run_id: RUN_ID,
       project: 'proj-1',
+      kind: 'deploy',
       target_sha: 'sha-1',
       current_step: null,
       status: 'running',
