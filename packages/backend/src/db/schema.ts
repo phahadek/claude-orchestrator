@@ -875,29 +875,6 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
-  // Awaiting-operator-decision state: a session that correctly refuses to
-  // self-authorize and asks the operator a question it cannot answer itself
-  // (extends the session.requestCapability precedent — see
-  // isSessionAwaitingCapabilityDisposition — to any operator-only decision,
-  // not just a capability grant). Non-null awaiting_operator_question is the
-  // marker; awaiting_operator_asked_at bounds how long it may sit unanswered
-  // before OrphanedTaskSweeper surfaces it instead of parking it forever.
-  try {
-    target.exec(
-      `ALTER TABLE sessions ADD COLUMN awaiting_operator_question TEXT`,
-    );
-  } catch {
-    /* already exists */
-  }
-
-  try {
-    target.exec(
-      `ALTER TABLE sessions ADD COLUMN awaiting_operator_asked_at INTEGER`,
-    );
-  } catch {
-    /* already exists */
-  }
-
   // Task-level pause reasons for tasks that have never had a PR (e.g. launch_failed).
   target.exec(`
     CREATE TABLE IF NOT EXISTS task_pause_reasons (
@@ -3141,6 +3118,28 @@ export function runMigrations(target: Database.Database): void {
       throw err;
     }
   }
+
+  // Awaiting-operator-decision state: a session that correctly refuses to
+  // self-authorize and asks the operator a question it cannot answer itself
+  // (extends the session.requestCapability precedent — see
+  // isSessionAwaitingCapabilityDisposition, which is itself keyed off a
+  // staged_intent side row rather than a sessions column — to any
+  // operator-only decision, not just a capability grant). A side table
+  // rather than new sessions columns: sessions is a hot, wide table read by
+  // cost-sensitive planner-plan-dependent queries (see
+  // idx_sessions_task_id_norm_flow_started_at's covering-index test), and
+  // even a single additional column measurably perturbs SQLite's
+  // no-ANALYZE-stats cost tie-breaking between existing indexes. A present
+  // row is the marker; asked_at bounds how long it may sit unanswered
+  // before OrphanedTaskSweeper surfaces it instead of parking it forever.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS session_operator_questions (
+      session_id TEXT    PRIMARY KEY,
+      question   TEXT    NOT NULL,
+      asked_at   INTEGER NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+    )
+  `);
 
   runStructuredResultExtractedClearBackfill(target);
 }

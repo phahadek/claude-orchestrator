@@ -258,7 +258,7 @@ export class OrphanedTaskSweeper {
     ) {
       if (
         !isOperatorDecisionPastWindow(
-          latestSession,
+          latestSession.session_id,
           AWAITING_OPERATOR_DECISION_WINDOW_MS,
         )
       ) {

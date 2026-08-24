@@ -2,7 +2,8 @@
  * Tests for the awaiting-operator-decision state — extends the
  * isSessionAwaitingCapabilityDisposition precedent to any operator-only
  * question, not just a capability grant. See queries.ts's "awaiting-operator-
- * decision" section.
+ * decision" section. Tracked in the session_operator_questions side table
+ * (not new sessions columns — see that section's comment for why).
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -25,6 +26,7 @@ import {
 } from '../queries.js';
 
 beforeEach(() => {
+  db.prepare('DELETE FROM session_operator_questions').run();
   db.prepare('DELETE FROM sessions').run();
 });
 
@@ -70,10 +72,10 @@ describe('awaiting-operator-decision state', () => {
     seedSession('sess-1');
     setSessionAwaitingOperatorDecision('sess-1', 'Question?', 1000);
 
-    const row = getSession('sess-1');
-    expect(row?.pause_reason).not.toBe('stalled_idle');
-    expect(row?.awaiting_operator_question).toBe('Question?');
-    expect(isSessionAwaitingOperatorDecision(row!)).toBe(true);
+    const row = getSession('sess-1')!;
+    expect(row.pause_reason).not.toBe('stalled_idle');
+    expect(getSessionOperatorQuestion('sess-1')?.question).toBe('Question?');
+    expect(isSessionAwaitingOperatorDecision(row)).toBe(true);
   });
 
   it('returns null when no question is pending', () => {
@@ -84,43 +86,57 @@ describe('awaiting-operator-decision state', () => {
     );
   });
 
-  it('requires status idle — a running session with a stale marker does not read as awaiting', () => {
+  it('requires status idle — a running session with a pending question does not read as awaiting', () => {
     seedSession('sess-1', 'running');
     setSessionAwaitingOperatorDecision('sess-1', 'Question?', 1000);
 
-    const row = getSession('sess-1');
-    expect(isSessionAwaitingOperatorDecision(row!)).toBe(false);
+    const row = getSession('sess-1')!;
+    expect(isSessionAwaitingOperatorDecision(row)).toBe(false);
   });
 
   it('is discharged when the operator answers', () => {
     seedSession('sess-1');
     setSessionAwaitingOperatorDecision('sess-1', 'Question?', 1000);
-    expect(isSessionAwaitingOperatorDecision(getSession('sess-1')!)).toBe(true);
+    expect(isSessionAwaitingOperatorDecision(getSession('sess-1')!)).toBe(
+      true,
+    );
 
     clearSessionAwaitingOperatorDecision('sess-1');
 
-    const row = getSession('sess-1');
-    expect(row?.awaiting_operator_question).toBeNull();
-    expect(row?.awaiting_operator_asked_at).toBeNull();
     expect(getSessionOperatorQuestion('sess-1')).toBeNull();
-    expect(isSessionAwaitingOperatorDecision(row!)).toBe(false);
+    expect(isSessionAwaitingOperatorDecision(getSession('sess-1')!)).toBe(
+      false,
+    );
+  });
+
+  it('re-parking overwrites the previous question rather than accumulating rows', () => {
+    seedSession('sess-1');
+    setSessionAwaitingOperatorDecision('sess-1', 'First question?', 1000);
+    setSessionAwaitingOperatorDecision('sess-1', 'Second question?', 2000);
+
+    expect(getSessionOperatorQuestion('sess-1')).toEqual({
+      question: 'Second question?',
+      askedAt: 2000,
+    });
   });
 
   it('isOperatorDecisionPastWindow is false within the window and true once elapsed', () => {
     seedSession('sess-1');
     setSessionAwaitingOperatorDecision('sess-1', 'Question?', 1000);
-    const row = getSession('sess-1')!;
 
-    expect(isOperatorDecisionPastWindow(row, 60_000, 1000 + 30_000)).toBe(
-      false,
-    );
-    expect(isOperatorDecisionPastWindow(row, 60_000, 1000 + 60_001)).toBe(true);
+    expect(
+      isOperatorDecisionPastWindow('sess-1', 60_000, 1000 + 30_000),
+    ).toBe(false);
+    expect(
+      isOperatorDecisionPastWindow('sess-1', 60_000, 1000 + 60_001),
+    ).toBe(true);
   });
 
   it('isOperatorDecisionPastWindow is false when nothing is pending', () => {
     seedSession('sess-1');
-    const row = getSession('sess-1')!;
-    expect(isOperatorDecisionPastWindow(row, 60_000, 10_000_000)).toBe(false);
+    expect(isOperatorDecisionPastWindow('sess-1', 60_000, 10_000_000)).toBe(
+      false,
+    );
   });
 
   it('a session awaiting an operator decision still reports as holding its task, with the reason retrievable rather than silent', () => {

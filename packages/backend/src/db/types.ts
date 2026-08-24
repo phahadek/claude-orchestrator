@@ -63,12 +63,6 @@ export interface Session {
   pending_done_call_site: string | null;
   terminal_completion_reason: string | null; // reason string markTerminal passed to markSessionDone, persisted for lookup after the session has ended
   last_event_at: number | null; // denormalised MAX(session_events.timestamp) for this session, maintained at event-insert time
-  // Awaiting-operator-decision state (extends the session.requestCapability
-  // precedent to any operator-only question) — see
-  // isSessionAwaitingOperatorDecision in queries.ts. Non-null question is the
-  // marker; asked_at bounds the unanswered window.
-  awaiting_operator_question: string | null;
-  awaiting_operator_asked_at: number | null;
 }
 
 export type NewSession = Omit<
@@ -101,8 +95,6 @@ export type NewSession = Omit<
   | 'pending_done_call_site'
   | 'terminal_completion_reason'
   | 'last_event_at'
-  | 'awaiting_operator_question'
-  | 'awaiting_operator_asked_at'
 > & {
   ended_at?: number | null;
   terminalized_at?: number | null;

@@ -10762,16 +10762,19 @@ export function isSessionAwaitingCapabilityDisposition(
 // ── awaiting-operator-decision ───────────────────────────────────────────────
 //
 // Extends the isSessionAwaitingCapabilityDisposition precedent above from one
-// specific question (a capability grant) to any question only the operator
-// can answer — e.g. a session that correctly refuses to self-authorize an
-// ambiguous instruction and asks rather than guessing. Stored directly on the
-// session row (awaiting_operator_question / awaiting_operator_asked_at)
-// rather than a side table: unlike a capability request, there is no
-// separate approve/reject workflow to model, just "is someone waiting on an
-// answer, and since when."
+// specific question (a capability grant, tracked via a staged_intent side
+// row) to any question only the operator can answer — e.g. a session that
+// correctly refuses to self-authorize an ambiguous instruction and asks
+// rather than guessing. Tracked the same way: a side table
+// (session_operator_questions), not new sessions columns — sessions is a
+// hot, wide table whose query plans are cost-sensitive (see
+// idx_sessions_task_id_norm_flow_started_at's covering-index regression
+// test), and even one additional column measurably perturbs SQLite's
+// no-ANALYZE-stats index tie-breaking there.
 
 let _stmtSetSessionAwaitingOperatorDecision: Database.Statement | null = null;
 let _stmtClearSessionAwaitingOperatorDecision: Database.Statement | null = null;
+let _stmtGetSessionOperatorQuestion: Database.Statement | null = null;
 
 /** Parks a session awaiting an operator decision, carrying the question it asked. */
 export function setSessionAwaitingOperatorDecision(
@@ -10784,10 +10787,11 @@ export function setSessionAwaitingOperatorDecision(
     question: string;
     asked_at: number;
   }>(
-    `UPDATE sessions
-     SET awaiting_operator_question = @question,
-         awaiting_operator_asked_at = @asked_at
-     WHERE session_id = @session_id`,
+    `INSERT INTO session_operator_questions (session_id, question, asked_at)
+     VALUES (@session_id, @question, @asked_at)
+     ON CONFLICT(session_id) DO UPDATE SET
+       question = excluded.question,
+       asked_at = excluded.asked_at`,
   );
   _stmtSetSessionAwaitingOperatorDecision.run({
     session_id: sessionId,
@@ -10800,12 +10804,7 @@ export function setSessionAwaitingOperatorDecision(
 export function clearSessionAwaitingOperatorDecision(sessionId: string): void {
   _stmtClearSessionAwaitingOperatorDecision ??= db.prepare<{
     session_id: string;
-  }>(
-    `UPDATE sessions
-     SET awaiting_operator_question = NULL,
-         awaiting_operator_asked_at = NULL
-     WHERE session_id = @session_id`,
-  );
+  }>(`DELETE FROM session_operator_questions WHERE session_id = @session_id`);
   _stmtClearSessionAwaitingOperatorDecision.run({ session_id: sessionId });
 }
 
@@ -10813,14 +10812,14 @@ export function clearSessionAwaitingOperatorDecision(sessionId: string): void {
 export function getSessionOperatorQuestion(
   sessionId: string,
 ): { question: string; askedAt: number } | null {
-  const row = getStmtGetSession().get({ session_id: sessionId }) as
-    | Pick<Session, 'awaiting_operator_question' | 'awaiting_operator_asked_at'>
-    | undefined;
-  if (!row || row.awaiting_operator_question === null) return null;
-  return {
-    question: row.awaiting_operator_question,
-    askedAt: row.awaiting_operator_asked_at ?? 0,
-  };
+  _stmtGetSessionOperatorQuestion ??= db.prepare<{ session_id: string }>(
+    `SELECT question, asked_at FROM session_operator_questions WHERE session_id = @session_id`,
+  );
+  const row = _stmtGetSessionOperatorQuestion.get({
+    session_id: sessionId,
+  }) as { question: string; asked_at: number } | undefined;
+  if (!row) return null;
+  return { question: row.question, askedAt: row.asked_at };
 }
 
 /**
@@ -10832,10 +10831,11 @@ export function getSessionOperatorQuestion(
  * isOperatorDecisionPastWindow says otherwise (see below).
  */
 export function isSessionAwaitingOperatorDecision(
-  session: Pick<Session, 'status' | 'awaiting_operator_question'>,
+  session: Pick<Session, 'status' | 'session_id'>,
 ): boolean {
   return (
-    session.status === 'idle' && session.awaiting_operator_question !== null
+    session.status === 'idle' &&
+    getSessionOperatorQuestion(session.session_id) !== null
   );
 }
 
@@ -10847,14 +10847,12 @@ export function isSessionAwaitingOperatorDecision(
  * forever by isSessionAwaitingOperatorDecision.
  */
 export function isOperatorDecisionPastWindow(
-  session: Pick<Session, 'awaiting_operator_asked_at'>,
+  sessionId: string,
   windowMs: number,
   now: number = Date.now(),
 ): boolean {
-  return (
-    session.awaiting_operator_asked_at !== null &&
-    now - session.awaiting_operator_asked_at > windowMs
-  );
+  const pending = getSessionOperatorQuestion(sessionId);
+  return pending !== null && now - pending.askedAt > windowMs;
 }
 
 /** Active (non-terminal-tombstone) intents for a project — superseded rows are always hidden. */
