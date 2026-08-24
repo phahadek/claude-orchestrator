@@ -370,7 +370,7 @@ export class AutoLauncher {
     const resolveBackend = this.options.resolveBackend ?? getTaskBackend;
     const backend = resolveBackend(project.id);
 
-    if (backend.type === 'local') {
+    if (backend.type === 'yaml') {
       return { eligible: 0, launched: 0, skipped: 0, readyTaskIds: [] };
     }
 

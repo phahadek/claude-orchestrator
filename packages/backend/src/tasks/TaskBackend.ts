@@ -168,7 +168,7 @@ export type PatchBodySectionOperation =
  */
 export interface TaskBackend {
   /** Backend identifier; reflects the project's task_source. */
-  readonly type: 'notion' | 'local' | 'jira' | 'github';
+  readonly type: 'notion' | 'yaml' | 'jira' | 'github';
 
   /**
    * Fetch tasks that are ready to be dispatched for the given milestone.
@@ -339,7 +339,7 @@ export class AuditingTaskBackend implements TaskBackend {
     private readonly projectId: string,
   ) {}
 
-  get type(): 'notion' | 'local' | 'jira' | 'github' {
+  get type(): 'notion' | 'yaml' | 'jira' | 'github' {
     return this.inner.type;
   }
 

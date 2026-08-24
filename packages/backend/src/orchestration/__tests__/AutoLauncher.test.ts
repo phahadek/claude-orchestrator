@@ -184,7 +184,7 @@ describe('AutoLauncher — project-driven polling', () => {
 
   it('skips YAML-mode (local backend) projects — AutoLauncher only handles notion/github backends', async () => {
     const localBackend = {
-      type: 'local' as const,
+      type: 'yaml' as const,
       fetchReadyTasks: vi
         .fn()
         .mockResolvedValue([makeResolvedTask({ id: 'yaml-task-1' })]),
@@ -293,7 +293,7 @@ describe('AutoLauncher — project-driven polling', () => {
 
   it('skips tasks that are blocked', async () => {
     const localBackend = {
-      type: 'local' as const,
+      type: 'yaml' as const,
       fetchReadyTasks: vi
         .fn()
         .mockResolvedValue([{ task: makeResolvedTask().task, blocked: true }]),
@@ -321,7 +321,7 @@ describe('AutoLauncher — project-driven polling', () => {
   it('skips tasks that have a PR pause reason', async () => {
     vi.mocked(getPausedPrReasonForTask).mockReturnValue('stuck_timeout');
     const localBackend = {
-      type: 'local' as const,
+      type: 'yaml' as const,
       fetchReadyTasks: vi.fn().mockResolvedValue([makeResolvedTask()]),
     };
     const resolveBackend = vi.fn().mockReturnValue(localBackend);
@@ -428,7 +428,7 @@ describe('AutoLauncher — project-driven polling', () => {
 
   it('does not launch if session already active for task (in-memory check)', async () => {
     const localBackend = {
-      type: 'local' as const,
+      type: 'yaml' as const,
       fetchReadyTasks: vi
         .fn()
         .mockResolvedValue([makeResolvedTask({ id: 'task-active' })]),
@@ -457,9 +457,9 @@ describe('AutoLauncher — project-driven polling', () => {
   });
 
   it('logs task id and live session id when skipping a candidate due to an existing live session', async () => {
-    // Use a notion-mode backend (not 'local') so processProject reaches
+    // Use a notion-mode backend (not 'yaml') so processProject reaches
     // isLaunchCandidate/launchTask instead of short-circuiting at the
-    // backend.type === 'local' guard.
+    // backend.type === 'yaml' guard.
     const notionBackend = {
       type: 'notion' as const,
       fetchReadyTasks: vi
@@ -500,7 +500,7 @@ describe('AutoLauncher — project-driven polling', () => {
   it('does not launch if session already active for task (DB check)', async () => {
     vi.mocked(hasActiveSessionForTask).mockReturnValue(true);
     const localBackend = {
-      type: 'local' as const,
+      type: 'yaml' as const,
       fetchReadyTasks: vi
         .fn()
         .mockResolvedValue([makeResolvedTask({ id: 'task-db-active' })]),

@@ -28,7 +28,7 @@ import { recordAccretionMarker as recordSeedAccretionMarker } from '../../seed/s
 
 function makeBackend(body: string) {
   return {
-    type: 'local' as const,
+    type: 'yaml' as const,
     updateStatus: vi.fn().mockResolvedValue(undefined),
     setDependsOn: vi.fn().mockResolvedValue(undefined),
     fetchTaskPage: vi.fn().mockResolvedValue(body),

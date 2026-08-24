@@ -124,7 +124,7 @@ function makeMockDiffSource(): DiffSource {
 
 function makeMockTaskBackend(): TaskTrackerBackend {
   return {
-    type: 'local',
+    type: 'yaml',
     fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nTest task'),
     updateStatus: vi.fn().mockResolvedValue(undefined),
     fetchTasks: vi.fn().mockResolvedValue([]),
