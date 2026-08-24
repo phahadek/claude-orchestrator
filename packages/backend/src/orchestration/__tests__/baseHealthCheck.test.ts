@@ -65,6 +65,7 @@ import { db } from '../../db/db';
 import {
   checkBaseBranchHealth,
   classifyTestRunOutcome,
+  classifyRun,
 } from '../baseHealthCheck';
 import { filterBaseAttributableFailures } from '../baseAttributableFilter';
 import {
@@ -75,10 +76,35 @@ import {
   clearExtractedStructuredResultsBatch,
   getLatestBaseHealthTestRequestRun,
   getLatestTestRequestRun,
+  getTestRequestRunById,
   updateTestRequestRunState,
 } from '../../db/queries';
+import { typedSetSetting } from '../../config/settings';
 import type { ProjectConfig } from '../../config';
 import type { TestRequestRunRow } from '../../db/types';
+
+/** Writes a test_run_summaries row directly — insertTestRunSummary itself is db/queries.ts-private. */
+function insertSummaryRow(
+  runId: string,
+  projectId: string,
+  totalCount: number,
+  failedCount: number,
+  incomplete = false,
+): void {
+  db.prepare(
+    `INSERT INTO test_run_summaries
+       (test_request_run_id, project_id, passed_count, failed_count, skipped_count, error_count, other_count, total_count, total_duration_ms, concurrent_run_count, oom_killed, incomplete, created_at)
+     VALUES (?, ?, ?, ?, 0, 0, 0, ?, 1000, NULL, 0, ?, ?)`,
+  ).run(
+    runId,
+    projectId,
+    totalCount - failedCount,
+    failedCount,
+    totalCount,
+    incomplete ? 1 : 0,
+    Date.now(),
+  );
+}
 
 function makeProject(overrides: Partial<ProjectConfig> = {}): ProjectConfig {
   return {
@@ -1078,5 +1104,96 @@ describe('checkBaseBranchHealth', () => {
       'hash-coalesce',
     );
     expect(baseHealthRow?.id).toBe('run-coalesce-probe');
+  });
+});
+
+describe('classifyRun suite-size floor', () => {
+  const projectId = 'proj-1';
+
+  function seedBaseline(totalCounts: number[]): void {
+    totalCounts.forEach((totalCount, i) => {
+      const runId = `run-baseline-${i}`;
+      insertTestRequestRun(
+        runId,
+        projectId,
+        `hash-baseline-${i}`,
+        null,
+        Date.now(),
+        undefined,
+        'base_health_probe',
+      );
+      completeTestRequestRun(runId, 'passed', '');
+      insertSummaryRow(runId, projectId, totalCount, 0);
+    });
+  }
+
+  /** Persists the row under test itself (the FK from test_run_summaries requires it) and returns it. */
+  function seedFailedRun(
+    runId: string,
+    overrides: Partial<TestRequestRunRow> = {},
+  ): TestRequestRunRow {
+    insertTestRequestRun(
+      runId,
+      projectId,
+      `hash-${runId}`,
+      null,
+      Date.now(),
+      undefined,
+      'base_health_probe',
+    );
+    completeTestRequestRun(
+      runId,
+      'failed',
+      '',
+      overrides.failure_reason ?? 'generic',
+      null,
+      Boolean(overrides.oom_killed),
+      overrides.test_report_acquisition_attempted !== 0,
+    );
+    return getTestRequestRunById(runId) as TestRequestRunRow;
+  }
+
+  it('classifies unknown when total_count falls below the configured fraction of the established baseline (be735798 shape: 6446 vs 11030)', () => {
+    typedSetSetting('base_health_suite_size_floor_fraction', 0.8);
+    seedBaseline([11007, 11030, 11032, 11046]);
+
+    const run = seedFailedRun('run-truncated');
+    insertSummaryRow(run.id, projectId, 6446, 368);
+
+    expect(classifyRun(run)).toBe('unknown');
+  });
+
+  it('still classifies partial_fail when total_count is at or above the floor (75b97376 shape: 11046 total, 4 failed)', () => {
+    typedSetSetting('base_health_suite_size_floor_fraction', 0.8);
+    seedBaseline([11007, 11030, 11032, 11046]);
+
+    const run = seedFailedRun('run-full');
+    insertSummaryRow(run.id, projectId, 11046, 4);
+
+    expect(classifyRun(run)).toBe('partial_fail');
+  });
+
+  it('classifies exactly as it does today (partial_fail) when no baseline can be established', () => {
+    typedSetSetting('base_health_suite_size_floor_fraction', 0.8);
+    // No prior base_health_probe runs seeded — baseline is unknown.
+
+    const run = seedFailedRun('run-no-baseline');
+    insertSummaryRow(run.id, projectId, 50, 3);
+
+    expect(classifyRun(run)).toBe('partial_fail');
+  });
+
+  it('keeps unknown and total_fail as distinct outcomes', () => {
+    typedSetSetting('base_health_suite_size_floor_fraction', 0.8);
+    seedBaseline([11007, 11030, 11032, 11046]);
+
+    const truncated = seedFailedRun('run-truncated-2');
+    insertSummaryRow(truncated.id, projectId, 6446, 368);
+    expect(classifyRun(truncated)).toBe('unknown');
+
+    // No summary row and no structured_result at all — a genuine crash.
+    const crashed = seedFailedRun('run-crashed');
+    expect(classifyRun(crashed)).toBe('total_fail');
+    expect(classifyRun(truncated)).not.toBe(classifyRun(crashed));
   });
 });

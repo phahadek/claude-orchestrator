@@ -83,6 +83,13 @@ const SettingsSchema = z.object({
   flip_rate_breadth_window_hours: z.coerce.number().int().min(1),
   flaky_remediation_file_threshold: z.coerce.number().int().min(1),
   decision_pick_one_paragraph_threshold: z.coerce.number().int().min(100),
+  // A base-health probe's reported total_count below this fraction of the
+  // project's own established baseline (see getBaseHealthSuiteSizeBaseline)
+  // is treated as a truncated run — its outcome classifies as `unknown`
+  // rather than `partial_fail`, so it cannot file a base-branch-broken
+  // remediation task off a suite that only partly reported. See
+  // baseHealthCheck.ts's classifyRun.
+  base_health_suite_size_floor_fraction: z.coerce.number().min(0).max(1),
   // Tier-3 classifier chronic-error-rate signal — rolling window plus
   // independent per-kind thresholds, same config shape as
   // milestone_attention_aging_threshold_seconds above. errored/usage_limited
@@ -205,6 +212,7 @@ export const SETTING_DEFAULTS: Settings = {
   flip_rate_breadth_window_hours: 24,
   flaky_remediation_file_threshold: 2,
   decision_pick_one_paragraph_threshold: 560,
+  base_health_suite_size_floor_fraction: 0.8,
   tier3_error_rate_window_seconds: 7 * 24 * 60 * 60,
   tier3_error_rate_errored_threshold: 0.5,
   tier3_error_rate_usage_limited_threshold: 0.5,

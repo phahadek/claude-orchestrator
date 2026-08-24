@@ -57,7 +57,9 @@ import {
   getLatestBaseHealthTestRequestRun,
   getTestRequestRunById,
   getTestRunSummary,
+  getBaseHealthSuiteSizeBaseline,
 } from '../db/queries';
+import { typedGetSetting } from '../config/settings';
 import type { TestRequestRunRow, StructuredTestResult } from '../db/types';
 
 const execFileAsync = promisify(execFile);
@@ -194,11 +196,36 @@ function classifyFailedRun(
  * reach the dispatch-gating caller as a confirmed base-branch break, so
  * it's downgraded to `unknown` here — "no confirmed base verdict at all",
  * which AutoLauncher's gate already treats as never-blocking.
+ *
+ * A `partial_fail` is itself downgraded to `unknown` when its summary's
+ * total_count falls short of the project's own established suite size (see
+ * isSuiteTruncated) — a run where both suites wrote a report but one was
+ * truncated mid-collection (e.g. killed partway through) still produces a
+ * `total_count > 0` summary, so classifyFailedRun alone cannot distinguish
+ * it from a normal partial failure. Treating a fraction of the suite as a
+ * confirmed base verdict would file a "base branch is broken" remediation
+ * task off tests that never actually ran. This check is scoped to
+ * base-health classification only — classifyTestRunOutcome (the Tests-tab/
+ * PR-pipeline taxonomy) does not consult it, so PR test verdicts are
+ * unaffected.
  */
+function isSuiteTruncated(run: TestRequestRunRow): boolean {
+  const summary = getTestRunSummary(run.id);
+  if (!summary) return false;
+  const baseline = getBaseHealthSuiteSizeBaseline(run.project_id);
+  if (baseline === null) return false;
+  const floorFraction = typedGetSetting(
+    'base_health_suite_size_floor_fraction',
+  );
+  return summary.total_count < baseline * floorFraction;
+}
+
 export function classifyRun(run: TestRequestRunRow): BaseHealthOutcome {
   if (run.state === 'passed') return 'clean_pass';
   const failed = classifyFailedRun(run);
-  if (failed === 'partial_fail') return 'partial_fail';
+  if (failed === 'partial_fail') {
+    return isSuiteTruncated(run) ? 'unknown' : 'partial_fail';
+  }
   if (!run.test_report_acquisition_attempted) return 'partial_fail';
   if (
     run.failure_reason === 'timeout' ||

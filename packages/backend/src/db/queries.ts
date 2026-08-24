@@ -8946,6 +8946,38 @@ export function getLatestBaseHealthTestRequestRun(
 }
 
 /**
+ * The project's own established base-health suite size — the maximum
+ * total_count reported across its recent base-health-probe runs (run_origin
+ * = 'base_health_probe'), so a legitimately growing suite raises this
+ * baseline on its own rather than needing a hand-maintained threshold.
+ * Bounded to the most recent `sampleLimit` finished probes so a suite that
+ * has permanently shrunk isn't pinned to a stale high-water mark forever.
+ * Returns null when no base-health-probe run for this project has ever
+ * produced a summary — callers must treat that as "no baseline available"
+ * rather than a floor of zero.
+ */
+export function getBaseHealthSuiteSizeBaseline(
+  projectId: string,
+  sampleLimit: number = 50,
+): number | null {
+  const row = db
+    .prepare<{ project_id: string; sample_limit: number }>(
+      `SELECT MAX(total_count) as max_total FROM (
+         SELECT trs.total_count as total_count
+         FROM test_run_summaries trs
+         JOIN test_request_runs r ON r.id = trs.test_request_run_id
+         WHERE r.project_id = @project_id AND r.run_origin = 'base_health_probe'
+         ORDER BY r.finished_at DESC
+         LIMIT @sample_limit
+       )`,
+    )
+    .get({ project_id: projectId, sample_limit: sampleLimit }) as
+    | { max_total: number | null }
+    | undefined;
+  return row?.max_total ?? null;
+}
+
+/**
  * Every base-health-probe run (run_origin = 'base_health_probe') for a
  * project finished at or after `sinceTs` — the history a base-recovery
  * escape check compares a PR's escalation timestamp against, rather than
