@@ -1307,7 +1307,9 @@ export interface GateVerifyFleetState {
  * project filter — every row carries its own project/milestone from
  * gate_item.
  */
-export function getGateVerifyFleetState(now: number = Date.now()): GateVerifyFleetState {
+export function getGateVerifyFleetState(
+  now: number = Date.now(),
+): GateVerifyFleetState {
   const liveSessions = getLiveGateVerifySessions();
   const sessions: GateVerifyFleetSession[] = liveSessions.map((session) => {
     const item = gateStore.getItem(session.itemId);
