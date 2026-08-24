@@ -20,7 +20,7 @@ import {
   isPlanningSession,
   type SessionType,
 } from '../session/sessionPredicates';
-import { toExternalId, normalizeTaskId } from '../tasks/taskId';
+import { toExternalId, normalizeTaskId, parseTaskId } from '../tasks/taskId';
 
 /** Strips a `source:` prefix for URL-building; falls back to the raw id if unprefixed. */
 function bareTaskId(id: string): string {
@@ -28,6 +28,15 @@ function bareTaskId(id: string): string {
     return toExternalId(id);
   } catch {
     return id;
+  }
+}
+
+/** True only for a Notion-sourced task id — gates the notion.so URL fallback below so a yaml/jira/github task never gets a fabricated Notion link. */
+function isNotionSourcedTaskId(id: string): boolean {
+  try {
+    return parseTaskId(id).source === 'notion';
+  } catch {
+    return false;
   }
 }
 import {
@@ -413,7 +422,9 @@ export class OpsSessionLauncher {
   ): Promise<LaunchOutcome> {
     const taskUrl =
       task.url ||
-      `https://www.notion.so/${bareTaskId(task.id).replace(/-/g, '')}`;
+      (isNotionSourcedTaskId(task.id)
+        ? `https://www.notion.so/${bareTaskId(task.id).replace(/-/g, '')}`
+        : '');
     let injectedProcedure:
       | { content: string; title?: string; docsTargetSurface?: string }
       | undefined;

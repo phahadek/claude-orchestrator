@@ -5,7 +5,7 @@
  * board lookup (project.boards.find(...) ?? project.boardId) that could
  * never match gate_item.milestone (a canonical short id like 'M13') and
  * whose fallback (project.boardId) was not a Notion database id at all —
- * see resolveMilestoneDatabaseId in projects/milestoneResolver.ts.
+ * see resolveMilestoneSourceId in projects/milestoneResolver.ts.
  */
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
@@ -82,7 +82,7 @@ function makeItem(overrides: Partial<Parameters<typeof insertItem>[0]> = {}) {
 }
 
 describe('defaultFollowupFiler.fileFollowupFixTask', () => {
-  it('resolves the database id via resolveMilestoneDatabaseId for a canonical-short-id milestone and passes it to createTask', async () => {
+  it('resolves the database id via resolveMilestoneSourceId for a canonical-short-id milestone and passes it to createTask', async () => {
     const item = makeItem();
 
     const result = await defaultFollowupFiler.fileFollowupFixTask(item, {

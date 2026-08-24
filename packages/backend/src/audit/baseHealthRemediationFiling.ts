@@ -37,7 +37,7 @@ import {
   tryClaimBaseHealthRemediationTestFiling,
 } from '../db/queries';
 import {
-  resolveMilestoneDatabaseId,
+  resolveMilestoneSourceId,
   resolveMilestoneForTaskId,
   UnknownMilestoneError,
 } from '../projects/milestoneResolver';
@@ -226,7 +226,7 @@ async function fileClaimedPartialFailTask(
 
   let databaseId: string;
   try {
-    databaseId = resolveMilestoneDatabaseId(trigger.projectId, milestone);
+    databaseId = resolveMilestoneSourceId(trigger.projectId, milestone);
   } catch (err) {
     if (err instanceof UnknownMilestoneError) {
       logger.warn(
@@ -379,7 +379,7 @@ async function fileClaimedTotalFailTask(
 
   let databaseId: string;
   try {
-    databaseId = resolveMilestoneDatabaseId(trigger.projectId, milestone);
+    databaseId = resolveMilestoneSourceId(trigger.projectId, milestone);
   } catch (err) {
     if (err instanceof UnknownMilestoneError) {
       logger.warn(

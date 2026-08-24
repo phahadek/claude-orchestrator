@@ -54,14 +54,18 @@ function canonicalizeExternalId(externalId: string): string {
 /**
  * Idempotently normalize a task ID to `source:externalId` form. If `id` is
  * already a valid prefixed task ID, its source prefix is kept; otherwise it
- * is wrapped as `notion:<id>`. Either way, the external id's hyphenation is
- * canonicalized (see `canonicalizeExternalId`) so hyphenated and hyphenless
- * forms of the same Notion UUID resolve to one task_cache key. This lets
- * Notion adapter methods accept both the raw Notion UUIDs exposed by the
- * groom-context bundle and already-prefixed ids (e.g. from createTask)
- * without double-prefixing the latter.
+ * is wrapped as `${defaultSource}:<id>` (defaulting to `notion`). Either
+ * way, the external id's hyphenation is canonicalized (see
+ * `canonicalizeExternalId`) so hyphenated and hyphenless forms of the same
+ * Notion UUID resolve to one task_cache key. This lets Notion adapter
+ * methods accept both the raw Notion UUIDs exposed by the groom-context
+ * bundle and already-prefixed ids (e.g. from createTask) without
+ * double-prefixing the latter.
  */
-export function normalizeTaskId(id: string): string {
+export function normalizeTaskId(
+  id: string,
+  defaultSource: TaskSource = 'notion',
+): string {
   const colonIndex = id.indexOf(':');
   if (colonIndex >= 0) {
     const source = id.substring(0, colonIndex);
@@ -73,7 +77,7 @@ export function normalizeTaskId(id: string): string {
       );
     }
   }
-  return formatTaskId('notion', canonicalizeExternalId(id));
+  return formatTaskId(defaultSource, canonicalizeExternalId(id));
 }
 
 /**

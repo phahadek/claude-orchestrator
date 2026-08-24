@@ -374,6 +374,29 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
     expect(options.taskName).not.toContain('notion.so/notion:');
   });
 
+  it('never synthesizes a notion.so URL for a yaml-sourced task with no real url', async () => {
+    const launcher = new OpsSessionLauncher(sessionManager as never);
+    const task = {
+      id: 'yaml:some-task',
+      title: 'A yaml task',
+      url: '',
+      blockingDepIds: [],
+    };
+
+    await launcher.launchSelected({
+      projectId: 'proj-1',
+      projectContextUrl: 'https://www.notion.so/context',
+      milestoneId: 'milestone-1',
+      sessionType: 'standard',
+      tasks: [task],
+    });
+
+    expect(start).toHaveBeenCalledTimes(1);
+    const [taskUrl] = start.mock.calls[0];
+    expect(taskUrl).not.toContain('notion.so');
+    expect(taskUrl).toBe('');
+  });
+
   it('passes a non-empty injectedProcedureContent for a groom dispatch', async () => {
     const { loadGroomContext } = await import('../../groom/groomLoad.js');
     (loadGroomContext as ReturnType<typeof vi.fn>).mockResolvedValue(

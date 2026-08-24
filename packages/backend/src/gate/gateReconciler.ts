@@ -25,7 +25,7 @@ import {
 import { catchUpMergeCommits } from './gateMergeConsumer';
 import { catchUpSeedMergeCommits } from '../seed/seedMergeConsumer';
 import {
-  resolveMilestoneDatabaseId,
+  resolveMilestoneSourceId,
   resolveMilestoneRowForProject,
   createWrappedMilestoneChecker,
   UnknownMilestoneError,
@@ -290,7 +290,7 @@ function buildFollowupTaskBody(
 
 export const defaultFollowupFiler: FollowupFixTaskFiler = {
   async fileFollowupFixTask(item, failure) {
-    const databaseId = resolveMilestoneDatabaseId(item.project, item.milestone);
+    const databaseId = resolveMilestoneSourceId(item.project, item.milestone);
     const backend = getTaskBackend(item.project);
     if (!backend.createTask) {
       throw new Error(

@@ -43,7 +43,7 @@ vi.mock('../../projects/milestoneResolver', async (importOriginal) => {
     await importOriginal<typeof import('../../projects/milestoneResolver')>();
   return {
     ...actual,
-    resolveMilestoneDatabaseId: (...args: unknown[]) =>
+    resolveMilestoneSourceId: (...args: unknown[]) =>
       mockResolveMilestoneDatabaseId(...args),
   };
 });

@@ -1196,10 +1196,10 @@ export function proposeGateItemReclassification(
   return { applied: true, item: updated };
 }
 
-/** A raw Notion-style status string counts as not-started when it hasn't left Backlog/Ready. */
-function isNotStartedStatus(notionStatus: string): boolean {
-  if (!notionStatus) return true;
-  return notionStatus.includes('Backlog') || notionStatus.includes('Ready');
+/** A raw cached-status string counts as not-started when it hasn't left Backlog/Ready. */
+function isNotStartedStatus(cachedStatus: string): boolean {
+  if (!cachedStatus) return true;
+  return cachedStatus.includes('Backlog') || cachedStatus.includes('Ready');
 }
 
 /**
@@ -1250,18 +1250,18 @@ export async function backfillGateTask(
   }
 
   const cacheRow = getTaskCache(normalizeTaskId(input.taskId));
-  let notionStatus = '';
+  let cachedStatus = '';
   if (cacheRow) {
     try {
       const parsed = JSON.parse(cacheRow.raw_json) as { status?: string };
-      notionStatus = parsed.status ?? '';
+      cachedStatus = parsed.status ?? '';
     } catch {
       // ignore malformed cache; treated as not-started below
     }
   }
-  if (!isNotStartedStatus(notionStatus)) {
+  if (!isNotStartedStatus(cachedStatus)) {
     throw new Error(
-      `gate backfill: task ${input.taskId} already started (status=${notionStatus})`,
+      `gate backfill: task ${input.taskId} already started (status=${cachedStatus})`,
     );
   }
 
