@@ -110,6 +110,7 @@ type EventType =
   | 'arch_unit_created'
   | 'arch_unit_updated'
   | 'arch_unit_superseded'
+  | 'migration_reservation_reserved'
   | 'project_record_access_guide_missing'
   | 'project_record_access_guide_blocks_escalation'
   | 'flow_arm_changed'

@@ -89,6 +89,9 @@ import type {
   ArchUnitEventRow,
   NewArchUnitEventRow,
   ArchUnitQuery,
+  MigrationReservationRow,
+  NewMigrationReservationRow,
+  NewMigrationReservationEventRow,
   CompletenessDispositionRow,
   NewCompletenessDispositionRow,
   CompletenessDispositionQuestion,
@@ -12526,6 +12529,108 @@ export function listArchUnitRegions(project?: string): string[] {
         )
         .all() as { region: string }[]);
   return rows.map((r) => r.region);
+}
+
+// ─── migration_reservation ──────────────────────────────────────────────────
+// Statements are cached lazily, same convention as arch_unit above.
+
+let _stmtGetMaxMigrationReservationNumber: Database.Statement | null = null;
+let _stmtInsertMigrationReservation: Database.Statement | null = null;
+let _stmtInsertMigrationReservationEvent: Database.Statement | null = null;
+let _stmtGetMigrationReservationByTask: Database.Statement | null = null;
+let _stmtGetMigrationReservationByTaskDirSuffix: Database.Statement | null =
+  null;
+let _stmtGetMigrationReservationByNumber: Database.Statement | null = null;
+
+/** Highest currently-reserved number for a project, or null if it has none yet. */
+export function getMaxMigrationReservationNumber(
+  project: string,
+): number | null {
+  _stmtGetMaxMigrationReservationNumber ??= db.prepare<{ project: string }>(
+    `SELECT MAX(number) AS max_number FROM migration_reservation WHERE project = @project`,
+  );
+  const row = _stmtGetMaxMigrationReservationNumber.get({ project }) as
+    | { max_number: number | null }
+    | undefined;
+  return row?.max_number ?? null;
+}
+
+/** Inserts a reservation row. Throws (UNIQUE(project, number) / PK) on a lost race. */
+export function insertMigrationReservation(
+  row: NewMigrationReservationRow,
+): void {
+  _stmtInsertMigrationReservation ??= db.prepare<MigrationReservationRow>(`
+    INSERT INTO migration_reservation
+      (id, project, number, task_id, dir, suffix, created_at, updated_at)
+    VALUES
+      (@id, @project, @number, @task_id, @dir, @suffix, @created_at, @updated_at)
+  `);
+  _stmtInsertMigrationReservation.run(row);
+}
+
+export function insertMigrationReservationEvent(
+  row: NewMigrationReservationEventRow,
+): void {
+  _stmtInsertMigrationReservationEvent ??= db.prepare<NewMigrationReservationEventRow>(`
+    INSERT INTO migration_reservation_event
+      (migration_reservation_id, event_type, payload, at)
+    VALUES
+      (@migration_reservation_id, @event_type, @payload, @at)
+  `);
+  _stmtInsertMigrationReservationEvent.run(row);
+}
+
+/** The reservation a given task currently holds, if any (a task claims at most one number). */
+export function getMigrationReservationByTask(
+  taskId: string,
+): MigrationReservationRow | undefined {
+  _stmtGetMigrationReservationByTask ??= db.prepare<{ task_id: string }>(
+    `SELECT * FROM migration_reservation WHERE task_id = @task_id`,
+  );
+  return _stmtGetMigrationReservationByTask.get({ task_id: taskId }) as
+    | MigrationReservationRow
+    | undefined;
+}
+
+/**
+ * The reservation for a given (taskId, dir, suffix) triple, if any — the
+ * idempotency key `reserveMigrationNumber` re-checks before allocating, so a
+ * task with more than one *(new)* migration placeholder gets one reservation
+ * per distinct entry rather than every entry collapsing onto the first.
+ */
+export function getMigrationReservationByTaskDirSuffix(
+  taskId: string,
+  dir: string,
+  suffix: string,
+): MigrationReservationRow | undefined {
+  _stmtGetMigrationReservationByTaskDirSuffix ??= db.prepare<{
+    task_id: string;
+    dir: string;
+    suffix: string;
+  }>(
+    `SELECT * FROM migration_reservation WHERE task_id = @task_id AND dir = @dir AND suffix = @suffix`,
+  );
+  return _stmtGetMigrationReservationByTaskDirSuffix.get({
+    task_id: taskId,
+    dir,
+    suffix,
+  }) as MigrationReservationRow | undefined;
+}
+
+/** The reservation holding a given (project, number) pair, if any — the review-gate's live-truth lookup. */
+export function getMigrationReservationByNumber(
+  project: string,
+  number: number,
+): MigrationReservationRow | undefined {
+  _stmtGetMigrationReservationByNumber ??= db.prepare<{
+    project: string;
+    number: number;
+  }>(
+    `SELECT * FROM migration_reservation WHERE project = @project AND number = @number`,
+  );
+  return _stmtGetMigrationReservationByNumber.get({ project, number }) as
+    | MigrationReservationRow
+    | undefined;
 }
 
 // ─── flow_arm ──────────────────────────────────────────────────────────────

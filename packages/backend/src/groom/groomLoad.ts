@@ -610,6 +610,45 @@ export function parseFilesPathsRawItems(
 }
 
 /**
+ * A migration filename with its leading number left as a placeholder run of
+ * `N`s (e.g. `NNN_add_thing.sql`) instead of a concrete digit sequence — the
+ * shape a groomer leaves behind when the real number can't be safely picked
+ * until Ready-flip time (grooming can't claim a number two tasks might groom
+ * concurrently; see the migration-number reservation design). The
+ * `(db/)?migrations?/` directory shape mirrors PRReviewService.ts's own
+ * migration-path recognition (`isMigrationPath`) so the two conventions
+ * never drift.
+ */
+const MIGRATION_PLACEHOLDER_RE =
+  /^((?:[\w.-]+\/)*(?:db\/)?migrations?\/)(N{2,})_([\w.-]+)$/i;
+
+export interface PendingMigrationPathEntry {
+  /** The exact placeholder path token as found in the entry's raw text. */
+  token: string;
+  /** Directory prefix, including the trailing slash. */
+  dir: string;
+  /** Filename suffix after the placeholder number and underscore, including extension. */
+  suffix: string;
+}
+
+/**
+ * Parses a Files/paths entry's path token as a pending migration-number
+ * placeholder, or returns null if it isn't one. Single source of truth for
+ * "which entries need a number", consumed both by groomGate.ts's
+ * promotion-time preview and stagedIntents.ts's Ready-flip apply-time
+ * allocator, so the two can never recognize a different set of entries.
+ */
+export function parsePendingMigrationPathEntry(
+  raw: string,
+): PendingMigrationPathEntry | null {
+  const token = extractPathToken(raw);
+  if (!token) return null;
+  const m = token.match(MIGRATION_PLACEHOLDER_RE);
+  if (!m) return null;
+  return { token, dir: m[1], suffix: m[3] };
+}
+
+/**
  * FM2 — parse a task's `## Files / paths affected` section into one entry
  * per list item, git-validating each candidate path against `trackedFiles`.
  * groomGate.ts's resolve-in-artifact check re-derives the hedge-token scan
