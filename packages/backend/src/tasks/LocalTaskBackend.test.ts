@@ -36,6 +36,11 @@ function writeTempTasksYaml(
     status: string;
     depends_on?: string[];
     reviewer?: string[];
+    body?: string;
+    context?: string;
+    acceptance_criteria?: string;
+    files_affected?: string[];
+    notes?: string;
   }>,
 ): void {
   const content = yaml.dump({
@@ -169,6 +174,25 @@ function readTasksYaml(dir: string): {
   const raw = fs.readFileSync(path.join(dir, 'tasks.yaml'), 'utf-8');
   return yaml.load(raw) as any;
 }
+
+function readTaskBody(dir: string, taskId: string): string | undefined {
+  const raw = fs.readFileSync(path.join(dir, 'tasks.yaml'), 'utf-8');
+  const parsed = yaml.load(raw) as {
+    milestones: Array<{ tasks: Array<{ id: string; body?: string }> }>;
+  };
+  const task = parsed.milestones
+    .flatMap((m) => m.tasks)
+    .find((t) => t.id === taskId);
+  return task?.body;
+}
+
+const SAMPLE_SECTIONS = {
+  summary: 'Do the thing.',
+  dependencies: [],
+  context: [],
+  automatedCriteria: ['tsc passes'],
+  manualCriteria: [],
+};
 
 describe('LocalTaskBackend.setDependsOn', () => {
   it('overwrites depends_on, stripping the yaml: prefix', async () => {
@@ -350,5 +374,121 @@ describe('LocalTaskBackend.createTask', () => {
     await expect(
       backend.createTask!({ databaseId: 'missing-ms', title: 'X' }),
     ).rejects.toThrow('milestone not found');
+  });
+});
+
+describe('LocalTaskBackend.updateBody', () => {
+  it('renders sections and writes body; fetchTaskPage reflects it afterward', async () => {
+    writeTempTasksYaml(tmpDir, [
+      { id: 'task-a', name: 'Task A', status: 'Ready' },
+    ]);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+
+    await backend.updateBody('yaml:task-a', SAMPLE_SECTIONS);
+
+    const written = readTaskBody(tmpDir, 'task-a');
+    expect(written).toContain('## Summary');
+    expect(written).toContain('Do the thing.');
+
+    const page = await backend.fetchTaskPage('yaml:task-a');
+    expect(page).toBe(written);
+  });
+});
+
+describe('LocalTaskBackend.patchBodySection', () => {
+  it('append/replace/remove against an existing body', async () => {
+    writeTempTasksYaml(tmpDir, [
+      {
+        id: 'task-a',
+        name: 'Task A',
+        status: 'Ready',
+        body: '## Summary\nOriginal summary.\n\n## Notes\nSome notes.',
+      },
+    ]);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+
+    await backend.patchBodySection('yaml:task-a', 'Notes', {
+      operation: 'replace',
+      find: 'Some notes.',
+      replaceWith: 'Updated notes.',
+    });
+    expect(readTaskBody(tmpDir, 'task-a')).toContain('Updated notes.');
+
+    await backend.patchBodySection('yaml:task-a', 'Notes', {
+      operation: 'remove',
+    });
+    expect(readTaskBody(tmpDir, 'task-a')).not.toContain('Updated notes.');
+    expect(readTaskBody(tmpDir, 'task-a')).not.toContain('## Notes');
+
+    await backend.patchBodySection('yaml:task-a', 'Open Questions', {
+      operation: 'append',
+      content: '- Does this work?',
+    });
+    const finalBody = readTaskBody(tmpDir, 'task-a');
+    expect(finalBody).toContain('## Open Questions');
+    expect(finalBody).toContain('- Does this work?');
+  });
+
+  it('splices against the fielded-assembly markdown for a legacy task with no body field, and populates body', async () => {
+    writeTempTasksYaml(tmpDir, [
+      {
+        id: 'task-a',
+        name: 'Task A',
+        status: 'Ready',
+        context: 'Legacy context.',
+        notes: 'Legacy notes.',
+      },
+    ]);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+
+    await backend.patchBodySection('yaml:task-a', 'Open Questions', {
+      operation: 'append',
+      content: '- Anything unclear?',
+    });
+
+    const written = readTaskBody(tmpDir, 'task-a');
+    expect(written).toBeDefined();
+    expect(written).toContain('Legacy context.');
+    expect(written).toContain('Legacy notes.');
+    expect(written).toContain('## Open Questions');
+    expect(written).toContain('- Anything unclear?');
+  });
+
+  it('replace against missing find-text throws explicitly', async () => {
+    writeTempTasksYaml(tmpDir, [
+      {
+        id: 'task-a',
+        name: 'Task A',
+        status: 'Ready',
+        body: '## Notes\nSome notes.',
+      },
+    ]);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+
+    await expect(
+      backend.patchBodySection('yaml:task-a', 'Notes', {
+        operation: 'replace',
+        find: 'nonexistent text',
+        replaceWith: 'new text',
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('remove on an absent section is a no-op', async () => {
+    writeTempTasksYaml(tmpDir, [
+      {
+        id: 'task-a',
+        name: 'Task A',
+        status: 'Ready',
+        body: '## Notes\nSome notes.',
+      },
+    ]);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+
+    await backend.patchBodySection('yaml:task-a', 'Nonexistent Section', {
+      operation: 'remove',
+    });
+
+    expect(readTaskBody(tmpDir, 'task-a')).toBe('## Notes\nSome notes.');
   });
 });
