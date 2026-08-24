@@ -176,7 +176,9 @@ describe('catchUpSeedMergeCommits — backfill for pre-existing rows', () => {
       project: 'polimarket-analyser',
       milestone: 'M12',
       spec: 'Still unmerged',
-      sources: [{ sourceTaskId: 'notion:pending', sourceTaskTitle: 'Pending task' }],
+      sources: [
+        { sourceTaskId: 'notion:pending', sourceTaskTitle: 'Pending task' },
+      ],
       updatedAt: new Date(0).toISOString(),
     });
 
