@@ -1581,7 +1581,13 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
 
     const diffMigrationPaths = parseDiffFiles(diffText).filter(isMigrationPath);
 
-    let overridden = result;
+    // Evaluate every *(new)* entry first and AND the verdicts together —
+    // overrideFilesPathsDimension overwrites `passed` per call (last call
+    // wins), so calling it once per entry would let a later matching entry
+    // silently clobber an earlier entry's mismatch. A single call with the
+    // aggregated pass/fail and all notes concatenated keeps the dimension
+    // failed if any *(new)* entry mismatches its reservation.
+    const checks: { passed: boolean; note: string }[] = [];
     for (const entry of newMigrationEntries) {
       const reservation = getReservationForTaskDirSuffix(
         taskId,
@@ -1603,14 +1609,22 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
         : null;
 
       if (shippedNumber === reservation.number) {
-        const note = `Deterministic migration-reservation check: ${entry.dir}${entry.suffix} ships as ${shippedPath}, matching its reserved number ${reservation.number} — override pass.`;
-        overridden = overrideFilesPathsDimension(overridden, true, note);
+        checks.push({
+          passed: true,
+          note: `Deterministic migration-reservation check: ${entry.dir}${entry.suffix} ships as ${shippedPath}, matching its reserved number ${reservation.number} — override pass.`,
+        });
       } else {
-        const note = `Deterministic migration-reservation check: expected migration number ${reservation.number} (reserved) for ${entry.dir}${entry.suffix} but the PR ships ${shippedNumber ?? 'no matching migration file'} — override fail.`;
-        overridden = overrideFilesPathsDimension(overridden, false, note);
+        checks.push({
+          passed: false,
+          note: `Deterministic migration-reservation check: expected migration number ${reservation.number} (reserved) for ${entry.dir}${entry.suffix} but the PR ships ${shippedNumber ?? 'no matching migration file'} — override fail.`,
+        });
       }
     }
-    return overridden;
+    if (checks.length === 0) return result;
+
+    const allPassed = checks.every((c) => c.passed);
+    const note = checks.map((c) => c.note).join(' ');
+    return overrideFilesPathsDimension(result, allPassed, note);
   }
 
   private async fetchTaskBodyBestEffort(
