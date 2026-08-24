@@ -28,6 +28,7 @@ import {
   setPreReviewStage,
   upsertPullRequest,
 } from '../db/queries.js';
+import { isMergeBlockingPause } from '../db/pauseReason.js';
 
 const NOW = '2024-01-01T00:00:00Z';
 
@@ -145,4 +146,18 @@ describe('clearTerminalPRFlags — DB helper', () => {
       expect(after?.pause_reason).toBeNull();
     },
   );
+
+  it('clears baseline_escalation_floor via human_unpark, and isMergeBlockingPause reports false afterward', () => {
+    insertPR(6);
+    setPauseReason(6, 'owner/repo', 'baseline_escalation_floor');
+
+    const before = getPRRow(6);
+    expect(isMergeBlockingPause(before?.pause_reason ?? null)).toBe(true);
+
+    clearTerminalPRFlags(6, 'owner/repo', 'human_unpark');
+
+    const after = getPRRow(6);
+    expect(after?.pause_reason).toBeNull();
+    expect(isMergeBlockingPause(after?.pause_reason ?? null)).toBe(false);
+  });
 });
