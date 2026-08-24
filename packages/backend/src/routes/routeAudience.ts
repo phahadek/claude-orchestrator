@@ -255,6 +255,11 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
     audience: 'operator',
     reason: 'seed item disposition',
   },
+  'POST /api/seed/items/:id/reopen': {
+    audience: 'known-gap',
+    reason: 'no frontend decision-surface mirror exists yet',
+    fixTask: 'seed_item reopen decision-surface mirror (frontend sibling task)',
+  },
   'POST /api/seed/backfill': {
     audience: 'tooling',
     reason: 'Remote-Control tooling (seed-state-client.mjs)',

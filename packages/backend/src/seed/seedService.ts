@@ -249,6 +249,11 @@ export function appendSeedItemEvent(
   if (!item) {
     throw new Error(`seed_item: no item ${seedItemId}`);
   }
+  if (event.outcome === 'reopened') {
+    throw new Error(
+      `seed_item ${seedItemId}: reopened is not a valid outcome for this route — use the reopen route instead`,
+    );
+  }
   if (event.outcome === 'blocked' && !event.filedFollowon) {
     throw new Error(
       `seed_item ${seedItemId}: a blocked outcome must carry a filedFollowon`,
@@ -262,6 +267,50 @@ export function appendSeedItemEvent(
   if (!updated) {
     throw new Error(
       `seed_item: failed to read back item ${seedItemId} after event`,
+    );
+  }
+  return updated;
+}
+
+/**
+ * States a reopen may be applied from: confirmed or blocked, the two
+ * terminal states. `pending`/`applied` already sit on a sanctioned path to
+ * resolution, so reopening them is a no-op we reject — mirrors the gate's
+ * REOPEN_BLOCKED_STATES.
+ */
+const REOPEN_BLOCKED_STATES = new Set(['pending', 'applied']);
+
+/**
+ * Operator-attributed reopen: pulls a confirmed/blocked item back to
+ * `pending` for re-verification. Mirrors reopenGateItem in gateService.
+ */
+export function reopenSeedItem(
+  seedItemId: string,
+  operator?: string,
+  reason?: string,
+): SeedItem {
+  const item = seedStore.getItem(seedItemId);
+  if (!item) {
+    throw new Error(`seed_item: no item ${seedItemId}`);
+  }
+  if (REOPEN_BLOCKED_STATES.has(item.state)) {
+    throw new Error(
+      `seed_item ${seedItemId}: already ${item.state} — reopen only applies to a resolved/terminal item`,
+    );
+  }
+  const now = new Date().toISOString();
+  seedStore.appendEvent(seedItemId, {
+    outcome: 'reopened',
+    operator,
+    evidence: reason === undefined ? undefined : { reason },
+    at: now,
+  });
+  seedStore.advanceState(seedItemId, 'pending', now);
+
+  const updated = seedStore.getItem(seedItemId);
+  if (!updated) {
+    throw new Error(
+      `seed_item: failed to read back item ${seedItemId} after reopen`,
     );
   }
   return updated;
