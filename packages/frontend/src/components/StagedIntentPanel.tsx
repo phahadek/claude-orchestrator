@@ -952,7 +952,9 @@ function GateVerifyHeadline({ intent }: { intent: StagedIntent }) {
         ) : payload.origin === 'consent' ? (
           <strong>Prod-Mutating — pending approval</strong>
         ) : payload.origin === 'unresolved-source' ? (
-          <strong>Unresolved merge commit — awaiting operator disposition</strong>
+          <strong>
+            Unresolved merge commit — awaiting operator disposition
+          </strong>
         ) : (
           <strong>{payload.disposition}</strong>
         )}
