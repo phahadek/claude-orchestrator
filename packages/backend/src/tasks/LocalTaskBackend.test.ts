@@ -492,3 +492,87 @@ describe('LocalTaskBackend.patchBodySection', () => {
     expect(readTaskBody(tmpDir, 'task-a')).toBe('## Notes\nSome notes.');
   });
 });
+
+describe('LocalTaskBackend.appendImplementationNote / updateNotes — body reconciliation', () => {
+  it('appendImplementationNote on a task with a body appends into the Implementation notes section, not legacy notes', async () => {
+    writeTempTasksYaml(tmpDir, [
+      {
+        id: 'task-a',
+        name: 'Task A',
+        status: 'Ready',
+        body: '## Summary\nDo the thing.\n\n## Implementation notes\nFirst note.',
+        notes: 'Legacy notes untouched.',
+      },
+    ]);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+
+    await backend.appendImplementationNote('yaml:task-a', 'Second note.');
+
+    const body = readTaskBody(tmpDir, 'task-a');
+    expect(body).toContain('First note.');
+    expect(body).toContain('Second note.');
+
+    const raw = yaml.load(
+      fs.readFileSync(path.join(tmpDir, 'tasks.yaml'), 'utf-8'),
+    );
+    const task = raw.milestones[0].tasks[0];
+    expect(task.notes).toBe('Legacy notes untouched.');
+  });
+
+  it('appendImplementationNote on a legacy task with no body keeps writing the notes field, unchanged from current behavior', async () => {
+    writeTempTasksYaml(tmpDir, [
+      { id: 'task-a', name: 'Task A', status: 'Ready', notes: 'Existing.' },
+    ]);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+
+    await backend.appendImplementationNote('yaml:task-a', 'Appended.');
+
+    const raw = yaml.load(
+      fs.readFileSync(path.join(tmpDir, 'tasks.yaml'), 'utf-8'),
+    );
+    const task = raw.milestones[0].tasks[0];
+    expect(task.notes).toBe('Existing.\nAppended.');
+    expect(task.body).toBeUndefined();
+  });
+
+  it('updateNotes on a task with a body replaces the Implementation notes section content, not legacy notes', async () => {
+    writeTempTasksYaml(tmpDir, [
+      {
+        id: 'task-a',
+        name: 'Task A',
+        status: 'Ready',
+        body: '## Summary\nDo the thing.\n\n## Implementation notes\nOld note.',
+        notes: 'Legacy notes untouched.',
+      },
+    ]);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+
+    await backend.updateNotes('yaml:task-a', 'Brand new note.');
+
+    const body = readTaskBody(tmpDir, 'task-a');
+    expect(body).not.toContain('Old note.');
+    expect(body).toContain('Brand new note.');
+
+    const raw = yaml.load(
+      fs.readFileSync(path.join(tmpDir, 'tasks.yaml'), 'utf-8'),
+    );
+    const task = raw.milestones[0].tasks[0];
+    expect(task.notes).toBe('Legacy notes untouched.');
+  });
+
+  it('updateNotes on a legacy task with no body keeps writing the notes field, unchanged from current behavior', async () => {
+    writeTempTasksYaml(tmpDir, [
+      { id: 'task-a', name: 'Task A', status: 'Ready', notes: 'Old.' },
+    ]);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+
+    await backend.updateNotes('yaml:task-a', 'New.');
+
+    const raw = yaml.load(
+      fs.readFileSync(path.join(tmpDir, 'tasks.yaml'), 'utf-8'),
+    );
+    const task = raw.milestones[0].tasks[0];
+    expect(task.notes).toBe('New.');
+    expect(task.body).toBeUndefined();
+  });
+});
