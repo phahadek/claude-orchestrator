@@ -15,8 +15,8 @@ const ALL_REASONS = Object.keys(
 ) as CanonicalPauseReason[];
 
 describe('PAUSE_REASON_REGISTRY', () => {
-  it('contains exactly 48 canonical reasons', () => {
-    expect(ALL_REASONS).toHaveLength(48);
+  it('contains exactly 49 canonical reasons', () => {
+    expect(ALL_REASONS).toHaveLength(49);
   });
 
   it('includes depth_review_pending as a recoverable, automatic reason, distinct from depth_review_escalation', () => {
