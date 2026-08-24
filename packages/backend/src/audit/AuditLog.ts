@@ -385,6 +385,26 @@ export function hasDeferredBlockerSurfacedEvent(
   });
 }
 
+/**
+ * True when `sourceTaskId` has a `gate_item_rehomed` audit_log row —
+ * rehomeItemsBySourceTask (gateStore.ts) records one every time a
+ * cross-milestone move carries a gate_item forward while deliberately
+ * leaving gate_item_source.source_task_id pointing at the pre-move task
+ * (the "Cross-milestone move" contract's audit trail). The merge-commit
+ * backfill's escalation path (gateMergeConsumer.ts's catchUpMergeCommits)
+ * uses this to distinguish "this source_task_id is archived by design and
+ * can never merge again" from a genuinely dropped webhook.
+ */
+export function hasGateItemRehomedEvent(sourceTaskId: string): boolean {
+  const row = db
+    .prepare<
+      [string],
+      { id: number }
+    >(`SELECT id FROM audit_log WHERE task_id = ? AND event_type = 'gate_item_rehomed' LIMIT 1`)
+    .get(sourceTaskId);
+  return row !== undefined;
+}
+
 /** Returns the most recent audit_log row of the given event type, or undefined. */
 export function getLatestEventByType(eventType: string): AuditRow | undefined {
   return db

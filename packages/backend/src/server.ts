@@ -86,7 +86,10 @@ import {
   configureGateItemMirrorSink,
   reattachOutstandingGateVerifications,
 } from './gate/gateReconciler';
-import { registerGateMergeConsumer } from './gate/gateMergeConsumer';
+import {
+  registerGateMergeConsumer,
+  configureUnresolvedSourceEscalationSink,
+} from './gate/gateMergeConsumer';
 import { latestDispositionEvidence } from './gate/gateService';
 import { SessionGateItemVerifier } from './gate/gateItemVerifier';
 import { register as registerInvestigationReconciler } from './investigation/investigationReconciler';
@@ -882,6 +885,30 @@ configureGateItemMirrorSink({
   },
   retireMirror(intentId, reason) {
     withdrawGateVerifyMirror(intentId, reason);
+  },
+});
+
+// Merge-commit backfill escalation sink: once catchUpMergeCommits' unresolved-
+// attempt count for a source crosses its ceiling, stage a `gate.verify`
+// mirror (origin: 'unresolved-source') into the Decision Inbox instead of
+// retrying forever — surfaced regardless of the gate_item's own state (it
+// may never have reached `runnable`). Retirement is handled generically by
+// reconcileHumanObservationMirrors above once the source resolves or the
+// item terminates. See gateMergeConsumer.escalateUnresolvedSource.
+configureUnresolvedSourceEscalationSink({
+  stage(item, evidence) {
+    stageIntent(
+      'gate.verify',
+      { gateItemId: item.id, origin: 'unresolved-source', evidence },
+      item.project,
+      null,
+      null,
+      `Unresolved merge commit: ${item.text}`,
+      null,
+      null,
+      item.milestone,
+      null,
+    );
   },
 });
 

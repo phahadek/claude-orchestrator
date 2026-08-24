@@ -2004,9 +2004,15 @@ interface GateVerifyIntentPayload {
    * disposition at all (the pass is already recorded; the operator
    * approves or rejects the hold itself via the dedicated gate
    * approve/reject endpoints, not this intent's generic apply path).
-   * Absent for a genuine verifier-originated report.
+   * `'unresolved-source'` is a gate_item whose source's merge_commit could
+   * not be resolved after gateMergeConsumer.ts's catchUpMergeCommits
+   * escalation ceiling — staged regardless of the item's own state (it may
+   * still be `open`, never having reached `runnable`), carrying a static
+   * `evidence` string naming why (dropped webhook vs. a cross-milestone
+   * rehome) for the operator to act on. Absent for a genuine
+   * verifier-originated report.
    */
-  origin?: 'mirror' | 'consent';
+  origin?: 'mirror' | 'consent' | 'unresolved-source';
 }
 /**
  * Payload for the notion.pageEdit staged intent — the Notion
@@ -4917,7 +4923,8 @@ async function applyIntent(
           `[stagedIntents] gate.verify apply: gate item "${payload.gateItemId}" was not found`,
         );
       }
-      // A mirror intent (Human-Observation, no verifier report behind it)
+      // A mirror intent (Human-Observation, or an 'unresolved-source'
+      // merge-commit escalation — neither has a verifier report behind it)
       // carries no pre-set disposition — the operator supplies pass/fail/
       // deferred/needs-setup/not-yet-triggerable at apply time instead, via
       // the same Pass/Fail/Defer/Park vocabulary GateReadinessPanel's direct
@@ -4925,21 +4932,21 @@ async function applyIntent(
       // (see nextStateForDisposition) rather than resolving it — the
       // operator's "not now, try again later" choice, distinct from
       // `deferred`'s permanent resolution.
-      const disposition =
-        payload.origin === 'mirror'
-          ? mirrorDisposition?.disposition
-          : payload.disposition;
+      const isOperatorSuppliedOrigin =
+        payload.origin === 'mirror' || payload.origin === 'unresolved-source';
+      const disposition = isOperatorSuppliedOrigin
+        ? mirrorDisposition?.disposition
+        : payload.disposition;
       if (!disposition) {
         throw new Error(
-          payload.origin === 'mirror'
-            ? `[stagedIntents] gate.verify apply: a Human-Observation mirror for "${payload.gateItemId}" requires an operator-supplied disposition (pass/fail/deferred/needs-setup/not-yet-triggerable)`
+          isOperatorSuppliedOrigin
+            ? `[stagedIntents] gate.verify apply: a mirror for "${payload.gateItemId}" requires an operator-supplied disposition (pass/fail/deferred/needs-setup/not-yet-triggerable)`
             : `[stagedIntents] gate.verify apply: intent carries no disposition`,
         );
       }
-      const evidence =
-        payload.origin === 'mirror'
-          ? mirrorDisposition?.evidence
-          : payload.evidence;
+      const evidence = isOperatorSuppliedOrigin
+        ? (mirrorDisposition?.evidence ?? payload.evidence)
+        : payload.evidence;
       const result: GateVerificationResult = {
         disposition,
         evidence,
@@ -4963,7 +4970,7 @@ async function applyIntent(
         null,
         {},
         false,
-        payload.origin === 'mirror' ? undefined : 'gate-verifier',
+        isOperatorSuppliedOrigin ? undefined : 'gate-verifier',
       );
     }
     case 'notion.pageEdit': {

@@ -867,7 +867,7 @@ interface GateVerifyPayload {
   disposition?: 'pass' | 'fail' | 'needs-setup' | 'deferred';
   evidence?: unknown;
   reclassify?: { to: string; reason: string };
-  origin?: 'mirror' | 'consent';
+  origin?: 'mirror' | 'consent' | 'unresolved-source';
 }
 
 interface GateVerifyEvidence {
@@ -951,6 +951,10 @@ function GateVerifyHeadline({ intent }: { intent: StagedIntent }) {
           <strong>Human-Observation — awaiting operator disposition</strong>
         ) : payload.origin === 'consent' ? (
           <strong>Prod-Mutating — pending approval</strong>
+        ) : payload.origin === 'unresolved-source' ? (
+          <strong>
+            Unresolved merge commit — awaiting operator disposition
+          </strong>
         ) : (
           <strong>{payload.disposition}</strong>
         )}
@@ -1276,12 +1280,15 @@ export function StagedIntentPanel({
   // disposition (commit/approve/reject) is ever offered for it.
   const isNoOp = intent.kind === 'planning.noOp';
   const isGrouped = !!intent.groupId;
-  // A Human-Observation mirror carries no pre-set disposition — no verifier
-  // ever observed anything, so the operator picks Pass/Fail/Defer here
-  // instead of a single generic "Commit" (see GateVerifyIntentPayload.origin).
+  // A Human-Observation mirror, or an 'unresolved-source' merge-commit
+  // escalation, carries no pre-set disposition — no verifier ever observed
+  // anything, so the operator picks Pass/Fail/Defer here instead of a
+  // single generic "Commit" (see GateVerifyIntentPayload.origin).
+  const gateVerifyOrigin = (intent.payload as { origin?: string } | null)
+    ?.origin;
   const isGateVerifyMirror =
     intent.kind === 'gate.verify' &&
-    (intent.payload as { origin?: string } | null)?.origin === 'mirror';
+    (gateVerifyOrigin === 'mirror' || gateVerifyOrigin === 'unresolved-source');
   // A Prod-Mutating item held at pending-approval (the consent gate) — its
   // pass is already recorded, so the operator's only choices are Approve
   // (release to pass, via the same approveGateItem the GateReadinessPanel
@@ -1289,8 +1296,7 @@ export function StagedIntentPanel({
   // disposition). Neither goes through the generic intent apply/reject
   // machinery — see StagedIntentPanel.tsx's handleConsentApprove/Reject.
   const isGateVerifyConsent =
-    intent.kind === 'gate.verify' &&
-    (intent.payload as { origin?: string } | null)?.origin === 'consent';
+    intent.kind === 'gate.verify' && gateVerifyOrigin === 'consent';
   const consentGateItemId = isGateVerifyConsent
     ? (intent.payload as GateVerifyPayload).gateItemId
     : null;

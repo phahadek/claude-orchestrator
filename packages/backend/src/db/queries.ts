@@ -10973,9 +10973,11 @@ const _stmtFindActiveGateVerifyMirrorForItemByOrigin = new Map<
  * genuine verifier-originated gate.verify report, or the other origin's
  * mirror, for the same item is never mistaken for a live one of this kind.
  */
+export type GateVerifyMirrorOrigin = 'mirror' | 'consent' | 'unresolved-source';
+
 export function findActiveGateVerifyMirrorForItem(
   gateItemId: string,
-  origin: 'mirror' | 'consent' = 'mirror',
+  origin: GateVerifyMirrorOrigin = 'mirror',
 ): StagedIntentRow | undefined {
   let stmt = _stmtFindActiveGateVerifyMirrorForItemByOrigin.get(origin);
   if (!stmt) {
@@ -11009,7 +11011,7 @@ const _stmtListActiveGateVerifyMirrorsByOrigin = new Map<
  * in the Decision Inbox.
  */
 export function listActiveGateVerifyMirrors(
-  origin: 'mirror' | 'consent' = 'mirror',
+  origin: GateVerifyMirrorOrigin = 'mirror',
 ): StagedIntentRow[] {
   let stmt = _stmtListActiveGateVerifyMirrorsByOrigin.get(origin);
   if (!stmt) {
