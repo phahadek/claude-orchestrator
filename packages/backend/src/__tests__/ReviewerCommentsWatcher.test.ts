@@ -123,6 +123,10 @@ function makeSessionManager(
   };
 }
 
+function makeScheduler() {
+  return { register: vi.fn() };
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 beforeEach(() => {
@@ -1326,5 +1330,47 @@ describe('isBotAuthor', () => {
     const deny = new Set(['special']);
     const allow = new Set(['special']);
     expect(isBotAuthor('special', 'User', deny, allow)).toBe(false);
+  });
+});
+
+// ── Scheduler registration ──────────────────────────────────────────────────
+
+describe('register', () => {
+  it('registers the job with the configured non-zero interval', () => {
+    vi.mocked(getSetting).mockImplementation((key: string) =>
+      key === 'reviewer_comments_watcher_poll_interval_ms'
+        ? '600000'
+        : undefined,
+    );
+    const watcher = new ReviewerCommentsWatcher(
+      makeGitHub() as never,
+      makeSessionManager() as never,
+    );
+    const scheduler = makeScheduler();
+
+    watcher.register(scheduler as never);
+
+    expect(scheduler.register).toHaveBeenCalledOnce();
+    const opts = scheduler.register.mock.calls[0][0] as {
+      name: string;
+      intervalMs: number;
+    };
+    expect(opts.name).toBe('reviewer_comments_watcher');
+    expect(opts.intervalMs).toBe(600_000);
+  });
+
+  it('skips scheduler registration entirely when the interval is 0', () => {
+    vi.mocked(getSetting).mockImplementation((key: string) =>
+      key === 'reviewer_comments_watcher_poll_interval_ms' ? '0' : undefined,
+    );
+    const watcher = new ReviewerCommentsWatcher(
+      makeGitHub() as never,
+      makeSessionManager() as never,
+    );
+    const scheduler = makeScheduler();
+
+    watcher.register(scheduler as never);
+
+    expect(scheduler.register).not.toHaveBeenCalled();
   });
 });
