@@ -648,10 +648,7 @@ export class StalledPRReconciler {
     // admission deferral, a deleted session row, no worktree on an idle
     // session) returns null and must not be charged against the retry
     // budget, since no fixer attempt actually happened.
-    const relaunched = await this.sessionManager.relaunchFixerForPR(
-      pr,
-      prompt,
-    );
+    const relaunched = await this.sessionManager.relaunchFixerForPR(pr, prompt);
     if (!relaunched) {
       logger.info(
         `[StalledPRReconciler] PR #${prNumber} (${repo}): fixer relaunch (kind=${kind}) was refused before it started — not counting as an attempt`,
@@ -696,7 +693,10 @@ export class StalledPRReconciler {
    * real-cause pause_reason distinct from the reconcile_exhausted flag's
    * generic retry-exhaustion story.
    */
-  private escalateNoRelaunchTarget(pr: PullRequestRow, kind: StalledPRKind): void {
+  private escalateNoRelaunchTarget(
+    pr: PullRequestRow,
+    kind: StalledPRKind,
+  ): void {
     const { pr_number: prNumber, repo } = pr;
     const project = getProjectByGithubRepo(repo);
 

@@ -226,9 +226,8 @@ describe('StalledPRReconciler — retry budget is only charged for a relaunch th
     });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
 
-    const { getSession, countUndeliveredInboxItems } = await import(
-      '../db/queries.js'
-    );
+    const { getSession, countUndeliveredInboxItems } =
+      await import('../db/queries.js');
     vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
     vi.mocked(countUndeliveredInboxItems).mockReturnValue(1);
 
