@@ -12241,7 +12241,7 @@ export function getFlakeRecoveryMisclassificationRates(
 // ─── Tier-3 classifier chronic-error-rate signal ──────────────────────────
 
 /** The classifier outcomes tracked as a chronic-error signal — see deferralClassifier.ts's Advisory['status']. */
-export type Tier3ClassifierErrorKind = 'errored' | 'usage_limited';
+type Tier3ClassifierErrorKind = 'errored' | 'usage_limited';
 
 export interface Tier3ClassifierErrorRateResult {
   project: string;
