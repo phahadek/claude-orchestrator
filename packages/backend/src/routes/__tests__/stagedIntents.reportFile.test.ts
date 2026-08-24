@@ -38,6 +38,7 @@ import {
   stageIntent,
   routeStageTimeBlock,
 } from '../stagedIntents';
+import { reserveMigrationNumber } from '../../db/migrationReservation';
 import type { SessionManager } from '../../session/SessionManager';
 
 const M1 = {
@@ -107,6 +108,8 @@ beforeEach(() => {
   db.prepare('DELETE FROM sessions').run();
   db.prepare('DELETE FROM audit_log').run();
   db.prepare('DELETE FROM investigation_report').run();
+  db.prepare('DELETE FROM migration_reservation_event').run();
+  db.prepare('DELETE FROM migration_reservation').run();
   setStagedIntentBroadcast(() => {});
   projectServiceMock.getById.mockReset();
   projectServiceMock.getById.mockReturnValue({
@@ -263,5 +266,77 @@ describe('report.file — commit-time apply path', () => {
     expect(report!.milestone_id).toBe(M1.id);
     expect(report!.evidence_text).toContain('HEAD:');
     expect(report!.evidence_text).toContain('src/auth/refresh.ts:42');
+  });
+});
+
+describe('report.file — migration-number-reassignment claim re-derivation', () => {
+  it('auto-dismisses (abandons) a claim the orchestrator cannot confirm against the live reservation table, rather than surfacing it to the operator', async () => {
+    insertCodeSession('session-reassign-deny', 'task-no-reservation');
+    const staged = stageReportFile(
+      'session-reassign-deny',
+      validPayload({
+        claimKind: 'migration-number-reassignment',
+        expectedNumber: 100,
+        actualNumber: 101,
+        taskId: 'task-no-reservation',
+      }),
+    );
+    const { agent } = makeApp();
+
+    const approveRes = await agent.post(
+      `/api/staged-intents/${staged.id}/approve`,
+    );
+    expect(approveRes.status).toBe(200);
+
+    const applyRes = await agent.post(`/api/staged-intents/${staged.id}/apply`);
+    expect(applyRes.status).toBe(200);
+    expect(applyRes.body.result.confirmed).toBe(false);
+
+    const reportId = applyRes.body.result.id as string;
+    const report = db
+      .prepare('SELECT * FROM investigation_report WHERE id = ?')
+      .get(reportId) as { state: string } | undefined;
+
+    expect(report).toBeDefined();
+    expect(report!.state).toBe('abandoned');
+  });
+
+  it('keeps a claim the orchestrator confirms visible for operator disposition (committed, not abandoned)', async () => {
+    reserveMigrationNumber({
+      project: 'proj-1',
+      taskId: 'task-1036',
+      dir: 'migrations/postgres/',
+      suffix: 'add_thing.sql',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    insertCodeSession('session-reassign-confirm', 'task-1036');
+    const staged = stageReportFile(
+      'session-reassign-confirm',
+      validPayload({
+        claimKind: 'migration-number-reassignment',
+        expectedNumber: 1,
+        actualNumber: 2,
+        taskId: 'task-1036',
+      }),
+    );
+    const { agent } = makeApp();
+
+    const approveRes = await agent.post(
+      `/api/staged-intents/${staged.id}/approve`,
+    );
+    expect(approveRes.status).toBe(200);
+
+    const applyRes = await agent.post(`/api/staged-intents/${staged.id}/apply`);
+    expect(applyRes.status).toBe(200);
+    expect(applyRes.body.result.confirmed).toBe(true);
+
+    const reportId = applyRes.body.result.id as string;
+    const report = db
+      .prepare('SELECT * FROM investigation_report WHERE id = ?')
+      .get(reportId) as { state: string } | undefined;
+
+    expect(report).toBeDefined();
+    expect(report!.state).toBe('committed');
   });
 });

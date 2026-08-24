@@ -925,6 +925,23 @@ export interface ReportFilePayload {
   symptom_text: string;
   evidence_text?: string;
   fingerprint: string;
+  /**
+   * Optional structured claim carried by a migration-number-reassignment
+   * report — a filed claim that a shipped migration's number doesn't match
+   * its live reservation. When present, all three of expectedNumber,
+   * actualNumber, and taskId are also present (enforced by the MCP tool's
+   * input schema, not re-validated here) and the report.file apply case
+   * routes through migrationReservation.ts's rederiveMigrationReassignment
+   * instead of the generic insertReport-then-commit path — see
+   * routes/stagedIntents.ts's report.file apply case.
+   */
+  claimKind?: 'migration-number-reassignment';
+  /** The number the reservation table shows for taskId's reservation, per the filing session's claim. */
+  expectedNumber?: number;
+  /** The number the migration actually shipped as, per the filing session's claim. */
+  actualNumber?: number;
+  /** The task whose migration reservation this claim is about. */
+  taskId?: string;
 }
 
 /**
