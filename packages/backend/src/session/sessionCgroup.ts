@@ -582,7 +582,7 @@ function isTestRunReapable(runId: string): boolean {
     getTestRequestRunById,
     getSession,
     TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED,
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
+     
   } = require('../db/queries') as typeof import('../db/queries');
   const run = getTestRequestRunById(runId);
   if (!run || !run.session_id) return true;
@@ -651,7 +651,7 @@ export function reapOrphanedTestsCgroupProcesses(
     // comment: audit/AuditLog also transitively loads db/db.ts.
     const {
       recordEvent,
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
+       
     } = require('../audit/AuditLog') as typeof import('../audit/AuditLog');
     recordEvent({
       event_type: 'orphan_processes_reaped',
