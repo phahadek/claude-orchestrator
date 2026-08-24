@@ -24,6 +24,7 @@ import {
   insertMilestone,
   insertGateItem,
 } from '../../db/queries.js';
+import { startDeployRun } from '../deployService.js';
 import {
   buildWrapPlaybook,
   markMilestoneWrapped,
@@ -31,6 +32,8 @@ import {
   bulkCarryPendingGateItems,
   repointAutoLaunchMilestone,
   createWrapShellRunner,
+  recordWrapLaunchParams,
+  readWrapLaunchParams,
   WRAP_STEP_MARK_WRAPPED,
   WRAP_STEP_CARRY_GATE_ITEMS,
   WRAP_STEP_CONFIRM_REPOINT,
@@ -47,6 +50,8 @@ const NEXT_MILESTONE = 'next-milestone-id';
 beforeEach(() => {
   db.prepare('DELETE FROM gate_item').run();
   db.prepare('DELETE FROM audit_log').run();
+  db.prepare('DELETE FROM deploy_run_event').run();
+  db.prepare('DELETE FROM deploy_run').run();
   db.prepare('DELETE FROM milestones').run();
   db.prepare('DELETE FROM projects').run();
 
@@ -454,5 +459,41 @@ describe('createWrapShellRunner: directive dispatch', () => {
       cwd: '/tmp',
     });
     expect(result.ok).toBe(true);
+  });
+});
+
+describe('recordWrapLaunchParams / readWrapLaunchParams (boot-resume support)', () => {
+  it('round-trips the exact launch input a run was started with', () => {
+    const run = startDeployRun({
+      project: PROJECT,
+      kind: 'wrap',
+      targetSha: CLOSING_MILESTONE,
+      startedAt: '2026-08-24T00:00:00.000Z',
+    });
+    const params = {
+      projectId: PROJECT,
+      closingMilestoneId: CLOSING_MILESTONE,
+      nextMilestoneId: NEXT_MILESTONE,
+      releaseVersion: '1.9.0',
+      repoUrl: 'https://github.com/acme/wrap-test-project.git',
+    };
+
+    recordWrapLaunchParams(run.run_id, params, '2026-08-24T00:00:00.000Z');
+
+    expect(readWrapLaunchParams(run.run_id)).toEqual(params);
+  });
+
+  it('returns null for a run with no recorded launch params', () => {
+    const run = startDeployRun({
+      project: PROJECT,
+      kind: 'wrap',
+      targetSha: CLOSING_MILESTONE,
+      startedAt: '2026-08-24T00:00:00.000Z',
+    });
+    expect(readWrapLaunchParams(run.run_id)).toBeNull();
+  });
+
+  it('returns null for an unknown run id', () => {
+    expect(readWrapLaunchParams('no-such-run')).toBeNull();
   });
 });

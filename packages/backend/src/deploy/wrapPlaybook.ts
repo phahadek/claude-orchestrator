@@ -13,6 +13,7 @@
 import type { DeployPlaybook, StepDescriptor } from './playbookSchema';
 import type { ShellResult, ShellRunner } from './DeployOrchestrator';
 import { spawnShell } from './DeployOrchestrator';
+import { appendDeployRunEvent, listDeployRunEvents } from './deployService';
 import { ProjectService } from '../projects/ProjectService';
 import { updateProject, listGateItemsByMilestone } from '../db/queries';
 import { resolveMilestoneForProject } from '../projects/milestoneResolver';
@@ -51,6 +52,46 @@ export interface WrapPlaybookInput {
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+// ─── Launch params (boot-resume support) ────────────────────────────────────
+// A wrap run's playbook is built fresh from its WrapPlaybookInput at launch
+// time (see createWrapRouter) rather than loaded from a file the way a
+// project's deploy playbook is — so unlike a deploy run, there is nothing on
+// disk resume() can re-read after a backend restart. Recording the exact
+// input as the run's very first deploy_run_event lets a boot-time resume
+// rebuild the identical playbook via buildWrapPlaybook and re-drive the run
+// from its persisted current_step, the same way a deploy run survives a
+// self-deploy restart.
+
+const WRAP_LAUNCH_PARAMS_EVENT_TYPE = 'wrap_launch_params';
+const WRAP_LAUNCH_PARAMS_STEP = '_meta';
+
+export function recordWrapLaunchParams(
+  runId: string,
+  input: WrapPlaybookInput,
+  at: string = new Date().toISOString(),
+): void {
+  appendDeployRunEvent({
+    runId,
+    step: WRAP_LAUNCH_PARAMS_STEP,
+    eventType: WRAP_LAUNCH_PARAMS_EVENT_TYPE,
+    detail: JSON.stringify(input),
+    at,
+  });
+}
+
+/** The WrapPlaybookInput a run was launched with, or null if it predates this recording (or the event is unreadable). */
+export function readWrapLaunchParams(runId: string): WrapPlaybookInput | null {
+  const event = listDeployRunEvents(runId).find(
+    (e) => e.event_type === WRAP_LAUNCH_PARAMS_EVENT_TYPE,
+  );
+  if (!event?.detail) return null;
+  try {
+    return JSON.parse(event.detail) as WrapPlaybookInput;
+  } catch {
+    return null;
+  }
 }
 
 /**

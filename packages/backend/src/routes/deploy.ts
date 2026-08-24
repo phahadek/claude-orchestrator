@@ -6,6 +6,8 @@ import type { Scheduler } from '../orchestration/Scheduler';
 import {
   reportProjectDeploy,
   getLatestDeployRun,
+  getActiveDeployRun,
+  completeDeployRun,
   listDeployRunEvents,
   appendDeployRunEvent,
   DeployRunConflictError,
@@ -19,7 +21,10 @@ import { loadDeployPlaybook } from '../deploy/loadPlaybook';
 import {
   buildWrapPlaybook,
   createWrapShellRunner,
+  recordWrapLaunchParams,
+  readWrapLaunchParams,
   WRAP_STATIC_BINDINGS,
+  type WrapPlaybookInput,
 } from '../deploy/wrapPlaybook';
 import {
   getProjectRowById,
@@ -646,6 +651,77 @@ class WrapConfirmGateController {
 
 const wrapConfirmGates = new WrapConfirmGateController();
 
+/**
+ * Builds the `DeployOrchestrator` a wrap run drives on — shared by
+ * `/wrap/launch` (a fresh call) and `resumeActiveWrapRuns` (boot-time
+ * recovery), so the two never drift into building the playbook/deps two
+ * different ways.
+ */
+function createWrapOrchestrator(
+  project: ProjectRow,
+  params: WrapPlaybookInput,
+): DeployOrchestrator {
+  const playbook = buildWrapPlaybook(params);
+  return new DeployOrchestrator(
+    project.id,
+    project.project_dir,
+    {
+      loadPlaybook: () => ({ ok: true, playbook }),
+      loadDeployBindings: () => ({
+        ok: true,
+        bindings: WRAP_STATIC_BINDINGS,
+        bindingsPath: null,
+      }),
+      runShell: createWrapShellRunner(),
+      spawnAgenticStep: (input) => {
+        logger.error(
+          `[wrap] run ${input.runId}: unexpected agentic step "${input.step.id}" — the wrap playbook declares none`,
+        );
+      },
+      waitForConfirmGate: (input) =>
+        wrapConfirmGates.wait(input.runId, input.step.id),
+    },
+    'wrap',
+  );
+}
+
+/**
+ * Boot-time reconciliation for the `wrap` run kind — mirrors
+ * `resumeActiveDeployRuns`: without this, a wrap run interrupted by a
+ * backend restart (or any crash) mid-run would sit `running` forever,
+ * permanently blocking any future wrap launch for that project via the
+ * (project, 'wrap') exclusivity lock, with no route to recover short of a
+ * hand DB edit. A wrap run's playbook is rebuilt from its recorded launch
+ * params (see recordWrapLaunchParams) rather than reloaded from a per-project
+ * file, since the wrap playbook is orchestrator-owned, not per-project.
+ * A run that somehow has no recorded params (e.g. it predates this
+ * mechanism, or crashed in the narrow window before they were recorded) is
+ * failed outright rather than left stuck, so the exclusivity lock still
+ * clears — an operator can just re-launch instead of hand-editing the DB.
+ */
+export function resumeActiveWrapRuns(projects: ProjectRow[]): void {
+  for (const project of projects) {
+    const active = getActiveDeployRun(project.id, 'wrap');
+    if (!active) continue;
+
+    const params = readWrapLaunchParams(active.run_id);
+    if (!params) {
+      logger.error(
+        `[wrap] boot resume: run ${active.run_id} for project ${project.id} has no recorded launch params — cannot rebuild its playbook; failing the run so its exclusivity lock clears`,
+      );
+      completeDeployRun(active.run_id, 'failed', new Date().toISOString());
+      continue;
+    }
+
+    const orchestrator = createWrapOrchestrator(project, params);
+    void orchestrator.resume().catch((err) => {
+      logger.error(
+        `[wrap] boot resume failed for project ${project.id} run ${active.run_id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+  }
+}
+
 export function createWrapRouter(): Router {
   const router = Router();
 
@@ -697,37 +773,21 @@ export function createWrapRouter(): Router {
         ? `https://github.com/${project.github_repo}.git`
         : project.project_dir;
 
-      const playbook = buildWrapPlaybook({
+      const params: WrapPlaybookInput = {
         projectId,
         closingMilestoneId,
         nextMilestoneId,
         releaseVersion,
         repoUrl,
-      });
-      const orchestrator = new DeployOrchestrator(
-        projectId,
-        project.project_dir,
-        {
-          loadPlaybook: () => ({ ok: true, playbook }),
-          loadDeployBindings: () => ({
-            ok: true,
-            bindings: WRAP_STATIC_BINDINGS,
-            bindingsPath: null,
-          }),
-          runShell: createWrapShellRunner(),
-          spawnAgenticStep: (input) => {
-            logger.error(
-              `[wrap] run ${input.runId}: unexpected agentic step "${input.step.id}" — the wrap playbook declares none`,
-            );
-          },
-          waitForConfirmGate: (input) =>
-            wrapConfirmGates.wait(input.runId, input.step.id),
-        },
-        'wrap',
-      );
+      };
+      const orchestrator = createWrapOrchestrator(project, params);
 
       try {
         const run = await orchestrator.startDeploy(closingMilestoneId);
+        // Recorded immediately so a boot-time resume (resumeActiveWrapRuns)
+        // can rebuild this exact playbook if the process restarts mid-run —
+        // see recordWrapLaunchParams.
+        recordWrapLaunchParams(run.run_id, params);
         res.status(202).json({ run });
       } catch (err) {
         if (err instanceof DeployRunConflictError) {
