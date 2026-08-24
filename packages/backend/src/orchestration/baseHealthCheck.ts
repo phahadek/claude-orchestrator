@@ -110,6 +110,8 @@ export interface BaseHealthCheckResult {
   run: TestRequestRunRow | null;
   /** Populated only for `unknown` — why no result could be produced. */
   unknownReason?: string;
+  /** The run's own passed/failed/total counts, read off test_run_summaries — null/absent when no summary row exists for `run` (including `unknown`/`total_fail`). */
+  testCounts?: { passed: number; failed: number; total: number } | null;
 }
 
 function unknownResult(
@@ -125,6 +127,19 @@ function unknownResult(
     cacheHit: false,
     run: null,
     unknownReason: reason,
+    testCounts: null,
+  };
+}
+
+function getRunTestCounts(
+  run: TestRequestRunRow,
+): { passed: number; failed: number; total: number } | null {
+  const summary = getTestRunSummary(run.id);
+  if (!summary) return null;
+  return {
+    passed: summary.passed_count,
+    failed: summary.failed_count,
+    total: summary.total_count,
   };
 }
 
@@ -394,6 +409,7 @@ async function checkBaseBranchHealthLocked(
       contentHash,
       cacheHit: true,
       run: cached,
+      testCounts: getRunTestCounts(cached),
     };
   }
 
@@ -443,5 +459,6 @@ async function checkBaseBranchHealthLocked(
     contentHash,
     cacheHit: false,
     run,
+    testCounts: getRunTestCounts(run),
   };
 }

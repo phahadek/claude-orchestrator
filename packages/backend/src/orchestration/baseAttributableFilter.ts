@@ -97,6 +97,7 @@ async function maybeFileRemediation(
   failingTestIds: string[],
   failureReason: string | null,
   triggeringTaskId: string | null,
+  testCounts: { passed: number; failed: number; total: number } | null,
 ): Promise<void> {
   try {
     await recordAndMaybeFileBaseHealthRemediation({
@@ -106,6 +107,7 @@ async function maybeFileRemediation(
       failingTestIds,
       failureReason,
       triggeringTaskId,
+      testCounts,
     });
   } catch (err) {
     logger.warn(
@@ -143,6 +145,7 @@ export async function filterBaseAttributableFailures(
         [],
         health.run.failure_reason,
         triggeringTaskId,
+        null,
       );
     } else if (health.outcome === 'partial_fail') {
       const baseFailing = getFailingTestIdsForRun(health.run.id).map(
@@ -158,6 +161,7 @@ export async function filterBaseAttributableFailures(
           baseFailing,
           null,
           triggeringTaskId,
+          health.testCounts ?? null,
         );
       }
     }
