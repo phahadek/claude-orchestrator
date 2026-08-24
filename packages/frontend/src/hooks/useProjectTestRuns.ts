@@ -19,7 +19,7 @@ export type ProjectTestRunProducer =
   | 'pr_gate'
   | 'base_health';
 
-export interface ProjectTestRunOutcomeCounts {
+interface ProjectTestRunOutcomeCounts {
   passed: number;
   failed: number;
   skipped: number;
