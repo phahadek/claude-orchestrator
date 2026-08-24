@@ -1562,16 +1562,17 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     );
     if (!sectionMatch) return result;
 
-    const { parseFilesPathsRawItems, extractPathToken } = await import(
-      '../groom/groomLoad'
-    );
+    const { parseFilesPathsRawItems, extractPathToken } =
+      await import('../groom/groomLoad');
     const newMigrationEntries = parseFilesPathsRawItems(sectionMatch[1])
       .filter((e) => e.isNew)
       .map((e) => {
         const token = extractPathToken(e.raw);
         if (!token || !isMigrationPath(token)) return null;
         const parts = parseMigrationEntryDirSuffix(token);
-        return parts ? { raw: e.raw, dir: parts.dir, suffix: parts.suffix } : null;
+        return parts
+          ? { raw: e.raw, dir: parts.dir, suffix: parts.suffix }
+          : null;
       })
       .filter(
         (e): e is { raw: string; dir: string; suffix: string } => e !== null,

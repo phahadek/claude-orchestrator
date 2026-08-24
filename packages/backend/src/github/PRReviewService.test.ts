@@ -3880,7 +3880,11 @@ describe('PRReviewService — migration-reservation override wired into reviewPR
     '- migrations/postgres/0100_widget_table.sql *(new)*\n';
 
   const dimsFailingFilesOnly = [
-    { name: 'Title and description vs task Summary', passed: true, notes: 'ok' },
+    {
+      name: 'Title and description vs task Summary',
+      passed: true,
+      notes: 'ok',
+    },
     { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
     { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
     {
@@ -3891,7 +3895,11 @@ describe('PRReviewService — migration-reservation override wired into reviewPR
   ];
 
   const dimsAllPassed = [
-    { name: 'Title and description vs task Summary', passed: true, notes: 'ok' },
+    {
+      name: 'Title and description vs task Summary',
+      passed: true,
+      notes: 'ok',
+    },
     { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
     { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
     {
