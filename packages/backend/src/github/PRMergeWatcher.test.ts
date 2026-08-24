@@ -82,6 +82,24 @@ vi.mock('../orchestration/baseHealthCheck.js', () => ({
   }),
 }));
 
+// runProjectTestRequest performs real work when unmocked (spawns the
+// project's test: commands, writes to test_request_runs) — never safe to
+// let through in this unit-test sandbox. evaluateF2LaneFlakyDisposition is
+// left real: the f2 lane-side flaky auto-disposition tests below exercise it
+// directly against a real db.
+const mockRunProjectTestRequest = vi
+  .fn()
+  .mockResolvedValue({ passed: true, output: '' });
+vi.mock('../orchestration/testRequestLane.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../orchestration/testRequestLane')>();
+  return {
+    ...actual,
+    runProjectTestRequest: (...args: unknown[]) =>
+      mockRunProjectTestRequest(...args),
+  };
+});
+
 import { PRMergeWatcher } from './PRMergeWatcher';
 import {
   getAllOpenPRs,
@@ -3561,6 +3579,167 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
     expect(vi.mocked(sessions.sendOrResume)).not.toHaveBeenCalled();
     // GitHub mergeability was consulted (normal flow)
     expect(vi.mocked(github.categorizeMergeability)).toHaveBeenCalled();
+  });
+
+  it('triggers a full run when the only settled row at this content_hash is scoped-passed — a scoped pass never satisfies F2', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-scoped-only',
+      session_id: 'coding-session',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeClean(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    // The only settled row for this content_hash is scoped-passed. The real
+    // getLatestTestRequestRun filters run_kind='full' at the SQL layer (see
+    // its @run_kind clause), so a caller passing runKind='full' never gets
+    // this scoped row back — mocked here as an unconditional miss, and the
+    // call-args assertion below confirms 'full' is what was actually asked
+    // for.
+    vi.mocked(getLatestTestRequestRun).mockReturnValue(undefined);
+    mockRunProjectTestRequest.mockResolvedValueOnce({
+      passed: true,
+      output: '',
+    });
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(getLatestTestRequestRun)).toHaveBeenCalledWith(
+      'proj-1',
+      'content-hash-x',
+      'full',
+    );
+    expect(mockRunProjectTestRequest).toHaveBeenCalledTimes(1);
+    expect(mockRunProjectTestRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: 'proj-1',
+        contentHash: 'content-hash-x',
+        commands: ['npm test'],
+      }),
+    );
+  });
+
+  it('a full-passed row at the current content_hash satisfies F2 without re-executing', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-full-pass',
+      session_id: 'coding-session',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeClean(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-full-1',
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
+      state: 'passed',
+      output: 'All tests passed',
+      run_kind: 'full',
+      started_at: 1000,
+      finished_at: 2000,
+    } as any);
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(mockRunProjectTestRequest).not.toHaveBeenCalled();
+    expect(vi.mocked(github.categorizeMergeability)).toHaveBeenCalled();
+  });
+
+  it('reuses one cached full-run result across repeated mergeability polls against an unchanged tree (no re-execution per poll)', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-unchanged',
+      session_id: 'coding-session',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeClean(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    // First poll: no settled full row yet — the run executes and this mock
+    // stands in for the durable row it would have written.
+    let settled: any = undefined;
+    mockRunProjectTestRequest.mockImplementationOnce(async () => {
+      settled = {
+        id: 'run-full-2',
+        project_id: 'proj-1',
+        content_hash: 'content-hash-x',
+        state: 'passed',
+        output: 'All tests passed',
+        run_kind: 'full',
+        started_at: 1000,
+        finished_at: 2000,
+      };
+      return { passed: true, output: '' };
+    });
+    vi.mocked(getLatestTestRequestRun).mockImplementation(() => settled);
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+    expect(mockRunProjectTestRequest).toHaveBeenCalledTimes(1);
+
+    // Second poll against the same (unchanged) tree — the settled row from
+    // the first poll is now returned by getLatestTestRequestRun, so no
+    // second execution should be triggered.
+    await watcher.poll();
+    expect(mockRunProjectTestRequest).toHaveBeenCalledTimes(1);
   });
 
   it('does not re-remediate when ci_remediation_attempted_sha matches head_sha', async () => {

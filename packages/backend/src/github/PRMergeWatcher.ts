@@ -22,7 +22,10 @@ import {
   getChangedFiles,
 } from '../session/autofix-runner';
 import { computeWholeTreeContentHash } from '../session/analyzeGating';
-import { evaluateF2LaneFlakyDisposition } from '../orchestration/testRequestLane';
+import {
+  evaluateF2LaneFlakyDisposition,
+  runProjectTestRequest,
+} from '../orchestration/testRequestLane';
 import {
   filterBaseAttributableFailures,
   applyF2GateMaskingGuards,
@@ -667,9 +670,33 @@ export class PRMergeWatcher extends EventEmitter {
       const contentHash = worktreePath
         ? await computeWholeTreeContentHash(worktreePath)
         : null;
-      const testResult = contentHash
-        ? getLatestTestRequestRun(project.id, contentHash)
+      // Explicitly scoped to 'full' — a settled row from a diff-scoped run
+      // (test_scoped:) must never stand in for the full-suite verdict this
+      // gate exists to enforce; see run_kind on test_request_runs.
+      let testResult = contentHash
+        ? getLatestTestRequestRun(project.id, contentHash, 'full')
         : undefined;
+      if (!testResult && contentHash && worktreePath) {
+        // No full-run verdict yet for this content hash — trigger one.
+        // runProjectTestRequest coalesces with any run already in flight for
+        // this exact (project, content-hash, 'full') key, so an overlapping
+        // poll joins the same execution instead of launching a second one;
+        // once settled, later polls hit the cache read above and never
+        // re-execute against an unchanged tree.
+        await runProjectTestRequest({
+          projectId: project.id,
+          contentHash,
+          worktreePath,
+          commands: config.test,
+          timeoutSec: config.test_timeout_sec,
+          maxRssMb: config.test_max_rss_mb,
+          sessionId: null,
+          runOrigin: 'pr_pipeline',
+          producer: 'pr_gate',
+          runKind: 'full',
+        });
+        testResult = getLatestTestRequestRun(project.id, contentHash, 'full');
+      }
       if (testResult && testResult.state === 'failed') {
         // ── Base-health-aware f2-gate pre-empt ─────────────────────────────
         // Filter the raw failure against the project's confirmed
@@ -764,8 +791,9 @@ export class PRMergeWatcher extends EventEmitter {
           return; // Gated on failing tests — skip GitHub mergeability evaluation
         }
       }
-      // No result yet (test hasn't run), test passed, or the failure was
-      // fully excused by the base-attributable gate filter → fall through
+      // No content hash to gate on (no worktree), test passed, or the
+      // failure was fully excused by the base-attributable gate filter →
+      // fall through
 
       // ── Test-report acquisition failure (non-blocking) ────────────────────
       // Independent of the ci_failing branch above: a run whose producer
