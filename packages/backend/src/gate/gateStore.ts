@@ -301,7 +301,8 @@ export function appendEvent(gateItemId: string, event: GateItemEvent): void {
   }
   recordEvent({
     event_type: 'gate_item_event_appended',
-    actor_type: 'system',
+    actor_type: event.operator ? 'human' : 'system',
+    actor_id: event.operator ?? null,
     project_id: row.project,
     payload: { gateItemId, disposition: event.disposition },
   });
@@ -416,7 +417,8 @@ export function setClassification(
   });
   recordEvent({
     event_type: 'gate_item_reclassified',
-    actor_type: 'system',
+    actor_type: operator ? 'human' : 'system',
+    actor_id: operator ?? null,
     project_id: row.project,
     payload: { gateItemId, from, to: classification },
   });
