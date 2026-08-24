@@ -15,6 +15,7 @@ import {
   setPauseReason,
 } from '../db/queries';
 import type { OpsPrIntentPayload } from '../db/types';
+import { getReservationForTaskDirSuffix } from '../db/migrationReservation';
 import { getCachedType } from '../tasks/TaskWriteCommands';
 import { recordEvent } from '../audit/AuditLog';
 import type { GitHubClient } from './GitHubClient';
@@ -162,6 +163,26 @@ function parseMigrationParts(path: string): MigrationPathParts | null {
     dir: slashIdx === -1 ? '' : path.slice(0, slashIdx + 1),
     number: m[1],
     suffix: m[2],
+  };
+}
+
+/**
+ * Parses a Files/paths migration entry's path token into dir+suffix,
+ * tolerating either a concrete leading number or an unsynced `NNN...`
+ * placeholder (see groomLoad.ts's MIGRATION_PLACEHOLDER_RE) — the
+ * reservation-override lookup only needs the placeholder's identity
+ * (dir+suffix), not whichever number currently sits in the entry's raw text.
+ */
+function parseMigrationEntryDirSuffix(
+  token: string,
+): { dir: string; suffix: string } | null {
+  const slashIdx = token.lastIndexOf('/');
+  const filename = slashIdx === -1 ? token : token.slice(slashIdx + 1);
+  const m = filename.match(/^(?:\d+|N{2,})_(.+)$/i);
+  if (!m) return null;
+  return {
+    dir: slashIdx === -1 ? '' : token.slice(0, slashIdx + 1),
+    suffix: m[1],
   };
 }
 
@@ -538,12 +559,17 @@ export class PRReviewService {
           projectId,
           prRow.task_id,
         );
-        const finalResult = await this.applyMigrationRenumberOverride(
-          this.applyBaselineEscalationFloor(aiResult, diff),
+        const finalResult = await this.applyMigrationReservationOverride(
+          await this.applyMigrationRenumberOverride(
+            this.applyBaselineEscalationFloor(aiResult, diff),
+            diff,
+            taskBodyForMigrationCheck,
+            repo,
+            prData.baseBranch,
+          ),
           diff,
           taskBodyForMigrationCheck,
-          repo,
-          prData.baseBranch,
+          prRow.task_id,
         );
         // Persist immediately after parse — before any side effects (GitHub/Notion).
         setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
@@ -619,12 +645,17 @@ export class PRReviewService {
             prNumber,
             repo,
           );
-          const finalResult = await this.applyMigrationRenumberOverride(
-            this.applyBaselineEscalationFloor(aiResult, diff),
+          const finalResult = await this.applyMigrationReservationOverride(
+            await this.applyMigrationRenumberOverride(
+              this.applyBaselineEscalationFloor(aiResult, diff),
+              diff,
+              taskBody,
+              repo,
+              prData.baseBranch,
+            ),
             diff,
             taskBody,
-            repo,
-            prData.baseBranch,
+            prRow.task_id,
           );
           // Persist immediately after parse — before any side effects (GitHub/Notion).
           setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
@@ -691,12 +722,17 @@ export class PRReviewService {
       });
 
       const aiResult = await verdictPromise;
-      const finalResult = await this.applyMigrationRenumberOverride(
-        this.applyBaselineEscalationFloor(aiResult, diff),
+      const finalResult = await this.applyMigrationReservationOverride(
+        await this.applyMigrationRenumberOverride(
+          this.applyBaselineEscalationFloor(aiResult, diff),
+          diff,
+          taskBody,
+          repo,
+          prData.baseBranch,
+        ),
         diff,
         taskBody,
-        repo,
-        prData.baseBranch,
+        prRow.task_id,
       );
       // Persist immediately after parse — before any side effects (GitHub/Notion).
       // setLastReviewedSha was already called above the verdictPromise await for
@@ -1052,12 +1088,17 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       projectId,
       pr.task_id,
     );
-    const finalResult = await this.applyMigrationRenumberOverride(
-      this.applyBaselineEscalationFloor(aiResult, diffData.diff),
+    const finalResult = await this.applyMigrationReservationOverride(
+      await this.applyMigrationRenumberOverride(
+        this.applyBaselineEscalationFloor(aiResult, diffData.diff),
+        diffData.diff,
+        taskBodyForMigrationCheck,
+        repo,
+        prData.baseBranch,
+      ),
       diffData.diff,
       taskBodyForMigrationCheck,
-      repo,
-      prData.baseBranch,
+      pr.task_id,
     );
     setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
     setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
@@ -1493,6 +1534,97 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     }
 
     return result;
+  }
+
+  /**
+   * Deterministic override for the "Changed files vs Files/paths affected
+   * list" dimension: for each `*(new)*` migration entry in the task's
+   * Files/paths list, the migration_reservation table — not the LLM's own
+   * arithmetic — is the literal source of truth for which number that entry
+   * claimed (see migrationReservation.ts's Ready-flip allocation + body-prose
+   * sync). A shipped migration file whose number matches the reservation
+   * forces the dimension to pass regardless of the LLM's raw verdict; a
+   * mismatch forces it to fail, with the expected/actual numbers rendered
+   * explicitly rather than left to the LLM's prose. Applied after
+   * applyMigrationRenumberOverride so this literal check has the final say
+   * for entries it recognizes. No-ops (no DB call) when the task has no
+   * `*(new)*` migration entry or no linked task.
+   */
+  private async applyMigrationReservationOverride(
+    result: PRReviewResult,
+    diffText: string,
+    taskBody: string,
+    taskId: string | null | undefined,
+  ): Promise<PRReviewResult> {
+    if (!taskId) return result;
+    const sectionMatch = taskBody.match(
+      /##+\s*Files\s*\/\s*paths[^\n]*\n([\s\S]*?)(?=\n##+\s|$)/i,
+    );
+    if (!sectionMatch) return result;
+
+    const { parseFilesPathsRawItems, extractPathToken } =
+      await import('../groom/groomLoad');
+    const newMigrationEntries = parseFilesPathsRawItems(sectionMatch[1])
+      .filter((e) => e.isNew)
+      .map((e) => {
+        const token = extractPathToken(e.raw);
+        if (!token || !isMigrationPath(token)) return null;
+        const parts = parseMigrationEntryDirSuffix(token);
+        return parts
+          ? { raw: e.raw, dir: parts.dir, suffix: parts.suffix }
+          : null;
+      })
+      .filter(
+        (e): e is { raw: string; dir: string; suffix: string } => e !== null,
+      );
+    if (newMigrationEntries.length === 0) return result;
+
+    const diffMigrationPaths = parseDiffFiles(diffText).filter(isMigrationPath);
+
+    // Evaluate every *(new)* entry first and AND the verdicts together —
+    // overrideFilesPathsDimension overwrites `passed` per call (last call
+    // wins), so calling it once per entry would let a later matching entry
+    // silently clobber an earlier entry's mismatch. A single call with the
+    // aggregated pass/fail and all notes concatenated keeps the dimension
+    // failed if any *(new)* entry mismatches its reservation.
+    const checks: { passed: boolean; note: string }[] = [];
+    for (const entry of newMigrationEntries) {
+      const reservation = getReservationForTaskDirSuffix(
+        taskId,
+        entry.dir,
+        entry.suffix,
+      );
+      if (!reservation) continue; // nothing reserved for this entry — leave to LLM judgement
+
+      const shippedPath = diffMigrationPaths.find((p) => {
+        const parts = parseMigrationParts(p);
+        return (
+          parts !== null &&
+          parts.dir === entry.dir &&
+          parts.suffix === entry.suffix
+        );
+      });
+      const shippedNumber = shippedPath
+        ? Number(parseMigrationParts(shippedPath)!.number)
+        : null;
+
+      if (shippedNumber === reservation.number) {
+        checks.push({
+          passed: true,
+          note: `Deterministic migration-reservation check: ${entry.dir}${entry.suffix} ships as ${shippedPath}, matching its reserved number ${reservation.number} — override pass.`,
+        });
+      } else {
+        checks.push({
+          passed: false,
+          note: `Deterministic migration-reservation check: expected migration number ${reservation.number} (reserved) for ${entry.dir}${entry.suffix} but the PR ships ${shippedNumber ?? 'no matching migration file'} — override fail.`,
+        });
+      }
+    }
+    if (checks.length === 0) return result;
+
+    const allPassed = checks.every((c) => c.passed);
+    const note = checks.map((c) => c.note).join(' ');
+    return overrideFilesPathsDimension(result, allPassed, note);
   }
 
   private async fetchTaskBodyBestEffort(

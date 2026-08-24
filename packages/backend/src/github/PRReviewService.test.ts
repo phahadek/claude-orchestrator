@@ -28,6 +28,10 @@ vi.mock('../tasks/TaskWriteCommands.js', () => ({
   getCachedType: vi.fn().mockReturnValue('💻 Code'),
 }));
 
+vi.mock('../db/migrationReservation.js', () => ({
+  getReservationForTaskDirSuffix: vi.fn(),
+}));
+
 import {
   PRReviewService,
   FetchRetryExhaustedError,
@@ -51,6 +55,7 @@ import {
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { getCachedType } from '../tasks/TaskWriteCommands';
+import { getReservationForTaskDirSuffix } from '../db/migrationReservation';
 import type { GitHubClient } from './GitHubClient';
 import { GitHubApiError } from './types';
 import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
@@ -3865,5 +3870,216 @@ describe('PRReviewService — migration-renumber override wired into reviewPR()'
     expect(dim1036.passed).toBe(true);
     expect(pr1027Style.verdict).toBe('approved');
     expect(pr1036Style.verdict).toBe('approved');
+  });
+});
+
+describe('PRReviewService — migration-reservation override wired into reviewPR()', () => {
+  const taskBodyWithReservation =
+    '## Summary\nAdd the widget migration\n\n' +
+    '## Files / paths affected\n' +
+    '- migrations/postgres/0100_widget_table.sql *(new)*\n';
+
+  const dimsFailingFilesOnly = [
+    {
+      name: 'Title and description vs task Summary',
+      passed: true,
+      notes: 'ok',
+    },
+    { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
+    { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
+    {
+      name: 'Changed files vs Files/paths affected list',
+      passed: false,
+      notes: 'LLM raw verdict: fails for unrelated reasons',
+    },
+  ];
+
+  const dimsAllPassed = [
+    {
+      name: 'Title and description vs task Summary',
+      passed: true,
+      notes: 'ok',
+    },
+    { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
+    { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
+    {
+      name: 'Changed files vs Files/paths affected list',
+      passed: true,
+      notes: 'LLM raw verdict: looks fine to me',
+    },
+  ];
+
+  function migrationDiff(path: string): string {
+    return [
+      `diff --git a/${path} b/${path}`,
+      'new file mode 100644',
+      `--- /dev/null`,
+      `+++ b/${path}`,
+      '@@ -0,0 +1,1 @@',
+      '+select 1;',
+    ].join('\n');
+  }
+
+  async function runReview(
+    diff: string,
+    payload: Record<string, unknown>,
+    reservationNumber: number | undefined,
+  ): Promise<import('./PRReviewService').PRReviewResult> {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+    vi.mocked(getReservationForTaskDirSuffix).mockReturnValue(
+      reservationNumber === undefined
+        ? undefined
+        : ({
+            id: 'res-1',
+            project: 'proj-1',
+            number: reservationNumber,
+            taskId: mockPRRow.task_id,
+            dir: 'migrations/postgres/',
+            suffix: 'widget_table.sql',
+            createdAt: '2026-01-01T00:00:00Z',
+            updatedAt: '2026-01-01T00:00:00Z',
+          } as any),
+    );
+    const mockSM = makeMockSessionManager();
+    const github = makeMockGitHub();
+    (github.listFilePathsAtRef as ReturnType<typeof vi.fn>).mockResolvedValue(
+      [],
+    );
+    const notion = makeMockNotion();
+    (notion.fetchTaskPage as ReturnType<typeof vi.fn>).mockResolvedValue(
+      taskBodyWithReservation,
+    );
+    const service = new PRReviewService(
+      github,
+      notion,
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (_a: string, _b: string, opts: { sessionId: string }) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(opts.sessionId, JSON.stringify(payload)),
+          ),
+        );
+        return opts.sessionId;
+      },
+    );
+    return service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(diff),
+    );
+  }
+
+  it('a shipped migration number matching the reservation passes the dimension regardless of the LLM raw verdict', async () => {
+    const result = await runReview(
+      migrationDiff('migrations/postgres/0100_widget_table.sql'),
+      {
+        verdict: 'needs_changes',
+        dimensions: dimsFailingFilesOnly,
+        summary: 'LLM incorrectly flagged a matching migration number.',
+      },
+      100,
+    );
+    const dim = result.dimensions!.find(
+      (d) => d.name === 'Changed files vs Files/paths affected list',
+    )!;
+    expect(dim.passed).toBe(true);
+    expect(dim.notes).toMatch(/Deterministic migration-reservation check/);
+    expect(result.verdict).toBe('approved');
+  });
+
+  it('a mismatching shipped number fails the dimension regardless of the LLM raw verdict, rendering expected/actual', async () => {
+    const result = await runReview(
+      migrationDiff('migrations/postgres/0105_widget_table.sql'),
+      {
+        verdict: 'approved',
+        dimensions: dimsAllPassed,
+        summary: 'LLM incorrectly approved a mismatching migration number.',
+      },
+      100,
+    );
+    const dim = result.dimensions!.find(
+      (d) => d.name === 'Changed files vs Files/paths affected list',
+    )!;
+    expect(dim.passed).toBe(false);
+    expect(dim.notes).toMatch(/Deterministic migration-reservation check/);
+    expect(dim.notes).toMatch(/expected migration number 100/);
+    expect(dim.notes).toMatch(/ships 105/);
+    expect(result.verdict).toBe('needs_changes');
+  });
+
+  it('a task with multiple *(new)* migration entries fails the dimension if any one entry mismatches its reservation — a later matching entry must not clobber an earlier mismatch', async () => {
+    const taskBodyWithTwoReservations =
+      '## Summary\nAdd two migrations\n\n' +
+      '## Files / paths affected\n' +
+      '- migrations/postgres/0100_widget_table.sql *(new)*\n' +
+      '- migrations/postgres/0200_gadget_table.sql *(new)*\n';
+
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+    vi.mocked(getReservationForTaskDirSuffix).mockImplementation(
+      (_taskId, _dir, suffix) =>
+        ({
+          id: `res-${suffix}`,
+          project: 'proj-1',
+          number: suffix === 'widget_table.sql' ? 100 : 200,
+          taskId: mockPRRow.task_id,
+          dir: 'migrations/postgres/',
+          suffix,
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        }) as any,
+    );
+    const mockSM = makeMockSessionManager();
+    const github = makeMockGitHub();
+    (github.listFilePathsAtRef as ReturnType<typeof vi.fn>).mockResolvedValue(
+      [],
+    );
+    const notion = makeMockNotion();
+    (notion.fetchTaskPage as ReturnType<typeof vi.fn>).mockResolvedValue(
+      taskBodyWithTwoReservations,
+    );
+    const service = new PRReviewService(
+      github,
+      notion,
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    const payload = {
+      verdict: 'approved',
+      dimensions: dimsAllPassed,
+      summary: 'LLM incorrectly approved despite one mismatched migration.',
+    };
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (_a: string, _b: string, opts: { sessionId: string }) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(opts.sessionId, JSON.stringify(payload)),
+          ),
+        );
+        return opts.sessionId;
+      },
+    );
+    // 0105 mismatches the widget reservation (100); 0200 matches the gadget
+    // reservation (200) and is evaluated second — it must not overwrite the
+    // earlier mismatch back to passed:true.
+    const diff = [
+      migrationDiff('migrations/postgres/0105_widget_table.sql'),
+      migrationDiff('migrations/postgres/0200_gadget_table.sql'),
+    ].join('\n');
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(diff),
+    );
+    const dim = result.dimensions!.find(
+      (d) => d.name === 'Changed files vs Files/paths affected list',
+    )!;
+    expect(dim.passed).toBe(false);
+    expect(dim.notes).toMatch(/expected migration number 100/);
+    expect(result.verdict).toBe('needs_changes');
   });
 });
