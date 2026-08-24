@@ -993,8 +993,13 @@ export class AutoMerger {
     // ci_failing — CI hasn't reported a failure, it's just slow — so it must
     // not report a 'ci_failed' merge state (that would misreport the cause
     // and, per isMergeBlockingPause, is what the non-blocking classification
-    // is specifically meant to avoid).
-    if (reason === 'ci_failing') {
+    // is specifically meant to avoid). Matched by capability
+    // (source:'ci' + blocks_merge), not the 'ci_failing' literal, so a
+    // future source:'ci'+blocking reason added to this function's param
+    // union is reported as a real CI failure without this call site needing
+    // its own update.
+    const isCiFailurePause = struct.source === 'ci' && struct.blocks_merge;
+    if (isCiFailurePause) {
       const names = failingCheckNames ?? [];
       updateMergeState(
         pr.pr_number,
@@ -1013,11 +1018,9 @@ export class AutoMerger {
       prNumber: pr.pr_number,
       repo: pr.repo,
       mergeable: !struct.blocks_merge,
-      mergeState: reason === 'ci_failing' ? 'ci_failed' : null,
+      mergeState: isCiFailurePause ? 'ci_failed' : null,
       failingChecks:
-        reason === 'ci_failing' &&
-        failingCheckNames &&
-        failingCheckNames.length > 0
+        isCiFailurePause && failingCheckNames && failingCheckNames.length > 0
           ? failingCheckNames
           : undefined,
     });
