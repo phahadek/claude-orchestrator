@@ -50,7 +50,8 @@
   border-radius: 10px;
 }
 
-.outcome--passed {
+.outcome--passed,
+.outcome--passed-scoped {
   background: var(--success-bg, #1f4d2c);
   color: var(--success-fg, #7ee0a0);
 }
