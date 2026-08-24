@@ -18,7 +18,7 @@ export type StalledPRKind =
  *
  *  1. incomplete verdict + no new push (head_sha unchanged)
  *  2. gate-failure verdict (autofix_failed / verify_failed) with no pending push
- *  3. reconciler retry cap reached (stalled_reconcile_cap pause)
+ *  3. reconciler retry cap reached (reconcile_exhausted flag)
  *
  * Errored/killed review sessions are NOT included here — PRMergeWatcher still
  * runs mergeability checks on those. The StalledPRReconciler handles re-driving
@@ -26,8 +26,7 @@ export type StalledPRKind =
  */
 export function isTerminalStalePR(pr: PullRequestRow): boolean {
   // Reconciler gave up — treat as terminal for polling purposes too
-  const parsed = parsePauseReason(pr.pause_reason);
-  if (parsed?.reason === 'stalled_reconcile_cap') return true;
+  if (pr.reconcile_exhausted) return true;
 
   if (!pr.review_result) return false;
 
@@ -91,11 +90,11 @@ export function classifyStalledPR(
   if (pr.human_merge_only) return null;
 
   // Already escalated — reconciler is done with this PR
-  const parsed = parsePauseReason(pr.pause_reason);
-  if (parsed?.reason === 'stalled_reconcile_cap') return null;
+  if (pr.reconcile_exhausted) return null;
 
   if (!pr.head_sha) return null;
 
+  const parsed = parsePauseReason(pr.pause_reason);
   const verdict = parseVerdict(pr.review_result);
 
   const isDeadImplementingSession =

@@ -372,7 +372,7 @@ export interface PullRequestRow {
    *  ci_failing pause; resets to 0 when the pause clears or head_sha advances. */
   flake_recovery_attempts: number;
   /** 0 | 1 — set when stalled_pr_retry_count's most recent exhaustion (the
-   *  gate_failed stall that triggered stalled_reconcile_cap escalation) was
+   *  gate_failed stall that triggered a reconcile_exhausted escalation) was
    *  confirmed base-attributable (see baseAttribution.ts) — the sole scoping
    *  signal the base-recovery reset consults; cleared on any reset. */
   stalled_retry_base_exhausted: number;
@@ -391,6 +391,19 @@ export interface PullRequestRow {
    *  every non-Ops PR. One approved PR-intent authorizes exactly one PR:
    *  linkPRToPRIntent rejects a second PR row claiming the same intent id. */
   pr_intent_id: string | null;
+  /** 0 | 1 — orthogonal automation-exhaustion flag set by
+   *  StalledPRReconciler.escalate() alongside whatever real-cause
+   *  pause-reason entries already exist. Decoupled from pause_reason
+   *  (retired: the stalled_reconcile_cap CanonicalPauseReason) — gates only
+   *  the reconciler's own re-drive decision and PRMergeWatcher's polling
+   *  skip (see pollUtils.ts), and must never block another subsystem from
+   *  recording or discharging a live pause-reason entry for the same PR. */
+  reconcile_exhausted: number;
+  /** Unix ms timestamp of when reconcile_exhausted was last set to true; null
+   *  when clear. The base-recovery escape (hasBaseTotalFailSince) uses this
+   *  as this PR's own escalation timestamp — pause_reason_set_at no longer
+   *  moves on escalation now that the flag is decoupled from pause_reason. */
+  reconcile_exhausted_set_at: number | null;
 }
 
 // ─── depth_review_verdicts ──────────────────────────────────────────────────

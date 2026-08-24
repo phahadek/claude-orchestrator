@@ -698,12 +698,12 @@ describe('new human comments reach the inbox', () => {
     vi.useRealTimers();
   });
 
-  it('watches a parked PR (stalled_reconcile_cap) for which isTerminalStalePR returns true — confirms the dropped clause', async () => {
+  it('watches a parked PR (reconcile_exhausted) for which isTerminalStalePR returns true — confirms the dropped clause', async () => {
     vi.useFakeTimers();
-    // stalled_reconcile_cap is both a needs_attention pause reason AND makes
-    // isTerminalStalePR() return true — this PR must still be watched.
+    // reconcile_exhausted makes isTerminalStalePR() return true — this PR
+    // must still be watched.
     vi.mocked(getAllOpenPRs).mockReturnValue([
-      makePR({ pause_reason: 'stalled_reconcile_cap' }),
+      makePR({ reconcile_exhausted: 1 }),
     ]);
     const github = makeGitHub({
       issueComments: [
@@ -1219,7 +1219,7 @@ describe('CHANGES_REQUESTED clears awaiting_human_approval', () => {
 describe('delivery routes through SessionManager.enqueueFeedback (resume, no force-clear)', () => {
   it('flushes a comment for a paused session via sessions.enqueueFeedback, resuming it without clearing pause_reason', async () => {
     vi.useFakeTimers();
-    const pr = makePR({ pause_reason: 'stalled_reconcile_cap' });
+    const pr = makePR({ pause_reason: 'review_failed' });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
     const github = makeGitHub({
       issueComments: [

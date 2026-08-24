@@ -92,8 +92,6 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Static analysis gate failed — fix the reported issues and re-push.',
   rate_limit:
     'API rate limit reached — session paused. Will resume automatically.',
-  stalled_reconcile_cap:
-    'PR stalled — reconciler retry cap reached. Manual intervention required.',
   needs_repo:
     'No repo assigned — assign a target repository before this task can launch.',
   autofix_git_infra_failure:
@@ -257,10 +255,7 @@ export function TaskCard({
           title={
             pauseStruct
               ? `[${pauseStruct.source}] ${PAUSE_REASON_LABELS[pauseStruct.reason] ?? pauseStruct.reason}` +
-                (pauseStruct.reason === 'stalled_reconcile_cap' &&
-                task.pauseDetail
-                  ? ` (${task.pauseDetail})`
-                  : '')
+                (task.pauseDetail ? ` (${task.pauseDetail})` : '')
               : undefined
           }
           data-pause-severity={pauseStruct?.severity}

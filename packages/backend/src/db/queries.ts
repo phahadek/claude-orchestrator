@@ -2795,6 +2795,8 @@ export function upsertPullRequest(
     | 'flake_recovery_base_exhausted'
     | 'human_merge_only'
     | 'pr_intent_id'
+    | 'reconcile_exhausted'
+    | 'reconcile_exhausted_set_at'
   > & {
     review_session_id?: string | null;
     review_iteration?: number;
@@ -2987,6 +2989,36 @@ export function resetStalledPRRetryCountForBaseRecovery(
   db.prepare<{ pr_number: number; repo: string }>(
     `UPDATE pull_requests SET stalled_pr_retry_count = 0, stalled_retry_base_exhausted = 0 WHERE pr_number = @pr_number AND repo = @repo`,
   ).run({ pr_number: prNumber, repo });
+}
+
+/**
+ * Sets (or clears) the orthogonal reconcile_exhausted automation-exhaustion
+ * flag — see PullRequestRow.reconcile_exhausted. Decoupled from
+ * pause_reason: never touches the concurrent pause-reason set, so setting it
+ * alongside an existing live cause never clobbers that cause, and clearing
+ * it never discharges an unrelated live cause either. Stamps
+ * reconcile_exhausted_set_at when setting true (nulled when clearing) —
+ * StalledPRReconciler's base-recovery escape uses this as this PR's own
+ * escalation timestamp.
+ */
+export function setReconcileExhausted(
+  prNumber: number,
+  repo: string,
+  value: boolean,
+): void {
+  db.prepare<{
+    pr_number: number;
+    repo: string;
+    value: number;
+    set_at: number | null;
+  }>(
+    `UPDATE pull_requests SET reconcile_exhausted = @value, reconcile_exhausted_set_at = @set_at WHERE pr_number = @pr_number AND repo = @repo`,
+  ).run({
+    pr_number: prNumber,
+    repo,
+    value: value ? 1 : 0,
+    set_at: value ? Date.now() : null,
+  });
 }
 
 export function clearReviewSessionId(prNumber: number, repo: string): void {
@@ -3754,8 +3786,8 @@ export function setPauseReason(
 
 /**
  * Signals that may trigger clearTerminalPRFlags. Only a subset of these are
- * trusted to clear a 'stalled_reconcile_cap' escalation — see
- * CAP_CLEAR_ALLOWED_TRIGGERS below.
+ * trusted to clear a live reconcile_exhausted escalation — see
+ * RECONCILE_EXHAUSTED_CLEAR_ALLOWED_TRIGGERS below.
  */
 export type ClearTerminalPRFlagsTrigger =
   | 'merged'
@@ -3767,7 +3799,7 @@ export type ClearTerminalPRFlagsTrigger =
   | 'base_recovery';
 
 /**
- * Triggers that are allowed to clear a 'stalled_reconcile_cap' escalation:
+ * Triggers that are allowed to clear a live reconcile_exhausted escalation:
  * a genuine terminal transition (merged/closed), a head_sha advance (a fix
  * was actually pushed — the load-bearing signal), an explicit human
  * unpark/recovery action, a session-initiated-close reconcile (the PR was
@@ -3777,10 +3809,10 @@ export type ClearTerminalPRFlagsTrigger =
  * class here rather than an inline setPauseReason(null) special case in the
  * reconciler). A bare automated 'review_verdict' is deliberately excluded:
  * an approved verdict does not guarantee the PR is mergeable, and clearing
- * the cap on verdict alone re-creates the open+no-pause+no-session limbo the
- * cap escalation exists to prevent.
+ * reconcile_exhausted on verdict alone re-creates the open+no-pause+no-session
+ * limbo the escalation exists to prevent.
  */
-const CAP_CLEAR_ALLOWED_TRIGGERS: ReadonlySet<ClearTerminalPRFlagsTrigger> =
+const RECONCILE_EXHAUSTED_CLEAR_ALLOWED_TRIGGERS: ReadonlySet<ClearTerminalPRFlagsTrigger> =
   new Set([
     'merged',
     'closed',
@@ -3791,13 +3823,17 @@ const CAP_CLEAR_ALLOWED_TRIGGERS: ReadonlySet<ClearTerminalPRFlagsTrigger> =
   ]);
 
 /**
- * Clear both pause_reason and pre_review_stage on terminal PR transitions
- * (merged, closed, or approved verdict). Composes the existing setters so that
- * pause_reason_set_at is also nulled correctly. Re-nulling already-null fields
- * is a no-op in SQLite and is safe.
+ * Clears pause_reason (the full concurrent set) and pre_review_stage on
+ * terminal PR transitions (merged, closed, or approved verdict). Composes
+ * the existing setters so that pause_reason_set_at is also nulled correctly.
+ * Re-nulling already-null fields is a no-op in SQLite and is safe.
  *
- * When the PR is currently escalated to 'stalled_reconcile_cap', clearing is
- * gated on `trigger` — see CAP_CLEAR_ALLOWED_TRIGGERS.
+ * Independently, when the PR has a live reconcile_exhausted escalation,
+ * clearing that flag is gated on `trigger` — see
+ * RECONCILE_EXHAUSTED_CLEAR_ALLOWED_TRIGGERS. That gating never blocks the
+ * pause_reason/pre_review_stage clear above: reconcile_exhausted is
+ * orthogonal, and an untrusted trigger must still be able to discharge (or
+ * record, via setPauseReason elsewhere) a live cause for the same PR.
  */
 export function clearTerminalPRFlags(
   prNumber: number,
@@ -3805,18 +3841,17 @@ export function clearTerminalPRFlags(
   trigger: ClearTerminalPRFlagsTrigger,
 ): void {
   const pr = getPRByNumber(prNumber, repo);
-  const pauseStruct = parsePauseReason(pr?.pause_reason ?? null);
-  if (
-    pauseStruct?.reason === 'stalled_reconcile_cap' &&
-    !CAP_CLEAR_ALLOWED_TRIGGERS.has(trigger)
-  ) {
-    logger.info(
-      `[clearTerminalPRFlags] PR #${prNumber} (${repo}): refusing to clear stalled_reconcile_cap — trigger '${trigger}' is not a trusted escalation-clearing signal`,
-    );
-    return;
-  }
   setPauseReason(prNumber, repo, null);
   setPreReviewStage(prNumber, repo, null);
+  if (pr?.reconcile_exhausted) {
+    if (RECONCILE_EXHAUSTED_CLEAR_ALLOWED_TRIGGERS.has(trigger)) {
+      setReconcileExhausted(prNumber, repo, false);
+    } else {
+      logger.info(
+        `[clearTerminalPRFlags] PR #${prNumber} (${repo}): leaving reconcile_exhausted set — trigger '${trigger}' is not a trusted escalation-clearing signal`,
+      );
+    }
+  }
   recordEvent({
     event_type: 'pr_terminal_flags_cleared',
     actor_type: 'system',

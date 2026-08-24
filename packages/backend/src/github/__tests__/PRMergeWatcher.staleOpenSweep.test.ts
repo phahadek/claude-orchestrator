@@ -61,9 +61,8 @@ vi.mock('../pollUtils', () => ({
 }));
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
-// parsePauseReason from ../../db/pauseReason is intentionally left unmocked —
-// the sweep's filtering logic depends on it correctly recognizing the
-// 'stalled_reconcile_cap' reason from the raw JSON stored on pause_reason.
+// The sweep's filtering logic keys off the orthogonal reconcile_exhausted
+// column, not pause_reason — see makePRRow's default below.
 
 import { PRMergeWatcher } from '../PRMergeWatcher';
 import {
@@ -131,6 +130,7 @@ function makePRRow(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
     conflict_nudge_sha: null,
     stalled_pr_retry_count: 5,
     session_initiated_close_at: null,
+    reconcile_exhausted: 1,
     ...overrides,
   };
 }
@@ -297,11 +297,12 @@ describe('PRMergeWatcher — escalated stale-open sweep', () => {
     expect(clearTerminalPRFlags).not.toHaveBeenCalled();
   });
 
-  it('enumerates only state=open + stalled_reconcile_cap rows, calling getPRState once per row, never listOpenPRs', async () => {
+  it('enumerates only state=open + reconcile_exhausted rows, calling getPRState once per row, never listOpenPRs', async () => {
     const escalated1 = makePRRow({ pr_number: 100 });
     const escalated2 = makePRRow({ pr_number: 200 });
     const nonEscalatedPaused = makePRRow({
       pr_number: 300,
+      reconcile_exhausted: 0,
       pause_reason: JSON.stringify({
         reason: 'merge_conflict',
         source: 'merge',
@@ -309,7 +310,11 @@ describe('PRMergeWatcher — escalated stale-open sweep', () => {
         retry_strategy: 'manual_action',
       }),
     });
-    const notPaused = makePRRow({ pr_number: 400, pause_reason: null });
+    const notPaused = makePRRow({
+      pr_number: 400,
+      pause_reason: null,
+      reconcile_exhausted: 0,
+    });
     vi.mocked(getAllOpenPRs).mockReturnValue([
       escalated1,
       escalated2,
@@ -401,11 +406,12 @@ describe('PRMergeWatcher — escalated stale-open sweep', () => {
     );
   });
 
-  it('re-drives AutoMerger when a still-open escalated row becomes clean, without clearing stalled_reconcile_cap (#1449)', async () => {
+  it('re-drives AutoMerger when a still-open escalated row becomes clean, without clearing reconcile_exhausted (#1449)', async () => {
     // The becomes-clean transition hook must fire so #1449-shaped rows are
-    // "considered", but stalled_reconcile_cap is a non-CI pause — it must
-    // not be cleared by this path. AutoMerger's own pause_reason guard is
-    // what actually blocks the merge until a trusted channel clears it.
+    // "considered", but reconcile_exhausted is orthogonal to CI/mergeability
+    // — it must not be cleared by this path. AutoMerger's own pause_reason
+    // guard is what actually blocks the merge until a trusted channel clears
+    // the live cause.
     const pr = makePRRow({ merge_state: 'unknown', mergeable: 0 });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
     vi.mocked(getPRByNumber).mockReturnValue(pr);

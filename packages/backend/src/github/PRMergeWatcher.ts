@@ -110,6 +110,14 @@ const STALE_OPEN_SWEEP_INTERVAL_MS = 20 * 60 * 1000; // 20 minutes
  * Pause reasons where mergeability polling is pointless — AutoMerger has given
  * up or the PR is blocked on human intervention. Checking GitHub's merge state
  * every cycle wastes quota without any possibility of changing the outcome.
+ *
+ * Deliberately excludes the reconcile_exhausted flag (the retired
+ * stalled_reconcile_cap reason's replacement): that flag is scoped to
+ * StalledPRReconciler's own re-drive decision and PRMergeWatcher's
+ * GitHub-quota-conserving polling skip (see pollUtils.isTerminalStalePR) —
+ * it must never suppress this function's own F2-gate CI-failure detection
+ * in runMergeabilityCheck, which is the mechanism that previously discarded
+ * a live cause (e.g. verify_failed) for an already-escalated PR.
  */
 const TERMINAL_MERGE_PAUSE_REASONS: ReadonlySet<string> = new Set([
   'auto_merge_failed',
@@ -118,7 +126,6 @@ const TERMINAL_MERGE_PAUSE_REASONS: ReadonlySet<string> = new Set([
   'pr_body_invalid',
   'attribution_missing',
   'merge_conflict',
-  'stalled_reconcile_cap',
 ]);
 
 function isTerminalMergePause(pauseReasonRaw: string | null): boolean {
@@ -253,12 +260,12 @@ export class PRMergeWatcher extends EventEmitter {
 
   /**
    * Targeted sweep over rows every scheduled loop otherwise skips forever:
-   * state='open' with pause_reason.reason='stalled_reconcile_cap'. Both
-   * poll() (via isTerminalStalePR) and StalledPRReconciler deliberately skip
-   * these rows to stop per-PR GitHub churn on parked PRs, but that means
-   * nothing ever re-queries GitHub for them — so a PR that reaches merged or
-   * closed on GitHub after escalation stays stuck at state='open' with a
-   * stale pause_reason forever, showing as a false "needs attention" entry.
+   * state='open' with reconcile_exhausted=1. Both poll() (via
+   * isTerminalStalePR) and StalledPRReconciler deliberately skip these rows
+   * to stop per-PR GitHub churn on parked PRs, but that means nothing ever
+   * re-queries GitHub for them — so a PR that reaches merged or closed on
+   * GitHub after escalation stays stuck at state='open' with a stale flag
+   * forever, showing as a false "needs attention" entry.
    *
    * Filters the escalated set in-code from getAllOpenPRs() rather than a
    * dedicated query, and calls getPRState() per-row — O(this orchestrator's
@@ -271,16 +278,14 @@ export class PRMergeWatcher extends EventEmitter {
    * only place anything ever re-categorizes mergeability for an escalated
    * row (poll() skips it via isTerminalStalePR), so without this a PR that
    * became mergeable while escalated (e.g. #1449) would sit at a stale
-   * merge_state/mergeable forever. runMergeabilityCheck's own terminalPause
-   * handling still refreshes the observability columns without clearing the
-   * pause; the becomes-clean transition hook re-drives AutoMerger.attempt()
-   * to "consider" the row without clearing stalled_reconcile_cap itself.
+   * merge_state/mergeable forever. runMergeabilityCheck no longer treats
+   * reconcile_exhausted as a terminal pause at all (see
+   * TERMINAL_MERGE_PAUSE_REASONS), so this refreshes observability columns
+   * and can re-drive AutoMerger.attempt() to "consider" the row without
+   * clearing reconcile_exhausted itself.
    */
   async sweepEscalatedStalePRs(): Promise<number> {
-    const escalated = getAllOpenPRs().filter(
-      (pr) =>
-        parsePauseReason(pr.pause_reason)?.reason === 'stalled_reconcile_cap',
-    );
+    const escalated = getAllOpenPRs().filter((pr) => pr.reconcile_exhausted);
     let items_processed = 0;
     for (const pr of escalated) {
       if (!getProjectByGithubRepo(pr.repo)) {
@@ -575,10 +580,8 @@ export class PRMergeWatcher extends EventEmitter {
       );
       setHeadSha(pr.pr_number, pr.repo, githubHeadSha);
       // A fix was actually pushed — the load-bearing signal that un-sticks a
-      // stalled_reconcile_cap escalation. No-op for any other pause reason.
-      if (
-        parsePauseReason(pr.pause_reason)?.reason === 'stalled_reconcile_cap'
-      ) {
+      // reconcile_exhausted escalation. No-op when the flag isn't set.
+      if (pr.reconcile_exhausted) {
         clearTerminalPRFlags(pr.pr_number, pr.repo, 'head_sha_advance');
       }
       const refreshedPr = getPRByNumber(pr.pr_number, pr.repo);
@@ -1554,12 +1557,9 @@ export class PRMergeWatcher extends EventEmitter {
           if (headSha !== prRow.head_sha) {
             setHeadSha(prRow.pr_number, prRow.repo, headSha);
             // A fix was actually pushed — the load-bearing signal that
-            // un-sticks a stalled_reconcile_cap escalation, independent of
+            // un-sticks a reconcile_exhausted escalation, independent of
             // whatever verdict the re-review below produces.
-            if (
-              parsePauseReason(prRow.pause_reason)?.reason ===
-              'stalled_reconcile_cap'
-            ) {
+            if (prRow.reconcile_exhausted) {
               clearTerminalPRFlags(
                 prRow.pr_number,
                 prRow.repo,

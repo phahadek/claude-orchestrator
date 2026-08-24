@@ -2094,6 +2094,28 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
+  // reconcile_exhausted: orthogonal automation-exhaustion flag, decoupled
+  // from pause_reason — set by StalledPRReconciler.escalate() alongside
+  // whatever real-cause pause-reason entries already exist, rather than as
+  // a CanonicalPauseReason value of its own (retired: stalled_reconcile_cap).
+  // Gates only the reconciler's own re-drive decision and the polling skip
+  // (see pollUtils.ts) — it must never block another subsystem from
+  // recording or discharging a live pause-reason entry for the same PR.
+  try {
+    target.exec(
+      `ALTER TABLE pull_requests ADD COLUMN reconcile_exhausted INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(
+      `ALTER TABLE pull_requests ADD COLUMN reconcile_exhausted_set_at INTEGER`,
+    );
+  } catch {
+    /* already exists */
+  }
+
   // seed_item.classification: mirrors gate_item's classification column, but
   // nullable/optional — unlike gate_item's NOT NULL classification, existing
   // seed_item rows predate this concept and a caller that hasn't started

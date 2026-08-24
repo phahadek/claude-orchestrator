@@ -447,7 +447,7 @@ describe('AutoMerger — pause-reason semantics govern mergeability, not mere pr
     expect(watcher.handleMerged).toHaveBeenCalled();
   });
 
-  it.each(['merge_conflict', 'max_reviews', 'stalled_reconcile_cap'] as const)(
+  it.each(['merge_conflict', 'max_reviews'] as const)(
     'a merge-blocking pause reason (%s) still skips merge on an otherwise clean/approved PR',
     async (reason) => {
       vi.mocked(getPRByNumber).mockReturnValue(

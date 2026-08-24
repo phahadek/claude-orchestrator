@@ -6,9 +6,9 @@
  * - Open PR whose review session is error/killed gets a FRESH review session
  *   (review_session_id cleared before enqueue).
  * - Gate-failed PR (autofix_failed/verify_failed) is retried without a new push.
- * - After the retry cap, the PR is escalated to pause_reason=stalled_reconcile_cap
+ * - After the retry cap, the PR is escalated by setting reconcile_exhausted
  *   and a pr_stalled_escalated broadcast is sent.
- * - PRs already at stalled_reconcile_cap are skipped.
+ * - PRs already at reconcile_exhausted are skipped.
  * - PRs with a review in-flight are skipped.
  * - reconcileOnce() processes no-op PRs without side effects.
  */
@@ -32,6 +32,7 @@ vi.mock('../db/queries.js', () => ({
   getSessionLastActivityMs: vi.fn(() => null),
   setStalledRetryBaseExhausted: vi.fn(),
   resetStalledPRRetryCountForBaseRecovery: vi.fn(),
+  setReconcileExhausted: vi.fn(),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -67,6 +68,7 @@ import {
   setPendingPush,
   getSessionLastActivityMs,
   setStalledRetryBaseExhausted,
+  setReconcileExhausted,
 } from '../db/queries.js';
 import {
   recordEvent,
@@ -359,7 +361,7 @@ describe('StalledPRReconciler', () => {
     );
 
     // Unchanged behavior: once the retry count is at the cap, the PR still
-    // escalates to stalled_reconcile_cap regardless of the HEAD check.
+    // escalates (reconcile_exhausted) regardless of the HEAD check.
     vi.clearAllMocks();
     const prAtCap = makePR({
       review_result: JSON.stringify({ verdict: 'verify_failed' }),
@@ -378,6 +380,7 @@ describe('StalledPRReconciler', () => {
 
     await reconciler2.reconcileOnce();
 
+    expect(setReconcileExhausted).toHaveBeenCalledWith(42, 'org/repo', true);
     expect(
       messages.find((m) => m.type === 'pr_stalled_escalated'),
     ).toMatchObject({
@@ -468,7 +471,7 @@ describe('StalledPRReconciler', () => {
     expect(sm.relaunchFixerForPR).not.toHaveBeenCalled();
   });
 
-  it('escalates to stalled_reconcile_cap after retry cap is reached', async () => {
+  it('escalates by setting reconcile_exhausted after retry cap is reached, without touching pause_reason', async () => {
     const pr = makePR({
       review_result: JSON.stringify({ verdict: 'incomplete' }),
       head_sha: 'sha1',
@@ -484,12 +487,8 @@ describe('StalledPRReconciler', () => {
 
     await reconciler.reconcileOnce();
 
-    expect(setPauseReason).toHaveBeenCalledWith(
-      42,
-      'org/repo',
-      'stalled_reconcile_cap',
-      'incomplete_verdict — 2 fixer attempts exhausted',
-    );
+    expect(setReconcileExhausted).toHaveBeenCalledWith(42, 'org/repo', true);
+    expect(setPauseReason).not.toHaveBeenCalled();
     expect(
       messages.find((m) => m.type === 'pr_stalled_escalated'),
     ).toMatchObject({
@@ -501,17 +500,12 @@ describe('StalledPRReconciler', () => {
     expect(ro.enqueueReview).not.toHaveBeenCalled();
   });
 
-  it('skips PRs already at stalled_reconcile_cap', async () => {
+  it('skips PRs already at reconcile_exhausted', async () => {
     const pr = makePR({
       review_result: JSON.stringify({ verdict: 'incomplete' }),
       head_sha: 'sha1',
       last_reviewed_sha: 'sha1',
-      pause_reason: JSON.stringify({
-        reason: 'stalled_reconcile_cap',
-        source: 'review',
-        severity: 'needs_attention',
-        retry_strategy: 'manual_action',
-      }),
+      reconcile_exhausted: 1,
       stalled_pr_retry_count: 2,
     });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
@@ -525,6 +519,7 @@ describe('StalledPRReconciler', () => {
 
     expect(ro.enqueueReview).not.toHaveBeenCalled();
     expect(setPauseReason).not.toHaveBeenCalled();
+    expect(setReconcileExhausted).not.toHaveBeenCalled();
     expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
   });
 
@@ -721,12 +716,7 @@ describe('StalledPRReconciler', () => {
 
     expect(setPendingPush).not.toHaveBeenCalled();
     expect(ro.enqueueReview).not.toHaveBeenCalled();
-    expect(setPauseReason).toHaveBeenCalledWith(
-      42,
-      'org/repo',
-      'stalled_reconcile_cap',
-      expect.stringContaining('gate_failed'),
-    );
+    expect(setReconcileExhausted).toHaveBeenCalledWith(42, 'org/repo', true);
   });
 
   it('does nothing when reviewOrchestrator is not set', async () => {
@@ -808,7 +798,7 @@ describe('StalledPRReconciler', () => {
     expect(incrementStalledPRRetryCount).toHaveBeenCalledWith(42, 'org/repo');
   });
 
-  it('escalates analyze_failing PR to stalled_reconcile_cap after retry cap', async () => {
+  it('escalates analyze_failing PR by setting reconcile_exhausted after retry cap', async () => {
     const pr = makePR({
       pause_reason: JSON.stringify({
         reason: 'analyze_failing',
@@ -830,12 +820,7 @@ describe('StalledPRReconciler', () => {
 
     await reconciler.reconcileOnce();
 
-    expect(setPauseReason).toHaveBeenCalledWith(
-      42,
-      'org/repo',
-      'stalled_reconcile_cap',
-      'analyze_failing — 2 fixer attempts exhausted',
-    );
+    expect(setReconcileExhausted).toHaveBeenCalledWith(42, 'org/repo', true);
     expect(
       messages.find((m) => m.type === 'pr_stalled_escalated'),
     ).toMatchObject({
@@ -875,7 +860,7 @@ describe('StalledPRReconciler', () => {
     );
   });
 
-  it('escalates pre_review_interrupted to stalled_reconcile_cap after retry cap', async () => {
+  it('escalates pre_review_interrupted by setting reconcile_exhausted after retry cap', async () => {
     const pr = makePR({
       review_result: null,
       head_sha: 'sha1',
@@ -893,12 +878,7 @@ describe('StalledPRReconciler', () => {
 
     await reconciler.reconcileOnce();
 
-    expect(setPauseReason).toHaveBeenCalledWith(
-      42,
-      'org/repo',
-      'stalled_reconcile_cap',
-      'pre_review_interrupted — 2 fixer attempts exhausted',
-    );
+    expect(setReconcileExhausted).toHaveBeenCalledWith(42, 'org/repo', true);
     expect(
       messages.find((m) => m.type === 'pr_stalled_escalated'),
     ).toMatchObject({
@@ -989,7 +969,7 @@ describe('StalledPRReconciler', () => {
     );
   });
 
-  it('escalates an approved+unmergeable PR to stalled_reconcile_cap after DEFAULT_RETRY_CAP attempts on the same head_sha', async () => {
+  it('escalates an approved+unmergeable PR by setting reconcile_exhausted after DEFAULT_RETRY_CAP attempts on the same head_sha', async () => {
     const pr = makePR({
       review_result: JSON.stringify({ verdict: 'approved' }),
       head_sha: 'sha1',
@@ -1276,12 +1256,7 @@ describe('StalledPRReconciler', () => {
     expect(recordEvent).not.toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'stalled_pr_reconcile_attempt' }),
     );
-    expect(setPauseReason).toHaveBeenCalledWith(
-      42,
-      'org/repo',
-      'stalled_reconcile_cap',
-      expect.stringContaining('orphaned'),
-    );
+    expect(setReconcileExhausted).toHaveBeenCalledWith(42, 'org/repo', true);
     expect(
       messages.find((m) => m.type === 'pr_stalled_escalated'),
     ).toMatchObject({

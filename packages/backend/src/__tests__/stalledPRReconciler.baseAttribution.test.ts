@@ -12,7 +12,7 @@
  *    stalled_retry_base_exhausted unconditionally — no live health check at
  *    this instant, since a total_fail window is often short-lived and may
  *    not coincide with the exact moment of escalation.
- *  - once already escalated to stalled_reconcile_cap, a PR whose
+ *  - once already escalated (reconcile_exhausted), a PR whose
  *    stalled_retry_base_exhausted flag is set has its budget restored (and
  *    pause cleared via the base_recovery trigger) once the base branch is
  *    clean_pass again AND base-health history corroborates a total_fail
@@ -29,6 +29,7 @@ vi.mock('../db/queries.js', () => ({
   incrementStalledPRRetryCount: vi.fn(),
   setStalledRetryBaseExhausted: vi.fn(),
   resetStalledPRRetryCountForBaseRecovery: vi.fn(),
+  setReconcileExhausted: vi.fn(),
   clearReviewSessionId: vi.fn(),
   deleteAnalyzeResult: vi.fn(),
   setHeadSha: vi.fn(),
@@ -71,6 +72,7 @@ import {
   incrementStalledPRRetryCount,
   setStalledRetryBaseExhausted,
   resetStalledPRRetryCountForBaseRecovery,
+  setReconcileExhausted,
   clearTerminalPRFlags,
   getSessionLastActivityMs,
 } from '../db/queries.js';
@@ -126,6 +128,8 @@ function makePR(overrides: Record<string, unknown> = {}) {
     flake_recovery_base_exhausted: 0,
     human_merge_only: 0,
     pr_intent_id: null,
+    reconcile_exhausted: 0,
+    reconcile_exhausted_set_at: null,
     ...overrides,
   };
 }
@@ -251,11 +255,10 @@ describe('StalledPRReconciler base-attributable-failures exemption', () => {
           'org/repo',
           true,
         );
-        expect(setPauseReason).toHaveBeenCalledWith(
+        expect(setReconcileExhausted).toHaveBeenCalledWith(
           1715,
           'org/repo',
-          'stalled_reconcile_cap',
-          expect.any(String),
+          true,
         );
         expect(
           messages.find((m) => m.type === 'pr_stalled_escalated'),
@@ -270,8 +273,8 @@ describe('StalledPRReconciler base-attributable-failures exemption', () => {
     const pr = makePR({
       stalled_pr_retry_count: 2,
       stalled_retry_base_exhausted: 1,
-      pause_reason: 'stalled_reconcile_cap',
-      pause_reason_set_at: 1000,
+      reconcile_exhausted: 1,
+      reconcile_exhausted_set_at: 1000,
     });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
 
@@ -307,8 +310,8 @@ describe('StalledPRReconciler base-attributable-failures exemption', () => {
     const pr = makePR({
       stalled_pr_retry_count: 2,
       stalled_retry_base_exhausted: 1,
-      pause_reason: 'stalled_reconcile_cap',
-      pause_reason_set_at: 500, // escalated before the total_fail window opened
+      reconcile_exhausted: 1,
+      reconcile_exhausted_set_at: 500, // escalated before the total_fail window opened
     });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
 
@@ -327,8 +330,8 @@ describe('StalledPRReconciler base-attributable-failures exemption', () => {
     const pr = makePR({
       stalled_pr_retry_count: 2,
       stalled_retry_base_exhausted: 1,
-      pause_reason: 'stalled_reconcile_cap',
-      pause_reason_set_at: 500,
+      reconcile_exhausted: 1,
+      reconcile_exhausted_set_at: 500,
     });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
 
@@ -347,7 +350,7 @@ describe('StalledPRReconciler base-attributable-failures exemption', () => {
     const pr = makePR({
       stalled_pr_retry_count: 2,
       stalled_retry_base_exhausted: 0, // exhausted for an unrelated reason — never armed
-      pause_reason: 'stalled_reconcile_cap',
+      reconcile_exhausted: 1,
     });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
 
@@ -367,7 +370,7 @@ describe('StalledPRReconciler base-attributable-failures exemption', () => {
     const pr = makePR({
       stalled_pr_retry_count: 2,
       stalled_retry_base_exhausted: 1,
-      pause_reason: 'stalled_reconcile_cap',
+      reconcile_exhausted: 1,
     });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
 
