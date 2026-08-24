@@ -3185,6 +3185,45 @@ export function runMigrations(target: Database.Database): void {
     }
   }
 
+  // ── migration_reservation: authoritative migration-number ledger ────────
+  // One row per (project, number) pair, reserved at Ready-flip apply time for
+  // the task whose *(new)* Files/paths migration entry claimed it. Mirrors
+  // the arch_unit/gate_item shape: a materialized current-state row per
+  // reservation, plus an append-only event log for its history. Two UNIQUE
+  // constraints back the two invariants migrationReservation.ts's synchronous
+  // read-then-write allocation otherwise only holds by the same-process
+  // no-await guarantee (safe within one process, not across a second writer
+  // sharing the same sqlite file): (project, number) — no two reservations
+  // ever claim the same number — and (task_id, dir, suffix) — a given
+  // placeholder is idempotently reserved at most once, never allocated two
+  // different numbers by two racing writers.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS migration_reservation (
+      id         TEXT    PRIMARY KEY,
+      project    TEXT    NOT NULL,
+      number     INTEGER NOT NULL,
+      task_id    TEXT    NOT NULL,
+      dir        TEXT    NOT NULL,
+      suffix     TEXT    NOT NULL,
+      created_at TEXT    NOT NULL,
+      updated_at TEXT    NOT NULL,
+      UNIQUE(project, number),
+      UNIQUE(task_id, dir, suffix)
+    );
+    CREATE INDEX IF NOT EXISTS idx_migration_reservation_project ON migration_reservation(project);
+    CREATE INDEX IF NOT EXISTS idx_migration_reservation_task_id ON migration_reservation(task_id);
+
+    CREATE TABLE IF NOT EXISTS migration_reservation_event (
+      id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+      migration_reservation_id  TEXT    NOT NULL,
+      event_type                TEXT    NOT NULL,
+      payload                   TEXT,
+      at                        TEXT    NOT NULL,
+      FOREIGN KEY (migration_reservation_id) REFERENCES migration_reservation(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_migration_reservation_event_res_id ON migration_reservation_event(migration_reservation_id);
+  `);
+
   runStructuredResultExtractedClearBackfill(target);
 }
 

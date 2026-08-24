@@ -53,7 +53,7 @@ import {
 } from '../planning/triage';
 import { ProjectService } from '../projects/ProjectService';
 import type { SeedItemClassification } from '../db/types';
-import { extractPathToken } from './groomLoad';
+import { extractPathToken, parsePendingMigrationPathEntry } from './groomLoad';
 import type { TrackedFileSetCache } from './groomLoad';
 import { getCachedStatus, getCachedType } from '../tasks/TaskWriteCommands';
 import { STATUS_DISPLAY } from '../tasks/statusCanonical';
@@ -132,6 +132,44 @@ export interface FilesPathsEntry {
    * recomputes the authoritative value server-side rather than trusting this.
    */
   existsInRepo: boolean;
+}
+
+export interface PendingMigrationReservation {
+  /** The entry's raw list-item text, unmodified — used to locate it for a body-patch replace. */
+  raw: string;
+  /** The exact placeholder path token as found within `raw` (e.g. `packages/backend/migrations/NNN_add_thing.sql`). */
+  token: string;
+  /** Directory prefix the placeholder number was claimed within, including the trailing slash. */
+  dir: string;
+  /** Filename suffix after the placeholder number and underscore. */
+  suffix: string;
+}
+
+/**
+ * Files/paths entries that are `*(new)*` migration placeholders awaiting a
+ * Ready-flip-allocated number (see db/migrationReservation.ts). Single
+ * source of truth for "which entries need a number" so this module's
+ * promotion-time preview and stagedIntents.ts's Ready-flip apply-time
+ * allocator can never recognize a different set of entries as pending.
+ */
+export function pendingMigrationReservations(
+  entries: FilesPathsEntry[] | undefined,
+): PendingMigrationReservation[] {
+  if (!entries) return [];
+  const out: PendingMigrationReservation[] = [];
+  for (const e of entries) {
+    if (!e.isNew) continue;
+    const parsed = parsePendingMigrationPathEntry(e.raw);
+    if (parsed) {
+      out.push({
+        raw: e.raw,
+        token: parsed.token,
+        dir: parsed.dir,
+        suffix: parsed.suffix,
+      });
+    }
+  }
+  return out;
 }
 
 /** A Depends On task's last-known type/status, as resolved by groomLoad.ts against the board/neighbour boards. */

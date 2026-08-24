@@ -179,7 +179,6 @@ export function updateUnit(
   if (!row) {
     throw new Error(`arch_unit: no unit ${id} to update`);
   }
-  const before = toArchUnit(row);
   const next = {
     ...row,
     title: fields.title ?? row.title,
@@ -209,6 +208,13 @@ export function updateUnit(
     }
     return value !== priorValues[key];
   });
+  // Only the fields that actually changed, at their prior values — not a
+  // full pre-update snapshot, so a no-op update's event payload carries an
+  // empty `before` rather than every field regardless of whether it moved.
+  const before: Partial<Record<keyof ArchUnitUpdateFields, unknown>> = {};
+  for (const key of changedFields) {
+    before[key] = priorValues[key];
+  }
   db.transaction(() => {
     updateArchUnit(next);
     insertArchUnitEvent({
