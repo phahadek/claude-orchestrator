@@ -91,3 +91,36 @@ bash_rules: []
 
 # Path (relative to project root) to a script run after worktree creation, before session spawn.
 bootstrap_script: ''
+
+# Session-kind-keyed capability pre-grants, seeded into a session's
+# granted_capabilities at spawn time (see capability_pre_grants in
+# packages/backend/src/session/orchestrator-config.ts) so a session starts
+# already holding reads this project always intends to grant, with no
+# session.requestCapability round trip needed. Keys must be members of
+# PRE_GRANT_SESSION_KINDS; project-scoped capability strings use the
+# registry project id `claude-dashboard`, not the config-dir name
+# `claude-orchestrator`. Scoped to observed per-kind demand (measured
+# 2026-08-20) rather than seeded uniformly across all six kinds:
+# - gate-verify / investigate: read:audit-log + read:session-events, plus
+#   the read-only adhoc-query script (isGrantable — matches no denylist
+#   pattern; read-only enforced independently by the script itself).
+# - groom: read:audit-log + read:session-events — the carve-out that
+#   auto-approves these reads for other kinds excludes groom
+#   (isSanctionedAutoApproveCapability's nonGroomCarveOut), so groom's
+#   requests otherwise park for a human every time.
+# - ops: read:audit-log only — no observed read:session-events demand.
+# design/docs are not seeded: design's demand is low and docs has none.
+capability_pre_grants:
+  gate-verify:
+    - read:audit-log:claude-dashboard
+    - read:session-events:claude-dashboard
+    - 'Bash(npx ts-node packages/backend/scripts/adhoc-query.ts:*)'
+  investigate:
+    - read:audit-log:claude-dashboard
+    - read:session-events:claude-dashboard
+    - 'Bash(npx ts-node packages/backend/scripts/adhoc-query.ts:*)'
+  ops:
+    - read:audit-log:claude-dashboard
+  groom:
+    - read:audit-log:claude-dashboard
+    - read:session-events:claude-dashboard

@@ -21,6 +21,7 @@ import {
   isDeclaredWriteAutoApprove,
   resolvePreGrantSessionKind,
   resolvePreGrantCapabilities,
+  PRE_GRANT_SESSION_KINDS,
 } from '../orchestrator-config';
 import { NOTION_READ_MCP_TOOLS } from '../../config';
 import {
@@ -1292,5 +1293,54 @@ describe('resolvePreGrantCapabilities', () => {
     expect(
       resolvePreGrantCapabilities(orchConfig, 'ops', 'notion:abc'),
     ).toEqual([]);
+  });
+});
+
+describe("this repo's own .claude-orchestrator.yml capability_pre_grants", () => {
+  // The M15 pre-grant mechanism is inert unless this repo's own config
+  // carries a non-empty, well-formed capability_pre_grants block. These
+  // assertions load the real file (not a fixture) so a regression here —
+  // an emptied block, a misspelled key, or a config-dir/registry id
+  // mix-up — fails the build instead of silently seeding nothing at
+  // spawn time.
+  const repoRoot = path.resolve(__dirname, '../../../../..');
+  const config = loadOrchestratorConfig(repoRoot);
+
+  it('is non-empty', () => {
+    expect(config.capability_pre_grants).toBeDefined();
+    expect(Object.keys(config.capability_pre_grants).length).toBeGreaterThan(0);
+  });
+
+  it('uses only keys from PRE_GRANT_SESSION_KINDS', () => {
+    for (const key of Object.keys(config.capability_pre_grants)) {
+      expect(PRE_GRANT_SESSION_KINDS as readonly string[]).toContain(key);
+    }
+  });
+
+  it('configures only capability strings that pass isGrantable', () => {
+    for (const [kind, capabilities] of Object.entries(
+      config.capability_pre_grants,
+    )) {
+      for (const capability of capabilities ?? []) {
+        expect(
+          isGrantable(capability),
+          `expected ${kind} capability "${capability}" to be grantable`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  it('uses the registry project id claude-dashboard, not the config-dir name claude-orchestrator, for every project-scoped capability', () => {
+    const allCapabilities = Object.values(config.capability_pre_grants).flat();
+    expect(allCapabilities.length).toBeGreaterThan(0);
+    for (const capability of allCapabilities) {
+      expect(capability).not.toContain('claude-orchestrator');
+      if (
+        capability.startsWith('read:audit-log:') ||
+        capability.startsWith('read:session-events:')
+      ) {
+        expect(capability.endsWith(':claude-dashboard')).toBe(true);
+      }
+    }
   });
 });
