@@ -7,3 +7,11 @@ export function publishTestRequestRunStatus(
 ): void {
   for (const listener of listeners) listener(payload);
 }
+
+/** Registers a listener for every published run-status payload; returns an unsubscribe function. */
+export function subscribeTestRequestRunStatus(
+  listener: (payload: TestRequestRunStatusPayload) => void,
+): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}

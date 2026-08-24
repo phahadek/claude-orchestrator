@@ -53,6 +53,7 @@ import type {
   TestRequestRunState,
   TestRequestFailureReason,
   RunOrigin,
+  TestRunProducer,
   DependencyCacheEntryRow,
   DependencyCacheEntryStatus,
   TestRunResultRow,
@@ -8425,20 +8426,43 @@ export function insertTestRequestRun(
   requestedAt: number,
   concurrentRunCount?: number | null,
   runOrigin?: RunOrigin,
+  producer?: TestRunProducer | null,
+  state: TestRequestRunState = 'running',
 ): void {
   db.prepare(
-    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, concurrent_run_count, run_origin)
-     VALUES (?, ?, ?, ?, 'running', '', ?, ?, NULL, NULL, ?, ?)`,
+    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, concurrent_run_count, run_origin, producer)
+     VALUES (?, ?, ?, ?, ?, '', ?, ?, NULL, NULL, ?, ?, ?)`,
   ).run(
     id,
     projectId,
     contentHash,
     sessionId,
+    state,
     requestedAt,
-    Date.now(),
+    // A queued row has no real start yet — requestedAt is its placeholder
+    // until markTestRequestRunRunning overwrites it with the real value once
+    // the semaphore permit is actually acquired.
+    state === 'queued' ? requestedAt : Date.now(),
     concurrentRunCount ?? null,
     runOrigin ?? null,
+    producer ?? null,
   );
+}
+
+/**
+ * Transitions a 'queued' row (inserted at admission, before the per-project
+ * semaphore permit was granted — see admitTestRequest in testRequestLane.ts)
+ * to 'running' once that permit is acquired, overwriting the placeholder
+ * started_at/concurrent_run_count set at insert time with their real values.
+ */
+export function markTestRequestRunRunning(
+  id: string,
+  startedAt: number,
+  concurrentRunCount: number | null,
+): void {
+  db.prepare(
+    `UPDATE test_request_runs SET state = 'running', started_at = ?, concurrent_run_count = ? WHERE id = ?`,
+  ).run(startedAt, concurrentRunCount, id);
 }
 
 export function completeTestRequestRun(
@@ -8483,7 +8507,7 @@ export function updateTestRequestRunState(
   );
 }
 
-const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin`;
+const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer`;
 
 /** Every run still `running` — used by the boot-time crash-recovery sweep. */
 export function listRunningTestRequestRuns(): TestRequestRunRow[] {
@@ -8491,6 +8515,24 @@ export function listRunningTestRequestRuns(): TestRequestRunRow[] {
     .prepare(
       `SELECT ${TEST_REQUEST_RUN_COLUMNS}
        FROM test_request_runs WHERE state = 'running'`,
+    )
+    .all() as TestRequestRunRow[];
+}
+
+/**
+ * Every run still `queued` — a row inserted at admission but never reaching
+ * `running` because the process died before its semaphore permit was
+ * acquired. Boot-time-crash-recovery counterpart to
+ * listRunningTestRequestRuns above; see recoverInterruptedTestRequestRuns in
+ * testRequestLane.ts, which treats both sets identically (marked `failed`,
+ * never silently re-queued — an in-memory semaphore waiter dies with the
+ * process, so a queued row can never resume on its own).
+ */
+export function listQueuedTestRequestRuns(): TestRequestRunRow[] {
+  return db
+    .prepare(
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
+       FROM test_request_runs WHERE state = 'queued'`,
     )
     .all() as TestRequestRunRow[];
 }
@@ -8556,7 +8598,7 @@ export function getLatestTestRequestRun(
     .prepare<{ project_id: string; content_hash: string }>(
       `SELECT ${TEST_REQUEST_RUN_COLUMNS}
        FROM test_request_runs
-       WHERE project_id = @project_id AND content_hash = @content_hash AND state != 'running'
+       WHERE project_id = @project_id AND content_hash = @content_hash AND state NOT IN ('running', 'queued')
        ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
     )
     .get({ project_id: projectId, content_hash: contentHash }) as
@@ -8588,7 +8630,7 @@ export function getLatestBaseHealthTestRequestRun(
       `SELECT ${TEST_REQUEST_RUN_COLUMNS}
        FROM test_request_runs
        WHERE project_id = @project_id AND content_hash = @content_hash
-         AND state != 'running' AND run_origin = 'base_health_probe'
+         AND state NOT IN ('running', 'queued') AND run_origin = 'base_health_probe'
        ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
     )
     .get({ project_id: projectId, content_hash: contentHash }) as
@@ -8614,7 +8656,7 @@ export function getBaseHealthProbeRunsSince(
       `SELECT ${TEST_REQUEST_RUN_COLUMNS}
        FROM test_request_runs
        WHERE project_id = @project_id AND run_origin = 'base_health_probe'
-         AND state != 'running' AND finished_at >= @since
+         AND state NOT IN ('running', 'queued') AND finished_at >= @since
        ORDER BY finished_at DESC`,
     )
     .all({ project_id: projectId, since: sinceTs }) as TestRequestRunRow[];
@@ -8659,7 +8701,7 @@ export function getLatestTestRequestRunForSession(
   }>(
     `SELECT id
      FROM test_request_runs
-     WHERE project_id = @project_id AND session_id = @session_id AND state = 'running'
+     WHERE project_id = @project_id AND session_id = @session_id AND state IN ('running', 'queued')
      ORDER BY started_at DESC, rowid DESC LIMIT 1`,
   );
   const running = _stmtLatestRunningTestRequestRunIdForSession.get({
@@ -8674,7 +8716,7 @@ export function getLatestTestRequestRunForSession(
   }>(
     `SELECT id
      FROM test_request_runs
-     WHERE project_id = @project_id AND session_id = @session_id AND state != 'running'
+     WHERE project_id = @project_id AND session_id = @session_id AND state NOT IN ('running', 'queued')
      ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
   );
   const finished = _stmtLatestFinishedTestRequestRunIdForSession.get({
@@ -8707,6 +8749,79 @@ export function listTestRequestRunsForSession(
       session_id: sessionId,
       limit,
     }) as TestRequestRunRow[];
+}
+
+/** One test_request_runs row plus its test_run_summaries outcome breakdown, when extracted. */
+export interface ProjectTestRunHistoryRow {
+  run: TestRequestRunRow;
+  outcomeCounts: TestOutcomeCounts & { total: number } | null;
+}
+
+/**
+ * Project-scope run-history feed: every test_request_runs row for a
+ * project — running, queued, and finished alike — newest-first by
+ * started_at (served by idx_test_request_runs_project_started), LEFT JOINed
+ * against test_run_summaries for the per-outcome breakdown where extraction
+ * has already run. This is the read model the 'tests' TopView destination
+ * (frontend follow-on task) consumes; unlike listTestRequestRunsForSession,
+ * it is not scoped to one session — producer (db/types.ts's TestRunProducer)
+ * is what a caller uses to attribute each row back to its originating lane
+ * call site.
+ */
+export function listTestRequestRunsForProject(
+  projectId: string,
+  limit = 100,
+): ProjectTestRunHistoryRow[] {
+  const rows = db
+    .prepare<{ project_id: string; limit: number }>(
+      `SELECT r.id, r.project_id, r.content_hash, r.session_id, r.state, r.output,
+              r.requested_at, r.started_at, r.finished_at, r.failure_reason,
+              r.structured_result, r.concurrent_run_count, r.oom_killed,
+              r.test_report_acquisition_attempted, r.run_origin, r.producer,
+              s.passed_count, s.failed_count, s.skipped_count, s.error_count,
+              s.other_count, s.total_count
+       FROM test_request_runs r
+       LEFT JOIN test_run_summaries s ON s.test_request_run_id = r.id
+       WHERE r.project_id = @project_id
+       ORDER BY r.started_at DESC, r.rowid DESC
+       LIMIT @limit`,
+    )
+    .all({ project_id: projectId, limit }) as Array<
+    TestRequestRunRow & {
+      passed_count: number | null;
+      failed_count: number | null;
+      skipped_count: number | null;
+      error_count: number | null;
+      other_count: number | null;
+      total_count: number | null;
+    }
+  >;
+
+  return rows.map((row) => {
+    const {
+      passed_count,
+      failed_count,
+      skipped_count,
+      error_count,
+      other_count,
+      total_count,
+      ...run
+    } = row;
+    return {
+      run,
+      outcomeCounts:
+        total_count == null
+          ? null
+          : {
+              passed: passed_count ?? 0,
+              failed: failed_count ?? 0,
+              skipped: skipped_count ?? 0,
+              error: error_count ?? 0,
+              other: other_count ?? 0,
+              total: total_count,
+            },
+    };
+  });
 }
 
 /**
@@ -12032,7 +12147,7 @@ export function getLaneHealthRollup(
     .prepare<{ project_id: string; limit: number }>(
       `SELECT state, requested_at, started_at, finished_at, failure_reason
        FROM test_request_runs
-       WHERE project_id = @project_id AND state != 'running'
+       WHERE project_id = @project_id AND state NOT IN ('running', 'queued')
        ORDER BY finished_at DESC, rowid DESC
        LIMIT @limit`,
     )

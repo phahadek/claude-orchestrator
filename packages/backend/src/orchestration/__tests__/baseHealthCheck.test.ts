@@ -571,6 +571,30 @@ describe('checkBaseBranchHealth', () => {
     expect(outcome).not.toBe('timed-out');
   });
 
+  it('classifies a queued row (durably recorded at admission, before its permit is acquired) as "queued"', () => {
+    const queuedRun: TestRequestRunRow = {
+      id: 'run-queued',
+      project_id: 'proj-1',
+      content_hash: 'hash-queued',
+      session_id: 'session-1',
+      state: 'queued',
+      output: '',
+      requested_at: 1000,
+      started_at: 1000,
+      finished_at: null,
+      structured_result: null,
+      failure_reason: null,
+      concurrent_run_count: null,
+      oom_killed: 0,
+      test_report_acquisition_attempted: null,
+      run_origin: null,
+      producer: 'session_request',
+    };
+
+    const { outcome } = classifyTestRunOutcome(queuedRun);
+    expect(outcome).toBe('queued');
+  });
+
   it('classifies a failed run whose acquisition was never attempted as partial_fail, not total_fail', async () => {
     const project = makeProject();
     mockComputeWholeTreeContentHash.mockResolvedValue('hash-unattempted');
