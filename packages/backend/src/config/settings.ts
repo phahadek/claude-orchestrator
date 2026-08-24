@@ -49,6 +49,9 @@ const SettingsSchema = z.object({
   auto_archive_grace_minutes: z.coerce.number().int().min(0),
   auto_archive_sweep_interval_minutes: z.coerce.number().int().min(1),
   reviewer_comment_quiescence_ms: z.coerce.number().int().min(0),
+  // 0 means disabled: ReviewerCommentsWatcher.register skips scheduler
+  // registration entirely rather than short-circuiting inside pollAll.
+  reviewer_comments_watcher_poll_interval_ms: z.coerce.number().int().min(0),
   session_pr_close_grace_minutes: z.coerce.number().int().min(0),
   flake_recovery_max_retries: z.coerce.number().int().min(0),
   test_request_max_concurrent_per_project: z.coerce.number().int().min(1),
@@ -185,6 +188,7 @@ export const SETTING_DEFAULTS: Settings = {
   auto_archive_grace_minutes: 30,
   auto_archive_sweep_interval_minutes: 5,
   reviewer_comment_quiescence_ms: 120_000,
+  reviewer_comments_watcher_poll_interval_ms: 600_000,
   session_pr_close_grace_minutes: 5,
   flake_recovery_max_retries: 2,
   test_request_max_concurrent_per_project: 2,

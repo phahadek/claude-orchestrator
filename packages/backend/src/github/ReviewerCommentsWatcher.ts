@@ -83,9 +83,18 @@ export class ReviewerCommentsWatcher {
   }
 
   register(scheduler: Scheduler): void {
+    const intervalMs = typedGetSetting(
+      'reviewer_comments_watcher_poll_interval_ms',
+    );
+    if (intervalMs === 0) {
+      logger.info(
+        '[ReviewerCommentsWatcher] poll interval is 0 — watcher disabled, skipping scheduler registration',
+      );
+      return;
+    }
     scheduler.register({
       name: 'reviewer_comments_watcher',
-      intervalMs: 10_000,
+      intervalMs,
       runOnBoot: false,
       concurrency: 'skip-if-running',
       run: async () => {
