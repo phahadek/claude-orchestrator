@@ -42,6 +42,7 @@ import {
 import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { GateReadinessPanel } from './components/GateReadinessPanel';
 import { TestsView } from './components/TestsView';
+import { FleetView } from './components/FleetView';
 import { ArchitecturePanel } from './components/ArchitecturePanel';
 import { MilestoneView } from './components/MilestoneView';
 import { Notifications } from './components/Notifications';
@@ -214,6 +215,7 @@ export default function App() {
     lastCiBillingBlockedEvent,
     lastSessionStartedEvent,
     lastSessionEndedEvent,
+    lastSessionStatusEvent,
     lastCacheUpdatedEvent,
     prPipelineStages,
     prPipelineFailedCommands,
@@ -933,6 +935,7 @@ export default function App() {
     milestone: milestonePanelDeclaration,
     settings: null,
     tests: null,
+    fleet: null,
   };
   const activePanel = resolvePanelKeyboardDeclaration(
     topView,
@@ -1301,6 +1304,7 @@ export default function App() {
       else if (view === 'architecture') setTopView('architecture');
       else if (view === 'analytics') setTopView('analytics');
       else if (view === 'settings') setTopView('settings');
+      else if (view === 'fleet') setTopView('fleet');
     },
     onFocusSearch: () => {
       searchInputRef.current?.focus();
@@ -1692,6 +1696,19 @@ export default function App() {
                 setSessionArchived={setSessionArchived}
                 setSessionFavorited={setSessionFavorited}
                 project={activeProject}
+              />
+            </div>
+          </ErrorBoundary>
+        )}
+
+        {topView === 'fleet' && (
+          <ErrorBoundary name="FleetView">
+            <div className={styles.analyticsView}>
+              <FleetView
+                lastSessionStartedEvent={lastSessionStartedEvent}
+                lastSessionStatusEvent={lastSessionStatusEvent}
+                lastSessionEndedEvent={lastSessionEndedEvent}
+                lastStagedIntentChange={lastStagedIntentChange}
               />
             </div>
           </ErrorBoundary>

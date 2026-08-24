@@ -22,7 +22,8 @@ export type TopView =
   | 'architecture'
   | 'milestone'
   | 'settings'
-  | 'tests';
+  | 'tests'
+  | 'fleet';
 
 interface AutoLaunchTogglePatch {
   autoLaunchEnabled: boolean;
@@ -188,6 +189,15 @@ export function Header({
         aria-label="Gate Readiness"
       >
         🚦
+      </button>
+      <button
+        type="button"
+        className={`${styles.navLink} ${styles.navLinkIcon}${activeView === 'fleet' ? ` ${styles.navLinkActive}` : ''}`}
+        onClick={() => onViewChange('fleet')}
+        title="Fleet"
+        aria-label="Fleet"
+      >
+        🚢
       </button>
       <button
         type="button"

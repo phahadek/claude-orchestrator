@@ -212,6 +212,10 @@ export function useSessionStore() {
     status: string;
     prUrl?: string;
   } | null>(null);
+  const [lastSessionStatusEvent, setLastSessionStatusEvent] = useState<{
+    sessionId: string;
+    status: string;
+  } | null>(null);
   const [lastCacheUpdatedEvent, setLastCacheUpdatedEvent] = useState<{
     projectId: string;
     boardId: string;
@@ -491,6 +495,12 @@ export function useSessionStore() {
         sessionId: msg.sessionId,
         status: msg.status,
         prUrl: msg.prUrl,
+      });
+    }
+    if (msg.type === 'session_status') {
+      setLastSessionStatusEvent({
+        sessionId: msg.sessionId,
+        status: msg.status,
       });
     }
     if (msg.type === 'task_updated') {
@@ -808,6 +818,7 @@ export function useSessionStore() {
     lastCiBillingBlockedEvent,
     lastSessionStartedEvent,
     lastSessionEndedEvent,
+    lastSessionStatusEvent,
     lastCacheUpdatedEvent,
     prPipelineStages,
     prPipelineFailedCommands,
