@@ -23,7 +23,8 @@ export type TopView =
   | 'milestone'
   | 'settings'
   | 'tests'
-  | 'fleet';
+  | 'fleet'
+  | 'flow-health';
 
 interface AutoLaunchTogglePatch {
   autoLaunchEnabled: boolean;
@@ -44,6 +45,7 @@ interface Props {
   tasks?: TaskView[];
   incompleteReviewCount?: number;
   milestoneAttentionCount?: number;
+  flowHealthAttentionCount?: number;
   onAutoLaunchToggle?: (patch: AutoLaunchTogglePatch) => void;
   autoLaunchRunningCount?: number;
   autoLaunchCap?: number;
@@ -83,6 +85,7 @@ export function Header({
   tasks,
   incompleteReviewCount,
   milestoneAttentionCount,
+  flowHealthAttentionCount,
   onAutoLaunchToggle,
   autoLaunchRunningCount,
   autoLaunchCap,
@@ -225,6 +228,23 @@ export function Header({
         aria-label="Analytics"
       >
         📊
+      </button>
+      <button
+        type="button"
+        className={`${styles.navLink} ${styles.navLinkIcon}${activeView === 'flow-health' ? ` ${styles.navLinkActive}` : ''}`}
+        onClick={() => onViewChange('flow-health')}
+        title="Flow Health"
+        aria-label="Flow Health"
+      >
+        💓
+        {flowHealthAttentionCount != null && flowHealthAttentionCount > 0 && (
+          <span
+            className={styles.incompleteBadge}
+            title="Flow health regressed — needs attention"
+          >
+            {flowHealthAttentionCount}
+          </span>
+        )}
       </button>
       <button
         type="button"

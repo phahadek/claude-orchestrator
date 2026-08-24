@@ -134,6 +134,33 @@ describe('Header', () => {
     expect(prsBtn.getAttribute('title')).toBe('PRs');
   });
 
+  it('renders the Flow Health nav button', () => {
+    render(<Header {...defaultProps} />);
+    expect(screen.getByRole('button', { name: 'Flow Health' })).toBeDefined();
+  });
+
+  it('calls onViewChange with "flow-health" when the Flow Health button is clicked', () => {
+    const onViewChange = vi.fn();
+    render(<Header {...defaultProps} onViewChange={onViewChange} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Flow Health' }));
+    expect(onViewChange).toHaveBeenCalledWith('flow-health');
+  });
+
+  it('renders the flow-health attention badge given a synthetic fired signal and clears once absent', () => {
+    const { rerender } = render(
+      <Header {...defaultProps} flowHealthAttentionCount={0} />,
+    );
+    expect(screen.getByRole('button', { name: 'Flow Health' })).toBeDefined();
+    expect(screen.queryByText('1')).toBeNull();
+
+    rerender(<Header {...defaultProps} flowHealthAttentionCount={1} />);
+    expect(screen.getByRole('button', { name: 'Flow Health' })).toBeDefined();
+    expect(screen.getByText('1')).toBeDefined();
+
+    rerender(<Header {...defaultProps} flowHealthAttentionCount={0} />);
+    expect(screen.queryByText('1')).toBeNull();
+  });
+
   it('keeps the PRs accessible name stable whether or not the count badge is present', () => {
     const { rerender } = render(
       <Header {...defaultProps} incompleteReviewCount={0} />,

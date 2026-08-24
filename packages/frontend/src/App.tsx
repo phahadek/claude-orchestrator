@@ -19,6 +19,7 @@ import type {
 import { resolvePanelKeyboardDeclaration } from './types/panelKeyboard';
 import { useNotifications } from './hooks/useNotifications';
 import { useMilestoneAttention } from './hooks/useMilestoneAttention';
+import { useFlowHealthAttention } from './hooks/useFlowHealthAttention';
 import { useIsMobile } from './hooks/useIsMobile';
 import { useNavigationHistory } from './hooks/useNavigationHistory';
 import { apiRequest, authedFetch } from './api/projects';
@@ -40,6 +41,7 @@ import {
   type AdmissionBlockReason,
 } from './components/AdmissionStallBanner';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
+import { FlowHealthPanel } from './components/FlowHealthPanel';
 import { GateReadinessPanel } from './components/GateReadinessPanel';
 import { TestsView } from './components/TestsView';
 import { FleetView } from './components/FleetView';
@@ -936,6 +938,7 @@ export default function App() {
     settings: null,
     tests: null,
     fleet: null,
+    'flow-health': null,
   };
   const activePanel = resolvePanelKeyboardDeclaration(
     topView,
@@ -1207,6 +1210,9 @@ export default function App() {
       invalidationKey: `${lastTaskUpdate?.taskId ?? ''}:${lastStagedIntentChange?.id ?? ''}`,
     });
 
+  const { attentionCount: flowHealthAttentionCount } =
+    useFlowHealthAttention(activeProjectId);
+
   useEffect(() => {
     if (!lastTier2Batch) return;
     for (const event of lastTier2Batch.events) {
@@ -1372,6 +1378,7 @@ export default function App() {
           autoLaunchPollIntervalMs={autoLaunchPollIntervalMs}
           bootReconciliation={bootReconciliation.state}
           milestoneAttentionCount={milestoneAttentionCount}
+          flowHealthAttentionCount={flowHealthAttentionCount}
         />
       </ErrorBoundary>
       {updateInfo && (
@@ -1681,6 +1688,14 @@ export default function App() {
           <ErrorBoundary name="AnalyticsView">
             <div className={styles.analyticsView}>
               <AnalyticsPanel activeProjectId={activeProjectId} />
+            </div>
+          </ErrorBoundary>
+        )}
+
+        {topView === 'flow-health' && (
+          <ErrorBoundary name="FlowHealthView">
+            <div className={styles.analyticsView}>
+              <FlowHealthPanel activeProjectId={activeProjectId} />
             </div>
           </ErrorBoundary>
         )}
