@@ -124,6 +124,8 @@ vi.mock('../../db/queries', () =>
     insertSession: vi.fn(),
     updateSessionStatus: vi.fn(),
     updateSessionWorktreePath: vi.fn(),
+    getSessionDocsTargetSurface: vi.fn().mockReturnValue(undefined),
+    setSessionDocsTargetSurface: vi.fn(),
     markSessionDone: vi.fn(),
     applyPendingDone: vi.fn().mockReturnValue(false),
     getSessionsWithUnappliedPendingDone: vi.fn().mockReturnValue([]),
@@ -282,6 +284,7 @@ import {
   getTaskCache,
   insertCompletingSignal,
   incrementSessionPokeRetryCount,
+  getSessionDocsTargetSurface,
 } from '../../db/queries';
 import { getProjectById } from '../../config';
 import { getCorporateMode } from '../../config/corporateMode';
@@ -2212,6 +2215,36 @@ describe('classifyWorktreeTeardownRefusal', () => {
     expect(result.expected).toBe(false);
     expect(result.reason).toBeDefined();
   });
+
+  it('classifies a "docs" session with an undeclared/Notion-page Target surface as expected (stage-only, no worktree)', () => {
+    expect(
+      classifyWorktreeTeardownRefusal(
+        'docs',
+        PROJECT_DIR,
+        PROJECT_DIR,
+        undefined,
+      ),
+    ).toEqual({ expected: true });
+    expect(
+      classifyWorktreeTeardownRefusal(
+        'docs',
+        PROJECT_DIR,
+        PROJECT_DIR,
+        'https://www.notion.so/some-page-abc123',
+      ),
+    ).toEqual({ expected: true });
+  });
+
+  it('classifies a "docs" session with a repo-file Target surface as anomalous — it is worktree-eligible like ops', () => {
+    const result = classifyWorktreeTeardownRefusal(
+      'docs',
+      PROJECT_DIR,
+      PROJECT_DIR,
+      'docs/some-doc.md',
+    );
+    expect(result.expected).toBe(false);
+    expect(result.reason).toEqual(expect.stringContaining('docs'));
+  });
 });
 
 // ── cleanupWorktree — expected vs anomalous refusal reporting ───────────────
@@ -2274,6 +2307,59 @@ describe('cleanupWorktree — classifies the refusal it reports', () => {
           projectDir: PROJECT_DIR,
           expected: false,
           reason: expect.stringContaining('standard'),
+        }),
+      }),
+    );
+    const removeCalls = vi
+      .mocked(execSync)
+      .mock.calls.filter(
+        ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
+      );
+    expect(removeCalls).toHaveLength(0);
+    expect(vi.mocked((fsModule as any).default.rmSync)).not.toHaveBeenCalled();
+  });
+
+  it('docs session with an undeclared Target surface, worktreePath === projectDir: refused, no audit event (expected case)', () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'done',
+      session_type: 'docs',
+    });
+    vi.mocked(getSessionDocsTargetSurface).mockReturnValue(undefined);
+
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      PROJECT_DIR,
+      undefined,
+      PROJECT_DIR,
+    );
+
+    expect(vi.mocked(recordEvent)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'worktree_teardown_refused' }),
+    );
+  });
+
+  it('docs session with a repo-file Target surface (worktree-eligible), non-removable path: refused, audit event with expected:false (anomalous case, threaded from getSessionDocsTargetSurface)', () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'done',
+      session_type: 'docs',
+    });
+    vi.mocked(getSessionDocsTargetSurface).mockReturnValue('docs/some-doc.md');
+
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      PROJECT_DIR,
+      undefined,
+      PROJECT_DIR,
+    );
+
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'worktree_teardown_refused',
+        payload: expect.objectContaining({
+          expected: false,
+          reason: expect.stringContaining('docs'),
         }),
       }),
     );

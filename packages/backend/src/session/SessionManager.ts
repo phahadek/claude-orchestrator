@@ -112,6 +112,8 @@ import {
   getGrantedCapabilities,
   seedGrantedCapabilities,
   setSessionDeclaredWrites,
+  setSessionDocsTargetSurface,
+  getSessionDocsTargetSurface,
   expireStagedIntentsForSession,
   hasStagedIntentForTask,
   hasUndispositionedStagedIntentsForSession,
@@ -577,13 +579,25 @@ export interface WorktreeTeardownRefusalClassification {
  * the refusal itself (no teardown of a path failing isRemovableWorktree) is
  * identical either way — see the two call sites in cleanupPartialWorktree
  * and cleanupWorktree.
+ *
+ * `docsTargetSurface` must be passed for 'docs' sessions — usesWorktree's
+ * worktree-eligibility for 'docs' depends on the declared Target surface,
+ * not sessionType alone (see sessionPredicates.ts). Omitting it for a
+ * worktree-eligible 'docs' session misclassifies an anomalous refusal as
+ * expected, silencing the exact incident shape this exists to catch —
+ * callers must thread it through from setSessionDocsTargetSurface /
+ * getSessionDocsTargetSurface rather than defaulting it away.
  */
 export function classifyWorktreeTeardownRefusal(
   sessionType: string,
   worktreePath: string,
   projectDir: string,
+  docsTargetSurface?: string,
 ): WorktreeTeardownRefusalClassification {
-  if (isPlanningSession(sessionType) && !usesWorktree(sessionType)) {
+  if (
+    isPlanningSession(sessionType) &&
+    !usesWorktree(sessionType, docsTargetSurface)
+  ) {
     return { expected: true };
   }
   return {
@@ -1865,6 +1879,14 @@ export class SessionManager extends EventEmitter {
     if (options?.declaredWrites) {
       setSessionDeclaredWrites(sessionId, options.declaredWrites);
     }
+    // Captured once, here at spawn, same rationale as declaredWrites above —
+    // classifyWorktreeTeardownRefusal needs this after spawn (at teardown
+    // time, from call sites that only have the DB row) to know whether this
+    // 'docs' session was worktree-eligible, since usesWorktree('docs', ...)
+    // depends on the Target surface, not sessionType alone.
+    if (sessionType === 'docs' && docsTargetSurface) {
+      setSessionDocsTargetSurface(sessionId, docsTargetSurface);
+    }
 
     recordEvent({
       event_type: 'session_launched',
@@ -2600,10 +2622,15 @@ export class SessionManager extends EventEmitter {
     // never remove it as if it were a disposable worktree.
     if (!worktreePath || !isRemovableWorktree(worktreePath, projectDir)) {
       if (worktreePath) {
+        const docsTargetSurface =
+          row.session_type === 'docs'
+            ? getSessionDocsTargetSurface(sessionId)
+            : undefined;
         const classification = classifyWorktreeTeardownRefusal(
           row.session_type || 'standard',
           worktreePath,
           projectDir,
+          docsTargetSurface,
         );
         if (classification.expected) {
           logger.debug(
@@ -3744,10 +3771,15 @@ export class SessionManager extends EventEmitter {
     // itself (2026-07-20 incident: a planning session's worktreePath ===
     // projectDir caused fs.rmSync to delete a production checkout).
     if (!isRemovableWorktree(worktreePath, projectDir)) {
+      const docsTargetSurface =
+        sessionRow?.session_type === 'docs'
+          ? getSessionDocsTargetSurface(sessionId)
+          : undefined;
       const classification = classifyWorktreeTeardownRefusal(
         sessionRow?.session_type || 'standard',
         worktreePath,
         projectDir,
+        docsTargetSurface,
       );
       if (classification.expected) {
         logger.debug(
