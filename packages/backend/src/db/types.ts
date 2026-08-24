@@ -349,7 +349,13 @@ export interface PullRequestRow {
   /** JSON-encoded string[] of failing check-run names. Non-null only when merge_state = 'ci_failed'. */
   failing_checks: string | null;
   pending_push: number; // 0 | 1 — push arrived before initial review completed
-  pause_reason: string | null; // JSON-serialized PauseReasonStruct or legacy bare string
+  /**
+   * JSON-serialized concurrent set of PauseReasonStruct entries (at most one
+   * live entry per PauseSource), a legacy single PauseReasonStruct JSON
+   * object, or a legacy bare canonical-reason string — see
+   * parsePauseReasonSet/parsePauseReason in db/pauseReason.ts.
+   */
+  pause_reason: string | null;
   pause_reason_set_at: number | null; // Unix ms timestamp of when pause_reason was last set
   ci_remediation_attempted_sha: string | null; // last head_sha for which CI remediation was attempted
   pre_review_stage: string | null;
