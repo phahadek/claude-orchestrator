@@ -1135,8 +1135,6 @@ export async function runGateReconcilerTick(
     // runnable backlog anywhere in the loop reliably starved it to zero,
     // every tick. See nextPendingGateItems.
     for (const { project, milestone } of armedMilestones) {
-      await yieldToEventLoop();
-
       const pendingBatch = nextPendingGateItems(project, milestone, {
         limit,
       });
@@ -1164,8 +1162,6 @@ export async function runGateReconcilerTick(
     // Pass 2: the AUTO_RUN_TIERS loop over nextRunnableGateItems spends
     // whatever budget pass 1 left behind.
     for (const { project, milestone } of armedMilestones) {
-      await yieldToEventLoop();
-
       for (const classification of AUTO_RUN_TIERS) {
         const batch = nextRunnableGateItems(project, milestone, {
           classification,
