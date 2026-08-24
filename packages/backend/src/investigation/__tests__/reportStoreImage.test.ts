@@ -24,7 +24,12 @@ vi.mock('../../db/db.js', async () => {
 });
 
 import { db } from '../../db/db.js';
-import { insertReport, getReport, writeReportImage, getReportImagesDir } from '../reportStore.js';
+import {
+  insertReport,
+  getReport,
+  writeReportImage,
+  getReportImagesDir,
+} from '../reportStore.js';
 
 let tmpParent: string;
 let prevXdgDataHome: string | undefined;
@@ -61,7 +66,12 @@ describe('writeReportImage', () => {
     const dir = getReportImagesDir();
     expect(fs.existsSync(dir)).toBe(false);
 
-    writeReportImage(report.id, Buffer.from('fake-png-bytes'), '.png', '2026-08-13T01:00:00Z');
+    writeReportImage(
+      report.id,
+      Buffer.from('fake-png-bytes'),
+      '.png',
+      '2026-08-13T01:00:00Z',
+    );
 
     expect(fs.existsSync(dir)).toBe(true);
   });
@@ -87,14 +97,17 @@ describe('writeReportImage', () => {
 
   it('does not leave a committed row referencing a missing file when the write fails', () => {
     const report = makeReport();
-    const writeSpy = vi
-      .spyOn(fs, 'writeFileSync')
-      .mockImplementation(() => {
-        throw new Error('ENOSPC: no space left on device');
-      });
+    const writeSpy = vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {
+      throw new Error('ENOSPC: no space left on device');
+    });
 
     expect(() =>
-      writeReportImage(report.id, Buffer.from('x'), '.png', '2026-08-13T01:00:00Z'),
+      writeReportImage(
+        report.id,
+        Buffer.from('x'),
+        '.png',
+        '2026-08-13T01:00:00Z',
+      ),
     ).toThrow('ENOSPC');
 
     writeSpy.mockRestore();
@@ -120,7 +133,12 @@ describe('writeReportImage', () => {
     });
 
     expect(() =>
-      writeReportImage(report.id, Buffer.from('x'), '.png', '2026-08-13T01:00:00Z'),
+      writeReportImage(
+        report.id,
+        Buffer.from('x'),
+        '.png',
+        '2026-08-13T01:00:00Z',
+      ),
     ).toThrow('simulated DB failure');
 
     runSpy.mockRestore();

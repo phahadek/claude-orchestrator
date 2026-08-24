@@ -283,9 +283,7 @@ async function main() {
     fail('snapshot-images', err.message);
   }
   if (!hasImagesArchive) {
-    console.log(
-      `[snapshot-images] ${imagesDir} does not exist yet — skipping`,
-    );
+    console.log(`[snapshot-images] ${imagesDir} does not exist yet — skipping`);
     currentPlaintextPaths.delete(imagesArchivePath);
   }
 
