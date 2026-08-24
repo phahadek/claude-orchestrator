@@ -12271,8 +12271,9 @@ let _stmtTier3ClassifierErrorCounts: Database.Statement | null = null;
  * project only: `readiness_override` events already carry `project_id`, no
  * milestone join needed. `now` is injectable for deterministic window-
  * boundary tests; the window's lower bound (`now - windowSeconds * 1000`) is
- * inclusive, its upper bound (`now`) is not (a future-dated row can't occur
- * in practice, but the boundary is defined precisely for the test).
+ * inclusive. There is no upper bound — a future-dated row can't occur in
+ * practice, and events stamped exactly at `now` (the common case for
+ * anything just recorded) must still count.
  * Purely observational — no gating, no auto-disarm.
  */
 export function getTier3ClassifierErrorRates(
@@ -12290,10 +12291,9 @@ export function getTier3ClassifierErrorRates(
       AND project_id = ?
       AND json_extract(payload, '$.reason') = 'tier3_semantic_advisory'
       AND ts >= ?
-      AND ts < ?
   `);
   const cutoff = now - windowSeconds * 1000;
-  const row = _stmtTier3ClassifierErrorCounts.get(project, cutoff, now) as {
+  const row = _stmtTier3ClassifierErrorCounts.get(project, cutoff) as {
     total: number | null;
     errored: number | null;
     usageLimited: number | null;
