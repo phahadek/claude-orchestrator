@@ -1,11 +1,18 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { getArm, listArm, upsertArm, getLaneHealthRollup } from '../db/queries';
+import {
+  getArm,
+  listArm,
+  upsertArm,
+  getLaneHealthRollup,
+  listFlowHealthRegressionSnapshotHistory,
+} from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { FLOW_IDS, isFlowId } from '../orchestration/flowArm';
 import { ProjectService } from '../projects/ProjectService';
 import { checkMilestoneRegistered } from '../groom/groomLoad';
 import { asyncHandler } from './asyncHandler';
+import { detectFlowHealthRegressionSignal } from '../convergence/attentionSignals';
 import {
   fileFlakyInvestigationTask,
   FlakyInvestigationFilingError,
@@ -110,6 +117,26 @@ export function createMilestonesRouter(): Router {
         if (Number.isFinite(parsed) && parsed > 0) limit = Math.floor(parsed);
       }
       res.json(getLaneHealthRollup(project, limit ?? 500));
+    },
+  );
+
+  // GET /api/milestones/:project/flow-health -> flow-health snapshot trend
+  // + the edge-triggered regression signal. Fleet-wide, not project-scoped
+  // (flow_health_regression_snapshot carries no project column) — :project
+  // is kept in the path only to follow the lane-health routing convention
+  // above; the response is identical for every project id.
+  router.get(
+    '/milestones/:project/flow-health',
+    (req: Request, res: Response) => {
+      const limitParam = req.query.limit;
+      let limit: number | undefined;
+      if (typeof limitParam === 'string' && limitParam.trim() !== '') {
+        const parsed = Number(limitParam);
+        if (Number.isFinite(parsed) && parsed > 0) limit = Math.floor(parsed);
+      }
+      const history = listFlowHealthRegressionSnapshotHistory(limit ?? 90);
+      const signal = detectFlowHealthRegressionSignal(history);
+      res.json({ history, signal: signal[0] ?? null });
     },
   );
 

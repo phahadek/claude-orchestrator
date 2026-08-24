@@ -6687,6 +6687,24 @@ export function getLatestFlowHealthRegressionSnapshot():
     | undefined;
 }
 
+let _stmtListFlowHealthRegressionSnapshotHistory: Database.Statement | null =
+  null;
+
+/** Trailing snapshot history in chronological order (oldest first) — feeds the flow-health trend panel and the edge-triggered regression signal. */
+export function listFlowHealthRegressionSnapshotHistory(
+  limit = 90,
+): FlowHealthRegressionSnapshotRow[] {
+  _stmtListFlowHealthRegressionSnapshotHistory ??= db.prepare(
+    `SELECT * FROM (
+       SELECT * FROM flow_health_regression_snapshot ORDER BY ts DESC LIMIT @limit
+     ) recent
+     ORDER BY recent.ts ASC`,
+  );
+  return _stmtListFlowHealthRegressionSnapshotHistory.all({
+    limit,
+  }) as FlowHealthRegressionSnapshotRow[];
+}
+
 export interface StandardSessionWallClockSample {
   durationsMs: number[];
   excludedArtifactCount: number;

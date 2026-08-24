@@ -7,7 +7,11 @@ import {
 import { parsePauseReason, type PauseReasonStruct } from '../db/pauseReason';
 import { resolveMilestoneForTaskId } from '../projects/milestoneResolver';
 import { runtimeSettings } from '../config';
-import type { ConvergenceSnapshotRow, StagedIntentRow } from '../db/types';
+import type {
+  ConvergenceSnapshotRow,
+  FlowHealthRegressionSnapshotRow,
+  StagedIntentRow,
+} from '../db/types';
 import type { SessionManager } from '../session/SessionManager';
 
 /**
@@ -20,7 +24,12 @@ import type { SessionManager } from '../session/SessionManager';
  * useNotifications.ts already dedups WS-driven notifications.
  */
 
-type AttentionTier2Type = 'aging' | 'blocked' | 'flat' | 'base_break';
+type AttentionTier2Type =
+  | 'aging'
+  | 'blocked'
+  | 'flat'
+  | 'base_break'
+  | 'flow_health_regression';
 
 export interface AttentionTier2Signal {
   key: string;
@@ -231,4 +240,56 @@ export function computeMilestoneAttentionSignals(
       ),
     ],
   };
+}
+
+/**
+ * Pure: fleet-wide edge-triggered regression signal for the flow-health tab
+ * (FlowHealthRegressionSnapshotJob's daily p50 wall-clock sample). Unlike
+ * the milestone tier-2 signals above, this isn't project/milestone-scoped —
+ * flow_health_regression_snapshot carries no such column — so it's computed
+ * separately rather than folded into computeMilestoneAttentionSignals.
+ *
+ * Fires only after >= 2 consecutive 'regressed' rows (mirrors the >= 2
+ * consecutive 'ok' rows required to clear — completeness-critic finding on
+ * disposition record 87, avoiding alert flapping right at the threshold).
+ * Once fired, the signal latches — it keeps the same stable key (the ts of
+ * the row that completed the firing streak) across polls until 2
+ * consecutive 'ok' rows clear it, so a single `regressed` row after
+ * clearing doesn't immediately re-fire.
+ */
+export function detectFlowHealthRegressionSignal(
+  history: FlowHealthRegressionSnapshotRow[],
+): AttentionTier2Signal[] {
+  let consecutiveRegressed = 0;
+  let consecutiveOk = 0;
+  let firing = false;
+  let episodeKey: string | null = null;
+
+  for (const row of history) {
+    if (row.status === 'regressed') {
+      consecutiveRegressed++;
+      consecutiveOk = 0;
+    } else {
+      consecutiveOk++;
+      consecutiveRegressed = 0;
+    }
+
+    if (!firing && consecutiveRegressed >= 2) {
+      firing = true;
+      episodeKey = row.ts;
+    } else if (firing && consecutiveOk >= 2) {
+      firing = false;
+      episodeKey = null;
+    }
+  }
+
+  if (!firing || episodeKey === null) return [];
+  return [
+    {
+      key: `flow_health_regression:${episodeKey}`,
+      type: 'flow_health_regression',
+      message:
+        'Flow health regressed — trailing p50 wall-clock has exceeded the 60m threshold for 2+ consecutive daily snapshots',
+    },
+  ];
 }

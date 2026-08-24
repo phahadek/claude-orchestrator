@@ -30,11 +30,15 @@ import {
   detectBlockedSignals,
   detectBaseBreakDispatchHoldSignal,
   detectFlatSignal,
+  detectFlowHealthRegressionSignal,
   computeMilestoneAttentionSignals,
   isMilestoneActionable,
   resolveSessionCompleteForDisplay,
 } from '../attentionSignals';
-import type { ConvergenceSnapshotRow } from '../../db/types';
+import type {
+  ConvergenceSnapshotRow,
+  FlowHealthRegressionSnapshotRow,
+} from '../../db/types';
 import type { PauseReasonStruct } from '../../db/pauseReason';
 
 const HOUR = 3_600_000;
@@ -269,6 +273,103 @@ describe('detectFlatSignal', () => {
       'proj-1:M12',
     );
     expect(first[0].key).toBe(second[0].key);
+  });
+});
+
+describe('detectFlowHealthRegressionSignal', () => {
+  function snapshot(
+    overrides: Partial<FlowHealthRegressionSnapshotRow> = {},
+  ): FlowHealthRegressionSnapshotRow {
+    return {
+      id: 'snap-1',
+      ts: new Date(0).toISOString(),
+      window_start: 0,
+      window_end: 1,
+      sample_count: 10,
+      p50_wall_clock_ms: 1000,
+      status: 'ok',
+      excluded_artifact_count: 0,
+      ...overrides,
+    };
+  }
+
+  function row(
+    status: 'ok' | 'regressed',
+    ts: string,
+  ): FlowHealthRegressionSnapshotRow {
+    return snapshot({ id: ts, ts, status });
+  }
+
+  it('does not fire on a single regressed row', () => {
+    const history = [row('ok', 't0'), row('regressed', 't1')];
+    expect(detectFlowHealthRegressionSignal(history)).toHaveLength(0);
+  });
+
+  it('fires after 2 consecutive regressed rows', () => {
+    const history = [row('regressed', 't0'), row('regressed', 't1')];
+    const signals = detectFlowHealthRegressionSignal(history);
+    expect(signals).toHaveLength(1);
+    expect(signals[0].type).toBe('flow_health_regression');
+    expect(signals[0].key).toBe('flow_health_regression:t1');
+  });
+
+  it('keeps a stable key across additional regressed rows in the same episode', () => {
+    const history = [
+      row('regressed', 't0'),
+      row('regressed', 't1'),
+      row('regressed', 't2'),
+    ];
+    const signals = detectFlowHealthRegressionSignal(history);
+    expect(signals).toHaveLength(1);
+    expect(signals[0].key).toBe('flow_health_regression:t1');
+  });
+
+  it('does not fire again after a single ok row interrupts the streak but the episode never latched', () => {
+    const history = [
+      row('regressed', 't0'),
+      row('ok', 't1'),
+      row('regressed', 't2'),
+    ];
+    expect(detectFlowHealthRegressionSignal(history)).toHaveLength(0);
+  });
+
+  it('stays fired through a single ok row once latched (requires 2 consecutive ok to clear)', () => {
+    const history = [
+      row('regressed', 't0'),
+      row('regressed', 't1'),
+      row('ok', 't2'),
+    ];
+    const signals = detectFlowHealthRegressionSignal(history);
+    expect(signals).toHaveLength(1);
+    expect(signals[0].key).toBe('flow_health_regression:t1');
+  });
+
+  it('clears after 2 consecutive ok rows following a fired signal', () => {
+    const history = [
+      row('regressed', 't0'),
+      row('regressed', 't1'),
+      row('ok', 't2'),
+      row('ok', 't3'),
+    ];
+    expect(detectFlowHealthRegressionSignal(history)).toHaveLength(0);
+  });
+
+  it('can re-fire with a fresh key for a later regression episode after clearing', () => {
+    const history = [
+      row('regressed', 't0'),
+      row('regressed', 't1'),
+      row('ok', 't2'),
+      row('ok', 't3'),
+      row('regressed', 't4'),
+      row('regressed', 't5'),
+    ];
+    const signals = detectFlowHealthRegressionSignal(history);
+    expect(signals).toHaveLength(1);
+    expect(signals[0].key).toBe('flow_health_regression:t5');
+  });
+
+  it('does not fire on empty history', () => {
+    expect(detectFlowHealthRegressionSignal([])).toHaveLength(0);
   });
 });
 
