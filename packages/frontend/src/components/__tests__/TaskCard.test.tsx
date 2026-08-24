@@ -626,7 +626,7 @@ describe('TaskCard', () => {
       <TaskCard
         task={makeTask({
           displayStatus: 'needs_attention',
-          pauseReason: 'launch_failed',
+          pauseReason: 'stuck_timeout',
         })}
         selected={false}
         onClick={vi.fn()}

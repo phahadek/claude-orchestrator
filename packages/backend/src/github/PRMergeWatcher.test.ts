@@ -3455,8 +3455,11 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
 
   it('still pauses with ci_failing when reconcile_exhausted is set but no live blocking cause exists (#1037 regression)', async () => {
     // reconcile_exhausted is orthogonal to pause_reason and must never
-    // suppress the F2 gate's own CI-failure detection — this is the
-    // mechanism that previously discarded #1037's verify_failed.
+    // suppress the F2 gate's own CI-failure detection. Exercised via
+    // checkMergeabilityNow — the direct-call path PRReviewService uses right
+    // after a review completes, bypassing poll()'s isTerminalStalePR
+    // quota-conserving skip — since that's the actual call site that
+    // previously discarded #1037's verify_failed via TERMINAL_MERGE_PAUSE_REASONS.
     const pr = makePRRow({
       head_sha: 'sha-fail',
       session_id: 'coding-session',
@@ -3464,7 +3467,7 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       pause_reason: null,
       reconcile_exhausted: 1,
     });
-    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
     const github = makeMockGitHub();
     mockCategorizeClean(github);
     vi.mocked(getProjectByGithubRepo).mockReturnValue({
@@ -3498,7 +3501,7 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       makeMockNotion(),
       () => {},
     );
-    await watcher.poll();
+    await watcher.checkMergeabilityNow(42, 'owner/repo');
 
     expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
       42,
