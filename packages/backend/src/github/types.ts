@@ -22,6 +22,7 @@ export class GitHubRateLimitError extends GitHubApiError {
     public readonly resetAt: Date,
     public readonly limit: number,
     public readonly used: number,
+    public readonly remaining: number = 0,
   ) {
     super(403, message);
     this.name = 'GitHubRateLimitError';

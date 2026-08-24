@@ -76,6 +76,7 @@ vi.mock('../github/reviewUtils.js', () => ({
 
 import { GitHubClient } from '../github/GitHubClient.js';
 import { GitHubApiError, GitHubRateLimitError } from '../github/types.js';
+import { recordEvent } from '../audit/AuditLog.js';
 import { PRMergeWatcher } from '../github/PRMergeWatcher.js';
 import { ReviewerCommentsWatcher } from '../github/ReviewerCommentsWatcher.js';
 import { AutoMerger } from '../github/AutoMerger.js';
@@ -248,6 +249,106 @@ describe('GitHubClient rate-limit detection', () => {
     await expect(client.listOpenPRs('owner/repo')).rejects.toBeInstanceOf(
       GitHubRateLimitError,
     );
+  });
+
+  it('carries x-ratelimit-remaining on the thrown error', async () => {
+    fetchSpy.mockResolvedValueOnce(makeRateLimitResponse() as never);
+    const client = new GitHubClient();
+    try {
+      await client.listOpenPRs('owner/repo');
+      expect.fail('should have thrown');
+    } catch (err) {
+      expect((err as GitHubRateLimitError).remaining).toBe(0);
+    }
+  });
+
+  it('writes a durable github_rate_limit_exhausted audit event with limit/used/remaining/reset', async () => {
+    fetchSpy.mockResolvedValueOnce(makeRateLimitResponse() as never);
+    const client = new GitHubClient();
+    await expect(client.listOpenPRs('owner/repo')).rejects.toBeInstanceOf(
+      GitHubRateLimitError,
+    );
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'github_rate_limit_exhausted',
+        actor_type: 'system',
+        payload: expect.objectContaining({
+          limit: 5000,
+          used: 5000,
+          remaining: 0,
+          resetAt: new Date(RESET_EPOCH * 1000).toISOString(),
+        }),
+      }),
+    );
+  });
+});
+
+describe('GitHubClient rate-limit headroom sampling', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+
+  function makeOkResponse(headers: Record<string, string>) {
+    return {
+      ok: true,
+      status: 200,
+      headers: new Headers(headers),
+      json: () => Promise.resolve([]),
+    };
+  }
+
+  beforeEach(() => {
+    fetchSpy = vi.spyOn(globalThis, 'fetch');
+    vi.mocked(recordEvent).mockClear();
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+  });
+
+  it('samples headroom on a successful response, then suppresses further samples within the cadence window', async () => {
+    fetchSpy.mockResolvedValue(
+      makeOkResponse({
+        'content-type': 'application/json',
+        'x-ratelimit-limit': '5000',
+        'x-ratelimit-used': '10',
+        'x-ratelimit-remaining': '4990',
+        'x-ratelimit-reset': String(RESET_EPOCH),
+      }) as never,
+    );
+    const client = new GitHubClient();
+
+    await client.listOpenPRs('owner/repo');
+    const sampleCalls = () =>
+      vi
+        .mocked(recordEvent)
+        .mock.calls.filter(
+          (args) => args[0].event_type === 'github_rate_limit_sampled',
+        );
+    expect(sampleCalls()).toHaveLength(1);
+    expect(sampleCalls()[0][0]).toEqual(
+      expect.objectContaining({
+        event_type: 'github_rate_limit_sampled',
+        actor_type: 'system',
+        payload: expect.objectContaining({
+          limit: 5000,
+          used: 10,
+          remaining: 4990,
+          resetAt: new Date(RESET_EPOCH * 1000).toISOString(),
+        }),
+      }),
+    );
+
+    // A second response within the same cadence window must not add another row.
+    await client.listOpenPRs('owner/repo');
+    expect(sampleCalls()).toHaveLength(1);
+  });
+
+  it('does not write a row or throw when the response carries no rate-limit headers', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      makeOkResponse({ 'content-type': 'application/json' }) as never,
+    );
+    const client = new GitHubClient();
+    await expect(client.listOpenPRs('owner/repo')).resolves.toEqual([]);
+    expect(recordEvent).not.toHaveBeenCalled();
   });
 });
 
