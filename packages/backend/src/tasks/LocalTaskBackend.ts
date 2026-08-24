@@ -5,6 +5,9 @@ import type {
   TaskBackend,
   NonMilestoneSourceConfig,
   TaskSummary,
+  NewTaskFields,
+  TaskPropertiesPatch,
+  TaskWriteOptions,
 } from './TaskBackend';
 import type { ResolvedTask } from './types';
 import type { NotionTask } from '../notion/types';
@@ -45,6 +48,7 @@ interface LocalTask {
   files_affected?: string[];
   notes?: string;
   reviewer?: string[]; // GitHub usernames to auto-request for review (corporate mode)
+  body?: string;
 }
 
 interface LocalMilestone {
@@ -102,6 +106,32 @@ function toDisplayType(type: string): string {
 function fromDisplayStatus(display: string): string {
   const entry = Object.entries(STATUS_DISPLAY).find(([, v]) => v === display);
   return entry ? entry[0] : display;
+}
+
+function fromDisplayType(display: string): string {
+  const entry = Object.entries(TYPE_DISPLAY).find(([, v]) => v === display);
+  return entry ? entry[0] : display;
+}
+
+const PRIORITY_DISPLAY: Record<string, string> = {
+  High: '🔴 High',
+  Medium: '🟡 Medium',
+  Low: '🟢 Low',
+};
+
+function fromDisplayPriority(display: string): string {
+  const entry = Object.entries(PRIORITY_DISPLAY).find(
+    ([, v]) => v === display,
+  );
+  return entry ? entry[0] : display;
+}
+
+/** Lowercase, hyphenate, and strip non-alphanumerics from a title to mint a task id. */
+function slugify(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 }
 
 // ── Schema helpers ───────────────────────────────────────────────────────────
@@ -381,5 +411,92 @@ export class LocalTaskBackend implements TaskBackend {
     const existing = found.task.notes ?? '';
     found.task.notes = existing ? `${existing}\n${note}` : note;
     this.writeFile(file);
+  }
+
+  async setDependsOn(taskId: string, dependsOn: string[]): Promise<void> {
+    const externalId = toExternalId(taskId);
+    const file = this.readFile();
+    const found = this.findTaskById(file, externalId);
+    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    found.task.depends_on = dependsOn.map((dep) => toExternalId(dep));
+    this.writeFile(file);
+  }
+
+  async setType(taskId: string, type: string): Promise<void> {
+    const externalId = toExternalId(taskId);
+    const file = this.readFile();
+    const found = this.findTaskById(file, externalId);
+    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    found.task.type = fromDisplayType(type);
+    this.writeFile(file);
+  }
+
+  async setProperties(
+    taskId: string,
+    patch: TaskPropertiesPatch,
+  ): Promise<void> {
+    const externalId = toExternalId(taskId);
+    const file = this.readFile();
+    const found = this.findTaskById(file, externalId);
+    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    if (patch.priority !== undefined) {
+      found.task.priority = fromDisplayPriority(patch.priority);
+    }
+    if (patch.title !== undefined) {
+      found.task.name = patch.title;
+    }
+    this.writeFile(file);
+  }
+
+  async archive(taskId: string): Promise<void> {
+    const externalId = toExternalId(taskId);
+    const file = this.readFile();
+    const found = this.findTaskById(file, externalId);
+    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    found.milestone.tasks = found.milestone.tasks.filter(
+      (t) => t.id !== externalId,
+    );
+    this.writeFile(file);
+  }
+
+  async createTask(
+    fields: NewTaskFields,
+    _options?: TaskWriteOptions,
+  ): Promise<string> {
+    const file = this.readFile();
+    const milestone = file.milestones.find((m) => m.id === fields.databaseId);
+    if (!milestone) {
+      throw new Error(
+        `[LocalTaskBackend] milestone not found: ${fields.databaseId}`,
+      );
+    }
+    const existingIds = new Set(
+      file.milestones.flatMap((m) => m.tasks.map((t) => t.id)),
+    );
+    const base = slugify(fields.title);
+    let id = base;
+    let suffix = 2;
+    while (existingIds.has(id)) {
+      id = `${base}-${suffix}`;
+      suffix += 1;
+    }
+
+    const task: LocalTask = {
+      id,
+      name: fields.title,
+      status: 'Backlog',
+    };
+    if (fields.type !== undefined) task.type = fromDisplayType(fields.type);
+    if (fields.priority !== undefined) {
+      task.priority = fromDisplayPriority(fields.priority);
+    }
+    if (fields.dependsOn !== undefined) {
+      task.depends_on = fields.dependsOn.map((dep) => toExternalId(dep));
+    }
+    if (fields.body !== undefined) task.body = fields.body;
+
+    milestone.tasks.push(task);
+    this.writeFile(file);
+    return formatTaskId('yaml', id);
   }
 }

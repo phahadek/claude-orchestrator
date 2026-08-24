@@ -162,3 +162,167 @@ describe('LocalTaskBackend.fetchReadyTasks — reviewer field round-trip', () =>
     expect(result[0].task.reviewer).toBeUndefined();
   });
 });
+
+function readTasksYaml(dir: string): {
+  milestones: Array<{ id: string; name: string; tasks: any[] }>;
+} {
+  const raw = fs.readFileSync(path.join(dir, 'tasks.yaml'), 'utf-8');
+  return yaml.load(raw) as any;
+}
+
+describe('LocalTaskBackend.setDependsOn', () => {
+  it('overwrites depends_on, stripping the yaml: prefix', async () => {
+    writeTempTasksYaml(tmpDir, [
+      { id: 'task-a', name: 'Task A', status: 'Ready' },
+      { id: 'task-b', name: 'Task B', status: 'Ready' },
+    ]);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+
+    await backend.setDependsOn!('yaml:task-a', ['yaml:task-b']);
+
+    const file = readTasksYaml(tmpDir);
+    const taskA = file.milestones[0].tasks.find((t) => t.id === 'task-a');
+    expect(taskA.depends_on).toEqual(['task-b']);
+  });
+
+  it('throws for a missing task', async () => {
+    writeTempTasksYaml(tmpDir, [
+      { id: 'task-a', name: 'Task A', status: 'Ready' },
+    ]);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+
+    await expect(
+      backend.setDependsOn!('yaml:missing', []),
+    ).rejects.toThrow('task not found');
+  });
+});
+
+describe('LocalTaskBackend.setType', () => {
+  it('reverse-maps display type to the internal yaml value', async () => {
+    writeTempTasksYaml(tmpDir, [
+      { id: 'task-a', name: 'Task A', status: 'Ready' },
+    ]);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+
+    await backend.setType!('yaml:task-a', '🧪 Testing');
+
+    const file = readTasksYaml(tmpDir);
+    expect(file.milestones[0].tasks[0].type).toBe('Testing');
+  });
+
+  it('throws for a missing task', async () => {
+    writeTempTasksYaml(tmpDir, []);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+
+    await expect(
+      backend.setType!('yaml:missing', '💻 Code'),
+    ).rejects.toThrow('task not found');
+  });
+});
+
+describe('LocalTaskBackend.setProperties', () => {
+  it('applies priority and title from a partial patch', async () => {
+    writeTempTasksYaml(tmpDir, [
+      { id: 'task-a', name: 'Task A', status: 'Ready' },
+    ]);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+
+    await backend.setProperties!('yaml:task-a', {
+      priority: '🔴 High',
+      title: 'Renamed Task',
+    });
+
+    const file = readTasksYaml(tmpDir);
+    const task = file.milestones[0].tasks[0];
+    expect(task.priority).toBe('High');
+    expect(task.name).toBe('Renamed Task');
+  });
+
+  it('throws for a missing task', async () => {
+    writeTempTasksYaml(tmpDir, []);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+
+    await expect(
+      backend.setProperties!('yaml:missing', { title: 'X' }),
+    ).rejects.toThrow('task not found');
+  });
+});
+
+describe('LocalTaskBackend.archive', () => {
+  it('removes the task node from its milestone tasks array', async () => {
+    writeTempTasksYaml(tmpDir, [
+      { id: 'task-a', name: 'Task A', status: 'Ready' },
+      { id: 'task-b', name: 'Task B', status: 'Ready' },
+    ]);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+
+    await backend.archive!('yaml:task-a');
+
+    const file = readTasksYaml(tmpDir);
+    expect(file.milestones[0].tasks.map((t) => t.id)).toEqual(['task-b']);
+  });
+
+  it('throws for a missing task', async () => {
+    writeTempTasksYaml(tmpDir, []);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+
+    await expect(backend.archive!('yaml:missing')).rejects.toThrow(
+      'task not found',
+    );
+  });
+});
+
+describe('LocalTaskBackend.createTask', () => {
+  it('mints an id by slugifying the title', async () => {
+    writeTempTasksYaml(tmpDir, []);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+
+    const id = await backend.createTask!({
+      databaseId: 'ms-1',
+      title: 'Foo Bar',
+    });
+
+    expect(id).toBe('yaml:foo-bar');
+    const file = readTasksYaml(tmpDir);
+    expect(file.milestones[0].tasks[0].id).toBe('foo-bar');
+  });
+
+  it('de-duplicates on id collision within the same milestone', async () => {
+    writeTempTasksYaml(tmpDir, []);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+
+    const first = await backend.createTask!({
+      databaseId: 'ms-1',
+      title: 'Foo Bar',
+    });
+    const second = await backend.createTask!({
+      databaseId: 'ms-1',
+      title: 'Foo Bar',
+    });
+
+    expect(first).toBe('yaml:foo-bar');
+    expect(second).toBe('yaml:foo-bar-2');
+  });
+
+  it('always creates at Backlog status regardless of input', async () => {
+    writeTempTasksYaml(tmpDir, []);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+
+    await backend.createTask!({
+      databaseId: 'ms-1',
+      title: 'Some Task',
+    });
+
+    const file = readTasksYaml(tmpDir);
+    expect(file.milestones[0].tasks[0].status).toBe('Backlog');
+  });
+
+  it('throws for an unknown milestone', async () => {
+    writeTempTasksYaml(tmpDir, []);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+
+    await expect(
+      backend.createTask!({ databaseId: 'missing-ms', title: 'X' }),
+    ).rejects.toThrow('milestone not found');
+  });
+});
