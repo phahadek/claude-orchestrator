@@ -1,13 +1,24 @@
 import { Router, json } from 'express';
 import type { Request, Response } from 'express';
+import fs from 'fs';
+import path from 'path';
 import {
   createReport,
   updateDraftReport,
   commitReport,
   abandonReport,
   getReportWithDerived,
+  getReportImagePath,
   listReports,
 } from '../investigation/reportService';
+
+const IMAGE_CONTENT_TYPE_BY_EXTENSION: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+};
 
 /**
  * Body-size limit for the routes under /api/reports, which include the two
@@ -116,6 +127,21 @@ export function createReportStateRouter(): Router {
       return;
     }
     res.json(report);
+  });
+
+  // GET /api/reports/:id/image
+  router.get('/reports/:id/image', (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const lookup = getReportImagePath(id);
+    if (!lookup.report || !lookup.path || !fs.existsSync(lookup.path)) {
+      res.status(404).json({ error: `no image for investigation report ${id}` });
+      return;
+    }
+    const extension = path.extname(lookup.path).toLowerCase();
+    const contentType =
+      IMAGE_CONTENT_TYPE_BY_EXTENSION[extension] ?? 'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
+    res.sendFile(lookup.path);
   });
 
   // PATCH /api/reports/:id  { title?, symptomText?, evidenceText?, milestoneId?, image? }
