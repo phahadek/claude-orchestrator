@@ -593,6 +593,13 @@ describe('runGateReconcilerTick', () => {
     expect(getItem(pending.id)?.state).toBe('pass');
     expect(getItem(runnable.id)?.state).toBe('runnable');
     expect(result.skippedForBudget).toBe(1);
+
+    // Restore defaults — settings persist across tests in this file (see
+    // other describe blocks below), and leaving these narrowed would starve
+    // later tests' dispatch budgets of their expected headroom.
+    typedSetSetting('max_concurrent_planning_sessions', 5);
+    typedSetSetting('human_reserve', 1);
+    typedSetSetting('max_concurrent_verify_sessions', 5);
   });
 
   it('files a follow-up fix task on failure, attaches it as a new source, and re-opens the item', async () => {
