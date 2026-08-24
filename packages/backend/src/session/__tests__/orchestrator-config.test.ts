@@ -817,7 +817,9 @@ describe('getSessionAddDirs', () => {
   it("unions a configured investigate read:path: pre-grant into a dispatched batch session's add-dir list", () => {
     const imagesDir = '/srv/orchestrator/data/investigation-report-images';
     const granted = resolvePreGrantCapabilities(
-      { capability_pre_grants: { investigate: [pathReadCapability(imagesDir)] } },
+      {
+        capability_pre_grants: { investigate: [pathReadCapability(imagesDir)] },
+      },
       'ops',
       'report-batch:batch-1',
     );

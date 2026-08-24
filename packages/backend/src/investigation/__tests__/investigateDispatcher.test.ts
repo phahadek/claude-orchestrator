@@ -82,11 +82,16 @@ describe('buildInvestigateProcedure', () => {
 
   it('emits an - image: line only for a report that has one', () => {
     const reports = [
-      makeReport({ id: 'r-1', image_path: '/data/investigation-report-images/r-1.png' }),
+      makeReport({
+        id: 'r-1',
+        image_path: '/data/investigation-report-images/r-1.png',
+      }),
       makeReport({ id: 'r-2' }),
     ];
     const procedure = buildInvestigateProcedure(reports);
-    expect(procedure).toContain('image: /data/investigation-report-images/r-1.png');
+    expect(procedure).toContain(
+      'image: /data/investigation-report-images/r-1.png',
+    );
 
     const r2Section = procedure.slice(procedure.indexOf('id: r-2'));
     expect(r2Section).not.toMatch(/- image:/);
