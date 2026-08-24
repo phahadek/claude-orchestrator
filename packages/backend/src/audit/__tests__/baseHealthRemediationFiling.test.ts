@@ -99,6 +99,7 @@ function partialFailTrigger(
   contentHash: string,
   failingTestIds: string[],
   triggeringTaskId: string | null = TRIGGERING_TASK_ID,
+  testCounts: { passed: number; failed: number; total: number } | null = null,
 ) {
   return recordAndMaybeFileBaseHealthRemediation({
     projectId: PROJECT,
@@ -107,6 +108,7 @@ function partialFailTrigger(
     failingTestIds,
     failureReason: null,
     triggeringTaskId,
+    testCounts,
   });
 }
 
@@ -122,6 +124,7 @@ function totalFailTrigger(
     failingTestIds: [],
     failureReason,
     triggeringTaskId,
+    testCounts: null,
   });
 }
 
@@ -262,6 +265,37 @@ describe('recordAndMaybeFileBaseHealthRemediation — partial_fail', () => {
     );
     expect(tracking?.remediation_task_open).toBe(0);
   });
+
+  it('does not assert the base branch is broken outright for a low-ratio failure (1 of 10974)', async () => {
+    const result = await partialFailTrigger(
+      'hash-ratio-low',
+      ['suite.testLow'],
+      TRIGGERING_TASK_ID,
+      { passed: 10973, failed: 1, total: 10974 },
+    );
+    expect(result.filed).toBe(true);
+
+    const title = createTaskMock.mock.calls[0][0].title as string;
+    expect(title).not.toContain('Base branch is broken');
+    expect(title).toContain('1 of 10974');
+
+    const body = createTaskMock.mock.calls[0][0].body as string;
+    expect(body).toContain('10973 passed, 1 failed, 10974 total');
+  });
+
+  it('does assert the base branch is broken for a high-ratio failure (majority of tests failing)', async () => {
+    const result = await partialFailTrigger(
+      'hash-ratio-high',
+      ['suite.testHigh'],
+      TRIGGERING_TASK_ID,
+      { passed: 2, failed: 8, total: 10 },
+    );
+    expect(result.filed).toBe(true);
+
+    const title = createTaskMock.mock.calls[0][0].title as string;
+    expect(title).toContain('Base branch is broken');
+    expect(title).toContain('8 of 10');
+  });
 });
 
 describe('recordAndMaybeFileBaseHealthRemediation — total_fail', () => {
@@ -275,6 +309,32 @@ describe('recordAndMaybeFileBaseHealthRemediation — total_fail', () => {
       'oom_killed',
     );
     expect(tracking?.remediation_task_open).toBe(1);
+  });
+
+  it('renders the total-fail title and body unchanged, regardless of testCounts', async () => {
+    const first = await totalFailTrigger('hash-h-unchanged', 'oom_killed');
+    expect(first.filed).toBe(true);
+
+    const call = createTaskMock.mock.calls[0][0];
+    expect(call.title).toBe(
+      'Base branch is broken (failure reason oom_killed)',
+    );
+    expect(call.body).toBe(
+      [
+        '## Evidence',
+        '',
+        '- Base branch content hash: `hash-h-unchanged`',
+        '- Failure reason: `oom_killed`',
+        '- On-demand base-branch health check: whole-process crash — the base tree failed its own configured test commands with no per-test breakdown at all.',
+        '',
+        '## Open question',
+        '',
+        'The base branch fails its own configured test commands at this content hash. ' +
+          'Dispatched task sessions are having this failure filtered out of (or their whole ' +
+          'run marked inconclusive in) their own test-request results so they are not blamed ' +
+          'for a break that predates their diff. Investigate and fix the base branch directly.',
+      ].join('\n'),
+    );
   });
 
   it('files at most one remediation task across a single triggering task’s repeated confirmations, even when failure_reason drifts mid-retry', async () => {

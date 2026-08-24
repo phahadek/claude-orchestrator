@@ -58,6 +58,13 @@ export interface BaseHealthRemediationTrigger {
   failureReason: string | null;
   /** The triggering session's own task id — the filed task lands on this task's milestone. */
   triggeringTaskId: string | null;
+  /**
+   * The base run's own passed/failed/total counts (partial_fail only —
+   * total_fail has no per-test breakdown to count). Null when the run's
+   * test_run_summaries row is unavailable; the partial-fail renderers fall
+   * back to a denominator-less rendering in that case.
+   */
+  testCounts: { passed: number; failed: number; total: number } | null;
 }
 
 export interface BaseHealthRemediationFilingResult {
@@ -66,30 +73,54 @@ export interface BaseHealthRemediationFilingResult {
   reason?: string;
 }
 
-function renderPartialFailTitle(contentHash: string): string {
-  return `Base branch is broken (content hash ${contentHash.slice(0, 12)})`;
+/**
+ * A failure ratio above this threshold reads as the base tree itself being
+ * broken; at or below it, the title states the count and denominator
+ * instead of a verdict — a handful of failing tests on an otherwise-green
+ * tree must not file under a headline that reads as a total outage.
+ */
+const PARTIAL_FAIL_BROKEN_RATIO_THRESHOLD = 0.5;
+
+function renderPartialFailTitle(
+  contentHash: string,
+  testCounts: { passed: number; failed: number; total: number } | null,
+): string {
+  const hashSuffix = `content hash ${contentHash.slice(0, 12)}`;
+  if (!testCounts || testCounts.total <= 0) {
+    return `Base branch is broken (${hashSuffix})`;
+  }
+  const ratio = testCounts.failed / testCounts.total;
+  if (ratio > PARTIAL_FAIL_BROKEN_RATIO_THRESHOLD) {
+    return `Base branch is broken (${testCounts.failed} of ${testCounts.total} tests failing, ${hashSuffix})`;
+  }
+  return `${testCounts.failed} of ${testCounts.total} base-branch tests failing (${hashSuffix})`;
 }
 
 function renderPartialFailBody(
   trigger: BaseHealthRemediationTrigger,
   claimedTestIds: string[],
 ): string {
+  const testCounts = trigger.testCounts;
   const lines = [
     '## Evidence',
     '',
     `- Base branch content hash: \`${trigger.contentHash}\``,
-    `- On-demand base-branch health check: ${claimedTestIds.length} failing test(s) on the base tree itself.`,
+    testCounts
+      ? `- Test results: ${testCounts.passed} passed, ${testCounts.failed} failed, ${testCounts.total} total.`
+      : `- On-demand base-branch health check: ${claimedTestIds.length} failing test(s) on the base tree itself.`,
     `- Failing tests: ${claimedTestIds.slice(0, 20).join(', ')}`,
   ];
-  lines.push(
-    '',
-    '## Open question',
-    '',
-    'The base branch fails its own configured test commands at this content hash. ' +
+  const openQuestion = testCounts
+    ? `${testCounts.failed} of ${testCounts.total} base-branch tests fail their own configured test commands at this ` +
+      `content hash; the remaining ${testCounts.passed} passed. ` +
       'Dispatched task sessions are having this failure filtered out of (or their whole ' +
       'run marked inconclusive in) their own test-request results so they are not blamed ' +
-      'for a break that predates their diff. Investigate and fix the base branch directly.',
-  );
+      'for a break that predates their diff. Investigate and fix the base branch directly.'
+    : 'The base branch fails its own configured test commands at this content hash. ' +
+      'Dispatched task sessions are having this failure filtered out of (or their whole ' +
+      'run marked inconclusive in) their own test-request results so they are not blamed ' +
+      'for a break that predates their diff. Investigate and fix the base branch directly.';
+  lines.push('', '## Open question', '', openQuestion);
   return lines.join('\n');
 }
 
@@ -249,7 +280,7 @@ async function fileClaimedPartialFailTask(
 
   const taskId = await backend.createTask({
     databaseId,
-    title: renderPartialFailTitle(trigger.contentHash),
+    title: renderPartialFailTitle(trigger.contentHash, trigger.testCounts),
     type: REMEDIATION_TASK_TYPE,
     body: renderPartialFailBody(trigger, claimedTestIds),
   });
