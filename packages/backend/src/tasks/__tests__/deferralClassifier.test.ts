@@ -10,13 +10,17 @@ import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
 import { mockDbQueries } from '../../__tests__/helpers/mockDbQueries';
 
-const { mockGetTaskBackend, mockRecordEvent, mockSpawn, mockRecordObservedUsageLimit } =
-  vi.hoisted(() => ({
-    mockGetTaskBackend: vi.fn(),
-    mockRecordEvent: vi.fn(),
-    mockSpawn: vi.fn(),
-    mockRecordObservedUsageLimit: vi.fn(),
-  }));
+const {
+  mockGetTaskBackend,
+  mockRecordEvent,
+  mockSpawn,
+  mockRecordObservedUsageLimit,
+} = vi.hoisted(() => ({
+  mockGetTaskBackend: vi.fn(),
+  mockRecordEvent: vi.fn(),
+  mockSpawn: vi.fn(),
+  mockRecordObservedUsageLimit: vi.fn(),
+}));
 
 vi.mock('../TaskBackend', () => ({
   getTaskBackend: mockGetTaskBackend,
