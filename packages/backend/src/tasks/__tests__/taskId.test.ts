@@ -46,7 +46,7 @@ describe('normalizeTaskId — default-source parameter', () => {
     expect(normalizeTaskId('my-task-slug', 'yaml')).toBe('yaml:my-task-slug');
   });
 
-  it('still keeps an already-prefixed id\'s own source, ignoring the default-source argument', () => {
+  it("still keeps an already-prefixed id's own source, ignoring the default-source argument", () => {
     expect(normalizeTaskId(`notion:${hyphenated}`, 'yaml')).toBe(
       `notion:${hyphenated}`,
     );

@@ -161,9 +161,7 @@ describe('resolveMilestoneSourceId', () => {
 
   it('throws a clear, source-neutral error when the resolved milestone has no source_id configured', () => {
     projectServiceMock.getById.mockReturnValue(project([M11, M12]));
-    expect(() => resolveMilestoneSourceId('p1', 'M11')).toThrow(
-      /no source_id/,
-    );
+    expect(() => resolveMilestoneSourceId('p1', 'M11')).toThrow(/no source_id/);
   });
 
   it('does not mention "Notion" in the no-source_id error text', () => {
