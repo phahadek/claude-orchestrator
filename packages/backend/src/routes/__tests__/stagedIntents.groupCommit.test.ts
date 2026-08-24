@@ -3579,7 +3579,7 @@ describe('commitGroupIntents — independent members apply concurrently', () => 
     return new Promise((resolve) => setTimeout(() => resolve(value), ms));
   }
 
-  it('applies several independent task.updateBody members in roughly the slowest member\'s latency, not the sum', async () => {
+  it("applies several independent task.updateBody members in roughly the slowest member's latency, not the sum", async () => {
     const MEMBER_COUNT = 4;
     const LATENCY_MS = 150;
     const calls: string[] = [];
