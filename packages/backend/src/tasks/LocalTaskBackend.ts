@@ -390,6 +390,19 @@ export class LocalTaskBackend implements TaskBackend {
     this.writeFile(file);
   }
 
+  async updateBodyRaw(
+    taskId: string,
+    markdown: string,
+    _options?: TaskWriteOptions,
+  ): Promise<void> {
+    const externalId = toExternalId(taskId);
+    const file = this.readFile();
+    const found = this.findTaskById(file, externalId);
+    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    found.task.body = markdown;
+    this.writeFile(file);
+  }
+
   async patchBodySection(
     taskId: string,
     section: string,
