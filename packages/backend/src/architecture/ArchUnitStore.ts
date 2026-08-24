@@ -191,6 +191,28 @@ export function updateUnit(
     version: row.version + 1,
     updated_at: at,
   };
+  const priorValues: Record<keyof ArchUnitUpdateFields, unknown> = {
+    title: row.title,
+    kind: row.kind,
+    topic: row.topic,
+    regions: JSON.parse(row.regions) as string[],
+    status: row.status,
+    body: row.body,
+  };
+  const changedFields = (
+    Object.keys(fields) as (keyof ArchUnitUpdateFields)[]
+  ).filter((key) => {
+    const value = fields[key];
+    if (value === undefined) return false;
+    if (key === 'regions') {
+      return JSON.stringify(value) !== row.regions;
+    }
+    return value !== priorValues[key];
+  });
+  const before: Record<string, unknown> = {};
+  for (const key of changedFields) {
+    before[key] = priorValues[key];
+  }
   db.transaction(() => {
     updateArchUnit(next);
     insertArchUnitEvent({
@@ -202,7 +224,7 @@ export function updateUnit(
     recordEvent({
       event_type: 'arch_unit_updated',
       actor_type: 'system',
-      payload: { archUnitId: id, fields: Object.keys(fields) },
+      payload: { archUnitId: id, fields: changedFields },
     });
   })();
   const unit = getUnit(id);

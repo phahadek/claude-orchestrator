@@ -435,3 +435,167 @@ describe('project scoping', () => {
     );
   });
 });
+
+describe('updateUnit edit history', () => {
+  function latestAuditPayload(eventType: string): {
+    archUnitId: string;
+    fields: string[];
+  } {
+    const row = db
+      .prepare(
+        `SELECT payload FROM audit_log WHERE event_type = ? ORDER BY id DESC LIMIT 1`,
+      )
+      .get(eventType) as { payload: string };
+    return JSON.parse(row.payload) as { archUnitId: string; fields: string[] };
+  }
+
+  function latestEventPayload(unitId: string): {
+    before: Record<string, unknown>;
+    after: unknown;
+  } {
+    const events = getUnitEvents(unitId);
+    return events[events.length - 1].payload as {
+      before: Record<string, unknown>;
+      after: unknown;
+    };
+  }
+
+  it('records the pre-edit body in before, not the post-edit body, on a body-only update', () => {
+    const unit = createUnit({
+      project: 'proj-1',
+      title: 'Dispatch gating',
+      kind: 'invariant',
+      topic: 'dispatch',
+      regions: [],
+      body: 'budgets charge normally, dispatch is not gated',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    updateUnit(
+      unit.id,
+      { body: 'it is surfaced as its own filter outcome' },
+      '2026-01-02T00:00:00Z',
+    );
+
+    const payload = latestEventPayload(unit.id);
+    expect(payload.before.body).toBe(
+      'budgets charge normally, dispatch is not gated',
+    );
+    expect(payload.before.body).not.toBe(
+      'it is surfaced as its own filter outcome',
+    );
+  });
+
+  it('reports exactly ["body"] in the arch_unit_updated audit payload for a body-only update', () => {
+    const unit = createUnit({
+      project: 'proj-1',
+      title: 'Dispatch gating',
+      kind: 'invariant',
+      topic: 'dispatch',
+      regions: [],
+      body: 'original body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    updateUnit(unit.id, { body: 'revised body' }, '2026-01-02T00:00:00Z');
+
+    const audit = latestAuditPayload('arch_unit_updated');
+    expect(audit.fields).toEqual(['body']);
+  });
+
+  it('does not report a field as changed when the supplied value equals the current value', () => {
+    const unit = createUnit({
+      project: 'proj-1',
+      title: 'Same title',
+      kind: 'invariant',
+      topic: 'dispatch',
+      regions: [],
+      body: 'same body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    updateUnit(
+      unit.id,
+      { title: 'Same title', body: 'same body' },
+      '2026-01-02T00:00:00Z',
+    );
+
+    const audit = latestAuditPayload('arch_unit_updated');
+    expect(audit.fields).toEqual([]);
+    const payload = latestEventPayload(unit.id);
+    expect(payload.before).toEqual({});
+  });
+
+  it('reports exactly the changed fields and their prior values on a multi-field update', () => {
+    const unit = createUnit({
+      project: 'proj-1',
+      title: 'Old title',
+      kind: 'invariant',
+      topic: 'dispatch',
+      regions: [],
+      body: 'old body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    updateUnit(
+      unit.id,
+      { title: 'New title', body: 'new body' },
+      '2026-01-02T00:00:00Z',
+    );
+
+    const audit = latestAuditPayload('arch_unit_updated');
+    expect(audit.fields.sort()).toEqual(['body', 'title']);
+
+    const payload = latestEventPayload(unit.id);
+    expect(payload.before.title).toBe('Old title');
+    expect(payload.before.body).toBe('old body');
+  });
+
+  it('does not report regions as changed when the supplied array matches the stored value', () => {
+    const unit = createUnit({
+      project: 'proj-1',
+      title: 'Region-bearing unit',
+      kind: 'subsystem',
+      topic: 'dispatch',
+      regions: ['packages/backend/src/dispatch'],
+      body: 'body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    updateUnit(
+      unit.id,
+      { regions: ['packages/backend/src/dispatch'], body: 'revised body' },
+      '2026-01-02T00:00:00Z',
+    );
+
+    const audit = latestAuditPayload('arch_unit_updated');
+    expect(audit.fields).toEqual(['body']);
+  });
+
+  it('keeps coalescing semantics unchanged: omitted fields retain their prior values, version increments by 1', () => {
+    const unit = createUnit({
+      project: 'proj-1',
+      title: 'Original title',
+      kind: 'invariant',
+      topic: 'dispatch',
+      regions: ['packages/backend/src/dispatch'],
+      status: 'active',
+      body: 'original body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    const updated = updateUnit(
+      unit.id,
+      { body: 'revised body' },
+      '2026-01-02T00:00:00Z',
+    );
+
+    expect(updated.title).toBe('Original title');
+    expect(updated.kind).toBe('invariant');
+    expect(updated.topic).toBe('dispatch');
+    expect(updated.regions).toEqual(['packages/backend/src/dispatch']);
+    expect(updated.status).toBe('active');
+    expect(updated.body).toBe('revised body');
+    expect(updated.version).toBe(unit.version + 1);
+  });
+});
