@@ -6274,13 +6274,8 @@ export async function pushBackGroupToOriginatingSession(
   const cache = createRowToApiCache();
   const forGroupDisposition: StagedIntentRow[] = [];
   for (const row of live) {
-    const { intent: rejectedIntent, row: rejectedRow } = transitionRejectedIntent(
-      row,
-      'pushback',
-      reason,
-      'auto',
-      cache,
-    );
+    const { intent: rejectedIntent, row: rejectedRow } =
+      transitionRejectedIntent(row, 'pushback', reason, 'auto', cache);
     if (rejectedIntent.kind === 'session.requestCapability') {
       await resumeCapabilityRequester(
         sessionManager,
@@ -7160,7 +7155,12 @@ export async function verifyDispatchedGroupsForSession(
   const outcomes: GroupVerificationOutcome[] = [];
   for (const groupId of groupIds) {
     outcomes.push(
-      await verifyGroup(groupId, sessionId, planningOrchestrator, sessionManager),
+      await verifyGroup(
+        groupId,
+        sessionId,
+        planningOrchestrator,
+        sessionManager,
+      ),
     );
   }
   return outcomes;
