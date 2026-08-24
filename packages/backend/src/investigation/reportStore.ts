@@ -251,10 +251,7 @@ export function getReportImagesDir(): string {
   return path.join(getDataDir(), REPORT_IMAGES_DIRNAME);
 }
 
-export function reportImageFilePath(
-  reportId: string,
-  extension: string,
-): string {
+function reportImageFilePath(reportId: string, extension: string): string {
   return path.join(getReportImagesDir(), `${reportId}${extension}`);
 }
 
