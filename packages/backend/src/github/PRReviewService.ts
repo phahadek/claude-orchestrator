@@ -141,10 +141,10 @@ export interface ReviewDimension {
 }
 
 /** Name of the dimension the migration-renumber pre-check overrides. Must match the JSON schema block below verbatim. */
-export const FILES_PATHS_DIMENSION_NAME =
+const FILES_PATHS_DIMENSION_NAME =
   'Changed files vs Files/paths affected list';
 
-export function isMigrationPath(path: string): boolean {
+function isMigrationPath(path: string): boolean {
   return /(^|\/)(db\/)?migrations?\//i.test(path);
 }
 
@@ -166,13 +166,13 @@ function parseMigrationParts(path: string): MigrationPathParts | null {
   };
 }
 
-export interface MigrationRenumberMatch {
+interface MigrationRenumberMatch {
   diffPath: string;
   listedPath: string;
   number: string;
 }
 
-export interface MigrationCollision {
+interface MigrationCollision {
   diffPath: string;
   collidesWithPath: string;
   number: string;
