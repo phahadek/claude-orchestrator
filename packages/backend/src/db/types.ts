@@ -560,6 +560,27 @@ export interface ConvergenceSnapshotRow {
 
 export type NewConvergenceSnapshotRow = Omit<ConvergenceSnapshotRow, 'id'>;
 
+// ─── flow_health_regression_snapshot ───────────────────────────────────────
+
+/** A point-in-time trailing-7-day median wall-clock sample for 'standard' code sessions, written by FlowHealthRegressionSnapshotJob only when it changes. */
+export interface FlowHealthRegressionSnapshotRow {
+  id: string;
+  /** ISO-8601 UTC, consistent with convergence_snapshot. */
+  ts: string;
+  window_start: number;
+  window_end: number;
+  sample_count: number;
+  p50_wall_clock_ms: number | null;
+  status: 'ok' | 'regressed';
+  /** Archived+killed+no-reason sessions started before the fixed historical cutoff — excluded from the sample set, counted separately. */
+  excluded_artifact_count: number;
+}
+
+export type NewFlowHealthRegressionSnapshotRow = Omit<
+  FlowHealthRegressionSnapshotRow,
+  'id'
+>;
+
 // ─── gate_item ────────────────────────────────────────────────────────────
 
 export type GateItemClassification =
