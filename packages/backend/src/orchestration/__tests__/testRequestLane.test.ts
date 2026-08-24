@@ -201,6 +201,81 @@ describe('runProjectTestRequest — coalescing', () => {
     expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
   });
 
+  it('a scoped run and a full run against the identical content-hash execute independently and are stored as two distinct rows, each queryable by run_kind', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-kind', runKind: 'full' }),
+    );
+    await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-kind', runKind: 'scoped' }),
+    );
+
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
+    const rows = db
+      .prepare(
+        `SELECT run_kind, base_sha FROM test_request_runs WHERE project_id = ? AND content_hash = ? ORDER BY run_kind`,
+      )
+      .all('proj-1', 'hash-kind') as Array<{
+      run_kind: string;
+      base_sha: string | null;
+    }>;
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.run_kind).sort()).toEqual(['full', 'scoped']);
+
+    const scoped = getLatestTestRequestRun('proj-1', 'hash-kind', 'scoped');
+    const full = getLatestTestRequestRun('proj-1', 'hash-kind', 'full');
+    expect(scoped?.run_kind).toBe('scoped');
+    expect(full?.run_kind).toBe('full');
+    expect(scoped?.id).not.toBe(full?.id);
+  });
+
+  it('a run with no runKind stated defaults to full and stores base_sha NULL', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    await runProjectTestRequest(baseSpec({ contentHash: 'hash-default-kind' }));
+
+    const row = getLatestTestRequestRun('proj-1', 'hash-default-kind');
+    expect(row?.run_kind).toBe('full');
+    expect(row?.base_sha).toBeNull();
+  });
+
+  it('a base-relative scoped run (e.g. vitest --changed) stores its base_sha', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    await runProjectTestRequest(
+      baseSpec({
+        contentHash: 'hash-base-relative',
+        runKind: 'scoped',
+        baseSha: 'abc123',
+      }),
+    );
+
+    const row = getLatestTestRequestRun(
+      'proj-1',
+      'hash-base-relative',
+      'scoped',
+    );
+    expect(row?.run_kind).toBe('scoped');
+    expect(row?.base_sha).toBe('abc123');
+  });
+
+  it('a marker-exclusion scoped run (no base dependency) stores base_sha NULL', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-marker-exclusion', runKind: 'scoped' }),
+    );
+
+    const row = getLatestTestRequestRun(
+      'proj-1',
+      'hash-marker-exclusion',
+      'scoped',
+    );
+    expect(row?.run_kind).toBe('scoped');
+    expect(row?.base_sha).toBeNull();
+  });
+
   it('records a completed run in test_request_runs, linked to the originating session', async () => {
     mockRunTestCommands.mockResolvedValue({ passed: false, output: 'boom' });
 

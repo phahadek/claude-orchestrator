@@ -69,6 +69,7 @@ import type {
   NewTestRunResultRow,
   RunOrigin,
   TestRunProducer,
+  TestRunKind,
 } from '../db/types';
 import { logger } from '../logger';
 import type { ServerMessage, TestRequestRunStatusPayload } from '../ws/types';
@@ -111,6 +112,21 @@ export interface TestRequestRunSpec {
   runOrigin: RunOrigin;
   /** Which lane call site is originating this run — set at insert time onto every row; see TestRunProducer in db/types.ts. */
   producer: TestRunProducer;
+  /**
+   * 'full' (the default when omitted) or 'scoped' — see TestRunKind in
+   * db/types.ts. Distinguishes `commands` a project declares as its unscoped
+   * `test:` set from a narrower `test_scoped:` set, so the two can never
+   * coalesce or replay each other's settled result under the same
+   * content_hash.
+   */
+  runKind?: TestRunKind;
+  /**
+   * Base commit sha `commands` was computed against, when runKind is
+   * 'scoped' and the scoping mechanism is base-relative (e.g.
+   * `vitest --changed <base_sha>`). Omitted/null for a 'full' run and for a
+   * marker-exclusion scoped run that has no base dependency.
+   */
+  baseSha?: string | null;
 }
 
 /**
@@ -217,6 +233,8 @@ function getProjectSemaphore(projectId: string): Semaphore {
 interface InFlightEntry {
   runId: string;
   contentHash: string;
+  runKind: TestRunKind;
+  baseSha: string | null;
   /** Live admission status, re-derived from the semaphore on every call — never a fixed snapshot. */
   admission: () => {
     status: TestRequestAdmissionStatus;
@@ -229,8 +247,19 @@ interface InFlightEntry {
 const inFlightRuns = new Map<string, InFlightEntry>();
 const pendingBySession = new Map<string, InFlightEntry>();
 
-function coalesceKey(projectId: string, contentHash: string): string {
-  return `${projectId}:${contentHash}`;
+/**
+ * Includes runKind/baseSha alongside (project, content-hash) so a scoped run
+ * and a full run against the identical tree never coalesce into one
+ * execution, and so a base-relative scoped run against a since-superseded
+ * base is never folded into one still running against the current base.
+ */
+function coalesceKey(
+  projectId: string,
+  contentHash: string,
+  runKind: TestRunKind,
+  baseSha: string | null,
+): string {
+  return `${projectId}:${contentHash}:${runKind}:${baseSha ?? ''}`;
 }
 
 function sessionKey(projectId: string, sessionId: string): string {
@@ -295,6 +324,8 @@ async function waitForMemoryAdmission(
 export function admitTestRequest(
   spec: TestRequestRunSpec,
 ): TestRequestAdmission {
+  const runKind: TestRunKind = spec.runKind ?? 'full';
+  const baseSha = spec.baseSha ?? null;
   const sKey = spec.sessionId
     ? sessionKey(spec.projectId, spec.sessionId)
     : null;
@@ -302,7 +333,11 @@ export function admitTestRequest(
   if (sKey) {
     const pending = pendingBySession.get(sKey);
     if (pending) {
-      if (pending.contentHash === spec.contentHash) {
+      if (
+        pending.contentHash === spec.contentHash &&
+        pending.runKind === runKind &&
+        pending.baseSha === baseSha
+      ) {
         return {
           runId: pending.runId,
           reused: true,
@@ -324,7 +359,7 @@ export function admitTestRequest(
     }
   }
 
-  const key = coalesceKey(spec.projectId, spec.contentHash);
+  const key = coalesceKey(spec.projectId, spec.contentHash, runKind, baseSha);
   const existing = inFlightRuns.get(key);
   if (existing) {
     const result = existing.promise.then((r) => ({
@@ -358,7 +393,12 @@ export function admitTestRequest(
   // tree at all — it must never be replayed as if it were one. Falling
   // through here means admission proceeds to a fresh execution below, same
   // as if no settled run existed.
-  const settled = getLatestTestRequestRun(spec.projectId, spec.contentHash);
+  const settled = getLatestTestRequestRun(
+    spec.projectId,
+    spec.contentHash,
+    runKind,
+    baseSha,
+  );
   if (settled && settled.failure_reason !== 'execution_failed') {
     const replayResult: TestRequestRunResult = {
       passed: settled.state === 'passed',
@@ -397,6 +437,8 @@ export function admitTestRequest(
     spec.runOrigin,
     spec.producer,
     'queued',
+    runKind,
+    baseSha,
   );
   const semaphore = getProjectSemaphore(spec.projectId);
   const permitPromise = semaphore.acquire(runId);
@@ -430,6 +472,8 @@ export function admitTestRequest(
   const entry: InFlightEntry = {
     runId,
     contentHash: spec.contentHash,
+    runKind,
+    baseSha,
     admission,
     promise,
   };
@@ -584,6 +628,8 @@ async function executeTestRequestRun(
       test_report_acquisition_attempted: acquisitionAttempted ? 1 : 0,
       run_origin: spec.runOrigin,
       producer: spec.producer,
+      run_kind: spec.runKind ?? 'full',
+      base_sha: spec.baseSha ?? null,
     });
     return { ...result, runId };
   } catch (err) {
