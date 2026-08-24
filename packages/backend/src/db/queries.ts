@@ -454,6 +454,7 @@ let _stmtMarkSessionSuperseded: Database.Statement | null = null;
 export function markSessionSuperseded(
   sessionId: string,
   endedAt: number,
+  reason?: string,
 ): void {
   const current = getStmtGetSession().get({ session_id: sessionId }) as
     | { status: string; task_id: string | null; session_type: SessionType }
@@ -467,6 +468,9 @@ export function markSessionSuperseded(
     WHERE session_id = @session_id
   `);
   _stmtMarkSessionSuperseded.run({ session_id: sessionId, ended_at: endedAt });
+  if (reason) {
+    setSessionTerminalCompletionReason(sessionId, reason);
+  }
   if (current && current.status !== 'superseded') {
     recordEvent({
       event_type: 'session_status_changed',
@@ -573,6 +577,9 @@ export function markSessionDone(
     pr_url: prUrl ?? null,
     terminalized_at: endedAt,
   });
+  if (callSite) {
+    setSessionTerminalCompletionReason(sessionId, callSite);
+  }
   if (current && current.status !== 'done') {
     recordEvent({
       event_type: 'session_status_changed',
@@ -636,6 +643,12 @@ export function applyPendingDone(sessionId: string): boolean {
     // deferral time preserved in ended_at for backwards compatibility.
     terminalized_at: terminalizedAt,
   });
+  if (current.pending_done_call_site) {
+    setSessionTerminalCompletionReason(
+      sessionId,
+      current.pending_done_call_site,
+    );
+  }
   clearPendingDone(sessionId);
   recordEvent({
     event_type: 'session_done_deferred_applied',

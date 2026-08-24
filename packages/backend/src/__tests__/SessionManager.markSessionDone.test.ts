@@ -43,6 +43,7 @@ import type { SessionManager } from '../session/SessionManager';
 import {
   markSessionDone,
   markSessionIdle,
+  markSessionSuperseded,
   applyPendingDone,
   updateSessionStatus,
   insertStagedIntent,
@@ -111,6 +112,16 @@ function getTimestamps(
     .get(sessionId) as
     | { ended_at: number | null; terminalized_at: number | null }
     | undefined;
+}
+
+function getTerminalCompletionReason(sessionId: string): string | null {
+  return (
+    db
+      .prepare(
+        'SELECT terminal_completion_reason FROM sessions WHERE session_id = ?',
+      )
+      .get(sessionId) as { terminal_completion_reason: string | null }
+  ).terminal_completion_reason;
 }
 
 function getAuditRows(
@@ -365,6 +376,69 @@ describe('terminalized_at on error/killed transitions', () => {
 
     expect(getStatus('sess-running-term')).toBe('running');
     expect(getTimestamps('sess-running-term')?.terminalized_at).toBeNull();
+  });
+});
+
+// ── terminal_completion_reason persistence ───────────────────────────────────
+
+describe('terminal_completion_reason', () => {
+  it('markSessionDone persists terminal_completion_reason equal to its callSite value (idle→done, immediate)', () => {
+    insertSession('sess-done-reason', 'idle');
+
+    markSessionDone(
+      'sess-done-reason',
+      Date.now(),
+      null,
+      'boot_idle_merged_pr',
+    );
+
+    expect(getTerminalCompletionReason('sess-done-reason')).toBe(
+      'boot_idle_merged_pr',
+    );
+  });
+
+  it('markSessionDone does not write a reason when callSite is omitted', () => {
+    insertSession('sess-done-no-reason', 'idle');
+
+    markSessionDone('sess-done-no-reason', Date.now(), null);
+
+    expect(getTerminalCompletionReason('sess-done-no-reason')).toBeNull();
+  });
+
+  it('a deferred markSessionDone transition persists its callSite as the reason once applyPendingDone drains it', () => {
+    insertSession('sess-deferred-reason', 'running', 'task-abc');
+    markSessionDone('sess-deferred-reason', Date.now(), null, 'test_call_site');
+    // Not yet applied — no reason written yet.
+    expect(getTerminalCompletionReason('sess-deferred-reason')).toBeNull();
+
+    applyPendingDone('sess-deferred-reason');
+
+    expect(getTerminalCompletionReason('sess-deferred-reason')).toBe(
+      'test_call_site',
+    );
+  });
+
+  it('markSessionSuperseded persists a reason once given one', () => {
+    insertSession('sess-superseded-reason', 'running');
+
+    markSessionSuperseded(
+      'sess-superseded-reason',
+      Date.now(),
+      'resume_superseded',
+    );
+
+    expect(getTerminalCompletionReason('sess-superseded-reason')).toBe(
+      'resume_superseded',
+    );
+    expect(getStatus('sess-superseded-reason')).toBe('superseded');
+  });
+
+  it('markSessionSuperseded does not write a reason when none is given', () => {
+    insertSession('sess-superseded-no-reason', 'running');
+
+    markSessionSuperseded('sess-superseded-no-reason', Date.now());
+
+    expect(getTerminalCompletionReason('sess-superseded-no-reason')).toBeNull();
   });
 });
 

@@ -78,6 +78,7 @@ vi.mock('../db/queries', () =>
     getStuckResultSessionRows: vi.fn().mockReturnValue([]),
     getRunningSessionsWithMergedOrClosedPR: vi.fn().mockReturnValue([]),
     getOtherRunningSessionsForTask: vi.fn().mockReturnValue([]),
+    setSessionTerminalCompletionReason: vi.fn(),
   }),
 );
 
@@ -224,6 +225,24 @@ describe('SessionManager.abortSession() — DB pre-mark', () => {
     await sm.abortSession('unknown-session');
 
     expect(queries.updateSessionStatus).not.toHaveBeenCalled();
+  });
+});
+
+describe('SessionManager.abortSession() — terminal_completion_reason', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(queries.getSession).mockReturnValue(makeSessionRow() as never);
+    setupFakeBackend();
+  });
+
+  it('persists terminal_completion_reason as operator_abort', async () => {
+    const sm = new SessionManager();
+    await sm.abortSession('test-session');
+
+    expect(queries.setSessionTerminalCompletionReason).toHaveBeenCalledWith(
+      'test-session',
+      'operator_abort',
+    );
   });
 });
 
