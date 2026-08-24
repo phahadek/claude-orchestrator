@@ -14,7 +14,7 @@ interface StagedIntentViolation {
 
 interface StagedIntentAdvisory {
   tier: 'semantic';
-  status: 'pending' | 'clean' | 'flagged' | 'errored';
+  status: 'pending' | 'clean' | 'flagged' | 'errored' | 'usage_limited';
   confidence: number;
   findings: { detail: string; location?: string; quote?: string }[];
   model: string;

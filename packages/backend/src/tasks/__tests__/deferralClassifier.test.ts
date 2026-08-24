@@ -10,10 +10,16 @@ import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
 import { mockDbQueries } from '../../__tests__/helpers/mockDbQueries';
 
-const { mockGetTaskBackend, mockRecordEvent, mockSpawn } = vi.hoisted(() => ({
+const {
+  mockGetTaskBackend,
+  mockRecordEvent,
+  mockSpawn,
+  mockRecordObservedUsageLimit,
+} = vi.hoisted(() => ({
   mockGetTaskBackend: vi.fn(),
   mockRecordEvent: vi.fn(),
   mockSpawn: vi.fn(),
+  mockRecordObservedUsageLimit: vi.fn(),
 }));
 
 vi.mock('../TaskBackend', () => ({
@@ -22,6 +28,10 @@ vi.mock('../TaskBackend', () => ({
 
 vi.mock('../../audit/AuditLog', () => ({
   recordEvent: mockRecordEvent,
+}));
+
+vi.mock('../../orchestration/usageAdmission', () => ({
+  recordObservedUsageLimit: mockRecordObservedUsageLimit,
 }));
 
 vi.mock('child_process', () => ({
@@ -166,6 +176,7 @@ beforeEach(() => {
   mockGetTaskBackend.mockReset();
   mockRecordEvent.mockReset();
   mockSpawn.mockReset();
+  mockRecordObservedUsageLimit.mockReset();
   mockListStagedIntentsByGroup.mockReset();
   mockGetTaskCache.mockReset();
   mockSetStagedIntentAdvisory.mockReset();
@@ -752,6 +763,125 @@ describe('classifyDeferral — stderr draining', () => {
     expect(mockSetStagedIntentAdvisory).toHaveBeenCalledTimes(1);
     const written = JSON.parse(mockSetStagedIntentAdvisory.mock.calls[0][1]);
     expect(written.status).toBe('clean');
+  });
+});
+
+describe('classifyDeferral — usage-limit handling', () => {
+  it('yields status:usage_limited (not errored) and records the observed limit', async () => {
+    mockListStagedIntentsByGroup.mockReturnValue([makeRow()]);
+    mockGetTaskCache.mockReturnValue({
+      raw_json: JSON.stringify({ type: '💻 Code' }),
+    });
+    const limitMessage = "You've hit your session limit · resets 6:10pm (UTC)";
+    stubSpawn({
+      stdout: JSON.stringify({
+        result: limitMessage,
+        is_error: true,
+        api_error_status: 429,
+      }),
+    });
+
+    vi.useFakeTimers();
+    try {
+      const promise = classifyReadyProposal('group-1');
+      await vi.advanceTimersByTimeAsync(10_000);
+      await promise;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(mockSetStagedIntentAdvisory).toHaveBeenCalledTimes(1);
+    const written = JSON.parse(mockSetStagedIntentAdvisory.mock.calls[0][1]);
+    expect(written.status).toBe('usage_limited');
+    expect(mockRecordObservedUsageLimit).toHaveBeenCalledWith(limitMessage);
+    // Two attempts (retry-once): both usage_limited, so recorded twice.
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+  });
+
+  it('still yields status:errored for a genuinely unparseable, non-usage-limit response', async () => {
+    mockListStagedIntentsByGroup.mockReturnValue([makeRow()]);
+    mockGetTaskCache.mockReturnValue({
+      raw_json: JSON.stringify({ type: '💻 Code' }),
+    });
+    stubSpawn({ stdout: 'not json at all' });
+
+    await classifyReadyProposal('group-1');
+
+    const written = JSON.parse(mockSetStagedIntentAdvisory.mock.calls[0][1]);
+    expect(written.status).toBe('errored');
+    expect(mockRecordObservedUsageLimit).not.toHaveBeenCalled();
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries once after a usage-limited first attempt and returns the retried (clean) result', async () => {
+    mockListStagedIntentsByGroup.mockReturnValue([makeRow()]);
+    mockGetTaskCache.mockReturnValue({
+      raw_json: JSON.stringify({ type: '💻 Code' }),
+    });
+    mockSpawn
+      .mockImplementationOnce(() =>
+        fakeClassifyProcess({
+          stdout: JSON.stringify({
+            result: 'limit hit',
+            is_error: true,
+            api_error_status: 429,
+          }),
+        }),
+      )
+      .mockImplementationOnce(() =>
+        fakeClassifyProcess({
+          stdout: cliJsonWrap({
+            status: 'clean',
+            confidence: 0,
+            findings: [],
+          }),
+        }),
+      );
+
+    vi.useFakeTimers();
+    try {
+      const promise = classifyReadyProposal('group-1');
+      await vi.advanceTimersByTimeAsync(10_000);
+      await promise;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+    const written = JSON.parse(mockSetStagedIntentAdvisory.mock.calls[0][1]);
+    expect(written.status).toBe('clean');
+    expect(mockRecordObservedUsageLimit).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry a second consecutive usage_limited result', async () => {
+    mockListStagedIntentsByGroup.mockReturnValue([makeRow()]);
+    mockGetTaskCache.mockReturnValue({
+      raw_json: JSON.stringify({ type: '💻 Code' }),
+    });
+    mockSpawn.mockImplementation(() =>
+      fakeClassifyProcess({
+        stdout: JSON.stringify({
+          result: 'limit hit',
+          is_error: true,
+          api_error_status: 429,
+        }),
+      }),
+    );
+
+    vi.useFakeTimers();
+    try {
+      const promise = classifyReadyProposal('group-1');
+      await vi.advanceTimersByTimeAsync(10_000);
+      await promise;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // Exactly one retry — a second usage_limited result is not retried again.
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+    const written = JSON.parse(mockSetStagedIntentAdvisory.mock.calls[0][1]);
+    expect(written.status).toBe('usage_limited');
+    expect(mockRecordObservedUsageLimit).toHaveBeenCalledTimes(2);
   });
 });
 
