@@ -102,6 +102,7 @@ describe('classifyStalledPR — pre_review_interrupted', () => {
       null,
       Infinity,
       false,
+      false, // isAwaitingOperatorDecision
       true, // isPreReviewPipelineInFlight
     );
 
@@ -123,6 +124,7 @@ describe('classifyStalledPR — pre_review_interrupted', () => {
       null,
       Infinity,
       false,
+      false, // isAwaitingOperatorDecision
       false, // isPreReviewPipelineInFlight — false after a restart, Set is empty
     );
 
