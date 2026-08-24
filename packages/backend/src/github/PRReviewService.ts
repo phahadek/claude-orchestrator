@@ -141,8 +141,7 @@ export interface ReviewDimension {
 }
 
 /** Name of the dimension the migration-renumber pre-check overrides. Must match the JSON schema block below verbatim. */
-const FILES_PATHS_DIMENSION_NAME =
-  'Changed files vs Files/paths affected list';
+const FILES_PATHS_DIMENSION_NAME = 'Changed files vs Files/paths affected list';
 
 function isMigrationPath(path: string): boolean {
   return /(^|\/)(db\/)?migrations?\//i.test(path);
