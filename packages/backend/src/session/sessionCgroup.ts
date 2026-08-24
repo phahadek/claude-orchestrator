@@ -534,6 +534,139 @@ export function reapOrphanedMainCgroupProcesses(
   return reaped;
 }
 
+function listTestRunDirNames(): string[] {
+  if (!testsCgroupPath) return [];
+  try {
+    return fs
+      .readdirSync(testsCgroupPath, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+}
+
+function listTestRunCgroupPids(runId: string): number[] {
+  if (!testsCgroupPath) return [];
+  try {
+    return fs
+      .readFileSync(path.join(testsCgroupPath, runId, 'cgroup.procs'), 'utf8')
+      .split('\n')
+      .map((l) => parseInt(l.trim(), 10))
+      .filter((n) => !Number.isNaN(n));
+  } catch {
+    return [];
+  }
+}
+
+export interface TestsCgroupOrphanReapDeps {
+  listTestRunDirs: () => string[];
+  listRunCgroupPids: (runId: string) => number[];
+  readPpid: (pid: number) => number | null;
+  kill: (pid: number) => void;
+  ownPid: number;
+}
+
+/**
+ * tests/-scoped counterpart to reapOrphanedMainCgroupProcesses: a temp
+ * postgres cluster (or any other test-lane subprocess) spawned under
+ * tests/<runId>/ whose owning pytest/test-request worker dies before
+ * teardown runs re-parents to init but is invisible to the main/ sweep,
+ * which only ever scans main/. Same ppid=1 safety signal, plus one more
+ * check the main/ sweep doesn't need: a cluster legitimately outlives
+ * individual test files within one still-running session, so a leaf is
+ * only reaped once `isRunReapable` confirms its owning session (if any) has
+ * already gone terminal — deliberately caller-supplied rather than defaulted
+ * here, so this module stays free of any DB dependency (see
+ * reapTestsCgroupOrphans below for why).
+ *
+ * A pid that is not re-parented (ppid still resolves and isn't 1) is left
+ * alone — it may be a legitimate subprocess still attached to a live
+ * parent within the same run.
+ */
+export function reapOrphanedTestsCgroupProcesses(
+  isRunReapable: (runId: string) => boolean,
+  deps: Partial<TestsCgroupOrphanReapDeps> = {},
+): number {
+  if (!testsCgroupPath) return 0;
+  const listRunDirs = deps.listTestRunDirs ?? listTestRunDirNames;
+  const listRunPids = deps.listRunCgroupPids ?? listTestRunCgroupPids;
+  const getPpid = deps.readPpid ?? readPpid;
+  const kill = deps.kill ?? ((pid: number) => process.kill(pid, 'SIGKILL'));
+  const ownPid = deps.ownPid ?? process.pid;
+
+  let reaped = 0;
+  for (const runId of listRunDirs()) {
+    for (const pid of listRunPids(runId)) {
+      if (pid === ownPid) continue;
+      if (getPpid(pid) !== 1) continue;
+      if (!isRunReapable(runId)) continue;
+      try {
+        kill(pid);
+        reaped++;
+        logger.warn(
+          `[sessionCgroup] reaped orphaned process ${pid} found sitting in tests/${runId}/ cgroup with ppid=1`,
+        );
+      } catch (err) {
+        logger.warn(
+          `[sessionCgroup] failed to reap orphaned tests/ process ${pid}: ${(err as Error).message}`,
+        );
+      }
+    }
+  }
+
+  return reaped;
+}
+
+/**
+ * Scheduler-facing entry point for the tests/ cgroup sweep: supplies the
+ * real DB-backed ownership check to reapOrphanedTestsCgroupProcesses (a run
+ * with no DB row, no session_id — e.g. a base-health-probe or pr-pipeline
+ * run with no originating session — or whose session row has already gone
+ * terminal, are all reapable; a run whose session is still non-terminal is
+ * left alone) and records an audit event naming the reaped pid count,
+ * mirroring sessionLivenessReconciler's orphan_processes_reaped event, only
+ * when at least one process was actually reaped.
+ *
+ * db/queries and audit/AuditLog are imported dynamically here rather than
+ * at module top level: a top-level import of either would transitively load
+ * db/db.ts, which opens the process-wide sqlite handle as an import-time
+ * side effect. This module is imported by spawning code (CliSessionRunner
+ * et al.) well before any caller has had a chance to validate DB_PATH — a
+ * top-level import here would make merely importing sessionCgroup.ts (e.g.
+ * to spawn a session) eagerly open that handle, which is exactly what
+ * dbIsolation.test.ts's CliSessionRunner spawn-env test guards against.
+ */
+export async function reapTestsCgroupOrphans(): Promise<number> {
+  const {
+    getTestRequestRunById,
+    getSession,
+    TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED,
+  } = await import('../db/queries');
+
+  const reaped = reapOrphanedTestsCgroupProcesses((runId) => {
+    const run = getTestRequestRunById(runId);
+    if (!run || !run.session_id) return true;
+    const session = getSession(run.session_id);
+    if (!session) return true;
+    return TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED.has(session.status);
+  });
+
+  if (reaped > 0) {
+    const { recordEvent } = await import('../audit/AuditLog');
+    recordEvent({
+      event_type: 'orphan_processes_reaped',
+      actor_type: 'system',
+      payload: { reaped_count: reaped, reason: 'tests_cgroup_orphan' },
+    });
+    logger.info(
+      `[sessionCgroup] reaped ${reaped} orphaned process(es) from tests/ cgroup`,
+    );
+  }
+
+  return reaped;
+}
+
 /** Test-only accessor/reset for the module's cached delegated-path state. */
 export function _resetForTesting(): void {
   sessionsCgroupPath = null;
