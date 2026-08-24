@@ -1136,6 +1136,8 @@ interface StructuredTestCase {
   durationMs: number;
   failureMessage?: string;
   failureTraceExcerpt?: string;
+  /** Marker/tag metadata (e.g. pytest's @pytest.mark.slow), when the JUnit XML carried a `markers`-named `<property>`. */
+  markers?: string[];
 }
 
 interface StructuredTestSuite {
@@ -1178,6 +1180,8 @@ export interface TestRunResultRow {
   oom_killed: number;
   failure_message: string | null;
   failure_trace_excerpt: string | null;
+  /** JSON array of marker/tag strings (e.g. '["slow"]'), or null when the JUnit XML carried none. */
+  markers: string | null;
   created_at: number;
 }
 
@@ -1188,6 +1192,7 @@ export interface NewTestRunResultRow {
   duration_ms: number;
   failureMessage?: string;
   failureTraceExcerpt?: string;
+  markers?: string[];
 }
 
 // ─── test_run_summaries ─────────────────────────────────────────────────────
@@ -1249,6 +1254,8 @@ export interface TestPerfBaselineRow {
   is_regressed: number;
   recent_outcomes: string;
   recent_durations: string;
+  /** JSON array of marker/tag strings from the most recent sample that carried any, or null. */
+  markers: string | null;
   updated_at: number;
 }
 

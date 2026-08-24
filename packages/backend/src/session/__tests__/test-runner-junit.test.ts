@@ -109,6 +109,27 @@ describe('parseJUnitXml', () => {
       failureMessage: 'TypeError: x is not a function',
     });
   });
+
+  it('extracts marker metadata from a testcase\'s <properties> child', () => {
+    const report = `<?xml version="1.0" encoding="utf-8"?>
+<testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="1.5">
+<testcase classname="tests.test_slow" name="test_slow_thing" time="1.500">
+<properties>
+<property name="markers" value="slow"/>
+</properties>
+</testcase>
+</testsuite>`;
+    const suites = parseJUnitXml(report);
+    expect(suites[0].tests).toHaveLength(1);
+    expect(suites[0].tests[0].markers).toEqual(['slow']);
+  });
+
+  it('parses a testcase with no <properties> child unchanged (backward compatible)', () => {
+    const suites = parseJUnitXml(PYTEST_REPORT);
+    for (const test of suites[0].tests) {
+      expect(test.markers).toBeUndefined();
+    }
+  });
 });
 
 describe('collectStructuredTestResult', () => {

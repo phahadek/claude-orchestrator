@@ -8761,12 +8761,13 @@ export function insertTestRunResults(
     oom_killed: number;
     failure_message: string | null;
     failure_trace_excerpt: string | null;
+    markers: string | null;
     created_at: number;
   }>(`
     INSERT INTO test_run_results
-      (test_request_run_id, project_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, failure_message, failure_trace_excerpt, created_at)
+      (test_request_run_id, project_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, failure_message, failure_trace_excerpt, markers, created_at)
     VALUES
-      (@test_request_run_id, @project_id, @test_id, @name, @outcome, @duration_ms, @concurrent_run_count, @oom_killed, @failure_message, @failure_trace_excerpt, @created_at)
+      (@test_request_run_id, @project_id, @test_id, @name, @outcome, @duration_ms, @concurrent_run_count, @oom_killed, @failure_message, @failure_trace_excerpt, @markers, @created_at)
   `);
   const stmt = _stmtInsertTestRunResult;
   const insertAll = db.transaction((items: NewTestRunResultRow[]) => {
@@ -8783,6 +8784,7 @@ export function insertTestRunResults(
         oom_killed: oomKilled ? 1 : 0,
         failure_message: item.failureMessage ?? null,
         failure_trace_excerpt: item.failureTraceExcerpt ?? null,
+        markers: item.markers && item.markers.length > 0 ? JSON.stringify(item.markers) : null,
         created_at: now,
       });
     }
@@ -8937,6 +8939,7 @@ export function recordTestPerfDigestSample(
   concurrentRunCount: number | null,
   oomKilled: boolean,
   sequencedAt: number,
+  markers?: string[],
 ): void {
   if (concurrentRunCount !== 0 || oomKilled) return;
 
@@ -8972,17 +8975,19 @@ export function recordTestPerfDigestSample(
     last_duration_ms: number;
     recent_outcomes: string;
     recent_durations: string;
+    markers: string | null;
     updated_at: number;
   }>(`
     INSERT INTO test_perf_baselines
-      (test_id, project_id, name, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, recent_outcomes, recent_durations, updated_at)
+      (test_id, project_id, name, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, recent_outcomes, recent_durations, markers, updated_at)
     VALUES
-      (@test_id, @project_id, @name, 0, 0, 0, @last_duration_ms, 0, @recent_outcomes, @recent_durations, @updated_at)
+      (@test_id, @project_id, @name, 0, 0, 0, @last_duration_ms, 0, @recent_outcomes, @recent_durations, @markers, @updated_at)
     ON CONFLICT(test_id) DO UPDATE SET
       project_id = excluded.project_id,
       name = excluded.name,
       recent_outcomes = excluded.recent_outcomes,
       recent_durations = excluded.recent_durations,
+      markers = COALESCE(excluded.markers, test_perf_baselines.markers),
       updated_at = excluded.updated_at
   `);
   _stmtUpsertTestPerfDigest.run({
@@ -8992,6 +8997,7 @@ export function recordTestPerfDigestSample(
     last_duration_ms: durationMs,
     recent_outcomes: JSON.stringify(outcomes),
     recent_durations: JSON.stringify(durations),
+    markers: markers && markers.length > 0 ? JSON.stringify(markers) : null,
     updated_at: sequencedAt,
   });
 }
@@ -9061,6 +9067,7 @@ export function ingestTestRunResultsTx(
         concurrentRunCount,
         oomKilled,
         baseSequence + index,
+        t.markers,
       );
     });
   });

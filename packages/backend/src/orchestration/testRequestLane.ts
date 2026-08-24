@@ -671,6 +671,7 @@ export function ingestTestRunResults(run: TestRequestRunRow): void {
       duration_ms: test.durationMs,
       failureMessage: test.failureMessage,
       failureTraceExcerpt: test.failureTraceExcerpt,
+      markers: test.markers,
     })),
   );
   // An incomplete merge (missing an expected report file) must still write
