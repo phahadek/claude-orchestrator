@@ -37,6 +37,7 @@ import {
 import { loadOpsContext } from '../opsLoad.js';
 import { getEntry } from '../opsJournal.js';
 import { createUnit } from '../../architecture/ArchUnitStore.js';
+import { GroomTaskSourceUnsupportedError } from '../../planning/errors.js';
 
 const TARGET_BOARD = 'target-board-id';
 const PROJECT = 'proj-1';
@@ -317,6 +318,19 @@ describe('loadOpsContext — classification', () => {
     expect(result.contextPages).toHaveLength(1);
     expect(result.contextPages[0].id).toBe(CONTEXT_PAGE_ID);
     expect(result.contextPages[0].title).toBe('Project Context');
+  });
+});
+
+describe('loadOpsContext — non-Notion task source', () => {
+  it('refuses with GroomTaskSourceUnsupportedError instead of reaching Notion for a YAML-backed project', async () => {
+    updateProject(PROJECT, { task_source: 'yaml' });
+    const fetchSpy = global.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchSpy.mockClear();
+
+    await expect(loadOpsContext(MILESTONE)).rejects.toThrow(
+      GroomTaskSourceUnsupportedError,
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
 

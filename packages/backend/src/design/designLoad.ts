@@ -29,6 +29,7 @@ import { NotionClient } from '../notion/NotionClient';
 import { getMilestoneById } from '../db/queries';
 import { formatTaskId, normalizeBoardId } from '../tasks/taskId';
 import { ProjectService } from '../projects/ProjectService';
+import { GroomTaskSourceUnsupportedError } from '../planning/errors';
 import { selectUnitsFromStore } from '../architecture/selectiveInjection';
 import { queryUnits } from '../architecture/ArchUnitStore';
 
@@ -283,14 +284,6 @@ export async function loadDesignContext(
   taskId: string,
   opts: LoadDesignContextOptions = {},
 ): Promise<DesignLoadResult> {
-  const repoRoot = opts.repoRoot ?? config.projectDir;
-  // `opts.project`, when present, is the project *registry* id — used below
-  // only to validate against the milestone's registry id. The manifest
-  // config-dir key is a separate id-space (the repo checkout's basename);
-  // mirror groomLoad and never resolve it from the registry id.
-  const manifest = opts.manifest ?? loadManifest(repoRoot);
-  const notion = opts.notion ?? new NotionClient();
-
   // We need the target task's board to locate it among the board rows (for
   // status/type/url) — resolved via the caller-supplied milestone's board.
   const milestone = getMilestoneById(milestoneId);
@@ -301,6 +294,25 @@ export async function loadDesignContext(
       `design-load: milestone ${milestoneId} belongs to project ${milestone.project_id}, not ${opts.project}`,
     );
   }
+  const projectRowForSourceCheck = ProjectService.getById(milestone.project_id);
+  if (
+    projectRowForSourceCheck &&
+    projectRowForSourceCheck.taskSource !== 'notion'
+  ) {
+    throw new GroomTaskSourceUnsupportedError(
+      milestone.project_id,
+      projectRowForSourceCheck.taskSource,
+    );
+  }
+
+  const repoRoot = opts.repoRoot ?? config.projectDir;
+  // `opts.project`, when present, is the project *registry* id — used below
+  // only to validate against the milestone's registry id. The manifest
+  // config-dir key is a separate id-space (the repo checkout's basename);
+  // mirror groomLoad and never resolve it from the registry id.
+  const manifest = opts.manifest ?? loadManifest(repoRoot);
+  const notion = opts.notion ?? new NotionClient();
+
   const board = milestone.source_id;
   if (!board)
     throw new Error(

@@ -57,6 +57,8 @@ import {
   resolveTaskRegions,
   type CodeWorklistOptions,
 } from '../groom/codeWorklist';
+import { ProjectService } from '../projects/ProjectService';
+import { GroomTaskSourceUnsupportedError } from '../planning/errors';
 
 // ─── Notion status vocabulary (matches the values NotionClient reads/writes) ──
 const STATUS = {
@@ -311,6 +313,16 @@ export async function loadOpsContext(
   if (opts.project && opts.project !== milestone.project_id) {
     throw new Error(
       `ops-load: milestone ${milestoneId} belongs to project ${milestone.project_id}, not ${opts.project}`,
+    );
+  }
+  const projectRowForSourceCheck = ProjectService.getById(milestone.project_id);
+  if (
+    projectRowForSourceCheck &&
+    projectRowForSourceCheck.taskSource !== 'notion'
+  ) {
+    throw new GroomTaskSourceUnsupportedError(
+      milestone.project_id,
+      projectRowForSourceCheck.taskSource,
     );
   }
   const project = milestone.project_id;
