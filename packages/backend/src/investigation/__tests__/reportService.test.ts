@@ -13,7 +13,11 @@
  * raises rather than persisting/matching an unresolved value.
  */
 
-import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import crypto from 'crypto';
 
 vi.mock('../../db/db.js', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
@@ -73,11 +77,25 @@ beforeAll(() => {
   });
 });
 
+let tmpParent: string;
+let prevXdgDataHome: string | undefined;
+
 beforeEach(() => {
   db.prepare('DELETE FROM investigation_report_dispatch').run();
   db.prepare('DELETE FROM investigation_report').run();
   db.prepare('DELETE FROM sessions').run();
   db.prepare('DELETE FROM audit_log').run();
+  tmpParent = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'report-images-service-test-'),
+  );
+  prevXdgDataHome = process.env.XDG_DATA_HOME;
+  process.env.XDG_DATA_HOME = tmpParent;
+});
+
+afterEach(() => {
+  if (prevXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
+  else process.env.XDG_DATA_HOME = prevXdgDataHome;
+  fs.rmSync(tmpParent, { recursive: true, force: true });
 });
 
 describe('createReport', () => {
@@ -326,5 +344,80 @@ describe('listReports / getReportWithDerived', () => {
 
     const result = listReports({ milestone: m2Id });
     expect(result.items.map((r) => r.id)).toEqual([report.id]);
+  });
+});
+
+describe('screenshot image handling', () => {
+  function pngDataUrl(bytes: Buffer): string {
+    return `data:image/png;base64,${bytes.toString('base64')}`;
+  }
+
+  it('createReport stores a multi-MB base64 image and round-trips identical bytes', () => {
+    const bytes = crypto.randomBytes(3 * 1024 * 1024);
+    const report = createReport({
+      projectId: 'proj-1',
+      title: 't',
+      symptomText: 's',
+      image: pngDataUrl(bytes),
+    });
+    expect(report.image_path).toBeTruthy();
+    expect(
+      fs.readFileSync(report.image_path as string).equals(bytes),
+    ).toBe(true);
+  });
+
+  it('createReport rejects a decoded image over the 8MB cap, naming the cap', () => {
+    const bytes = crypto.randomBytes(8.5 * 1024 * 1024);
+    expect(() =>
+      createReport({
+        projectId: 'proj-1',
+        title: 't',
+        symptomText: 's',
+        image: pngDataUrl(bytes),
+      }),
+    ).toThrow(/8 MB/);
+  });
+
+  it('updateDraftReport replaces a draft report image', () => {
+    const report = createReport({
+      projectId: 'proj-1',
+      title: 't',
+      symptomText: 's',
+      image: pngDataUrl(Buffer.from('original')),
+    });
+    const newBytes = crypto.randomBytes(1024);
+    const updated = updateDraftReport(report.id, {
+      image: pngDataUrl(newBytes),
+    });
+    expect(
+      fs.readFileSync(updated.image_path as string).equals(newBytes),
+    ).toBe(true);
+  });
+
+  it('updateDraftReport clears a draft report image', () => {
+    const report = createReport({
+      projectId: 'proj-1',
+      title: 't',
+      symptomText: 's',
+      image: pngDataUrl(Buffer.from('original')),
+    });
+    const originalPath = report.image_path as string;
+    expect(fs.existsSync(originalPath)).toBe(true);
+
+    const updated = updateDraftReport(report.id, { image: null });
+    expect(updated.image_path).toBeNull();
+    expect(fs.existsSync(originalPath)).toBe(false);
+  });
+
+  it('updateDraftReport rejects a decoded image over the 8MB cap, naming the cap', () => {
+    const report = createReport({
+      projectId: 'proj-1',
+      title: 't',
+      symptomText: 's',
+    });
+    const bytes = crypto.randomBytes(8.5 * 1024 * 1024);
+    expect(() =>
+      updateDraftReport(report.id, { image: pngDataUrl(bytes) }),
+    ).toThrow(/8 MB/);
   });
 });

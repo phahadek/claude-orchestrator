@@ -296,6 +296,39 @@ export function writeReportImage(
       `investigation_report: failed to read back report ${reportId} after image update`,
     );
   }
+  if (row.image_path && row.image_path !== filePath) {
+    fs.rmSync(row.image_path, { force: true });
+  }
+  return updated;
+}
+
+/**
+ * Clears a report's screenshot attachment — removes the row's image_path
+ * (back to null) and, if a file was actually on disk, removes it too. A
+ * no-op file removal (already-clear report) is not an error.
+ */
+export function clearReportImage(
+  reportId: string,
+  updatedAt: string,
+): InvestigationReportRow {
+  const row = getReport(reportId);
+  if (!row) {
+    throw new Error(
+      `investigation_report: no report ${reportId} to clear an image from`,
+    );
+  }
+  db.prepare(
+    `UPDATE investigation_report SET image_path = NULL, updated_at = ? WHERE id = ?`,
+  ).run(updatedAt, reportId);
+  const updated = getReport(reportId);
+  if (!updated) {
+    throw new Error(
+      `investigation_report: failed to read back report ${reportId} after image clear`,
+    );
+  }
+  if (row.image_path) {
+    fs.rmSync(row.image_path, { force: true });
+  }
   return updated;
 }
 

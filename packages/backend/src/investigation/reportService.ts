@@ -5,6 +5,8 @@ import {
   countReportsFiltered,
   updateReportFields,
   updateReportState,
+  writeReportImage,
+  clearReportImage,
   isInFlight,
   isResolveEligible,
   blocksMilestoneConvergence,
@@ -29,6 +31,42 @@ import {
 
 const DEFAULT_LIST_LIMIT = 20;
 const MAX_LIST_LIMIT = 100;
+
+/** Decoded-image size cap — enforced here, independent of the request body's JSON size limit. */
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+
+const IMAGE_DATA_URL_RE =
+  /^data:(image\/(?:png|jpeg|jpg|gif|webp));base64,(.+)$/i;
+
+const IMAGE_EXTENSION_BY_MIME_TYPE: Record<string, string> = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/jpg': '.jpg',
+  'image/gif': '.gif',
+  'image/webp': '.webp',
+};
+
+/**
+ * Decodes a screenshot field into image bytes + a file extension. Accepts
+ * either a bare base64 string (assumed image/png, the common screenshot
+ * case) or a `data:<mime>;base64,<data>` URL, the shape browsers produce
+ * from canvas.toDataURL()/FileReader — carrying its own mime type alongside
+ * the bytes rather than requiring a second request field. Throws naming the
+ * 8 MB cap explicitly when the decoded payload exceeds it, so the caller's
+ * error message is never a generic body-parser rejection.
+ */
+function decodeImageField(raw: string): { bytes: Buffer; extension: string } {
+  const match = IMAGE_DATA_URL_RE.exec(raw);
+  const base64Data = match ? match[2] : raw;
+  const mimeType = match ? match[1].toLowerCase() : 'image/png';
+  const bytes = Buffer.from(base64Data, 'base64');
+  if (bytes.length > MAX_IMAGE_BYTES) {
+    throw new Error(
+      `image exceeds the 8 MB size cap (decoded image is ${bytes.length} bytes)`,
+    );
+  }
+  return { bytes, extension: IMAGE_EXTENSION_BY_MIME_TYPE[mimeType] ?? '.png' };
+}
 
 export interface InvestigationReportWithDerived extends InvestigationReportRow {
   inFlight: boolean;
@@ -77,6 +115,8 @@ export interface CreateReportInput {
   source?: 'operator' | 'session';
   originSessionId?: string;
   originTaskId?: string;
+  /** Base64 screenshot — bare base64 (assumed PNG) or a data:<mime>;base64,<data> URL. Decoded and size-capped at 8 MB. */
+  image?: string;
 }
 
 /**
@@ -93,7 +133,10 @@ export function createReport(
   if (!input.title || !input.title.trim()) {
     throw new Error('title is required');
   }
-  const row = insertReport({
+  const decodedImage =
+    input.image !== undefined ? decodeImageField(input.image) : undefined;
+  const now = new Date().toISOString();
+  let row = insertReport({
     projectId: input.projectId,
     milestoneId: resolveMilestoneIdForWrite(
       input.projectId,
@@ -105,8 +148,11 @@ export function createReport(
     source: input.source,
     originSessionId: input.originSessionId,
     originTaskId: input.originTaskId,
-    createdAt: new Date().toISOString(),
+    createdAt: now,
   });
+  if (decodedImage) {
+    row = writeReportImage(row.id, decodedImage.bytes, decodedImage.extension, now);
+  }
   return withDerived(row);
 }
 
@@ -115,6 +161,8 @@ export interface UpdateDraftReportInput {
   symptomText?: string;
   evidenceText?: string | null;
   milestoneId?: string;
+  /** Base64 screenshot to replace the current one, or null to clear it. Undefined leaves it untouched. */
+  image?: string | null;
 }
 
 /** Updates a report's content fields — only while it is still a draft. */
@@ -131,14 +179,23 @@ export function updateDraftReport(
       `investigation report ${id} is ${existing.state}, not draft — cannot update`,
     );
   }
-  const resolvedFields: UpdateDraftReportInput = { ...fields };
+  const decodedImage =
+    typeof fields.image === 'string' ? decodeImageField(fields.image) : undefined;
+  const { image: _image, ...textFields } = fields;
+  const resolvedFields: UpdateDraftReportInput = { ...textFields };
   if (fields.milestoneId !== undefined) {
     resolvedFields.milestoneId = resolveMilestoneIdForWrite(
       existing.project_id,
       fields.milestoneId,
     );
   }
-  const row = updateReportFields(id, resolvedFields, new Date().toISOString());
+  const now = new Date().toISOString();
+  let row = updateReportFields(id, resolvedFields, now);
+  if (decodedImage) {
+    row = writeReportImage(id, decodedImage.bytes, decodedImage.extension, now);
+  } else if (fields.image === null) {
+    row = clearReportImage(id, now);
+  }
   return withDerived(row);
 }
 
