@@ -5757,7 +5757,11 @@ async function resolveTestRequestExecutionInputs(intent: StagedIntent): Promise<
  * forces the full `test:` command since a scoped run can't safely skip
  * changes to shared config/infra files; no match expands `{{changed_files}}`
  * (same templating autofix commands use) in each `test_scoped` command
- * against that diff.
+ * against that diff. Falls back to the full `test:` commands if that
+ * expansion leaves nothing to run (e.g. a deletion-only diff whose paths
+ * getChangedFiles filters out as no-longer-existing) — an empty commands
+ * array reads to runTestCommands as a no-op pass, which would turn a
+ * genuine test.request into a false-green signal instead of running tests.
  */
 async function resolveTestCommandsForDiff(
   config: OrchestratorConfig,
@@ -5769,9 +5773,10 @@ async function resolveTestCommandsForDiff(
   if (matchesPathDiff(config.test_full_run_paths, diffPaths)) {
     return config.test;
   }
-  return config.test_scoped
+  const scoped = config.test_scoped
     .map((cmd) => expandAutofixCommand(cmd, diffPaths))
     .filter((cmd): cmd is string => cmd !== null);
+  return scoped.length > 0 ? scoped : config.test;
 }
 
 /**

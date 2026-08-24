@@ -187,4 +187,29 @@ describe('resolveTestRequestExecutionInputs — test_scoped / test_full_run_path
       }),
     );
   });
+
+  it('falls back to the full test: commands when the scoped expansion leaves nothing to run (e.g. a deletion-only diff)', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({
+      test: ['npm run test -w packages/backend'],
+      test_scoped: ['npm run test:scoped -- {{changed_files}}'],
+      test_full_run_paths: ['package-lock.json'],
+      test_timeout_sec: 60,
+      test_max_rss_mb: 0,
+      test_fail_fast: true,
+    });
+    // getChangedFiles already filters out paths no longer present in the
+    // worktree (e.g. a deletion-only diff) — simulate that by resolving to [].
+    mockGetChangedFiles.mockResolvedValue([]);
+    setUpSession('session-empty-diff');
+    const intent = stageTestRequest('session-empty-diff');
+
+    await routeStageTimeBlock(intent, undefined);
+
+    expect(mockGetChangedFiles).toHaveBeenCalledWith('/tmp/wt', 'dev');
+    expect(mockAdmitTestRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commands: ['npm run test -w packages/backend'],
+      }),
+    );
+  });
 });
