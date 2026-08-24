@@ -28,7 +28,13 @@ vi.mock('../tasks/TaskWriteCommands.js', () => ({
   getCachedType: vi.fn().mockReturnValue('💻 Code'),
 }));
 
-import { PRReviewService, FetchRetryExhaustedError } from './PRReviewService';
+import {
+  PRReviewService,
+  FetchRetryExhaustedError,
+  evaluateMigrationRenumberTolerance,
+  extractListedMigrationPaths,
+  overrideFilesPathsDimension,
+} from './PRReviewService';
 import {
   getPRByNumber,
   setPRReviewResult,
@@ -119,6 +125,7 @@ function makeMockGitHub(): GitHubClient {
       .fn()
       .mockResolvedValue({ mergeable: true, mergeableState: 'clean' }),
     markPRReady: vi.fn().mockResolvedValue(undefined),
+    listFilePathsAtRef: vi.fn().mockResolvedValue([]),
   } as unknown as GitHubClient;
 }
 
@@ -3528,5 +3535,335 @@ describe('PRReviewService — taskUrl strips notion: prefix', () => {
     // backend (github, notion, etc.).
     expect(capturedTaskUrl).toBe('https://notion.so/ctx');
     expect(capturedTaskId).toBe('notion:task-abc123');
+  });
+});
+
+// ── Migration-renumber tolerance — deterministic pre-check ──────────────────
+
+describe('evaluateMigrationRenumberTolerance()', () => {
+  const listed = ['migrations/postgres/0099_daemon_roster_canary.sql'];
+
+  it('tolerates a renumber to a number free on the base branch', () => {
+    const evaluation = evaluateMigrationRenumberTolerance(
+      ['migrations/postgres/0108_daemon_roster_canary.sql'],
+      listed,
+      ['migrations/postgres/0100_unrelated_thing.sql'],
+    );
+    expect(evaluation.collisions).toEqual([]);
+    expect(evaluation.toleratedRenumbers).toEqual([
+      {
+        diffPath: 'migrations/postgres/0108_daemon_roster_canary.sql',
+        listedPath: 'migrations/postgres/0099_daemon_roster_canary.sql',
+        number: '0108',
+      },
+    ]);
+  });
+
+  it('flags a collision when the new number is already used on the base branch', () => {
+    const evaluation = evaluateMigrationRenumberTolerance(
+      ['migrations/postgres/0108_daemon_roster_canary.sql'],
+      listed,
+      ['migrations/postgres/0108_something_else.sql'],
+    );
+    expect(evaluation.toleratedRenumbers).toEqual([]);
+    expect(evaluation.collisions).toEqual([
+      {
+        diffPath: 'migrations/postgres/0108_daemon_roster_canary.sql',
+        collidesWithPath: 'migrations/postgres/0108_something_else.sql',
+        number: '0108',
+      },
+    ]);
+  });
+
+  it('does not treat a literal match as a deviation', () => {
+    const evaluation = evaluateMigrationRenumberTolerance(
+      ['migrations/postgres/0099_daemon_roster_canary.sql'],
+      listed,
+      [],
+    );
+    expect(evaluation.toleratedRenumbers).toEqual([]);
+    expect(evaluation.collisions).toEqual([]);
+  });
+
+  it('does not tolerate an unrelated migration file with no matching suffix', () => {
+    const evaluation = evaluateMigrationRenumberTolerance(
+      ['migrations/postgres/0110_totally_unrelated.sql'],
+      listed,
+      [],
+    );
+    expect(evaluation.toleratedRenumbers).toEqual([]);
+    expect(evaluation.collisions).toEqual([]);
+  });
+
+  it('is a pure function — identical inputs always produce identical output', () => {
+    const run = () =>
+      evaluateMigrationRenumberTolerance(
+        ['migrations/postgres/0112_daemon_roster_canary.sql'],
+        listed,
+        ['migrations/postgres/0100_other.sql'],
+      );
+    expect(run()).toEqual(run());
+  });
+});
+
+describe('extractListedMigrationPaths()', () => {
+  it('extracts a migration path from the Files / paths affected section', () => {
+    const body =
+      '## Summary\nDo the thing\n\n' +
+      '## Files / paths affected\n' +
+      '- migrations/postgres/0099_daemon_roster_canary.sql *(new)*\n' +
+      '- packages/backend/src/daemon/roster.ts\n';
+    expect(extractListedMigrationPaths(body)).toEqual([
+      'migrations/postgres/0099_daemon_roster_canary.sql',
+    ]);
+  });
+
+  it('returns an empty array when no migration path is listed', () => {
+    const body =
+      '## Files / paths affected\n- packages/backend/src/daemon/roster.ts\n';
+    expect(extractListedMigrationPaths(body)).toEqual([]);
+  });
+});
+
+describe('overrideFilesPathsDimension()', () => {
+  const baseResult = {
+    prNumber: 1,
+    repo: 'owner/repo',
+    verdict: 'needs_changes' as const,
+    summary: 's',
+    reviewedAt: '2024-01-01T00:00:00Z',
+    dimensions: [
+      {
+        name: 'Title and description vs task Summary',
+        passed: true,
+        notes: 'ok',
+      },
+      { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
+      { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
+      {
+        name: 'Changed files vs Files/paths affected list',
+        passed: false,
+        notes: 'migration file numbered differently than the task body',
+      },
+    ],
+  };
+
+  it('flips the dimension to passed and recomputes verdict to approved', () => {
+    const result = overrideFilesPathsDimension(
+      baseResult,
+      true,
+      'Deterministic migration-renumber check: tolerated.',
+    );
+    const dim = result.dimensions!.find(
+      (d) => d.name === 'Changed files vs Files/paths affected list',
+    )!;
+    expect(dim.passed).toBe(true);
+    expect(dim.notes).toMatch(/Deterministic migration-renumber check/);
+    expect(result.verdict).toBe('approved');
+  });
+
+  it('forces the dimension to failed and recomputes verdict to needs_changes, naming the collision', () => {
+    const allPassed = {
+      ...baseResult,
+      dimensions: baseResult.dimensions.map((d) =>
+        d.name === 'Changed files vs Files/paths affected list'
+          ? { ...d, passed: true }
+          : d,
+      ),
+    };
+    const result = overrideFilesPathsDimension(
+      allPassed,
+      false,
+      'Deterministic migration-renumber check: 0108 collides with 0108_something_else.sql.',
+    );
+    const dim = result.dimensions!.find(
+      (d) => d.name === 'Changed files vs Files/paths affected list',
+    )!;
+    expect(dim.passed).toBe(false);
+    expect(dim.notes).toMatch(/collides/);
+    expect(result.verdict).toBe('needs_changes');
+  });
+});
+
+describe('PRReviewService — migration-renumber override wired into reviewPR()', () => {
+  const taskBodyWithMigration =
+    '## Summary\nAdd the daemon roster canary migration\n\n' +
+    '## Files / paths affected\n' +
+    '- migrations/postgres/0099_daemon_roster_canary.sql *(new)*\n';
+
+  const dimsFailingFilesOnly = [
+    {
+      name: 'Title and description vs task Summary',
+      passed: true,
+      notes: 'ok',
+    },
+    { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
+    { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
+    {
+      name: 'Changed files vs Files/paths affected list',
+      passed: false,
+      notes: 'migration is 0108_daemon_roster_canary.sql, not 0099 as assigned',
+    },
+  ];
+
+  const dimsAllPassed = dimsFailingFilesOnly.map((d) =>
+    d.name === 'Changed files vs Files/paths affected list'
+      ? { ...d, passed: true, notes: 'renumbered, explained above' }
+      : d,
+  );
+
+  function migrationDiff(path: string): string {
+    return [
+      `diff --git a/${path} b/${path}`,
+      'new file mode 100644',
+      `--- /dev/null`,
+      `+++ b/${path}`,
+      '@@ -0,0 +1,1 @@',
+      '+select 1;',
+    ].join('\n');
+  }
+
+  async function runReview(
+    diff: string,
+    payload: Record<string, unknown>,
+    baseBranchFiles: string[],
+  ): Promise<import('./PRReviewService').PRReviewResult> {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+    const mockSM = makeMockSessionManager();
+    const github = makeMockGitHub();
+    (github.listFilePathsAtRef as ReturnType<typeof vi.fn>).mockResolvedValue(
+      baseBranchFiles,
+    );
+    const notion = makeMockNotion();
+    (notion.fetchTaskPage as ReturnType<typeof vi.fn>).mockResolvedValue(
+      taskBodyWithMigration,
+    );
+    const service = new PRReviewService(
+      github,
+      notion,
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (_a: string, _b: string, opts: { sessionId: string }) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(opts.sessionId, JSON.stringify(payload)),
+          ),
+        );
+        return opts.sessionId;
+      },
+    );
+    return service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(diff),
+    );
+  }
+
+  it('a renumbered migration to a currently-free number does not fail the dimension (#1027-shaped case)', async () => {
+    const result = await runReview(
+      migrationDiff('migrations/postgres/0108_daemon_roster_canary.sql'),
+      {
+        verdict: 'needs_changes',
+        dimensions: dimsFailingFilesOnly,
+        summary: 'LLM flagged the renumber.',
+      },
+      ['migrations/postgres/0050_unrelated.sql'],
+    );
+    const dim = result.dimensions!.find(
+      (d) => d.name === 'Changed files vs Files/paths affected list',
+    )!;
+    expect(dim.passed).toBe(true);
+    expect(result.verdict).toBe('approved');
+  });
+
+  it('an unlisted non-migration file still fails the dimension — tolerance is scoped to migrations', async () => {
+    const dims = [
+      {
+        name: 'Title and description vs task Summary',
+        passed: true,
+        notes: 'ok',
+      },
+      { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
+      { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
+      {
+        name: 'Changed files vs Files/paths affected list',
+        passed: false,
+        notes: 'touches unrelated_module.ts, not in the task spec',
+      },
+    ];
+    const result = await runReview(
+      [
+        'diff --git a/src/unrelated_module.ts b/src/unrelated_module.ts',
+        'new file mode 100644',
+        '--- /dev/null',
+        '+++ b/src/unrelated_module.ts',
+        '@@ -0,0 +1,1 @@',
+        '+export const x = 1;',
+      ].join('\n'),
+      {
+        verdict: 'needs_changes',
+        dimensions: dims,
+        summary: 'Unrelated file added.',
+      },
+      [],
+    );
+    const dim = result.dimensions!.find(
+      (d) => d.name === 'Changed files vs Files/paths affected list',
+    )!;
+    expect(dim.passed).toBe(false);
+  });
+
+  it('a migration number colliding with the base branch still fails, naming the collision', async () => {
+    const result = await runReview(
+      migrationDiff('migrations/postgres/0108_daemon_roster_canary.sql'),
+      {
+        verdict: 'approved',
+        dimensions: dimsAllPassed,
+        summary: 'LLM incorrectly approved despite the collision.',
+      },
+      ['migrations/postgres/0108_something_else.sql'],
+    );
+    const dim = result.dimensions!.find(
+      (d) => d.name === 'Changed files vs Files/paths affected list',
+    )!;
+    expect(dim.passed).toBe(false);
+    expect(dim.notes).toMatch(/0108/);
+    expect(result.verdict).toBe('needs_changes');
+  });
+
+  it('replaying #1027 (LLM passed) and #1036 (LLM failed) shaped inputs on the same free-number renumber produces the same outcome', async () => {
+    const pr1027Style = await runReview(
+      migrationDiff('migrations/postgres/0108_daemon_roster_canary.sql'),
+      {
+        verdict: 'approved',
+        dimensions: dimsAllPassed,
+        summary:
+          'All core files match the spec list, migration renumbered as explained.',
+      },
+      ['migrations/postgres/0050_unrelated.sql'],
+    );
+    const pr1036Style = await runReview(
+      migrationDiff('migrations/postgres/0112_daemon_roster_canary.sql'),
+      {
+        verdict: 'needs_changes',
+        dimensions: dimsFailingFilesOnly,
+        summary:
+          'This resubmission is byte-for-byte identical to the diff already flagged: migration is still not 0099 as assigned.',
+      },
+      ['migrations/postgres/0050_unrelated.sql'],
+    );
+    const dim1027 = pr1027Style.dimensions!.find(
+      (d) => d.name === 'Changed files vs Files/paths affected list',
+    )!;
+    const dim1036 = pr1036Style.dimensions!.find(
+      (d) => d.name === 'Changed files vs Files/paths affected list',
+    )!;
+    expect(dim1027.passed).toBe(true);
+    expect(dim1036.passed).toBe(true);
+    expect(pr1027Style.verdict).toBe('approved');
+    expect(pr1036Style.verdict).toBe('approved');
   });
 });

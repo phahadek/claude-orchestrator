@@ -140,6 +140,165 @@ export interface ReviewDimension {
   notes: string;
 }
 
+/** Name of the dimension the migration-renumber pre-check overrides. Must match the JSON schema block below verbatim. */
+const FILES_PATHS_DIMENSION_NAME = 'Changed files vs Files/paths affected list';
+
+function isMigrationPath(path: string): boolean {
+  return /(^|\/)(db\/)?migrations?\//i.test(path);
+}
+
+interface MigrationPathParts {
+  dir: string;
+  number: string;
+  suffix: string;
+}
+
+function parseMigrationParts(path: string): MigrationPathParts | null {
+  const slashIdx = path.lastIndexOf('/');
+  const filename = slashIdx === -1 ? path : path.slice(slashIdx + 1);
+  const m = filename.match(/^(\d+)_(.+)$/);
+  if (!m) return null;
+  return {
+    dir: slashIdx === -1 ? '' : path.slice(0, slashIdx + 1),
+    number: m[1],
+    suffix: m[2],
+  };
+}
+
+interface MigrationRenumberMatch {
+  diffPath: string;
+  listedPath: string;
+  number: string;
+}
+
+interface MigrationCollision {
+  diffPath: string;
+  collidesWithPath: string;
+  number: string;
+}
+
+export interface MigrationRenumberEvaluation {
+  /** Diff migration files that renumber a task-listed migration to a currently-free number — tolerated. */
+  toleratedRenumbers: MigrationRenumberMatch[];
+  /** Diff migration files whose new number is already used by a different migration on the base branch — not tolerated. */
+  collisions: MigrationCollision[];
+}
+
+/**
+ * Deterministic pre-check for the "Changed files vs Files/paths affected
+ * list" dimension: a migration file in the diff that isn't literally listed
+ * in the task is a legitimate renumber (not a spec violation) when it shares
+ * a directory and name-suffix with a listed migration and differs only in
+ * its leading number — UNLESS that number is already claimed by a different
+ * migration on the base branch, in which case it's a real collision. Pure
+ * function so identical inputs always produce identical output, independent
+ * of LLM judgement — see the PRReviewService callers that fetch
+ * `baseBranchMigrationPaths` and apply this as a code-level override.
+ */
+export function evaluateMigrationRenumberTolerance(
+  diffMigrationPaths: string[],
+  listedMigrationPaths: string[],
+  baseBranchMigrationPaths: string[],
+): MigrationRenumberEvaluation {
+  const toleratedRenumbers: MigrationRenumberMatch[] = [];
+  const collisions: MigrationCollision[] = [];
+  const listedSet = new Set(listedMigrationPaths);
+
+  for (const diffPath of diffMigrationPaths) {
+    if (listedSet.has(diffPath)) continue; // literal match — nothing to evaluate
+    const diffParts = parseMigrationParts(diffPath);
+    if (!diffParts) continue;
+
+    const listedMatch = listedMigrationPaths
+      .map((p) => ({ p, parts: parseMigrationParts(p) }))
+      .find(
+        ({ parts }) =>
+          parts &&
+          parts.dir === diffParts.dir &&
+          parts.suffix === diffParts.suffix &&
+          parts.number !== diffParts.number,
+      );
+    if (!listedMatch) continue; // not a recognizable renumber — leave to LLM judgement
+
+    const collidingBaseFile = baseBranchMigrationPaths.find((basePath) => {
+      if (basePath === diffPath) return false;
+      const baseParts = parseMigrationParts(basePath);
+      return (
+        baseParts !== null &&
+        baseParts.dir === diffParts.dir &&
+        baseParts.number === diffParts.number
+      );
+    });
+
+    if (collidingBaseFile) {
+      collisions.push({
+        diffPath,
+        collidesWithPath: collidingBaseFile,
+        number: diffParts.number,
+      });
+    } else {
+      toleratedRenumbers.push({
+        diffPath,
+        listedPath: listedMatch.p,
+        number: diffParts.number,
+      });
+    }
+  }
+
+  return { toleratedRenumbers, collisions };
+}
+
+/**
+ * Extracts migration file paths named in the task body's "Files / paths
+ * affected" section (or, if that heading isn't found, the whole body — a
+ * loose fallback so minor heading-format drift doesn't silently disable the
+ * check). Scoped to migration-looking paths only; non-migration entries are
+ * irrelevant to this pre-check and are left for the LLM's existing
+ * tolerance for downstream files.
+ */
+export function extractListedMigrationPaths(taskBody: string): string[] {
+  const sectionMatch = taskBody.match(
+    /##+\s*Files\s*\/\s*paths[^\n]*\n([\s\S]*?)(?=\n##+\s|$)/i,
+  );
+  const section = sectionMatch ? sectionMatch[1] : taskBody;
+  const matches = section.match(/[\w./-]*\bmigrations?\/[\w./-]+\.\w+/gi) ?? [];
+  return [...new Set(matches)];
+}
+
+/**
+ * Applies an `evaluateMigrationRenumberTolerance` verdict to the parsed
+ * review result's Files/paths dimension, overriding the LLM's own
+ * passed/notes for that dimension and recomputing the top-level verdict
+ * from the resulting pass count (per the schema's verdict rules). No-ops
+ * when there's nothing to override, leaving the LLM's verdict untouched.
+ */
+export function overrideFilesPathsDimension(
+  result: PRReviewResult,
+  passed: boolean,
+  note: string,
+): PRReviewResult {
+  if (!result.dimensions) return result;
+  let found = false;
+  const dimensions = result.dimensions.map((d) => {
+    if (d.name !== FILES_PATHS_DIMENSION_NAME) return d;
+    found = true;
+    return {
+      ...d,
+      passed,
+      notes: d.notes ? `${d.notes} ${note}` : note,
+    };
+  });
+  if (!found) return result;
+  const passedCount = dimensions.filter((d) => d.passed).length;
+  const verdict: PRReviewResult['verdict'] =
+    passedCount === dimensions.length
+      ? 'approved'
+      : passedCount === 0
+        ? 'incomplete'
+        : 'needs_changes';
+  return { ...result, dimensions, verdict };
+}
+
 export interface PRReviewResult {
   prNumber: number;
   repo: string;
@@ -375,7 +534,17 @@ export class PRReviewService {
           });
         }
         const aiResult = await verdictPromise;
-        const finalResult = this.applyBaselineEscalationFloor(aiResult, diff);
+        const taskBodyForMigrationCheck = await this.fetchTaskBodyBestEffort(
+          projectId,
+          prRow.task_id,
+        );
+        const finalResult = await this.applyMigrationRenumberOverride(
+          this.applyBaselineEscalationFloor(aiResult, diff),
+          diff,
+          taskBodyForMigrationCheck,
+          repo,
+          prData.baseBranch,
+        );
         // Persist immediately after parse — before any side effects (GitHub/Notion).
         setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
         setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
@@ -450,7 +619,13 @@ export class PRReviewService {
             prNumber,
             repo,
           );
-          const finalResult = this.applyBaselineEscalationFloor(aiResult, diff);
+          const finalResult = await this.applyMigrationRenumberOverride(
+            this.applyBaselineEscalationFloor(aiResult, diff),
+            diff,
+            taskBody,
+            repo,
+            prData.baseBranch,
+          );
           // Persist immediately after parse — before any side effects (GitHub/Notion).
           setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
           setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
@@ -516,7 +691,13 @@ export class PRReviewService {
       });
 
       const aiResult = await verdictPromise;
-      const finalResult = this.applyBaselineEscalationFloor(aiResult, diff);
+      const finalResult = await this.applyMigrationRenumberOverride(
+        this.applyBaselineEscalationFloor(aiResult, diff),
+        diff,
+        taskBody,
+        repo,
+        prData.baseBranch,
+      );
       // Persist immediately after parse — before any side effects (GitHub/Notion).
       // setLastReviewedSha was already called above the verdictPromise await for
       // the race-window guard; the verdict write here is the critical safety net.
@@ -867,9 +1048,16 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       prNumber,
       repo,
     );
-    const finalResult = this.applyBaselineEscalationFloor(
-      aiResult,
+    const taskBodyForMigrationCheck = await this.fetchTaskBodyBestEffort(
+      projectId,
+      pr.task_id,
+    );
+    const finalResult = await this.applyMigrationRenumberOverride(
+      this.applyBaselineEscalationFloor(aiResult, diffData.diff),
       diffData.diff,
+      taskBodyForMigrationCheck,
+      repo,
+      prData.baseBranch,
     );
     setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
     setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
@@ -1238,6 +1426,88 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
         : floorReason,
       baselineEscalationFloor: true,
     };
+  }
+
+  /**
+   * Deterministic override for the "Changed files vs Files/paths affected
+   * list" dimension when the only deviation is a migration file renumbered
+   * away from the task-listed number (see evaluateMigrationRenumberTolerance
+   * for the rule). Fetches the base branch's file listing to check for a
+   * number collision; on fetch failure it fails open by leaving the LLM's
+   * verdict untouched rather than risking a false pass/fail from an
+   * unverifiable collision check. No-ops entirely (no network call) when the
+   * diff contains no migration file that isn't already listed verbatim.
+   */
+  private async applyMigrationRenumberOverride(
+    result: PRReviewResult,
+    diffText: string,
+    taskBody: string,
+    repo: string,
+    baseBranch: string,
+  ): Promise<PRReviewResult> {
+    const diffMigrationPaths = parseDiffFiles(diffText).filter(isMigrationPath);
+    if (diffMigrationPaths.length === 0) return result;
+
+    const listedMigrationPaths = extractListedMigrationPaths(taskBody);
+    const hasUnlistedMigration = diffMigrationPaths.some(
+      (p) => !listedMigrationPaths.includes(p),
+    );
+    if (!hasUnlistedMigration) return result;
+
+    let baseBranchMigrationPaths: string[];
+    try {
+      baseBranchMigrationPaths = (
+        await this.github.listFilePathsAtRef(repo, baseBranch)
+      ).filter(isMigrationPath);
+    } catch (e) {
+      logger.warn(
+        `[PRReviewService] failed to fetch base-branch file listing for migration-renumber check on ${repo}@${baseBranch}: ${(e as Error).message}`,
+      );
+      return result;
+    }
+
+    const evaluation = evaluateMigrationRenumberTolerance(
+      diffMigrationPaths,
+      listedMigrationPaths,
+      baseBranchMigrationPaths,
+    );
+
+    if (evaluation.collisions.length > 0) {
+      const note = `Deterministic migration-renumber check: ${evaluation.collisions
+        .map(
+          (c) =>
+            `${c.diffPath} reuses migration number ${c.number}, already claimed by ${c.collidesWithPath} on ${baseBranch}`,
+        )
+        .join('; ')}.`;
+      return overrideFilesPathsDimension(result, false, note);
+    }
+
+    if (evaluation.toleratedRenumbers.length > 0) {
+      const note = `Deterministic migration-renumber check: ${evaluation.toleratedRenumbers
+        .map(
+          (t) =>
+            `${t.diffPath} is a legitimate renumber of task-listed ${t.listedPath} (number ${t.number} is free on ${baseBranch})`,
+        )
+        .join('; ')} — tolerated.`;
+      return overrideFilesPathsDimension(result, true, note);
+    }
+
+    return result;
+  }
+
+  private async fetchTaskBodyBestEffort(
+    projectId: string,
+    taskId: string | null | undefined,
+  ): Promise<string> {
+    if (!taskId) return '';
+    try {
+      return await this.resolveBackend(projectId).fetchTaskPage(taskId);
+    } catch (e) {
+      logger.warn(
+        `[PRReviewService] fetchTaskPage failed for migration-renumber check (task ${taskId}): ${(e as Error).message}`,
+      );
+      return '';
+    }
   }
 
   /**
