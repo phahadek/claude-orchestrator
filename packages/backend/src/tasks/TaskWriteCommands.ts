@@ -49,7 +49,7 @@ import { planMove, type MoveGraphTask } from '../orchestration/moveTask';
 import { normalizeTaskId, toExternalId } from './taskId';
 import {
   resolveMilestoneForProject,
-  resolveMilestoneDatabaseId,
+  resolveMilestoneSourceId,
 } from '../projects/milestoneResolver';
 import {
   toCanonicalStatus,
@@ -228,7 +228,7 @@ export interface MoveTaskTargetMilestone extends MoveTaskMilestoneRef {
  * Fields accepted by the command-layer createTask. Like NewTaskFields, but
  * `databaseId` is optional — a caller supplies `milestone` (the milestone's
  * DB id, display name, or canonical short key) instead, and createTask
- * resolves the board databaseId server-side (resolveMilestoneDatabaseId),
+ * resolves the board databaseId server-side (resolveMilestoneSourceId),
  * the same resolution the move path already gets via
  * MoveTaskTargetMilestone.databaseId. A caller never needs to know a raw
  * Notion database id.
@@ -517,7 +517,7 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
           '[TaskWriteCommands] cannot resolve milestone databaseId without a projectId',
         );
       }
-      databaseId = resolveMilestoneDatabaseId(this.projectId, milestone);
+      databaseId = resolveMilestoneSourceId(this.projectId, milestone);
     }
     // Status is intentionally not accepted here — createTask always lands in
     // Backlog, enforced by the backend/adapter regardless of any field a

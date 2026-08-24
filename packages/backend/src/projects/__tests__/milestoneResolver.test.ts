@@ -28,7 +28,7 @@ vi.mock('../../investigation/reportStore.js', () => reportStoreMock);
 import {
   resolveMilestoneForProject,
   resolveMilestoneAnyProject,
-  resolveMilestoneDatabaseId,
+  resolveMilestoneSourceId,
   resolveMilestoneForSessionTask,
   UnknownMilestoneError,
 } from '../milestoneResolver.js';
@@ -129,8 +129,8 @@ describe('resolveMilestoneForProject', () => {
   });
 });
 
-describe('resolveMilestoneDatabaseId', () => {
-  it('resolves claude-dashboard / M12 to its Notion board source_id (task.create parent resolution)', () => {
+describe('resolveMilestoneSourceId', () => {
+  it('resolves claude-dashboard / M12 to its board source_id (task.create parent resolution)', () => {
     const claudeDashboardM12 = {
       ...M12,
       id: 'ms-uuid-12',
@@ -141,7 +141,7 @@ describe('resolveMilestoneDatabaseId', () => {
     projectServiceMock.getById.mockReturnValue(
       project([M11, claudeDashboardM12]),
     );
-    expect(resolveMilestoneDatabaseId('claude-dashboard', 'M12')).toBe(
+    expect(resolveMilestoneSourceId('claude-dashboard', 'M12')).toBe(
       '6614adb5-5bec-4b9a-b9a4-208ae0f00f3c',
     );
   });
@@ -149,26 +149,31 @@ describe('resolveMilestoneDatabaseId', () => {
   it('resolves a milestone DB id to its board source_id', () => {
     const withSource = { ...M11, sourceId: 'db-source-11' };
     projectServiceMock.getById.mockReturnValue(project([withSource, M12]));
-    expect(resolveMilestoneDatabaseId('p1', 'ms-uuid-11')).toBe('db-source-11');
+    expect(resolveMilestoneSourceId('p1', 'ms-uuid-11')).toBe('db-source-11');
   });
 
-  it('throws a clear error (not an opaque Notion parent error) for an unresolvable milestone', () => {
+  it('throws a clear error (not an opaque backend parent error) for an unresolvable milestone', () => {
     projectServiceMock.getById.mockReturnValue(project());
-    expect(() => resolveMilestoneDatabaseId('p1', 'M99')).toThrow(
+    expect(() => resolveMilestoneSourceId('p1', 'M99')).toThrow(
       UnknownMilestoneError,
     );
   });
 
-  it('throws a clear error when the resolved milestone has no source_id configured', () => {
+  it('throws a clear, source-neutral error when the resolved milestone has no source_id configured', () => {
     projectServiceMock.getById.mockReturnValue(project([M11, M12]));
-    expect(() => resolveMilestoneDatabaseId('p1', 'M11')).toThrow(
-      /no source_id/,
+    expect(() => resolveMilestoneSourceId('p1', 'M11')).toThrow(/no source_id/);
+  });
+
+  it('does not mention "Notion" in the no-source_id error text', () => {
+    projectServiceMock.getById.mockReturnValue(project([M11, M12]));
+    expect(() => resolveMilestoneSourceId('p1', 'M11')).toThrow(
+      /^(?:(?!Notion).)*$/s,
     );
   });
 
   it('throws when the project itself is unknown', () => {
     projectServiceMock.getById.mockReturnValue(undefined);
-    expect(() => resolveMilestoneDatabaseId('no-such-project', 'M11')).toThrow(
+    expect(() => resolveMilestoneSourceId('no-such-project', 'M11')).toThrow(
       UnknownMilestoneError,
     );
   });

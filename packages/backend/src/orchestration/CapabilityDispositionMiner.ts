@@ -12,7 +12,7 @@ import {
   type CapabilityDenialPattern,
 } from '../audit/capabilityDispositionMining';
 import {
-  resolveMilestoneDatabaseId,
+  resolveMilestoneSourceId,
   resolveMilestoneForTaskId,
   UnknownMilestoneError,
 } from '../projects/milestoneResolver';
@@ -117,7 +117,7 @@ export class CapabilityDispositionMiner {
 
     let databaseId: string;
     try {
-      databaseId = resolveMilestoneDatabaseId(project.id, milestone);
+      databaseId = resolveMilestoneSourceId(project.id, milestone);
     } catch (err) {
       if (err instanceof UnknownMilestoneError) {
         logger.warn(

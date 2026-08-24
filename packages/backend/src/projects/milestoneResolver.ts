@@ -117,14 +117,14 @@ export function resolveMilestoneForProject(
 
 /**
  * Resolves a milestone reference (its DB id, display name, or canonical
- * short-form key) to the board's raw Notion database ID — the same
+ * short-form key) to the board's raw backend-native board ID — the same
  * resolution the move path already gets for free via
  * MoveTaskTargetMilestone.databaseId, made available to the create path so a
- * caller only ever supplies a milestone reference, never a raw Notion id.
- * Throws UnknownMilestoneError (not an opaque Notion parent error) for an
+ * caller only ever supplies a milestone reference, never a raw backend id.
+ * Throws UnknownMilestoneError (not an opaque backend parent error) for an
  * unresolvable milestone or one with no source_id configured.
  */
-export function resolveMilestoneDatabaseId(
+export function resolveMilestoneSourceId(
   projectId: string,
   milestone: string,
 ): string {
@@ -145,7 +145,7 @@ export function resolveMilestoneDatabaseId(
   if (!match.sourceId) {
     throw new UnknownMilestoneError(
       `milestone "${milestone}" (project "${projectId}") has no source_id — ` +
-        "set it to the board's Notion database ID before creating tasks under it",
+        "set it to the board's source database ID before creating tasks under it",
     );
   }
   return match.sourceId;

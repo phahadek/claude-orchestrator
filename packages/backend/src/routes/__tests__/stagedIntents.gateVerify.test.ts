@@ -286,7 +286,7 @@ describe('gate.verify — requires a full gate item id', () => {
   });
 });
 
-describe('gate.verify — fail disposition files a follow-up task via resolveMilestoneDatabaseId', () => {
+describe('gate.verify — fail disposition files a follow-up task via resolveMilestoneSourceId', () => {
   it('applies cleanly and reaches appendGateItemEvent, with no routeApplyTimeFailure pushback (regression for the 2026-08-01 auto-rejections)', async () => {
     const item = makeGateItem({ milestone: 'M13' });
     const app = makeApp();
@@ -308,7 +308,7 @@ describe('gate.verify — fail disposition files a follow-up task via resolveMil
       .post(`/api/staged-intents/${staged.body.id}/apply`)
       .send({});
 
-    // Before the fix, resolveMilestoneDatabaseId's boardId fallback would
+    // Before the fix, resolveMilestoneSourceId's boardId fallback would
     // hand createTask the legacy composite milestone row id instead of a
     // Notion database id, the real backend would reject it, and this apply
     // would come back 500 with redrivenToSession — exactly what happened to

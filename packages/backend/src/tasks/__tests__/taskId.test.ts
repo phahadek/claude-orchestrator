@@ -34,3 +34,21 @@ describe('normalizeTaskId — hyphenation canonicalization', () => {
     expect(normalizeTaskId('yaml:my-task-slug')).toBe('yaml:my-task-slug');
   });
 });
+
+describe('normalizeTaskId — default-source parameter', () => {
+  const hyphenated = '3aa22f91-52f3-81a7-a58b-db94fe13e649';
+
+  it('defaults an unprefixed id to notion: when no default-source is given', () => {
+    expect(normalizeTaskId(hyphenated)).toBe(`notion:${hyphenated}`);
+  });
+
+  it('wraps an unprefixed id under the given default source when one is passed', () => {
+    expect(normalizeTaskId('my-task-slug', 'yaml')).toBe('yaml:my-task-slug');
+  });
+
+  it("still keeps an already-prefixed id's own source, ignoring the default-source argument", () => {
+    expect(normalizeTaskId(`notion:${hyphenated}`, 'yaml')).toBe(
+      `notion:${hyphenated}`,
+    );
+  });
+});
