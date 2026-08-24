@@ -455,6 +455,11 @@ const RECOVERY_ACTION_MAP: Partial<
   pr_body_invalid: 'resume',
   attribution_missing: 'resume',
   audit_findings: 'resume',
+  // The floor itself never re-derives (it's diff-driven, not verdict-driven),
+  // so discharging it must not re-run review — that would just re-escalate
+  // against the same diff. 'resume' only clears the pause and nudges the
+  // session to continue, unlike 'rerun' which re-enters the review pipeline.
+  baseline_escalation_floor: 'resume',
   // awaiting_human_approval, max_reviews → available: false (omitted from map)
 };
 

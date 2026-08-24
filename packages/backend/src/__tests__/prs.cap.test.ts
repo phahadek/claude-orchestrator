@@ -301,6 +301,87 @@ describe('POST /prs/:owner/:repoName/:prNumber/approve — cap-escalated PR', ()
   });
 });
 
+// ── POST /prs/:owner/:repoName/:prNumber/approve — baseline_escalation_floor ──
+
+const BASELINE_FLOOR_PAUSE_JSON = JSON.stringify({
+  reason: 'baseline_escalation_floor',
+  source: 'review',
+  severity: 'needs_attention',
+  retry_strategy: 'manual_action',
+  blocks_merge: true,
+});
+
+const MERGE_CONFLICT_PAUSE_JSON = JSON.stringify({
+  reason: 'merge_conflict',
+  source: 'merge',
+  severity: 'needs_attention',
+  retry_strategy: 'manual_action',
+  blocks_merge: true,
+});
+
+describe('POST /prs/:owner/:repoName/:prNumber/approve — baseline_escalation_floor PR', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('clears the pause (human sign-off) without re-running the review pipeline', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(
+      makeCapPRRow({ pause_reason: BASELINE_FLOOR_PAUSE_JSON }) as never,
+    );
+
+    const runAutofixPipeline = vi
+      .fn()
+      .mockResolvedValue({ success: true, summary: 'done' });
+    const reviewOrchestrator = { runAutofixPipeline };
+
+    const app = express();
+    app.use(express.json());
+    app.use(
+      '/api',
+      createPrsRouter(
+        makeGithub(),
+        makePRReviewService(),
+        makeSessionManager(),
+        undefined,
+        undefined,
+        undefined,
+        reviewOrchestrator,
+      ),
+    );
+
+    await supertest(app).post('/api/prs/owner/repo/42/approve').expect(200);
+
+    expect(queries.clearTerminalPRFlags).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'human_unpark',
+    );
+    // Re-running review would just re-escalate against the same diff.
+    expect(runAutofixPipeline).not.toHaveBeenCalled();
+  });
+
+  it('does NOT clear the pause for merge_conflict — approval cannot resolve an unmergeable PR', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(
+      makeCapPRRow({ pause_reason: MERGE_CONFLICT_PAUSE_JSON }) as never,
+    );
+
+    const app = express();
+    app.use(express.json());
+    app.use(
+      '/api',
+      createPrsRouter(
+        makeGithub(),
+        makePRReviewService(),
+        makeSessionManager(),
+      ),
+    );
+
+    await supertest(app).post('/api/prs/owner/repo/42/approve').expect(200);
+
+    expect(queries.clearTerminalPRFlags).not.toHaveBeenCalled();
+  });
+});
+
 // ── POST /api/prs/:prNumber/unpark ────────────────────────────────────────────
 
 describe('POST /prs/:prNumber/unpark', () => {

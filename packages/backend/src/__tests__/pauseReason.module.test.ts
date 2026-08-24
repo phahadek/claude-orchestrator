@@ -285,6 +285,7 @@ describe('deriveRecoveryDescriptor', () => {
     ['pr_body_invalid', 'resume', 'Resume'],
     ['attribution_missing', 'resume', 'Resume'],
     ['audit_findings', 'resume', 'Resume'],
+    ['baseline_escalation_floor', 'resume', 'Resume'],
   ] as const)('%s → resume', (reason, action, label) => {
     const d = deriveRecoveryDescriptor(reason);
     expect(d).toEqual({ available: true, action, label });
@@ -408,6 +409,26 @@ describe('deriveTaskRecoveryDescriptor', () => {
       sessionTerminal: false,
     });
     expect(d).toEqual({ available: false });
+  });
+
+  it('baseline_escalation_floor (PR-side) resolves to an available resume action, giving the discharge path an affordance', () => {
+    const d = deriveTaskRecoveryDescriptor({
+      taskReason: null,
+      prReason: 'baseline_escalation_floor',
+      hasPR: true,
+      sessionTerminal: false,
+    });
+    expect(d).toEqual({ available: true, action: 'resume', label: 'Resume' });
+  });
+
+  it('baseline_escalation_floor (task-side) resolves to an available resume action', () => {
+    const d = deriveTaskRecoveryDescriptor({
+      taskReason: 'baseline_escalation_floor',
+      prReason: null,
+      hasPR: true,
+      sessionTerminal: false,
+    });
+    expect(d).toEqual({ available: true, action: 'resume', label: 'Resume' });
   });
 });
 

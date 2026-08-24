@@ -1491,6 +1491,29 @@ describe('POST /api/tasks/:taskId/recover', () => {
         }),
       );
     });
+
+    it('baseline_escalation_floor resolves to a resume action instead of 422', async () => {
+      vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+        makeAggregate('task-1', '⚠️ Needs Attention', {
+          pr_pause_reason: 'baseline_escalation_floor',
+          code_session_id: 'sess-1',
+          code_session_status: 'idle',
+        }),
+      ]);
+      const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+      const app = buildAppWithServices({ sendOrResume });
+
+      const res = await supertest(app).post(
+        '/api/tasks/task-1/recover?projectId=proj-1',
+      );
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ ok: true, action: 'resume' });
+      expect(queries.clearTerminalPRFlags).toHaveBeenCalledWith(
+        99,
+        'owner/repo',
+        'human_unpark',
+      );
+    });
   });
 });
 
