@@ -22,7 +22,7 @@ import {
   resetStalledPRRetryCountForBaseRecovery,
   setReconcileExhausted,
 } from '../db/queries';
-import { parsePauseReason } from '../db/pauseReason';
+import { isManualActionPause } from '../db/pauseReason';
 import { getProjectByGithubRepo } from '../config';
 import { typedGetSetting } from '../config/settings';
 import {
@@ -157,7 +157,6 @@ export class StalledPRReconciler {
       // head_sha-change trigger already uses, then fall through to
       // reconcile this PR fresh this cycle. Scoped to this PR alone — never
       // a blanket reset of every escalated PR's counter.
-      const existing = parsePauseReason(pr.pause_reason);
       if (pr.reconcile_exhausted) {
         if (pr.stalled_retry_base_exhausted) {
           const project = getProjectByGithubRepo(pr.repo);
@@ -192,12 +191,15 @@ export class StalledPRReconciler {
         continue;
       }
 
-      // A pause reason declaring retry_strategy: 'manual_action' (e.g.
+      // A live pause entry declaring retry_strategy: 'manual_action' (e.g.
       // depth_review_escalation) is already an operator action item, parked
       // the same way a human_merge_only PR is above — never re-drive it,
       // and never clobber its diagnostic pause reason with a generic
-      // stalled classification.
-      if (existing?.retry_strategy === 'manual_action') continue;
+      // stalled classification. Checked against the full concurrent set
+      // (isManualActionPause), not just the single display-resolved entry —
+      // a manual_action entry from a different source than the "top"
+      // resolved one must still park this PR.
+      if (isManualActionPause(pr.pause_reason)) continue;
 
       // Resolve review session status for the errored-session check
       const reviewSessionStatus = pr.review_session_id

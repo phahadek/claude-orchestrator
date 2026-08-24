@@ -35,7 +35,12 @@ import { closeFlakyRemediationTaskIfLinked } from '../audit/flakyRemediationFili
 import { closeBaseHealthRemediationTaskIfLinked } from '../audit/baseHealthRemediationFiling';
 import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow, TestRequestRunRow } from '../db/types';
-import { parsePauseReason } from '../db/pauseReason';
+import {
+  parsePauseReason,
+  parsePauseReasonSet,
+  findAutomaticGateRecoveryEntry,
+  type PauseSource,
+} from '../db/pauseReason';
 import type { AutoMerger } from './AutoMerger';
 import type { PRReviewService, PRReviewResult } from './PRReviewService';
 import type { ReviewOrchestrator } from './ReviewOrchestrator';
@@ -1045,7 +1050,16 @@ export class PRMergeWatcher extends EventEmitter {
     pr: PullRequestRow,
     category: MergeabilityCategory,
   ): void {
-    if (parsePauseReason(pr.pause_reason)?.source !== 'ci') return;
+    // source:'ci' alone would also match ci_billing_blocked (retry_strategy:
+    // 'manual_action') — a mergeability-category change never discharges
+    // that one, only a genuinely automatic ci pause like ci_failing.
+    if (
+      !findAutomaticGateRecoveryEntry(
+        parsePauseReasonSet(pr.pause_reason),
+        'ci',
+      )
+    )
+      return;
     // Trigger recovery for any non-CI-failing, non-conflict category.
     // AutoMerger will re-categorize and bounce back if not actually mergeable.
     if (category.category === 'ci_failed' || category.category === 'conflict')
@@ -1085,14 +1099,20 @@ export class PRMergeWatcher extends EventEmitter {
       return;
     }
 
-    const pauseStruct = parsePauseReason(pr.pause_reason);
-    // Each gate fails under its own distinct pause reason — a disposition
-    // must match the reason the PR is actually paused on, otherwise an
-    // 'analyze' confirmation would silently no-op against a ci_failing pause
-    // (or vice versa) instead of actuating the right same-commit re-run.
-    const expectedPauseReason =
-      payload.disposition.gate === 'analyze' ? 'analyze_failing' : 'ci_failing';
-    if (pauseStruct?.reason !== expectedPauseReason) return;
+    // Each gate's disposition must match a live entry with the gate's
+    // source and an 'automatic' retry_strategy — otherwise an 'analyze'
+    // confirmation would silently no-op against a ci_failing pause (or vice
+    // versa), and a source-only match would wrongly actuate against a
+    // manual_action pause sharing the same source (e.g. ci_billing_blocked
+    // for gate 'ci'). Gate 'f2' shares the 'ci' source with gate 'ci' —
+    // both are recovered via the same ci_failing-class pause.
+    const gateSource: PauseSource =
+      payload.disposition.gate === 'analyze' ? 'analyze' : 'ci';
+    const matchedEntry = findAutomaticGateRecoveryEntry(
+      parsePauseReasonSet(pr.pause_reason),
+      gateSource,
+    );
+    if (!matchedEntry) return;
 
     const project = getProjectByGithubRepo(pr.repo);
     const projectId = project?.id ?? null;
@@ -1128,7 +1148,7 @@ export class PRMergeWatcher extends EventEmitter {
       setPauseReason(
         pr.pr_number,
         pr.repo,
-        expectedPauseReason,
+        matchedEntry.reason,
         'flake-recovery-exhausted',
       );
       recordEvent({

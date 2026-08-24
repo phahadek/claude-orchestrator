@@ -1,4 +1,4 @@
-type PauseSource =
+export type PauseSource =
   | 'autofix'
   | 'verify'
   | 'analyze'
@@ -448,6 +448,21 @@ export interface RecoveryDescriptor {
 // CanonicalPauseReason needs an explicit, reviewed entry here — either a real
 // RecoveryAction or a deliberate 'none' — so adding a new reason without
 // deciding its discharge path is a typecheck failure, not a silent omission.
+//
+// Deliberately kept keyed by CanonicalPauseReason rather than re-expressed as
+// a (source, retry_strategy) capability predicate like
+// findAutomaticGateRecoveryEntry/isManualActionPause above: which
+// RecoveryAction applies (redispatch vs rerun vs resume) does not correlate
+// with source — e.g. 'merge'-sourced auto_merge_failed is 'rerun' while
+// 'merge'-sourced merge_conflict is 'resume' and 'merge'-sourced
+// pr_creation_failed is 'redispatch'. The one capability-derivable slice —
+// every severity:'recoverable' + retry_strategy:'automatic' reason
+// (stuck_timeout, api_overloaded, base_branch_broken, rate_limit,
+// depth_review_pending, usage_limit_deferred) maps to 'none' below, since a
+// self-healing pause never has a manual click to offer — is still listed
+// explicitly per-reason rather than derived, to preserve the exhaustiveness
+// guarantee against a reason moving between (severity, retry_strategy) pairs
+// without this map being re-reviewed.
 const RECOVERY_ACTION_MAP: Record<
   CanonicalPauseReason,
   RecoveryAction | 'none'
@@ -607,6 +622,21 @@ export function isMergeBlockingPause(pauseReasonRaw: string | null): boolean {
   return set.some((entry) => entry.blocks_merge !== false);
 }
 
+/**
+ * Capability predicate for "this PR is parked on an operator action item" —
+ * true when any live concurrent entry declares retry_strategy:
+ * 'manual_action'. Mirrors isMergeBlockingPause's shape: ORs across the full
+ * set rather than only the single entry precedence resolution would pick,
+ * since a manual_action entry from one source (e.g. depth_review_escalation)
+ * must still be honored even when a different, higher-severity or
+ * more-recent entry from another source would otherwise resolve to the
+ * display-level "top" pause.
+ */
+export function isManualActionPause(pauseReasonRaw: string | null): boolean {
+  const set = parsePauseReasonSet(pauseReasonRaw);
+  return set.some((entry) => entry.retry_strategy === 'manual_action');
+}
+
 export function serializePauseReason(struct: PauseReasonStruct): string {
   return JSON.stringify(struct);
 }
@@ -614,6 +644,28 @@ export function serializePauseReason(struct: PauseReasonStruct): string {
 /** Serializes a concurrent pause-reason set for storage in pull_requests.pause_reason. */
 export function serializePauseReasonSet(entries: PauseReasonStruct[]): string {
   return JSON.stringify(entries);
+}
+
+/**
+ * Capability predicate generalizing isAutomaticRecoveryPending below: finds
+ * the live concurrent-set entry (if any) whose source matches `source` and
+ * whose retry_strategy is 'automatic' — i.e. a pause that a same-commit
+ * automatic re-run can discharge. Callers that used to compare
+ * pauseStruct.reason against a single expected literal (e.g. 'ci_failing')
+ * should match on this instead: it generalizes past source alone, which
+ * would incorrectly treat a manual_action pause sharing the same source
+ * (e.g. ci_billing_blocked, source: 'ci') as automatically dischargeable.
+ */
+export function findAutomaticGateRecoveryEntry(
+  entries: PauseReasonStruct[],
+  source: PauseSource,
+): PauseReasonStruct | null {
+  return (
+    entries.find(
+      (entry) =>
+        entry.source === source && entry.retry_strategy === 'automatic',
+    ) ?? null
+  );
 }
 
 /**
