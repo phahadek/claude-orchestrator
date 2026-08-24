@@ -161,7 +161,9 @@ type EventType =
   | 'no_op_investigation_failed'
   | 'test_request_cycle_limit_crossed'
   | 'session_awaiting_operator_decision'
-  | 'session_operator_decision_answered';
+  | 'session_operator_decision_answered'
+  | 'github_rate_limit_exhausted'
+  | 'github_rate_limit_sampled';
 
 type ActorType = 'ai' | 'human' | 'system';
 

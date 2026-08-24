@@ -15,6 +15,7 @@ import {
   RerequestedCheckRun,
 } from './types';
 import { getPRByNumber } from '../db/queries';
+import { recordEvent } from '../audit/AuditLog';
 
 /** GitHub check-run conclusions that indicate the check did not pass. */
 const FAILING_CHECK_CONCLUSIONS: ReadonlySet<string> = new Set([
@@ -1471,6 +1472,8 @@ export class GitHubClient {
       throw new GitHubApiError(res.status, text);
     }
 
+    sampleRateLimitHeadroom(res.headers);
+
     const contentType = res.headers.get('content-type') ?? '';
     if (contentType.includes('application/json')) {
       return res.json() as Promise<T>;
@@ -1665,6 +1668,46 @@ const RATE_LIMIT_PATTERNS = [
   /^You have exceeded a secondary rate limit/i,
 ];
 
+/** Wall-clock cadence for durable headroom samples — bounds row volume regardless of call rate. */
+const RATE_LIMIT_SAMPLE_INTERVAL_MS = 5 * 60 * 1000;
+let lastRateLimitSampleAt = 0;
+
+/**
+ * Records a durable, low-volume snapshot of GitHub quota headroom, gated to a
+ * fixed wall-clock cadence so it doesn't add a row per API response. Silently
+ * no-ops when the response carries no rate-limit headers (e.g. GraphQL calls
+ * that go through fetch() directly rather than request()).
+ */
+function sampleRateLimitHeadroom(headers: Headers): void {
+  const limit = parseInt(headers.get('x-ratelimit-limit') ?? '', 10);
+  const used = parseInt(headers.get('x-ratelimit-used') ?? '', 10);
+  const remaining = parseInt(headers.get('x-ratelimit-remaining') ?? '', 10);
+  const resetEpoch = parseInt(headers.get('x-ratelimit-reset') ?? '', 10);
+  if (
+    !Number.isFinite(limit) ||
+    !Number.isFinite(used) ||
+    !Number.isFinite(remaining) ||
+    !Number.isFinite(resetEpoch)
+  ) {
+    return;
+  }
+
+  const now = Date.now();
+  if (now - lastRateLimitSampleAt < RATE_LIMIT_SAMPLE_INTERVAL_MS) return;
+  lastRateLimitSampleAt = now;
+
+  recordEvent({
+    event_type: 'github_rate_limit_sampled',
+    actor_type: 'system',
+    payload: {
+      limit,
+      used,
+      remaining,
+      resetAt: new Date(resetEpoch * 1000).toISOString(),
+    },
+  });
+}
+
 function tryParseRateLimitError(
   body: string,
   headers: Headers,
@@ -1687,8 +1730,21 @@ function tryParseRateLimitError(
     : new Date(Date.now() + 60_000);
   const limit = parseInt(headers.get('x-ratelimit-limit') ?? '', 10) || 0;
   const used = parseInt(headers.get('x-ratelimit-used') ?? '', 10) || 0;
+  const remaining =
+    parseInt(headers.get('x-ratelimit-remaining') ?? '', 10) || 0;
 
-  return new GitHubRateLimitError(message, resetAt, limit, used);
+  recordEvent({
+    event_type: 'github_rate_limit_exhausted',
+    actor_type: 'system',
+    payload: {
+      limit,
+      used,
+      remaining,
+      resetAt: resetAt.toISOString(),
+    },
+  });
+
+  return new GitHubRateLimitError(message, resetAt, limit, used, remaining);
 }
 
 export function parseDiffFiles(diff: string): string[] {
