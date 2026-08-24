@@ -17,6 +17,7 @@ import {
   reclassifyGateItem,
   backfillGateTask,
   carryForwardGateItem,
+  getGateVerifyFleetState,
 } from '../gate/gateService';
 import { dispatchGateItemVerification } from '../gate/gateReconciler';
 import type { GateItemClassification, DeviceRow } from '../db/types';
@@ -696,6 +697,15 @@ export function createGateStateRouter(): Router {
       }
       throw err;
     }
+  });
+
+  // GET /api/gate/fleet
+  // Cross-project snapshot of every in-flight gate-verify session — live
+  // count, elapsed/remaining budget, capability-suspension state, and
+  // recent skippedForBudget history. No project filter: every row carries
+  // its own project/milestone. See gateService.getGateVerifyFleetState.
+  router.get('/gate/fleet', (_req: Request, res: Response) => {
+    res.json(getGateVerifyFleetState());
   });
 
   // GET /api/gate/flake-recovery-rate?project=<id>

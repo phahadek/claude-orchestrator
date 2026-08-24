@@ -28,7 +28,8 @@ export interface SessionGateItemVerifierOptions {
   pollIntervalMs?: number;
 }
 
-const DEFAULT_BUDGET_MS = 20 * 60_000;
+/** Wall-clock verify budget used both to bound a dispatch and, at read time, to compute a live session's elapsed/remaining for the fleet route — see routes/gateState.ts. */
+export const DEFAULT_BUDGET_MS = 20 * 60_000;
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 
 /**
@@ -464,7 +465,7 @@ export class SessionGateItemVerifier implements GateItemVerifier {
    *    to review.
    */
   private awaitDisposition(
-    item: GateItem,
+    _item: GateItem,
     sessionId: string,
     preCaptured?: GateVerifyDispositionPayload,
   ): Promise<GateVerificationResult> {
