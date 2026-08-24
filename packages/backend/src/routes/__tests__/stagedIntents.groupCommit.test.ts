@@ -2185,7 +2185,10 @@ describe('Tier-3 advisory — group-commit path invocation', () => {
       .send({});
 
     expect(commit.status).toBe(200);
-    expect(mockClassifyReadyProposal).toHaveBeenCalledWith('g-commit-tier3');
+    expect(mockClassifyReadyProposal).toHaveBeenCalledWith(
+      'g-commit-tier3',
+      expect.objectContaining({ preCommit: false }),
+    );
   });
 
   it('does not let a rejecting classifyReadyProposal reject, delay, or alter the commit result', async () => {
