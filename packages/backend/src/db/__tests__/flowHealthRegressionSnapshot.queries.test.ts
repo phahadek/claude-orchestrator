@@ -10,9 +10,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../db.js', async () => {
-  const { setupTestDb } = await import(
-    '../../../test/helpers/setupTestDb.js'
-  );
+  const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
   return { db: setupTestDb() };
 });
 
@@ -51,7 +49,11 @@ beforeEach(() => {
 
 describe('getStandardSessionWallClockSample', () => {
   it('excludes in-flight sessions (ended_at IS NULL) from the sample set', () => {
-    insertSession({ sessionId: 's-inflight', startedAt: 500_000, endedAt: null });
+    insertSession({
+      sessionId: 's-inflight',
+      startedAt: 500_000,
+      endedAt: null,
+    });
     insertSession({
       sessionId: 's-done',
       startedAt: 500_000,
