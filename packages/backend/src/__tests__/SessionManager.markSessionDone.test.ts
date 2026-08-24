@@ -385,7 +385,12 @@ describe('terminal_completion_reason', () => {
   it('markSessionDone persists terminal_completion_reason equal to its callSite value (idle→done, immediate)', () => {
     insertSession('sess-done-reason', 'idle');
 
-    markSessionDone('sess-done-reason', Date.now(), null, 'boot_idle_merged_pr');
+    markSessionDone(
+      'sess-done-reason',
+      Date.now(),
+      null,
+      'boot_idle_merged_pr',
+    );
 
     expect(getTerminalCompletionReason('sess-done-reason')).toBe(
       'boot_idle_merged_pr',
@@ -402,12 +407,7 @@ describe('terminal_completion_reason', () => {
 
   it('a deferred markSessionDone transition persists its callSite as the reason once applyPendingDone drains it', () => {
     insertSession('sess-deferred-reason', 'running', 'task-abc');
-    markSessionDone(
-      'sess-deferred-reason',
-      Date.now(),
-      null,
-      'test_call_site',
-    );
+    markSessionDone('sess-deferred-reason', Date.now(), null, 'test_call_site');
     // Not yet applied — no reason written yet.
     expect(getTerminalCompletionReason('sess-deferred-reason')).toBeNull();
 
@@ -438,9 +438,7 @@ describe('terminal_completion_reason', () => {
 
     markSessionSuperseded('sess-superseded-no-reason', Date.now());
 
-    expect(
-      getTerminalCompletionReason('sess-superseded-no-reason'),
-    ).toBeNull();
+    expect(getTerminalCompletionReason('sess-superseded-no-reason')).toBeNull();
   });
 });
 

@@ -16,7 +16,12 @@ function insertSession(
     `INSERT INTO sessions (session_id, task_id, task_url, project_context_url,
        status, started_at, session_type, terminal_completion_reason)
      VALUES (?, 'task-1', 'https://notion.so/task', 'https://notion.so/ctx', ?, ?, 'standard', ?)`,
-  ).run(sessionId, status, Date.now() - 10 * 60 * 1000, terminalCompletionReason);
+  ).run(
+    sessionId,
+    status,
+    Date.now() - 10 * 60 * 1000,
+    terminalCompletionReason,
+  );
 }
 
 beforeEach(() => {
@@ -31,7 +36,11 @@ describe('backfillTerminalCompletionReason', () => {
       event_type: 'session_errored',
       actor_type: 'system',
       actor_id: 'sess-killed',
-      payload: { sessionId: 'sess-killed', status: 'killed', reason: 'user_kill' },
+      payload: {
+        sessionId: 'sess-killed',
+        status: 'killed',
+        reason: 'user_kill',
+      },
     });
 
     const summary = backfillTerminalCompletionReason();
@@ -72,9 +81,7 @@ describe('backfillTerminalCompletionReason', () => {
       },
     });
 
-    expect(getKilledSessionsMissingTerminalCompletionReason()).toHaveLength(
-      0,
-    );
+    expect(getKilledSessionsMissingTerminalCompletionReason()).toHaveLength(0);
     backfillTerminalCompletionReason();
 
     const row = db
@@ -94,9 +101,7 @@ describe('backfillTerminalCompletionReason', () => {
       payload: { sessionId: 'sess-done', status: 'error', reason: 'run_error' },
     });
 
-    expect(getKilledSessionsMissingTerminalCompletionReason()).toHaveLength(
-      0,
-    );
+    expect(getKilledSessionsMissingTerminalCompletionReason()).toHaveLength(0);
   });
 
   it('getLatestSessionErroredReason returns the most recent reason when multiple rows exist', () => {

@@ -239,9 +239,10 @@ describe('SessionManager.abortSession() — terminal_completion_reason', () => {
     const sm = new SessionManager();
     await sm.abortSession('test-session');
 
-    expect(
-      queries.setSessionTerminalCompletionReason,
-    ).toHaveBeenCalledWith('test-session', 'operator_abort');
+    expect(queries.setSessionTerminalCompletionReason).toHaveBeenCalledWith(
+      'test-session',
+      'operator_abort',
+    );
   });
 });
 

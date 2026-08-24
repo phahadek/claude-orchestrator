@@ -288,17 +288,19 @@ describe('SessionManager.markSessionErrored() — terminal_completion_reason', (
   it('persists terminal_completion_reason equal to the provided reason', () => {
     const sm = new SessionManager();
     sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
-    expect(
-      queries.setSessionTerminalCompletionReason,
-    ).toHaveBeenCalledWith('test-session', 'runner_non_zero');
+    expect(queries.setSessionTerminalCompletionReason).toHaveBeenCalledWith(
+      'test-session',
+      'runner_non_zero',
+    );
   });
 
   it('persists the reason for a killed status too', () => {
     const sm = new SessionManager();
     sm.markSessionErrored('test-session', 'killed', 'user_kill');
-    expect(
-      queries.setSessionTerminalCompletionReason,
-    ).toHaveBeenCalledWith('test-session', 'user_kill');
+    expect(queries.setSessionTerminalCompletionReason).toHaveBeenCalledWith(
+      'test-session',
+      'user_kill',
+    );
   });
 });
 
