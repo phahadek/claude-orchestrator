@@ -283,6 +283,7 @@ describe('ReviewOrchestrator.runTestPipeline — re-run on new content hash', ()
       maxRssMb: 0,
       sessionId: null,
       runOrigin: 'pr_pipeline',
+      producer: 'pr_gate',
     });
 
     vi.clearAllMocks();
@@ -314,6 +315,7 @@ describe('ReviewOrchestrator.runTestPipeline — re-run on new content hash', ()
       maxRssMb: 0,
       sessionId: null,
       runOrigin: 'pr_pipeline',
+      producer: 'pr_gate',
     });
   });
 });
@@ -347,6 +349,7 @@ describe('ReviewOrchestrator.runTestPipeline — persistence via the shared lane
       maxRssMb: 0,
       sessionId: null,
       runOrigin: 'pr_pipeline',
+      producer: 'pr_gate',
     });
   });
 
