@@ -74,7 +74,13 @@ export function isTerminalStalePR(pr: PullRequestRow): boolean {
  * reports whether the implementing session is currently mid a single
  * long-running tool call (pending tool_use + live OS process) — resolved by
  * the caller via sessionLifecycle.sessionBusyInFlightToolCall — and
- * suppresses the session_inert fallback below while true.
+ * suppresses the session_inert fallback below while true. isAwaitingOperatorDecision
+ * reports whether the implementing session is parked awaiting an operator
+ * decision (see db/queries.ts's isSessionAwaitingOperatorDecision) — resolved
+ * by the caller — and, like sessionBusyInFlightToolCall, suppresses the
+ * session_inert fallback: a session correctly waiting on an answer only the
+ * operator can give must never be misread as inert purely because it hasn't
+ * emitted a session_events row recently.
  */
 export function classifyStalledPR(
   pr: PullRequestRow,
@@ -84,6 +90,7 @@ export function classifyStalledPR(
   lastActivityAgeMs: number | null = null,
   inertThresholdMs = Infinity,
   sessionBusyInFlightToolCall = false,
+  isAwaitingOperatorDecision = false,
 ): { kind: StalledPRKind } | null {
   // The docs execution flow's never-auto-merged gate: an open, un-merged
   // human_merge_only PR waits indefinitely for a human to merge it — that is
@@ -196,7 +203,8 @@ export function classifyStalledPR(
   if (
     lastActivityAgeMs !== null &&
     lastActivityAgeMs > inertThresholdMs &&
-    !sessionBusyInFlightToolCall
+    !sessionBusyInFlightToolCall &&
+    !isAwaitingOperatorDecision
   ) {
     return { kind: 'session_inert' };
   }

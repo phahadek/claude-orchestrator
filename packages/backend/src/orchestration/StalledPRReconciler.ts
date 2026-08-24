@@ -33,7 +33,10 @@ import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow } from '../db/types';
 import { classifyStalledPR, parseVerdict } from '../github/pollUtils';
 import type { StalledPRKind } from '../github/pollUtils';
-import { sessionBusyInFlightToolCall } from '../session/sessionLifecycle';
+import {
+  sessionBusyInFlightToolCall,
+  sessionAwaitingOperatorDecision,
+} from '../session/sessionLifecycle';
 import {
   isBaseTotalFail,
   isProjectBaseHealthy,
@@ -248,6 +251,15 @@ export class StalledPRReconciler {
         ? sessionBusyInFlightToolCall(pr.session_id)
         : false;
 
+      // Suppress session_inert for an implementing session correctly parked
+      // awaiting an operator decision — regardless of session_events
+      // recency, mirroring isBusyInFlightToolCall above. See
+      // isSessionIdAwaitingOperatorDecision and OrphanedTaskSweeper's
+      // matching guard.
+      const isAwaitingOperatorDecision = pr.session_id
+        ? sessionAwaitingOperatorDecision(pr.session_id)
+        : false;
+
       const stalled = classifyStalledPR(
         effectivePr,
         reviewSessionStatus,
@@ -256,6 +268,7 @@ export class StalledPRReconciler {
         lastActivityAgeMs,
         inertThresholdMs,
         isBusyInFlightToolCall,
+        isAwaitingOperatorDecision,
       );
       if (!stalled) continue;
 

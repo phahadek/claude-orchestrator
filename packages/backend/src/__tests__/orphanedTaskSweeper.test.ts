@@ -32,6 +32,8 @@ vi.mock('../db/queries.js', () => ({
   hasActiveSessionForTask: vi.fn(),
   hasNonTerminalPlanningSessionForTask: vi.fn(() => false),
   isSessionAwaitingCapabilityDisposition: vi.fn(() => false),
+  isSessionAwaitingOperatorDecision: vi.fn(() => false),
+  isOperatorDecisionPastWindow: vi.fn(() => false),
   getPRByNotionTaskId: vi.fn(() => null),
   // sessionLifecycle.ts's sessionDidWork (called by the sweeper's
   // ops/docs fallback path) is keyed on session id, not task id — kept
@@ -76,6 +78,8 @@ import {
   hasActiveSessionForTask,
   hasNonTerminalPlanningSessionForTask,
   isSessionAwaitingCapabilityDisposition,
+  isSessionAwaitingOperatorDecision,
+  isOperatorDecisionPastWindow,
   getPRByNotionTaskId,
   getLocalBranchBySession,
   setSessionPauseReason,
@@ -184,6 +188,8 @@ describe('OrphanedTaskSweeper', () => {
     vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
     vi.mocked(hasNonTerminalPlanningSessionForTask).mockReturnValue(false);
     vi.mocked(isSessionAwaitingCapabilityDisposition).mockReturnValue(false);
+    vi.mocked(isSessionAwaitingOperatorDecision).mockReturnValue(false);
+    vi.mocked(isOperatorDecisionPastWindow).mockReturnValue(false);
     vi.mocked(getPRByNotionTaskId).mockReturnValue(null);
     vi.mocked(getLocalBranchBySession).mockReturnValue(undefined);
     vi.mocked(setSessionPauseReason).mockClear();
@@ -805,6 +811,72 @@ describe('OrphanedTaskSweeper', () => {
     expect(backend.updateStatus).not.toHaveBeenCalled();
     expect(setSessionPauseReason).not.toHaveBeenCalled();
     expect(recordEvent).not.toHaveBeenCalled();
+  });
+
+  it('never nudges or reverts an idle session parked awaiting an operator decision, within the bounded window', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    const endedAt = Date.now() - 10 * 60 * 1000; // ended 10 min ago (past grace)
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession('idle', 30 * 60 * 1000, endedAt) as ReturnType<
+        typeof getLatestCodeSessionByNotionTaskId
+      >,
+    );
+    vi.mocked(isSessionAwaitingOperatorDecision).mockReturnValue(true);
+    vi.mocked(isOperatorDecisionPastWindow).mockReturnValue(false);
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      enqueueFeedback,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(enqueueFeedback).not.toHaveBeenCalled();
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(setSessionPauseReason).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalled();
+  });
+
+  it('surfaces (rather than parks forever) a session past the awaiting-operator-decision window', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    const endedAt = Date.now() - 10 * 60 * 1000;
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession('idle', 30 * 60 * 1000, endedAt) as ReturnType<
+        typeof getLatestCodeSessionByNotionTaskId
+      >,
+    );
+    vi.mocked(isSessionAwaitingOperatorDecision).mockReturnValue(true);
+    vi.mocked(isOperatorDecisionPastWindow).mockReturnValue(true);
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      enqueueFeedback,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(enqueueFeedback).not.toHaveBeenCalled();
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(setSessionPauseReason).toHaveBeenCalledWith(
+      'sess-1',
+      'stalled_idle',
+    );
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'task_orphan_surfaced',
+        payload: expect.objectContaining({
+          reason: 'awaiting_operator_decision_timeout',
+        }),
+      }),
+    );
   });
 
   it('surfaces to operator after nudge limit is reached (no revert)', async () => {

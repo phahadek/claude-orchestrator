@@ -127,6 +127,9 @@ import {
   getLatestMcpUnreachableRespawnTimestamp,
   hasMcpUnreachableExhaustedEvent,
   listLiveSessionRows,
+  setSessionAwaitingOperatorDecision,
+  clearSessionAwaitingOperatorDecision,
+  getSessionOperatorQuestion,
 } from '../db/queries';
 import { recoverSession } from './sessionRecovery';
 import {
@@ -4753,6 +4756,53 @@ export class SessionManager extends EventEmitter {
    * terminal resume either — a boot sweep across every terminal session
    * with stale items should not mass-relaunch them.
    */
+  /**
+   * Parks a session awaiting an operator decision, carrying the question it
+   * asked — the generalized sibling of a session.requestCapability staged
+   * intent (see isSessionAwaitingOperatorDecision). Recorded to the audit
+   * log so the question is visible on the operator-facing surfaces that
+   * already read audit_log, not only retrievable by direct DB query.
+   */
+  askOperatorQuestion(sessionId: string, question: string): void {
+    const askedAt = Date.now();
+    setSessionAwaitingOperatorDecision(sessionId, question, askedAt);
+    const session = getSession(sessionId);
+    recordEvent({
+      event_type: 'session_awaiting_operator_decision',
+      actor_type: 'system',
+      actor_id: sessionId,
+      project_id: session?.project_id ?? null,
+      task_id: session?.task_id ?? null,
+      payload: { sessionId, question, askedAt },
+    });
+  }
+
+  /**
+   * Discharges a session's awaiting-operator-decision state and delivers
+   * the operator's answer as ordinary feedback via the existing
+   * enqueueFeedback path — the counterpart to askOperatorQuestion above.
+   * Clears the marker before enqueueing so a concurrently-running
+   * OrphanedTaskSweeper/StalledPRReconciler sweep can never observe the
+   * question as still pending once the answer has been recorded.
+   */
+  async answerOperatorQuestion(
+    sessionId: string,
+    answer: string,
+  ): Promise<void> {
+    const pending = getSessionOperatorQuestion(sessionId);
+    clearSessionAwaitingOperatorDecision(sessionId);
+    const session = getSession(sessionId);
+    recordEvent({
+      event_type: 'session_operator_decision_answered',
+      actor_type: 'human',
+      actor_id: sessionId,
+      project_id: session?.project_id ?? null,
+      task_id: session?.task_id ?? null,
+      payload: { sessionId, question: pending?.question ?? null, answer },
+    });
+    await this.enqueueFeedback(sessionId, 'operator:answer', answer);
+  }
+
   async enqueueFeedback(
     sessionId: string,
     source: string,

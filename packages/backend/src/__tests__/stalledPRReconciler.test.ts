@@ -50,6 +50,7 @@ vi.mock('../config/settings.js', () => ({
 
 vi.mock('../session/sessionLifecycle.js', () => ({
   sessionBusyInFlightToolCall: vi.fn(() => false),
+  sessionAwaitingOperatorDecision: vi.fn(() => false),
 }));
 
 import {
@@ -75,7 +76,10 @@ import {
   hasPrBodyMarkerUpdateSinceTimestamp,
 } from '../audit/AuditLog.js';
 import { typedGetSetting } from '../config/settings.js';
-import { sessionBusyInFlightToolCall } from '../session/sessionLifecycle.js';
+import {
+  sessionBusyInFlightToolCall,
+  sessionAwaitingOperatorDecision,
+} from '../session/sessionLifecycle.js';
 import { StalledPRReconciler } from '../orchestration/StalledPRReconciler.js';
 import type { ServerMessage } from '../ws/types.js';
 
@@ -1203,6 +1207,32 @@ describe('StalledPRReconciler', () => {
       expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
 
       vi.mocked(sessionBusyInFlightToolCall).mockReturnValue(false);
+    });
+
+    it('does not nudge when the session is awaiting an operator decision — regardless of session_events recency', async () => {
+      const pr = makeInertPR();
+      vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+      vi.mocked(getSession).mockImplementation((sessionId: string) => {
+        if (sessionId === 'session-1') return { status: 'idle' } as any;
+        return null as any;
+      });
+      vi.mocked(hasPrBodyMarkerUpdateSinceTimestamp).mockReturnValue(false);
+      vi.mocked(sessionAwaitingOperatorDecision).mockReturnValue(true);
+
+      const { fn: broadcast } = makeBroadcast();
+      const ro = makeReviewOrchestrator();
+      const sm = makeSessionManager();
+      const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+      reconciler.setReviewOrchestrator(ro as any);
+      reconciler.setSessionManager(sm as any);
+
+      await reconciler.reconcileOnce();
+
+      expect(ro.enqueueReview).not.toHaveBeenCalled();
+      expect(sm.relaunchFixerForPR).not.toHaveBeenCalled();
+      expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
+
+      vi.mocked(sessionAwaitingOperatorDecision).mockReturnValue(false);
     });
 
     it('skips entirely (no nudge, no increment) when a review is already in-flight for the PR', async () => {
