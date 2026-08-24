@@ -298,10 +298,13 @@ describe('deriveRecoveryDescriptor', () => {
     ['planning_first_turn_empty', 'redispatch', 'Redispatch'],
     ['planning_terminal_no_decision', 'redispatch', 'Redispatch'],
     ['ops_journal_terminal_incomplete', 'redispatch', 'Redispatch'],
-  ] as const)('%s → redispatch (previously omitted)', (reason, action, label) => {
-    const d = deriveRecoveryDescriptor(reason);
-    expect(d).toEqual({ available: true, action, label });
-  });
+  ] as const)(
+    '%s → redispatch (previously omitted)',
+    (reason, action, label) => {
+      const d = deriveRecoveryDescriptor(reason);
+      expect(d).toEqual({ available: true, action, label });
+    },
+  );
 
   it.each([
     'max_reviews',

@@ -28,7 +28,10 @@ import {
   setPreReviewStage,
   upsertPullRequest,
 } from '../db/queries.js';
-import { isMergeBlockingPause, parsePauseReasonSet } from '../db/pauseReason.js';
+import {
+  isMergeBlockingPause,
+  parsePauseReasonSet,
+} from '../db/pauseReason.js';
 
 const NOW = '2024-01-01T00:00:00Z';
 

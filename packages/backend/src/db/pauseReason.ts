@@ -443,7 +443,10 @@ export interface RecoveryDescriptor {
 // CanonicalPauseReason needs an explicit, reviewed entry here — either a real
 // RecoveryAction or a deliberate 'none' — so adding a new reason without
 // deciding its discharge path is a typecheck failure, not a silent omission.
-const RECOVERY_ACTION_MAP: Record<CanonicalPauseReason, RecoveryAction | 'none'> = {
+const RECOVERY_ACTION_MAP: Record<
+  CanonicalPauseReason,
+  RecoveryAction | 'none'
+> = {
   // redispatch: clear pause + reset crash count + set Ready
   launch_failed: 'redispatch',
   needs_repo: 'redispatch',
@@ -668,7 +671,10 @@ function unknownPauseReasonFallback(raw: string): PauseReasonStruct {
  * the set, since that would make isMergeBlockingPause under-report a pause
  * that fails to parse (see UNKNOWN_FALLBACK's fail-closed blocks_merge:true).
  */
-function coerceArrayElementOrFallback(item: unknown, index: number): PauseReasonStruct {
+function coerceArrayElementOrFallback(
+  item: unknown,
+  index: number,
+): PauseReasonStruct {
   if (item !== null && typeof item === 'object') {
     const coerced = coercePauseReasonObject(item as Record<string, unknown>);
     if (coerced) return coerced;
