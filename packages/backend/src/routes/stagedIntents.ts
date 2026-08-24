@@ -23,6 +23,10 @@ import type {
 } from '../tasks/TaskBackend';
 import type { TaskBodySections } from '../tasks/bodyRender';
 import {
+  splicePatchBodySection,
+  type SplicePatchResult,
+} from '../tasks/bodySections';
+import {
   checkReadiness,
   composeProposedBody,
   ReadinessGateError,
@@ -6398,35 +6402,6 @@ function isArmingReadyIntent(row: StagedIntentRow): boolean {
 }
 
 /**
- * Locates the heading-bounded range of `section` in a flattened markdown
- * body: the heading line's index and the exclusive index of the next
- * heading (or the end of the body). Case/whitespace-insensitive match on
- * the heading text, mirroring NotionClient's locateHeadingSection but
- * against plain text rather than live blocks — modeled on (not a reuse of)
- * readinessGate's own heading walk and the frontend's BodySectionDiff
- * splitter, since neither is a shared section-splitter this can call into.
- */
-function findMarkdownSectionRange(
-  lines: string[],
-  section: string,
-): { start: number; end: number } | null {
-  const target = section.trim().toLowerCase();
-  let start = -1;
-  let end = lines.length;
-  for (let i = 0; i < lines.length; i++) {
-    const heading = lines[i].match(/^#{1,6}\s*(.+)$/);
-    if (!heading) continue;
-    if (start === -1) {
-      if (heading[1].trim().toLowerCase() === target) start = i;
-      continue;
-    }
-    end = i;
-    break;
-  }
-  return start === -1 ? null : { start, end };
-}
-
-/**
  * Result of composePatchBodySectionPreview: `applied: false` replaces the old
  * silent-identity-return — the composer could not simulate the patch (target
  * section missing, or find-text absent from it), so `body` is the input
@@ -6434,11 +6409,7 @@ function findMarkdownSectionRange(
  * discard. `applied: true` means `body` is the spliced result exactly as
  * before.
  */
-export interface PatchComposeResult {
-  body: string;
-  applied: boolean;
-  reason?: string;
-}
+export type PatchComposeResult = SplicePatchResult;
 
 /**
  * Staging-time preview of a task.patchBodySection apply: splices the
@@ -6448,79 +6419,15 @@ export interface PatchComposeResult {
  * remove) `applied: false` is reported alongside the unchanged body, since
  * apply time remains the sole authority that fails explicitly (and does so
  * loudly — see NotionClient.patchBodySection's identical-condition throw).
+ * Delegates to the shared splicer (bodySections.ts) — apply-time writers
+ * (LocalTaskBackend.patchBodySection) call the same function.
  */
 export function composePatchBodySectionPreview(
   storedBody: string,
   section: string,
   patch: PatchBodySectionOperation,
 ): PatchComposeResult {
-  const lines = storedBody.split('\n');
-  const range = findMarkdownSectionRange(lines, section);
-
-  if (patch.operation === 'remove') {
-    if (!range) {
-      return {
-        body: storedBody,
-        applied: false,
-        reason: `section "${section}" not found`,
-      };
-    }
-    return {
-      body: [...lines.slice(0, range.start), ...lines.slice(range.end)].join(
-        '\n',
-      ),
-      applied: true,
-    };
-  }
-
-  if (patch.operation === 'append') {
-    if (!range) {
-      return {
-        body: [
-          storedBody.trimEnd(),
-          '',
-          `## ${section}`,
-          '',
-          patch.content,
-        ].join('\n'),
-        applied: true,
-      };
-    }
-    return {
-      body: [
-        ...lines.slice(0, range.end),
-        patch.content,
-        ...lines.slice(range.end),
-      ].join('\n'),
-      applied: true,
-    };
-  }
-
-  // replace
-  if (!range) {
-    return {
-      body: storedBody,
-      applied: false,
-      reason: `section "${section}" not found`,
-    };
-  }
-  const sectionText = lines.slice(range.start + 1, range.end).join('\n');
-  if (!sectionText.includes(patch.find)) {
-    return {
-      body: storedBody,
-      applied: false,
-      reason: `find text not present in section "${section}"`,
-    };
-  }
-  const mutated = sectionText.replace(patch.find, patch.replaceWith);
-  return {
-    body: [
-      ...lines.slice(0, range.start + 1),
-      mutated,
-      ...lines.slice(range.end),
-    ].join('\n'),
-    applied: true,
-  };
+  return splicePatchBodySection(storedBody, section, patch);
 }
 
 /**

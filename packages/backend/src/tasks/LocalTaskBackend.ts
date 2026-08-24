@@ -8,6 +8,7 @@ import type {
   NewTaskFields,
   TaskPropertiesPatch,
   TaskWriteOptions,
+  PatchBodySectionOperation,
 } from './TaskBackend';
 import type { ResolvedTask } from './types';
 import type { NotionTask } from '../notion/types';
@@ -16,6 +17,8 @@ import { DependencyResolver } from '../notion/DependencyResolver';
 import { upsertTaskCache } from '../db/queries';
 import { logger } from '../logger';
 import { ProjectService } from '../projects/ProjectService';
+import { renderTaskBodyMarkdown, type TaskBodySections } from './bodyRender';
+import { splicePatchBodySection } from './bodySections';
 
 /**
  * Thrown when a milestone registered in the orchestrator DB has no matching
@@ -48,6 +51,13 @@ interface LocalTask {
   files_affected?: string[];
   notes?: string;
   reviewer?: string[]; // GitHub usernames to auto-request for review (corporate mode)
+  /**
+   * Full page body as raw markdown (see the YAML task-backend write surface
+   * design). Absent on legacy tasks that predate this field — such tasks
+   * fall back to the fielded (context/acceptance_criteria/files_affected/
+   * notes) assembly, and get implicitly migrated to `body` the first time
+   * updateBody/patchBodySection touches them.
+   */
   body?: string;
 }
 
@@ -338,8 +348,16 @@ export class LocalTaskBackend implements TaskBackend {
     const file = this.readFile();
     const found = this.findTaskById(file, externalId);
     if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
-    const task = found.task;
+    if (found.task.body !== undefined) return found.task.body;
+    return this.assembleFieldedBody(found.task);
+  }
 
+  /**
+   * Legacy fielded assembly (context/acceptance_criteria/files_affected/
+   * notes) — used as fetchTaskPage's fallback for tasks with no `body` yet,
+   * and as the splice base for patchBodySection against such a task.
+   */
+  private assembleFieldedBody(task: LocalTask): string {
     const sections: string[] = [`# ${task.name}`];
     if (task.context?.trim()) {
       sections.push(`## Context\n${task.context.trim()}`);
@@ -358,6 +376,37 @@ export class LocalTaskBackend implements TaskBackend {
       sections.push(`## Notes\n${task.notes.trim()}`);
     }
     return sections.join('\n\n');
+  }
+
+  async updateBody(
+    taskId: string,
+    sections: TaskBodySections,
+  ): Promise<void> {
+    const externalId = toExternalId(taskId);
+    const file = this.readFile();
+    const found = this.findTaskById(file, externalId);
+    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    found.task.body = renderTaskBodyMarkdown(sections);
+    this.writeFile(file);
+  }
+
+  async patchBodySection(
+    taskId: string,
+    section: string,
+    operation: PatchBodySectionOperation,
+  ): Promise<void> {
+    const externalId = toExternalId(taskId);
+    const file = this.readFile();
+    const found = this.findTaskById(file, externalId);
+    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    const base = found.task.body ?? this.assembleFieldedBody(found.task);
+    const result = splicePatchBodySection(base, section, operation);
+    if (!result.applied) {
+      if (operation.operation === 'remove') return;
+      throw new Error(`[LocalTaskBackend] patchBodySection: ${result.reason}`);
+    }
+    found.task.body = result.body;
+    this.writeFile(file);
   }
 
   async fetchNonMilestoneReadyTasks(
