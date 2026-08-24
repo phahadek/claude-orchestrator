@@ -367,7 +367,10 @@ describe('seedStore.rehomeItemById — item-level rehome independent of source t
       milestone: 'M15',
       spec: 'Re-home me without touching the done source task',
       sources: [
-        { sourceTaskId: 'notion:done-task-2', sourceTaskTitle: 'Done fix task 2' },
+        {
+          sourceTaskId: 'notion:done-task-2',
+          sourceTaskTitle: 'Done fix task 2',
+        },
       ],
       updatedAt: new Date(0).toISOString(),
     });

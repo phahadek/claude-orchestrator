@@ -124,11 +124,12 @@ export function getSeedItemDetail(
  * it's already ✅ Done on the closing milestone). Preserves sources and
  * event history; only the item's milestone changes.
  */
-export function rehomeSeedItem(
-  id: string,
-  targetMilestone: string,
-): SeedItem {
-  return seedStore.rehomeItemById(id, targetMilestone, new Date().toISOString());
+export function rehomeSeedItem(id: string, targetMilestone: string): SeedItem {
+  return seedStore.rehomeItemById(
+    id,
+    targetMilestone,
+    new Date().toISOString(),
+  );
 }
 
 const DEFAULT_LIST_LIMIT = 20;
