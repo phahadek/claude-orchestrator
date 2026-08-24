@@ -28,6 +28,8 @@ import {
   setPreReviewStage,
   setReconcileExhausted,
   upsertPullRequest,
+  incrementStalledPRRetryCount,
+  setStalledRetryBaseExhausted,
 } from '../db/queries.js';
 import { isMergeBlockingPause } from '../db/pauseReason.js';
 
@@ -75,6 +77,21 @@ function getPRRow(prNumber: number, repo = 'owner/repo') {
         pause_reason_set_at: number | null;
         pre_review_stage: string | null;
         reconcile_exhausted: number;
+      }
+    | undefined;
+}
+
+function getRetryBudgetRow(prNumber: number, repo = 'owner/repo') {
+  return db
+    .prepare<{ pr_number: number; repo: string }>(
+      `SELECT stalled_pr_retry_count, stalled_retry_base_exhausted
+       FROM pull_requests
+       WHERE pr_number = @pr_number AND repo = @repo`,
+    )
+    .get({ pr_number: prNumber, repo }) as
+    | {
+        stalled_pr_retry_count: number;
+        stalled_retry_base_exhausted: number;
       }
     | undefined;
 }
@@ -162,5 +179,61 @@ describe('clearTerminalPRFlags — DB helper', () => {
     const after = getPRRow(6);
     expect(after?.pause_reason).toBeNull();
     expect(isMergeBlockingPause(after?.pause_reason ?? null)).toBe(false);
+  });
+
+  it('restores stalled_pr_retry_count and stalled_retry_base_exhausted when clearing a live reconcile_exhausted via human_unpark', () => {
+    insertPR(7);
+    setReconcileExhausted(7, 'owner/repo', true);
+    incrementStalledPRRetryCount(7, 'owner/repo');
+    incrementStalledPRRetryCount(7, 'owner/repo');
+    setStalledRetryBaseExhausted(7, 'owner/repo', true);
+
+    const before = getRetryBudgetRow(7);
+    expect(before?.stalled_pr_retry_count).toBe(2);
+    expect(before?.stalled_retry_base_exhausted).toBe(1);
+
+    clearTerminalPRFlags(7, 'owner/repo', 'human_unpark');
+
+    const after = getRetryBudgetRow(7);
+    expect(after?.stalled_pr_retry_count).toBe(0);
+    expect(after?.stalled_retry_base_exhausted).toBe(0);
+    expect(getPRRow(7)?.reconcile_exhausted).toBe(0);
+  });
+
+  it('does NOT restore the retry budget for a human_unpark that clears a non-exhausted pause (e.g. baseline_escalation_floor)', () => {
+    insertPR(8);
+    setPauseReason(8, 'owner/repo', 'baseline_escalation_floor');
+    incrementStalledPRRetryCount(8, 'owner/repo');
+
+    clearTerminalPRFlags(8, 'owner/repo', 'human_unpark');
+
+    // reconcile_exhausted was never set for this PR, so the budget is left
+    // untouched — nothing charged it in the first place for this pause.
+    const after = getRetryBudgetRow(8);
+    expect(after?.stalled_pr_retry_count).toBe(1);
+  });
+
+  it('an operator rerun (budget restored) does not immediately re-hit the cap — re-escalation only after the restored budget is genuinely spent', () => {
+    insertPR(9);
+    setReconcileExhausted(9, 'owner/repo', true);
+    incrementStalledPRRetryCount(9, 'owner/repo');
+    incrementStalledPRRetryCount(9, 'owner/repo');
+
+    const retryCap = 2;
+    clearTerminalPRFlags(9, 'owner/repo', 'human_unpark');
+
+    // Immediately after the rerun, the restored count is well under the cap.
+    let row = getRetryBudgetRow(9);
+    expect(row?.stalled_pr_retry_count).toBeLessThan(retryCap);
+
+    // The stall persists and genuinely re-drives retryCap more times before
+    // the budget is exhausted again — not on the very next tick.
+    for (let i = 0; i < retryCap; i++) {
+      row = getRetryBudgetRow(9);
+      expect(row?.stalled_pr_retry_count ?? 0).toBeLessThan(retryCap);
+      incrementStalledPRRetryCount(9, 'owner/repo');
+    }
+    row = getRetryBudgetRow(9);
+    expect(row?.stalled_pr_retry_count).toBe(retryCap);
   });
 });

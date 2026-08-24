@@ -2986,6 +2986,16 @@ export function resetStalledPRRetryCountForBaseRecovery(
   prNumber: number,
   repo: string,
 ): void {
+  resetStalledPRRetryBudget(prNumber, repo);
+}
+
+/**
+ * Shared reset for stalled_pr_retry_count + stalled_retry_base_exhausted —
+ * used both by the base-recovery escape (resetStalledPRRetryCountForBaseRecovery)
+ * and by clearTerminalPRFlags's human_unpark branch below, so an operator's
+ * own recovery action restores the same budget it (or the reconciler) spent.
+ */
+function resetStalledPRRetryBudget(prNumber: number, repo: string): void {
   db.prepare<{ pr_number: number; repo: string }>(
     `UPDATE pull_requests SET stalled_pr_retry_count = 0, stalled_retry_base_exhausted = 0 WHERE pr_number = @pr_number AND repo = @repo`,
   ).run({ pr_number: prNumber, repo });
@@ -3846,6 +3856,15 @@ export function clearTerminalPRFlags(
   if (pr?.reconcile_exhausted) {
     if (RECONCILE_EXHAUSTED_CLEAR_ALLOWED_TRIGGERS.has(trigger)) {
       setReconcileExhausted(prNumber, repo, false);
+      // An operator's own human_unpark action discharging a live
+      // reconcile_exhausted escalation must also restore the retry budget
+      // that produced it — otherwise the very next reconciler tick (or the
+      // rerun this trigger accompanies) can fail and re-hit an
+      // already-exhausted counter with zero new attempts, producing a
+      // re-escalation loop the operator has no way out of.
+      if (trigger === 'human_unpark') {
+        resetStalledPRRetryBudget(prNumber, repo);
+      }
     } else {
       logger.info(
         `[clearTerminalPRFlags] PR #${prNumber} (${repo}): leaving reconcile_exhausted set — trigger '${trigger}' is not a trusted escalation-clearing signal`,

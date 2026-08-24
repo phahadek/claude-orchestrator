@@ -92,6 +92,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Static analysis gate failed — fix the reported issues and re-push.',
   rate_limit:
     'API rate limit reached — session paused. Will resume automatically.',
+  stalled_no_relaunch_target:
+    'PR stalled — no session to relaunch a fixer onto. Redispatch required.',
   needs_repo:
     'No repo assigned — assign a target repository before this task can launch.',
   autofix_git_infra_failure:

@@ -10,6 +10,7 @@ export type StalledPRKind =
   | 'conflict_dead_session'
   | 'undelivered_review_feedback'
   | 'orphaned_no_task_link'
+  | 'no_relaunch_target'
   | 'session_inert';
 
 /**
