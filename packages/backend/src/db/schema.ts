@@ -2312,6 +2312,16 @@ export function runMigrations(target: Database.Database): void {
       ON investigation_report_dispatch(report_id, session_id);
   `);
 
+  // image_path: absolute path to a screenshot attachment in the
+  // backend-owned investigation-report-images directory (see
+  // reportStore.ts's getReportImagesDir/writeReportImage) — nullable, most
+  // reports have no attachment.
+  try {
+    target.exec(`ALTER TABLE investigation_report ADD COLUMN image_path TEXT`);
+  } catch {
+    /* already exists */
+  }
+
   // investigation_report.milestone_id: canonicalize pre-existing rows written
   // before createReport/updateDraftReport's resolveMilestoneRowForProject
   // normalization existed — the operator intake (InvestigationReportSection)
