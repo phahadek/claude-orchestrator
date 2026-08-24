@@ -5,16 +5,19 @@ import type { DeployPlanStep } from '../api/deploy';
 import { DeployStepStrip } from './DeployStepStrip';
 import { useMilestoneConvergence } from '../hooks/useMilestoneConvergence';
 import type { MilestoneConvergence } from '@claude-orchestrator/backend/src/convergence/convergenceService';
-import {
-  WRAP_STEP_MARK_WRAPPED,
-  WRAP_STEP_CARRY_GATE_ITEMS,
-  WRAP_STEP_CONFIRM_REPOINT,
-  WRAP_STEP_REPOINT,
-  WRAP_STEP_ADVANCE_MAIN,
-  WRAP_STEP_CONFIRM_RELEASE,
-  WRAP_STEP_CUT_RELEASE,
-} from '@claude-orchestrator/backend/src/deploy/wrapPlaybook';
 import styles from './WrapSection.module.css';
+
+// Mirrors the orchestrator-owned wrap step ids (packages/backend/src/deploy/
+// wrapPlaybook.ts WRAP_STEP_* constants) as literals — a value import of that
+// module would pull backend runtime code (DB queries, ProjectService, etc.)
+// into the frontend bundle.
+const WRAP_STEP_MARK_WRAPPED = 'mark-wrapped';
+const WRAP_STEP_CARRY_GATE_ITEMS = 'carry-gate-items';
+const WRAP_STEP_CONFIRM_REPOINT = 'confirm-repoint-auto-launch';
+const WRAP_STEP_REPOINT = 'repoint-auto-launch';
+const WRAP_STEP_ADVANCE_MAIN = 'advance-main';
+const WRAP_STEP_CONFIRM_RELEASE = 'confirm-cut-release';
+const WRAP_STEP_CUT_RELEASE = 'cut-release';
 
 interface Props {
   activeProjectId: string | null;
