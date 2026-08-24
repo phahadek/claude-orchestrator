@@ -451,6 +451,28 @@ describe('deriveTaskRecoveryDescriptor', () => {
     });
     expect(d).toEqual({ available: false });
   });
+
+  it('reconcileExhausted with no pause_reason of either kind resolves to rerun', () => {
+    const d = deriveTaskRecoveryDescriptor({
+      taskReason: null,
+      prReason: null,
+      hasPR: true,
+      sessionTerminal: false,
+      reconcileExhausted: true,
+    });
+    expect(d).toEqual({ available: true, action: 'rerun', label: 'Rerun' });
+  });
+
+  it('an existing live pause reason takes precedence over reconcileExhausted', () => {
+    const d = deriveTaskRecoveryDescriptor({
+      taskReason: null,
+      prReason: 'ci_failing',
+      hasPR: true,
+      sessionTerminal: false,
+      reconcileExhausted: true,
+    });
+    expect(d).toEqual({ available: true, action: 'resume', label: 'Resume' });
+  });
 });
 
 // ── isMergeBlockingPause ──────────────────────────────────────────────────────

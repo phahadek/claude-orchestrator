@@ -179,6 +179,45 @@ describe('deriveDisplayStatus', () => {
     ).toBe('in_review');
   });
 
+  // ─── reconcileExhausted (orthogonal to pauseReason) ────────────────────────
+
+  it("returns 'needs_attention' when reconcileExhausted is true even with no pauseReason (In Review)", () => {
+    expect(
+      deriveDisplayStatus(
+        makeInput({
+          notionStatus: '👀 In Review',
+          prState: 'open',
+          pauseReason: null,
+          reconcileExhausted: true,
+        }),
+      ),
+    ).toBe('needs_attention');
+  });
+
+  it("returns 'needs_attention' when reconcileExhausted is true even with no pauseReason (outside In Review)", () => {
+    expect(
+      deriveDisplayStatus(
+        makeInput({
+          notionStatus: '🔄 In Progress',
+          pauseReason: null,
+          reconcileExhausted: true,
+        }),
+      ),
+    ).toBe('needs_attention');
+  });
+
+  it("does NOT return 'needs_attention' when reconcileExhausted is false and pauseReason is null", () => {
+    expect(
+      deriveDisplayStatus(
+        makeInput({
+          notionStatus: '🔄 In Progress',
+          pauseReason: null,
+          reconcileExhausted: false,
+        }),
+      ),
+    ).toBe('in_progress');
+  });
+
   // ─── ready_to_merge ────────────────────────────────────────────────────────
 
   it("returns 'ready_to_merge' when notionStatus is '👀 In Review', reviewVerdict is 'approved' and prState is 'open'", () => {

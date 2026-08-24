@@ -369,6 +369,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
   );
   const taskPauseStruct = getTaskPauseReason(row.task_id);
   const effectivePauseStruct = taskPauseStruct ?? pauseStruct;
+  const reconcileExhausted = row.pr_reconcile_exhausted === 1;
 
   const displayStatus = deriveDisplayStatus({
     notionStatus,
@@ -381,6 +382,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     pauseReason: pauseStruct,
     flakeRecoveryAttempts: row.pr_flake_recovery_attempts ?? 0,
     flakeRecoveryMaxRetries: typedGetSetting('flake_recovery_max_retries'),
+    reconcileExhausted,
   });
 
   const totalTokens = {
@@ -398,7 +400,11 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     notionStatus,
     displayStatus,
     pauseReason: effectivePauseStruct?.reason ?? null,
-    pauseDetail: effectivePauseStruct?.detail ?? null,
+    pauseDetail:
+      effectivePauseStruct?.detail ??
+      (reconcileExhausted && !effectivePauseStruct
+        ? 'PR stalled — reconciler retry cap reached. Manual intervention required.'
+        : null),
     priority,
     notionUrl: notionTask?.notionUrl ?? '',
     taskType: notionTask?.type ?? '',
@@ -422,6 +428,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
       sessionTerminal: TERMINAL_SESSION_STATUSES.has(
         row.code_session_status ?? '',
       ),
+      reconcileExhausted,
     }),
   };
 }
@@ -1053,6 +1060,7 @@ export function createTasksRouter(
         sessionTerminal: TERMINAL_SESSION_STATUSES.has(
           row?.code_session_status ?? '',
         ),
+        reconcileExhausted: row?.pr_reconcile_exhausted === 1,
       });
 
       if (!descriptor.available || !descriptor.action) {

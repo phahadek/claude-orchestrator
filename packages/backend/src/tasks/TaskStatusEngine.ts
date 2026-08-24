@@ -34,6 +34,14 @@ export interface TaskStatusInput {
   pauseReason?: PauseReasonStruct | null; // non-null forces needs_attention (unless terminal/approved)
   flakeRecoveryAttempts?: number; // pull_requests.flake_recovery_attempts — how many automatic recovery attempts have run
   flakeRecoveryMaxRetries?: number; // flake_recovery_max_retries setting — budget for automatic recovery
+  /** pull_requests.reconcile_exhausted — StalledPRReconciler's retry-cap
+   *  escalation flag, orthogonal to pause_reason (see db/types.ts). Forces
+   *  needs_attention the same as a live pauseReason, since a PR can be
+   *  escalated (kinds like incomplete_verdict) with no pause_reason entry of
+   *  its own — otherwise the escalation would surface with zero operator-
+   *  visible signal. Never feeds into the automatic-recovery check below —
+   *  reconcile_exhausted has no automatic-recovery notion of its own. */
+  reconcileExhausted?: boolean;
 }
 
 /**
@@ -51,6 +59,7 @@ export function deriveDisplayStatus(input: TaskStatusInput): DisplayStatus {
     pauseReason,
     flakeRecoveryAttempts = 0,
     flakeRecoveryMaxRetries = 0,
+    reconcileExhausted = false,
   } = input;
 
   // A pause whose automatic recovery budget isn't exhausted yet surfaces as a
@@ -80,7 +89,7 @@ export function deriveDisplayStatus(input: TaskStatusInput): DisplayStatus {
     if (reviewVerdict === 'approved' && prState === 'open')
       return 'ready_to_merge';
     if (autoRecovering) return 'auto_recovering';
-    if (pauseReason) return 'needs_attention';
+    if (pauseReason || reconcileExhausted) return 'needs_attention';
     return 'in_review';
   }
 
@@ -93,7 +102,7 @@ export function deriveDisplayStatus(input: TaskStatusInput): DisplayStatus {
   // Any non-null pause_reason marks the task as needing attention — unless it's
   // still within its automatic recovery budget (see autoRecovering above).
   if (autoRecovering) return 'auto_recovering';
-  if (pauseReason) return 'needs_attention';
+  if (pauseReason || reconcileExhausted) return 'needs_attention';
 
   if (notionStatus.includes('In Progress')) return 'in_progress';
 
@@ -158,5 +167,6 @@ export function deriveDisplayStatusFromDb(notionTaskId: string): DisplayStatus {
       null,
     flakeRecoveryAttempts: prRow?.flake_recovery_attempts ?? 0,
     flakeRecoveryMaxRetries: getFlakeRecoveryMaxRetries(),
+    reconcileExhausted: prRow?.reconcile_exhausted === 1,
   });
 }
