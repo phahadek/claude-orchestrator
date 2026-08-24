@@ -68,7 +68,6 @@ vi.mock('../orchestration/baseAttribution.js', () => ({
 import {
   getAllOpenPRs,
   getSession,
-  setPauseReason,
   incrementStalledPRRetryCount,
   setStalledRetryBaseExhausted,
   resetStalledPRRetryCountForBaseRecovery,

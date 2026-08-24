@@ -470,7 +470,11 @@ export async function reconcileOrphanProcesses(
     killCgroup(proc.sessionId);
     if (row.worktree_path) killWorktreeTree(row.worktree_path);
 
-    candidates.push({ pid: proc.pid, sessionId: proc.sessionId, status: row.status });
+    candidates.push({
+      pid: proc.pid,
+      sessionId: proc.sessionId,
+      status: row.status,
+    });
   }
 
   const escalations = await Promise.all(
