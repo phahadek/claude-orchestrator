@@ -34,6 +34,7 @@ import { recordEvent } from '../audit/AuditLog';
 import { placeSessionPid } from '../session/sessionCgroup';
 import { logger } from '../logger';
 import { getCachedType } from './TaskWriteCommands';
+import { recordObservedUsageLimit } from '../orchestration/usageAdmission';
 
 interface AdvisoryFinding {
   detail: string;
@@ -43,7 +44,7 @@ interface AdvisoryFinding {
 
 interface Advisory {
   tier: 'semantic';
-  status: 'pending' | 'clean' | 'flagged' | 'errored';
+  status: 'pending' | 'clean' | 'flagged' | 'errored' | 'usage_limited';
   confidence: number;
   findings: AdvisoryFinding[];
   model: string;
@@ -76,6 +77,9 @@ const CLASSIFY_TIMEOUT_MS = 20_000;
 /** Bounds how many classify subprocesses run at once for a batch of Ready-flips. */
 const MAX_CONCURRENT_CLASSIFICATIONS = 3;
 
+/** Delay before the single retry after a usage-limit termination — a single retry may land after the per-call rate limit has cleared. */
+const USAGE_LIMIT_RETRY_DELAY_MS = 5_000;
+
 const DEFERRAL_CLASSIFIER_PROMPT = `You are a narrow classifier. Your ONLY job is to find sentences in a software task's description that defer a genuine decision to implementation-time — i.e. to "whoever writes the code" — WITHOUT using any of the well-known phrases already caught by a separate deterministic filter. You are looking for PARAPHRASES of those phrases, not the phrases themselves.
 
 Already caught by the deterministic filter (do NOT flag these verbatim phrases — they never reach you):
@@ -99,6 +103,13 @@ interface ClassifyResult {
   findings: AdvisoryFinding[];
 }
 
+/** Shape of `claude --print --output-format json`'s top-level stdout object. */
+interface CliTopLevelJson {
+  result?: string;
+  is_error?: boolean;
+  api_error_status?: number;
+}
+
 /** Tolerates a ```json (or bare ```) fence around the model's reply — the prompt forbids it, but the model emits one anyway. */
 function stripCodeFence(raw: string): string {
   const trimmed = raw.trim();
@@ -106,10 +117,37 @@ function stripCodeFence(raw: string): string {
   return m ? m[1].trim() : trimmed;
 }
 
-function parseClassifyOutput(stdout: string): ClassifyResult {
-  const parsed = JSON.parse(stdout) as {
-    result?: string;
+/** Mirrors eventKind.ts's isUsageLimitResult check, adapted for the one-shot --print JSON payload shape rather than a session 'result' event. */
+function isUsageLimitPayload(parsed: CliTopLevelJson): boolean {
+  return parsed.api_error_status === 429 || parsed.is_error === true;
+}
+
+/**
+ * Detects a usage-limit termination in the raw stdout before it's treated as
+ * an unparseable verdict — the CLI exits 0 on this path and returns the
+ * limit message (not JSON) in `result`, which would otherwise fail
+ * JSON.parse(stripCodeFence(...)) inside parseClassifyOutput and get
+ * misreported as a generic parse error.
+ */
+function detectUsageLimit(stdout: string): {
+  isUsageLimit: boolean;
+  message?: string;
+} {
+  let parsed: CliTopLevelJson;
+  try {
+    parsed = JSON.parse(stdout) as CliTopLevelJson;
+  } catch {
+    return { isUsageLimit: false };
+  }
+  if (!isUsageLimitPayload(parsed)) return { isUsageLimit: false };
+  return {
+    isUsageLimit: true,
+    message: typeof parsed.result === 'string' ? parsed.result : undefined,
   };
+}
+
+function parseClassifyOutput(stdout: string): ClassifyResult {
+  const parsed = JSON.parse(stdout) as CliTopLevelJson;
   // `claude --print --output-format json` wraps the model's reply in a
   // `result` string field; fall back to raw stdout for forward-compat.
   const raw = typeof parsed.result === 'string' ? parsed.result : stdout;
@@ -143,13 +181,36 @@ function parseClassifyOutput(stdout: string): ClassifyResult {
   return { status, confidence, findings };
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Invokes the claude CLI in one-shot headless print mode to classify a task
+ * body for paraphrased deferrals, retrying exactly once after a short delay
+ * if the first attempt hits the shared account's usage limit — a single
+ * retry may land after the per-call rate limit has cleared. Whatever the
+ * retried attempt yields (including a second 'usage_limited') is final; it
+ * is never retried again. Preserves the fail-open contract: 'usage_limited'
+ * and 'errored' both never block or auto-route-back a Ready transition.
+ */
+async function classifyDeferral(body: string): Promise<Advisory> {
+  const first = await classifyDeferralOnce(body);
+  if (first.status !== 'usage_limited') return first;
+  await delay(USAGE_LIMIT_RETRY_DELAY_MS);
+  return classifyDeferralOnce(body);
+}
+
 /**
  * Invokes the claude CLI in one-shot headless print mode to classify a task
  * body for paraphrased deferrals. Fails open: any spawn error, non-zero
  * exit, timeout, or unparseable output resolves to status:'errored' rather
  * than throwing — a classify failure must never block or auto-route-back.
+ * A usage-limit termination (CLI exits 0, payload carries
+ * api_error_status: 429 / is_error: true) resolves to status:'usage_limited'
+ * instead, and feeds the shared usage-admission deferral gate immediately.
  */
-async function classifyDeferral(body: string): Promise<Advisory> {
+async function classifyDeferralOnce(body: string): Promise<Advisory> {
   const model = runtimeSettings.tier3_classifier_model;
   const checkedAt = Date.now();
   return new Promise<Advisory>((resolve) => {
@@ -245,6 +306,23 @@ async function classifyDeferral(body: string): Promise<Advisory> {
         });
         return;
       }
+      const usageLimit = detectUsageLimit(stdout);
+      if (usageLimit.isUsageLimit) {
+        recordObservedUsageLimit(usageLimit.message);
+        logger.warn(
+          '[deferralClassifier] classify subprocess hit the shared account usage limit',
+        );
+        settle({
+          tier: 'semantic',
+          status: 'usage_limited',
+          confidence: 0,
+          findings: [],
+          model,
+          checkedAt,
+        });
+        return;
+      }
+
       try {
         const result = parseClassifyOutput(stdout);
         settle({
