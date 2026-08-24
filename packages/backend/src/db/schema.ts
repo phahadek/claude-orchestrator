@@ -456,6 +456,23 @@ export function runMigrations(target: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_convergence_snapshot_project_milestone_ts
       ON convergence_snapshot(project, milestone, ts DESC);
 
+    -- Trailing 7-day median wall-clock for 'standard' code sessions, written
+    -- by FlowHealthRegressionSnapshotJob only when the computed row differs
+    -- from the latest stored one — mirrors convergence_snapshot's
+    -- dedup-on-write shape above.
+    CREATE TABLE IF NOT EXISTS flow_health_regression_snapshot (
+      id                       TEXT    PRIMARY KEY,
+      ts                       TEXT    NOT NULL,
+      window_start             INTEGER NOT NULL,
+      window_end               INTEGER NOT NULL,
+      sample_count             INTEGER NOT NULL,
+      p50_wall_clock_ms        INTEGER,
+      status                   TEXT    NOT NULL,
+      excluded_artifact_count  INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_flow_health_regression_snapshot_ts
+      ON flow_health_regression_snapshot(ts DESC);
+
     CREATE TABLE IF NOT EXISTS session_feedback_inbox (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
       session_id   TEXT    NOT NULL,

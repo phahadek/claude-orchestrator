@@ -31,6 +31,7 @@ import {
 } from './routes/tasks';
 import { TaskCacheRefresher } from './orchestration/TaskCacheRefresher';
 import { ConvergenceSnapshotJob } from './orchestration/ConvergenceSnapshotJob';
+import { FlowHealthRegressionSnapshotJob } from './orchestration/FlowHealthRegressionSnapshotJob';
 import { FlakyTestRollupJob } from './orchestration/FlakyTestRollupJob';
 import { analyticsRouter } from './routes/analytics';
 import { projectsRouter, setAutoMerger } from './routes/projects';
@@ -655,6 +656,10 @@ const sessionEventsPruner = new SessionEventsPruner();
 // minutes and writes a durable burndown row only when it changes.
 const convergenceSnapshotJob = new ConvergenceSnapshotJob();
 
+// Flow-health regression snapshot: daily trailing-7-day median wall-clock
+// for 'standard' code sessions, written only when it changes.
+const flowHealthRegressionSnapshotJob = new FlowHealthRegressionSnapshotJob();
+
 // Flaky-test rollup: recomputes flagged_flaky_tests_rollup for every project
 // every 15 minutes so lane-health reads a precomputed table instead of
 // scanning full test_run_results history on the request path.
@@ -690,6 +695,7 @@ sessionEventsPruner.register(scheduler);
 stuckSessionMonitor.register(scheduler);
 planUsagePoller.register(scheduler);
 convergenceSnapshotJob.register(scheduler);
+flowHealthRegressionSnapshotJob.register(scheduler);
 flakyTestRollupJob.register(scheduler);
 registerWorktreeReconciler(scheduler);
 registerTempClusterReconciler(scheduler);

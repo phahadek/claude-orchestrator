@@ -106,6 +106,8 @@ import type {
   FlowArmRow,
   ConvergenceSnapshotRow,
   NewConvergenceSnapshotRow,
+  FlowHealthRegressionSnapshotRow,
+  NewFlowHealthRegressionSnapshotRow,
   OpsJournalState,
 } from './types';
 import { FLOW_IDS, DEFAULT_ARM, type FlowId } from '../orchestration/flowArm';
@@ -6613,6 +6615,100 @@ export function listConvergenceSnapshotHistory(
     .all(params) as ConvergenceSnapshotRow[];
 }
 
+// ─── flow_health_regression_snapshot ───────────────────────────────────────
+
+let _stmtInsertFlowHealthRegressionSnapshot: Database.Statement | null = null;
+let _stmtGetLatestFlowHealthRegressionSnapshot: Database.Statement | null =
+  null;
+let _stmtGetStandardSessionWallClockRows: Database.Statement | null = null;
+
+export function insertFlowHealthRegressionSnapshot(
+  row: NewFlowHealthRegressionSnapshotRow,
+): void {
+  _stmtInsertFlowHealthRegressionSnapshot ??=
+    db.prepare<FlowHealthRegressionSnapshotRow>(`
+    INSERT INTO flow_health_regression_snapshot
+      (id, ts, window_start, window_end, sample_count, p50_wall_clock_ms, status, excluded_artifact_count)
+    VALUES
+      (@id, @ts, @window_start, @window_end, @sample_count, @p50_wall_clock_ms, @status, @excluded_artifact_count)
+  `);
+  _stmtInsertFlowHealthRegressionSnapshot.run({
+    id: randomUUID(),
+    ...row,
+  });
+}
+
+/** Latest stored snapshot — the dedup baseline for FlowHealthRegressionSnapshotJob. */
+export function getLatestFlowHealthRegressionSnapshot():
+  | FlowHealthRegressionSnapshotRow
+  | undefined {
+  _stmtGetLatestFlowHealthRegressionSnapshot ??= db.prepare(
+    `SELECT * FROM flow_health_regression_snapshot ORDER BY ts DESC LIMIT 1`,
+  );
+  return _stmtGetLatestFlowHealthRegressionSnapshot.get() as
+    | FlowHealthRegressionSnapshotRow
+    | undefined;
+}
+
+export interface StandardSessionWallClockSample {
+  durationsMs: number[];
+  excludedArtifactCount: number;
+}
+
+/**
+ * Trailing-window wall-clock durations for ended 'standard' sessions, split
+ * from the archived+killed+no-reason "bookkeeping artifact" kills started
+ * before `artifactCutoff` (see FlowHealthRegressionSnapshotJob's doc
+ * comment for why the cutoff is fixed rather than open-ended). In-flight
+ * sessions (ended_at IS NULL) are excluded from both by technical
+ * necessity — they have no wall-clock duration yet. Served by
+ * idx_sessions_session_type_started_at(session_type, started_at DESC).
+ */
+export function getStandardSessionWallClockSample(
+  windowStart: number,
+  windowEnd: number,
+  artifactCutoff: number,
+): StandardSessionWallClockSample {
+  _stmtGetStandardSessionWallClockRows ??= db.prepare<{
+    window_start: number;
+    window_end: number;
+  }>(`
+    SELECT started_at, ended_at, archived, status, terminal_completion_reason
+    FROM sessions
+    WHERE session_type = 'standard'
+      AND started_at >= @window_start
+      AND started_at <= @window_end
+      AND ended_at IS NOT NULL
+  `);
+  const rows = _stmtGetStandardSessionWallClockRows.all({
+    window_start: windowStart,
+    window_end: windowEnd,
+  }) as Array<{
+    started_at: number;
+    ended_at: number;
+    archived: number;
+    status: string;
+    terminal_completion_reason: string | null;
+  }>;
+
+  const durationsMs: number[] = [];
+  let excludedArtifactCount = 0;
+  for (const row of rows) {
+    const isBookkeepingArtifact =
+      row.archived === 1 &&
+      row.status === 'killed' &&
+      !row.terminal_completion_reason &&
+      row.started_at < artifactCutoff;
+    if (isBookkeepingArtifact) {
+      excludedArtifactCount++;
+      continue;
+    }
+    durationsMs.push(row.ended_at - row.started_at);
+  }
+
+  return { durationsMs, excludedArtifactCount };
+}
+
 export interface SchedulerAuditStats {
   job: string;
   lastDurationMs: number | null;
@@ -12422,7 +12518,7 @@ function getRegressedTestsForProject(
   }));
 }
 
-function percentilesOf(samples: number[]): DurationPercentiles {
+export function percentilesOf(samples: number[]): DurationPercentiles {
   if (samples.length === 0) {
     return { p50: null, p90: null, p99: null, sampleCount: 0 };
   }
