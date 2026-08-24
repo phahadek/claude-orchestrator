@@ -4,6 +4,7 @@ import {
   type ProjectTestRunOutcome,
   type ProjectTestRunProducer,
 } from '../hooks/useProjectTestRuns';
+import { Tier3ErrorRateCard } from './Tier3ErrorRateCard';
 import styles from './TestsView.module.css';
 
 const OUTCOME_LABELS: Record<ProjectTestRunOutcome, string> = {
@@ -64,6 +65,7 @@ export function TestsView({ activeProjectId }: Props) {
   if (error) {
     return (
       <div className={styles.container}>
+        <Tier3ErrorRateCard activeProjectId={activeProjectId} />
         <div className={styles.errorBanner}>
           Failed to load test runs: {error}
         </div>
@@ -74,6 +76,7 @@ export function TestsView({ activeProjectId }: Props) {
   if (loading && runs.length === 0) {
     return (
       <div className={styles.container}>
+        <Tier3ErrorRateCard activeProjectId={activeProjectId} />
         <p className={styles.emptyState}>Loading test runs…</p>
       </div>
     );
@@ -82,6 +85,7 @@ export function TestsView({ activeProjectId }: Props) {
   if (runs.length === 0) {
     return (
       <div className={styles.container}>
+        <Tier3ErrorRateCard activeProjectId={activeProjectId} />
         <p className={styles.emptyState} data-testid="tests-view-empty">
           No test runs for this project yet.
         </p>
@@ -91,6 +95,7 @@ export function TestsView({ activeProjectId }: Props) {
 
   return (
     <div className={styles.container} data-testid="tests-view">
+      <Tier3ErrorRateCard activeProjectId={activeProjectId} />
       <div className={styles.runList}>
         {runs.map((run) => (
           <div

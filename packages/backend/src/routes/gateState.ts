@@ -25,8 +25,10 @@ import {
   getFlowRejectionRate,
   getFlakeRecoveryMisclassificationRates,
   getAutoGrantDisagreementRate,
+  getTier3ClassifierErrorRates,
 } from '../db/queries';
 import type { TrustPrecisionFlow, AutoGrantKind } from '../db/queries';
+import { runtimeSettings } from '../config';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { BackendTaskWriteCommands } from '../tasks/TaskWriteCommands';
 import type {
@@ -719,6 +721,38 @@ export function createGateStateRouter(): Router {
     const project =
       typeof req.query.project === 'string' ? req.query.project : undefined;
     res.json(getFlakeRecoveryMisclassificationRates(project));
+  });
+
+  // GET /api/gate/tier3-error-rate?project=<id>
+  // The Tier-3 semantic-advisory classifier's chronic-error-rate signal:
+  // per (project, kind), the rolling-window rate of readiness_override /
+  // tier3_semantic_advisory classify calls resolving 'errored' or
+  // 'usage_limited' (see db/queries.ts's getTier3ClassifierErrorRates),
+  // alongside the configured window/threshold so a systemic classifier
+  // failure surfaces automatically instead of requiring an operator to
+  // notice. Project-only, mirrors /gate/flake-recovery-rate's shape rather
+  // than /gate/trust-rate's (no milestone — readiness_override events don't
+  // need one). Informative only — no gating, no auto-disarm.
+  router.get('/gate/tier3-error-rate', (req: Request, res: Response) => {
+    const project =
+      typeof req.query.project === 'string' ? req.query.project : null;
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    const windowSeconds = runtimeSettings.tier3_error_rate_window_seconds;
+    const thresholds: Record<'errored' | 'usage_limited', number> = {
+      errored: runtimeSettings.tier3_error_rate_errored_threshold,
+      usage_limited: runtimeSettings.tier3_error_rate_usage_limited_threshold,
+    };
+    const rates = getTier3ClassifierErrorRates(project, windowSeconds);
+    res.json(
+      rates.map((r) => ({
+        ...r,
+        threshold: thresholds[r.kind],
+        chronic: r.rate !== null && r.rate >= thresholds[r.kind],
+      })),
+    );
   });
 
   return router;

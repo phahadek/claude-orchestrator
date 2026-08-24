@@ -12238,6 +12238,86 @@ export function getFlakeRecoveryMisclassificationRates(
   });
 }
 
+// ─── Tier-3 classifier chronic-error-rate signal ──────────────────────────
+
+/** The classifier outcomes tracked as a chronic-error signal — see deferralClassifier.ts's Advisory['status']. */
+export type Tier3ClassifierErrorKind = 'errored' | 'usage_limited';
+
+export interface Tier3ClassifierErrorRateResult {
+  project: string;
+  kind: Tier3ClassifierErrorKind;
+  windowSeconds: number;
+  /** All tier3_semantic_advisory classify calls for this project within the window — the shared denominator for both kinds. */
+  total: number;
+  /** Of `total`, the ones that resolved to this kind. */
+  matched: number;
+  /** `matched / total`, or null when there's no denominator yet. */
+  rate: number | null;
+}
+
+let _stmtTier3ClassifierErrorCounts: Database.Statement | null = null;
+
+/**
+ * Per-(project, kind) rolling-window chronic-error rate for the Tier-3
+ * semantic-advisory classifier — the operator-visible signal locked by the
+ * Tier-3 classifier chronic-error-rate signal design (see
+ * classifyReadyProposal, tasks/deferralClassifier.ts, which writes one
+ * `readiness_override` audit_log event with `payload.reason ===
+ * 'tier3_semantic_advisory'` and `payload.status` per classify call — no new
+ * table or write path). `errored` and `usage_limited` are reported as two
+ * independent rates against the same `total` denominator (every classify
+ * call in the window), never combined into one signal — mirrors
+ * getAutoGrantDisagreementRate's per-kind grouping above. Grain is per
+ * project only: `readiness_override` events already carry `project_id`, no
+ * milestone join needed. `now` is injectable for deterministic window-
+ * boundary tests; the window's lower bound (`now - windowSeconds * 1000`) is
+ * inclusive, its upper bound (`now`) is not (a future-dated row can't occur
+ * in practice, but the boundary is defined precisely for the test).
+ * Purely observational — no gating, no auto-disarm.
+ */
+export function getTier3ClassifierErrorRates(
+  project: string,
+  windowSeconds: number,
+  now: number = Date.now(),
+): Tier3ClassifierErrorRateResult[] {
+  _stmtTier3ClassifierErrorCounts ??= db.prepare(`
+    SELECT
+      COUNT(*) AS total,
+      SUM(CASE WHEN json_extract(payload, '$.status') = 'errored' THEN 1 ELSE 0 END) AS errored,
+      SUM(CASE WHEN json_extract(payload, '$.status') = 'usage_limited' THEN 1 ELSE 0 END) AS usageLimited
+    FROM audit_log
+    WHERE event_type = 'readiness_override'
+      AND project_id = ?
+      AND json_extract(payload, '$.reason') = 'tier3_semantic_advisory'
+      AND ts >= ?
+      AND ts < ?
+  `);
+  const cutoff = now - windowSeconds * 1000;
+  const row = _stmtTier3ClassifierErrorCounts.get(project, cutoff, now) as {
+    total: number | null;
+    errored: number | null;
+    usageLimited: number | null;
+  };
+  const total = row.total ?? 0;
+
+  const buildResult = (
+    kind: Tier3ClassifierErrorKind,
+    matched: number,
+  ): Tier3ClassifierErrorRateResult => ({
+    project,
+    kind,
+    windowSeconds,
+    total,
+    matched,
+    rate: total > 0 ? matched / total : null,
+  });
+
+  return [
+    buildResult('errored', row.errored ?? 0),
+    buildResult('usage_limited', row.usageLimited ?? 0),
+  ];
+}
+
 // ─── lane-health rollup ────────────────────────────────────────────────────
 
 /** p50/p90/p99 of a duration distribution, in ms. Null fields mean no samples were available. */

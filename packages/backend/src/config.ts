@@ -926,6 +926,12 @@ export interface RuntimeSettings {
   weekly_usage_pause_threshold_percent: string;
   /** decision.pickOne fields (decisionProposal/investigation/option description) over this many characters must contain a \n\n paragraph break. */
   decision_pick_one_paragraph_threshold: number;
+  /** Tier-3 classifier chronic-error-rate signal: rolling-window size in seconds (see db/queries.ts's getTier3ClassifierErrorRates). */
+  tier3_error_rate_window_seconds: number;
+  /** Fraction (0-1) of tier3_semantic_advisory classify calls resolving 'errored' within the window that's flagged chronic. */
+  tier3_error_rate_errored_threshold: number;
+  /** Fraction (0-1) of tier3_semantic_advisory classify calls resolving 'usage_limited' within the window that's flagged chronic. */
+  tier3_error_rate_usage_limited_threshold: number;
 }
 
 /** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
@@ -1001,6 +1007,15 @@ export const runtimeSettings: RuntimeSettings = {
   milestone_attention_flat_convergence_window_seconds: Number(
     process.env.MILESTONE_ATTENTION_FLAT_CONVERGENCE_WINDOW_SECONDS ??
       48 * 60 * 60,
+  ),
+  tier3_error_rate_window_seconds: Number(
+    process.env.TIER3_ERROR_RATE_WINDOW_SECONDS ?? 7 * 24 * 60 * 60,
+  ),
+  tier3_error_rate_errored_threshold: Number(
+    process.env.TIER3_ERROR_RATE_ERRORED_THRESHOLD ?? 0.5,
+  ),
+  tier3_error_rate_usage_limited_threshold: Number(
+    process.env.TIER3_ERROR_RATE_USAGE_LIMITED_THRESHOLD ?? 0.5,
   ),
   ci_poll_interval_seconds: Number(process.env.CI_POLL_INTERVAL_SECONDS ?? 30),
   ci_poll_max_minutes: Number(process.env.CI_POLL_MAX_MINUTES ?? 30),
