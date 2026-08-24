@@ -106,7 +106,6 @@ function insertSummaryRow(
   );
 }
 
-
 function makeProject(overrides: Partial<ProjectConfig> = {}): ProjectConfig {
   return {
     id: 'proj-1',
