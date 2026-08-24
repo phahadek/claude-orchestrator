@@ -207,6 +207,21 @@ function run(): FlakyTestRollupWorkerResult {
   const { dbPath, projectId, windowN, thresholdK, computedAt } =
     workerData as FlakyTestRollupWorkerData;
   const database = new Database(dbPath);
+  // The main-thread `db` singleton (db.ts) always sets journal_mode = WAL
+  // before any worker can be dispatched against the same file, so this is a
+  // no-op against the real app database — WAL is a persistent, file-level
+  // setting, not a per-connection one. It matters for tests that open their
+  // own short-lived file-backed database without setting it: without WAL, a
+  // second connection to the same file competes for the single rollback-
+  // journal write lock the first (still-open) connection may be holding,
+  // which under host contention surfaces as an intermittent SQLITE_BUSY
+  // failure rather than a deterministic result — this was the actual source
+  // of flakyTestRollupOffMainThread.test.ts's flip/flop, not an undersized
+  // timeout. busy_timeout makes better-sqlite3 retry for up to 5s instead of
+  // throwing immediately on a transient lock, covering the remaining
+  // WAL-mode writer-vs-writer case.
+  database.pragma('journal_mode = WAL');
+  database.pragma('busy_timeout = 5000');
   try {
     const since = getWatermark(database, projectId);
     const candidates = getCandidates(database, projectId, since);

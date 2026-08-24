@@ -30,6 +30,14 @@ describe('replaceFlaggedFlakyTestsRollupOffMainThread', () => {
     tmpDirs.push(dir);
     const file = path.join(dir, 'test.db');
     const db = new Database(file);
+    // Mirrors db.ts's real startup pragmas. Without WAL, this connection
+    // (left open for the lifetime of the test) and the worker's own
+    // connection to the same file compete for a single rollback-journal
+    // write lock, which under host contention throws SQLITE_BUSY
+    // intermittently instead of the deterministic result the assertions
+    // below expect — see flakyTestRollupWorker.ts's matching comment.
+    db.pragma('journal_mode = WAL');
+    db.pragma('busy_timeout = 5000');
     runMigrations(db);
     return { db, file };
   }
@@ -153,6 +161,103 @@ describe('replaceFlaggedFlakyTestsRollupOffMainThread', () => {
     // threads simultaneously) this has been observed exceeding 30s even
     // though the test does trivial work once the worker is up. See the
     // matching comment on db.performance.test.ts's watermark test.
+  }, 60000);
+
+  it('closes the worker thread connection deterministically, independent of elapsed time', async () => {
+    const { db, file } = openFileBackedDb();
+    try {
+      insertTestResult(db, {
+        projectId: 'proj-1',
+        testId: 'test-flaky',
+        name: 'suite > flaky test',
+        outcome: 'passed',
+        createdAt: 0,
+      });
+
+      await replaceFlaggedFlakyTestsRollupOffMainThread(
+        file,
+        'proj-1',
+        20,
+        2,
+        1000,
+      );
+
+      // flakyTestRollupWorker.ts's run() closes its connection in a
+      // `finally` before posting its result message, so by the time this
+      // promise resolves the worker's write lock is already released — not
+      // "eventually", on a timer. busy_timeout = 0 makes this assertion
+      // itself timing-independent: BEGIN IMMEDIATE either acquires the
+      // write lock right away or throws SQLITE_BUSY immediately, with no
+      // window for a slow host to make it flaky either direction.
+      const probe = new Database(file);
+      try {
+        probe.pragma('busy_timeout = 0');
+        expect(() => {
+          probe.exec('BEGIN IMMEDIATE');
+          probe.exec('COMMIT');
+        }).not.toThrow();
+      } finally {
+        probe.close();
+      }
+    } finally {
+      db.close();
+    }
+  }, 60000);
+
+  it('computes correct, race-free results when several projects are dispatched to worker threads concurrently', async () => {
+    const projects = ['proj-a', 'proj-b', 'proj-c', 'proj-d'].map((id) => ({
+      projectId: id,
+      ...openFileBackedDb(),
+    }));
+    try {
+      for (const project of projects) {
+        (['passed', 'failed', 'passed', 'failed'] as const).forEach(
+          (outcome, i) =>
+            insertTestResult(project.db, {
+              projectId: project.projectId,
+              testId: 'test-flaky',
+              name: 'suite > flaky test',
+              outcome,
+              createdAt: i,
+            }),
+        );
+      }
+
+      // Simulates the "many test files spawning their own worker threads
+      // simultaneously" load this test is documented above to run under —
+      // dispatching several worker threads at once, rather than one at a
+      // time, is what actually reproduces host contention instead of just
+      // asserting a single dispatch works in isolation.
+      const results = await Promise.all(
+        projects.map((project) =>
+          replaceFlaggedFlakyTestsRollupOffMainThread(
+            project.file,
+            project.projectId,
+            20,
+            2,
+            1000,
+          ),
+        ),
+      );
+
+      results.forEach((result) => expect(result.itemsProcessed).toBe(1));
+      for (const project of projects) {
+        const rows = project.db
+          .prepare(
+            'SELECT test_id, sample_count, transition_count FROM flagged_flaky_tests_rollup WHERE project_id = ?',
+          )
+          .all(project.projectId) as {
+          test_id: string;
+          sample_count: number;
+          transition_count: number;
+        }[];
+        expect(rows).toEqual([
+          { test_id: 'test-flaky', sample_count: 4, transition_count: 3 },
+        ]);
+      }
+    } finally {
+      for (const project of projects) project.db.close();
+    }
   }, 60000);
 
   it('prunes a flagged rollup row via the worker path once its test_perf_baselines row goes stale, without crossing the watermark again', async () => {
