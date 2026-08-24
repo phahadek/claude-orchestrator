@@ -89,6 +89,7 @@ function baseStoreReturn(overrides: Record<string, unknown> = {}) {
     lastCiBillingBlockedEvent: null,
     lastSessionStartedEvent: null,
     lastSessionEndedEvent: null,
+    lastSessionStatusEvent: null,
     lastCacheUpdatedEvent: null,
     prPipelineStages: new Map(),
     prPipelineFailedCommands: new Map(),

@@ -3,8 +3,9 @@ import type {
   FlowRejectionRateResult,
   TrustPrecisionFlow,
 } from '@claude-orchestrator/backend/src/db/queries';
+import type { GateVerifyFleetState } from '@claude-orchestrator/backend/src/gate/gateService';
 
-export type { FlowRejectionRateResult, TrustPrecisionFlow };
+export type { FlowRejectionRateResult, TrustPrecisionFlow, GateVerifyFleetState };
 
 /** Mirrors the backend's TRUST_PRECISION_FLOWS (routes/gateState.ts) — the flows the /api/gate/trust-rate route accepts. */
 export const TRUST_PRECISION_FLOWS: TrustPrecisionFlow[] = [
@@ -296,6 +297,11 @@ export const gateApi = {
     return apiRequest<FlowRejectionRateResult>(
       `/api/gate/trust-rate${buildQuery({ project, milestone, flow })}`,
     );
+  },
+
+  /** Cross-project snapshot of every in-flight gate-verify session — see GET /api/gate/fleet. */
+  getFleetState(): Promise<GateVerifyFleetState> {
+    return apiRequest<GateVerifyFleetState>('/api/gate/fleet');
   },
 
   /** Changes a gate item's classification tier. */
