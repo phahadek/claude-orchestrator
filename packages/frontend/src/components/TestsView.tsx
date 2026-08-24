@@ -38,7 +38,9 @@ function queuePositions(runs: ProjectTestRunEntry[]): Map<string, number> {
   const positions = new Map<string, number>();
   const queued = runs
     .filter((run) => run.outcome === 'queued')
-    .sort((a, b) => (a.requestedAt ?? a.startedAt) - (b.requestedAt ?? b.startedAt));
+    .sort(
+      (a, b) => (a.requestedAt ?? a.startedAt) - (b.requestedAt ?? b.startedAt),
+    );
   queued.forEach((run, index) => positions.set(run.id, index + 1));
   return positions;
 }

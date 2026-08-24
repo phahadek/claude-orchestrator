@@ -14,7 +14,10 @@ export type ProjectTestRunOutcome =
   | 'running'
   | 'queued';
 
-export type ProjectTestRunProducer = 'session_request' | 'pr_gate' | 'base_health';
+export type ProjectTestRunProducer =
+  | 'session_request'
+  | 'pr_gate'
+  | 'base_health';
 
 export interface ProjectTestRunOutcomeCounts {
   passed: number;

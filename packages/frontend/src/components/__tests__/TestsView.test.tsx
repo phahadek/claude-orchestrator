@@ -28,7 +28,8 @@ describe('TestsView', () => {
           finishedAt: null,
           durationMs: null,
           outcome: 'queued',
-          nextAction: 'Run is queued — waiting for a lane concurrency slot to open.',
+          nextAction:
+            'Run is queued — waiting for a lane concurrency slot to open.',
           outcomeCounts: null,
         },
         {
@@ -61,7 +62,14 @@ describe('TestsView', () => {
           durationMs: 1000,
           outcome: 'passed',
           nextAction: 'No action needed — all tests passed.',
-          outcomeCounts: { passed: 5, failed: 0, skipped: 0, error: 0, other: 0, total: 5 },
+          outcomeCounts: {
+            passed: 5,
+            failed: 0,
+            skipped: 0,
+            error: 0,
+            other: 0,
+            total: 5,
+          },
         },
       ],
     });
