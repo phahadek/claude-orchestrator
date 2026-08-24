@@ -10771,8 +10771,7 @@ export function isSessionAwaitingCapabilityDisposition(
 // answer, and since when."
 
 let _stmtSetSessionAwaitingOperatorDecision: Database.Statement | null = null;
-let _stmtClearSessionAwaitingOperatorDecision: Database.Statement | null =
-  null;
+let _stmtClearSessionAwaitingOperatorDecision: Database.Statement | null = null;
 
 /** Parks a session awaiting an operator decision, carrying the question it asked. */
 export function setSessionAwaitingOperatorDecision(

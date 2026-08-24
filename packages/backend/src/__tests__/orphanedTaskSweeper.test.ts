@@ -865,7 +865,10 @@ describe('OrphanedTaskSweeper', () => {
 
     expect(enqueueFeedback).not.toHaveBeenCalled();
     expect(backend.updateStatus).not.toHaveBeenCalled();
-    expect(setSessionPauseReason).toHaveBeenCalledWith('sess-1', 'stalled_idle');
+    expect(setSessionPauseReason).toHaveBeenCalledWith(
+      'sess-1',
+      'stalled_idle',
+    );
     expect(recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         event_type: 'task_orphan_surfaced',

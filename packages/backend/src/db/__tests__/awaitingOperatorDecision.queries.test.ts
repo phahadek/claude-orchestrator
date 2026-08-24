@@ -95,9 +95,7 @@ describe('awaiting-operator-decision state', () => {
   it('is discharged when the operator answers', () => {
     seedSession('sess-1');
     setSessionAwaitingOperatorDecision('sess-1', 'Question?', 1000);
-    expect(isSessionAwaitingOperatorDecision(getSession('sess-1')!)).toBe(
-      true,
-    );
+    expect(isSessionAwaitingOperatorDecision(getSession('sess-1')!)).toBe(true);
 
     clearSessionAwaitingOperatorDecision('sess-1');
 
@@ -116,9 +114,7 @@ describe('awaiting-operator-decision state', () => {
     expect(isOperatorDecisionPastWindow(row, 60_000, 1000 + 30_000)).toBe(
       false,
     );
-    expect(isOperatorDecisionPastWindow(row, 60_000, 1000 + 60_001)).toBe(
-      true,
-    );
+    expect(isOperatorDecisionPastWindow(row, 60_000, 1000 + 60_001)).toBe(true);
   });
 
   it('isOperatorDecisionPastWindow is false when nothing is pending', () => {
