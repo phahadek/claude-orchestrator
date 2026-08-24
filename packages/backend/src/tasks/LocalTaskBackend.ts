@@ -120,9 +120,7 @@ const PRIORITY_DISPLAY: Record<string, string> = {
 };
 
 function fromDisplayPriority(display: string): string {
-  const entry = Object.entries(PRIORITY_DISPLAY).find(
-    ([, v]) => v === display,
-  );
+  const entry = Object.entries(PRIORITY_DISPLAY).find(([, v]) => v === display);
   return entry ? entry[0] : display;
 }
 

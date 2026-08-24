@@ -191,9 +191,9 @@ describe('LocalTaskBackend.setDependsOn', () => {
     ]);
     const backend = new LocalTaskBackend(tmpDir, 'proj-1');
 
-    await expect(
-      backend.setDependsOn!('yaml:missing', []),
-    ).rejects.toThrow('task not found');
+    await expect(backend.setDependsOn!('yaml:missing', [])).rejects.toThrow(
+      'task not found',
+    );
   });
 });
 
@@ -214,9 +214,9 @@ describe('LocalTaskBackend.setType', () => {
     writeTempTasksYaml(tmpDir, []);
     const backend = new LocalTaskBackend(tmpDir, 'proj-1');
 
-    await expect(
-      backend.setType!('yaml:missing', '💻 Code'),
-    ).rejects.toThrow('task not found');
+    await expect(backend.setType!('yaml:missing', '💻 Code')).rejects.toThrow(
+      'task not found',
+    );
   });
 });
 
