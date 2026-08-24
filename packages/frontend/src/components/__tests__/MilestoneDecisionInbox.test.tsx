@@ -288,11 +288,17 @@ describe('MilestoneDecisionInbox', () => {
 
     fireEvent.click(screen.getByTestId('approve-all-clean'));
 
-    await waitFor(() =>
-      expect(commitBatch).toHaveBeenCalledWith(
-        ['group-a', 'group-b'],
-        undefined,
-      ),
+    // A generous timeout: under the full suite's parallel load this
+    // assertion has been observed to time out at the default 1000ms despite
+    // commitBatch being a mocked, immediately-resolving call — the event
+    // loop itself is what's starved, not the mock.
+    await waitFor(
+      () =>
+        expect(commitBatch).toHaveBeenCalledWith(
+          ['group-a', 'group-b'],
+          undefined,
+        ),
+      { timeout: 5000 },
     );
   });
 
