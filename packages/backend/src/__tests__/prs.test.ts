@@ -117,6 +117,7 @@ import type { SessionManager } from '../session/SessionManager.js';
 import type { NotionClient } from '../notion/NotionClient.js';
 import type { PRMergeWatcher } from '../github/PRMergeWatcher.js';
 import type { PullRequestRow } from '../db/types.js';
+import { formatReviewFeedback } from '../github/reviewUtils.js';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -233,6 +234,7 @@ function makeMockSessionManager(): SessionManager {
     sendOrResume: vi.fn().mockResolvedValue(undefined),
     endSession: vi.fn(),
     markForBranchDeletion: vi.fn(),
+    enqueueFeedback: vi.fn().mockResolvedValue(undefined),
   } as unknown as SessionManager;
 }
 
@@ -1326,6 +1328,78 @@ describe('POST /api/prs/:prNumber/re-review', () => {
 
     // Reset broadcast to no-op
     setPRBroadcast(() => {});
+  });
+
+  it('routes a needs_changes verdict to the implementing session, matching the normal review path', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const needsChangesResult = {
+      prNumber: 42,
+      repo: 'owner/repo',
+      verdict: 'needs_changes' as const,
+      dimensions: [
+        { name: 'Tests', passed: false, notes: 'Missing test coverage.' },
+      ],
+      summary: 'Needs changes.',
+      reviewedAt: '2024-01-01T00:00:00Z',
+    };
+    const prReviewService = {
+      reviewPR: vi.fn().mockResolvedValue(needsChangesResult),
+    } as unknown as PRReviewService;
+    const sessionManager = makeMockSessionManager();
+
+    const res = await supertest(
+      buildApp(undefined, prReviewService, sessionManager),
+    ).post('/api/prs/owner/repo/42/re-review');
+
+    expect(res.status).toBe(200);
+    expect(res.body.feedbackRouted).toBe(true);
+    expect(vi.mocked(sessionManager.enqueueFeedback)).toHaveBeenCalledWith(
+      mockPRRow.session_id,
+      'ai-reviewer',
+      formatReviewFeedback(needsChangesResult, 0, {
+        conflicted: mockPRRow.merge_state === 'dirty',
+        baseBranch: mockPRRow.base_branch ?? undefined,
+      }),
+    );
+  });
+
+  it('does not route feedback for an approved verdict', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const sessionManager = makeMockSessionManager();
+
+    const res = await supertest(
+      buildApp(undefined, makeMockPRReviewService(), sessionManager),
+    ).post('/api/prs/owner/repo/42/re-review');
+
+    expect(res.status).toBe(200);
+    expect(res.body.feedbackRouted).toBe(false);
+    expect(vi.mocked(sessionManager.enqueueFeedback)).not.toHaveBeenCalled();
+  });
+
+  it('skips feedback routing cleanly when the PR has no resolvable implementing session', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRowNoTask);
+    const needsChangesResult = {
+      prNumber: 43,
+      repo: 'owner/repo',
+      verdict: 'needs_changes' as const,
+      dimensions: [
+        { name: 'Tests', passed: false, notes: 'Missing test coverage.' },
+      ],
+      summary: 'Needs changes.',
+      reviewedAt: '2024-01-01T00:00:00Z',
+    };
+    const prReviewService = {
+      reviewPR: vi.fn().mockResolvedValue(needsChangesResult),
+    } as unknown as PRReviewService;
+    const sessionManager = makeMockSessionManager();
+
+    const res = await supertest(
+      buildApp(undefined, prReviewService, sessionManager),
+    ).post('/api/prs/owner/repo/43/re-review');
+
+    expect(res.status).toBe(200);
+    expect(res.body.feedbackRouted).toBe(false);
+    expect(vi.mocked(sessionManager.enqueueFeedback)).not.toHaveBeenCalled();
   });
 });
 
