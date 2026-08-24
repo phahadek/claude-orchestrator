@@ -305,8 +305,12 @@ describe('LocalTaskBackend.createTask', () => {
   });
 
   it('prefixes minted ids with projectId so two projects with the same title never collide in task_cache', async () => {
-    const dirA = fs.mkdtempSync(path.join(os.tmpdir(), 'local-backend-test-a-'));
-    const dirB = fs.mkdtempSync(path.join(os.tmpdir(), 'local-backend-test-b-'));
+    const dirA = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'local-backend-test-a-'),
+    );
+    const dirB = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'local-backend-test-b-'),
+    );
     writeTempTasksYaml(dirA, []);
     writeTempTasksYaml(dirB, []);
     const backendA = new LocalTaskBackend(dirA, 'proj-a');
