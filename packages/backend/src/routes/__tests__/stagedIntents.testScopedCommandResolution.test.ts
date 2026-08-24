@@ -136,7 +136,9 @@ describe('resolveTestRequestExecutionInputs — test_scoped / test_full_run_path
 
     expect(mockGetChangedFiles).not.toHaveBeenCalled();
     expect(mockAdmitTestRequest).toHaveBeenCalledWith(
-      expect.objectContaining({ commands: ['npm run test -w packages/backend'] }),
+      expect.objectContaining({
+        commands: ['npm run test -w packages/backend'],
+      }),
     );
   });
 
@@ -180,7 +182,9 @@ describe('resolveTestRequestExecutionInputs — test_scoped / test_full_run_path
 
     expect(mockGetChangedFiles).toHaveBeenCalledWith('/tmp/wt', 'dev');
     expect(mockAdmitTestRequest).toHaveBeenCalledWith(
-      expect.objectContaining({ commands: ['npm run test -w packages/backend'] }),
+      expect.objectContaining({
+        commands: ['npm run test -w packages/backend'],
+      }),
     );
   });
 });

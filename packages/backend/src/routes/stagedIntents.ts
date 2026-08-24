@@ -174,7 +174,10 @@ import {
   type OrchestratorConfig,
 } from '../session/orchestrator-config';
 import { computeWholeTreeContentHash } from '../session/analyzeGating';
-import { getChangedFiles, expandAutofixCommand } from '../session/autofix-runner';
+import {
+  getChangedFiles,
+  expandAutofixCommand,
+} from '../session/autofix-runner';
 import { matchesPathDiff } from '../deploy/pathDiffPredicate';
 import type { TestCommandResult } from '../session/test-runner';
 import { truncateForDelivery } from '../session/test-runner';
