@@ -14,6 +14,7 @@ import {
   insertSeedItemSource,
   updateSeedItemSourceMergeCommit,
   rehomeSeedItemsBySourceTask,
+  rehomeSeedItemById,
   listSeedItemEvents,
   insertSeedItemEvent,
   getSeedAccretion,
@@ -342,6 +343,35 @@ export function rehomeItemsBySourceTask(
     });
   }
   return seedItemIds;
+}
+
+/**
+ * Re-homes a single seed_item by id onto a target milestone, independent of
+ * its source task — for cases where the source task must not itself be
+ * moved (e.g. it's already ✅ Done on the closing milestone). Preserves the
+ * item's sources and event history; only milestone and updated_at change.
+ */
+export function rehomeItemById(
+  id: string,
+  targetMilestone: string,
+  updatedAt: string,
+): SeedItem {
+  const row = getSeedItem(id);
+  if (!row) {
+    throw new Error(`seed_item: no item ${id} to rehome`);
+  }
+  rehomeSeedItemById(id, targetMilestone, updatedAt);
+  recordEvent({
+    event_type: 'seed_item_rehomed',
+    actor_type: 'system',
+    project_id: row.project,
+    payload: { seedItemId: id, milestone: targetMilestone },
+  });
+  const item = getItem(id);
+  if (!item) {
+    throw new Error(`seed_item: failed to read back item ${id} after rehome`);
+  }
+  return item;
 }
 
 export interface SeedAccretionMarker {

@@ -18,6 +18,7 @@
 //   node seed-state-client.mjs item <seedItemId>
 //   node seed-state-client.mjs detail <seedItemId>
 //   node seed-state-client.mjs event <seedItemId> <json-payload>
+//   node seed-state-client.mjs rehome <seedItemId> <milestone>
 //   node seed-state-client.mjs accrete <json-payload>
 //
 // Example:
@@ -161,6 +162,17 @@ export function appendSeedItemEvent({ host, port, token, seedItemId, event }) {
   });
 }
 
+export function rehomeSeedItem({ host, port, token, seedItemId, milestone }) {
+  return requestSeedState({
+    host,
+    port,
+    token,
+    method: 'POST',
+    path: `/api/seed/items/${encodeURIComponent(seedItemId)}/rehome`,
+    payload: { milestone },
+  });
+}
+
 export function accreteSeedContribution({ host, port, token, contribution }) {
   return requestSeedState({
     host,
@@ -193,6 +205,7 @@ const USAGE =
   '  node seed-state-client.mjs item <seedItemId>\n' +
   '  node seed-state-client.mjs detail <seedItemId>\n' +
   '  node seed-state-client.mjs event <seedItemId> <json-payload>\n' +
+  '  node seed-state-client.mjs rehome <seedItemId> <milestone>\n' +
   '  node seed-state-client.mjs accrete <json-payload>';
 
 async function main() {
@@ -265,6 +278,16 @@ async function main() {
         token,
         seedItemId,
         event,
+      });
+    } else if (command === 'rehome') {
+      const [seedItemId, milestone] = rest;
+      if (!seedItemId || !milestone) return fail(USAGE);
+      result = await rehomeSeedItem({
+        host,
+        port,
+        token,
+        seedItemId,
+        milestone,
       });
     } else if (command === 'accrete') {
       const [payloadJson] = rest;

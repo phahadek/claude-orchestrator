@@ -260,6 +260,10 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
     reason: 'no frontend decision-surface mirror exists yet',
     fixTask: 'seed_item reopen decision-surface mirror (frontend sibling task)',
   },
+  'POST /api/seed/items/:id/rehome': {
+    audience: 'tooling',
+    reason: 'called by packages/backend/scripts/seed-state-client.mjs',
+  },
   'POST /api/seed/backfill': {
     audience: 'tooling',
     reason: 'Remote-Control tooling (seed-state-client.mjs)',

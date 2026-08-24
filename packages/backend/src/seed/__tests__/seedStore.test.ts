@@ -28,6 +28,7 @@ import {
   getAccretionMarker,
   recordAccretionMarker,
   rehomeItemsBySourceTask,
+  rehomeItemById,
   rollbackContribution,
 } from '../seedStore.js';
 
@@ -329,6 +330,57 @@ describe('seedStore.rehomeItemsBySourceTask — moveTask accretion carry', () =>
 
     expect(rehomed).toEqual([]);
     expect(getItem(other.id)?.milestone).toBe('M12');
+  });
+});
+
+describe('seedStore.rehomeItemById — item-level rehome independent of source task', () => {
+  it('moves a seed_item to a target milestone by item id, preserving its sources and event history', () => {
+    const item = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M15',
+      spec: 'Backfill the resolution-review lookback window',
+      sources: [
+        { sourceTaskId: 'notion:done-task', sourceTaskTitle: 'Done fix task' },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+    appendEvent(item.id, {
+      outcome: 'blocked',
+      evidence: { reason: 'awaiting M16 deploy' },
+      at: new Date(1).toISOString(),
+    });
+
+    const rehomed = rehomeItemById(item.id, 'M16', new Date(2).toISOString());
+
+    expect(rehomed.milestone).toBe('M16');
+    const reread = getItem(item.id);
+    expect(reread?.milestone).toBe('M16');
+    expect(reread?.sources).toHaveLength(1);
+    expect(reread?.sources[0].sourceTaskId).toBe('notion:done-task');
+    expect(reread?.events).toHaveLength(1);
+    expect(reread?.events[0]).toMatchObject({ outcome: 'blocked' });
+  });
+
+  it('does not move the source task — only the item — and the item counts against its new milestone, not its old one', () => {
+    const item = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M15',
+      spec: 'Re-home me without touching the done source task',
+      sources: [
+        {
+          sourceTaskId: 'notion:done-task-2',
+          sourceTaskTitle: 'Done fix task 2',
+        },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+
+    rehomeItemById(item.id, 'M16', new Date(1).toISOString());
+
+    const m15Items = listByMilestone('polimarket-analyser', 'M15');
+    const m16Items = listByMilestone('polimarket-analyser', 'M16');
+    expect(m15Items.map((i) => i.id)).not.toContain(item.id);
+    expect(m16Items.map((i) => i.id)).toContain(item.id);
   });
 });
 
