@@ -15,6 +15,16 @@ import { EventEmitter } from 'events';
 import express from 'express';
 import supertest from 'supertest';
 
+const { createTaskMock } = vi.hoisted(() => ({
+  createTaskMock: vi.fn(async () => 'notion:new-followup-task'),
+}));
+vi.mock('../../tasks/TaskBackend', () => ({
+  getTaskBackend: vi.fn().mockReturnValue({
+    type: 'notion',
+    createTask: createTaskMock,
+  }),
+}));
+
 vi.mock('../../db/db', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
   return { db: setupTestDb() };
@@ -103,8 +113,10 @@ beforeEach(() => {
       projectId: 'proj-auto-commit',
       name: 'M12',
       canonicalShortId: 'M12',
+      sourceId: 'db00d3a1-aaaa-bbbb-cccc-1234567890ac',
     });
   }
+  createTaskMock.mockClear();
 });
 
 describe('gate.verify auto-commit — staging-time attempt', () => {

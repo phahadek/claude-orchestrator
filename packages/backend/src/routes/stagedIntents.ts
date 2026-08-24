@@ -5364,7 +5364,7 @@ export function isGateVerifyAutoCommitEligible(row: StagedIntentRow): boolean {
  * park via the sessionManager 'message' listener wired in
  * createStagedIntentsRouter below.
  */
-const gateVerifyAutoCommitInFlight = new Set<string>();
+const gateVerifyAutoCommitInFlight = new Map<string, Promise<boolean>>();
 
 export async function autoCommitGateVerifyIntent(
   row: StagedIntentRow,
@@ -5377,15 +5377,22 @@ export async function autoCommitGateVerifyIntent(
   // sessionManager 'message' listener) can both reach here for the same row
   // in close succession — this synchronous check-and-set (no await between
   // the eligibility re-check above and here) makes only one of them actually
-  // apply/commit, so routeVerificationResult's gate_item_event write and the
-  // session-release call each happen exactly once.
-  if (gateVerifyAutoCommitInFlight.has(fresh.id)) return false;
-  gateVerifyAutoCommitInFlight.add(fresh.id);
-  try {
-    return await commitGateVerifyAutoCommit(fresh, sessionManager, planningOrchestrator);
-  } finally {
+  // apply/commit. A racing caller awaits the SAME in-flight promise rather
+  // than getting a stale `false` back while the first caller's commit is
+  // still running, so routeVerificationResult's gate_item_event write and
+  // the session-release call each happen exactly once, and every caller
+  // still observes the real outcome.
+  const existing = gateVerifyAutoCommitInFlight.get(fresh.id);
+  if (existing) return existing;
+  const promise = commitGateVerifyAutoCommit(
+    fresh,
+    sessionManager,
+    planningOrchestrator,
+  ).finally(() => {
     gateVerifyAutoCommitInFlight.delete(fresh.id);
-  }
+  });
+  gateVerifyAutoCommitInFlight.set(fresh.id, promise);
+  return promise;
 }
 
 async function commitGateVerifyAutoCommit(
