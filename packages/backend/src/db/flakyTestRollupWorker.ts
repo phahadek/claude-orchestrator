@@ -54,6 +54,35 @@ interface FlakyTestRollupWorkerResult {
 // last real digest update is the only available signal to prune it.
 const GHOST_STALE_MS = 7 * 24 * 60 * 60 * 1000;
 
+// Mirrors hasGhostFlaggedFlakyTests in db/queries.ts — same WHERE clause as
+// the DELETE below, wrapped in a read-only EXISTS check. A read never blocks
+// on, or is blocked by, a concurrent writer under WAL mode, so this can run
+// on every tick for free while the DELETE (a write, contending for the
+// single shared writer lock with the main-thread connection) only fires
+// when it would actually change something.
+function hasGhostFlaggedFlakyTests(
+  database: Database.Database,
+  projectId: string,
+  computedAt: number,
+): boolean {
+  const row = database
+    .prepare(
+      `SELECT EXISTS(
+         SELECT 1 FROM flagged_flaky_tests_rollup
+         WHERE project_id = @project_id
+           AND test_id NOT IN (
+             SELECT test_id FROM test_perf_baselines
+             WHERE project_id = @project_id AND updated_at > @stale_before
+           )
+       ) AS has_ghost`,
+    )
+    .get({
+      project_id: projectId,
+      stale_before: computedAt - GHOST_STALE_MS,
+    }) as { has_ghost: number };
+  return row.has_ghost === 1;
+}
+
 function pruneGhostFlaggedFlakyTests(
   database: Database.Database,
   projectId: string,
@@ -225,11 +254,13 @@ function run(): FlakyTestRollupWorkerResult {
   try {
     const since = getWatermark(database, projectId);
     const candidates = getCandidates(database, projectId, since);
-    const ghostsPruned = pruneGhostFlaggedFlakyTests(
+    const ghostsPruned = hasGhostFlaggedFlakyTests(
       database,
       projectId,
       computedAt,
-    );
+    )
+      ? pruneGhostFlaggedFlakyTests(database, projectId, computedAt)
+      : 0;
 
     if (candidates.testIds.length === 0) {
       return { itemsProcessed: ghostsPruned };
