@@ -17,6 +17,7 @@ import {
   killTestRunCgroup,
   isTestRunCgroupEmpty,
   removeTestRunCgroup,
+  testRunCgroupMemoryCurrentPath,
 } from './sessionCgroup';
 
 export interface TestCommandResult {
@@ -134,6 +135,36 @@ export function getChildRssMb(
     // process may have exited
   }
   return 0;
+}
+
+/**
+ * Current memory footprint of the whole run, in MB. Prefers the run's own
+ * cgroup-v2 leaf (tests/<runId>/memory.current) — inherited at fork, so it
+ * captures the full process tree spawnIntoTestRunCgroup placed there,
+ * including grandchildren that setsid() or get re-parented away from `pid`.
+ * Falls back to `pid`'s own VmRSS (today's behavior — a single /proc read,
+ * no subtree traversal) when no cgroup leaf exists, e.g. a host without the
+ * delegated tests/ subtree set up. Non-Linux platforms return 0, same as
+ * getChildRssMb, so the poller stays disabled there.
+ */
+export function getRunMemoryMb(
+  runId: string,
+  pid: number,
+  _platform: NodeJS.Platform = process.platform,
+  readFn: (path: string) => string = (p) => readFileSync(p, 'utf8') as string,
+): number {
+  if (_platform !== 'linux') return 0;
+  const cgroupPath = testRunCgroupMemoryCurrentPath(runId);
+  if (cgroupPath) {
+    try {
+      const raw = readFn(cgroupPath).trim();
+      const bytes = parseInt(raw, 10);
+      if (!Number.isNaN(bytes)) return bytes / (1024 * 1024);
+    } catch {
+      // leaf not yet created / already torn down — fall through
+    }
+  }
+  return getChildRssMb(pid, _platform, readFn);
 }
 
 /** Bounded retries for verifyRunTeardown — a cgroup.kill signal needs a moment to actually reap before cgroup.procs reflects it as empty. */
@@ -327,7 +358,7 @@ function runCommandWithTimeout(
     if (maxRssMb > 0) {
       rssPoller = setInterval(() => {
         if (proc.pid == null) return;
-        const rss = getChildRssMb(proc.pid);
+        const rss = getRunMemoryMb(runId, proc.pid);
         if (rss > 0 && rss > maxRssMb) {
           escalate(
             false,
