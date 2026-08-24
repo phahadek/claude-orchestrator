@@ -114,6 +114,7 @@ import {
 import {
   createDeployRouter,
   createDeployBuildShaRouter,
+  createWrapRouter,
   setDeployScheduler,
   setDeploySessionManager,
   resumeActiveDeployRuns,
@@ -389,6 +390,7 @@ app.use('/api', createGateStateRouter());
 app.use('/api', createReportStateRouter());
 app.use('/api', createInvestigateRouter(sessionManager));
 app.use('/api', createDeployRouter());
+app.use('/api', createWrapRouter());
 app.use('/api', createSeedStateRouter());
 app.use('/api', createConvergenceRouter(sessionManager));
 app.use('/api', createArchitectureRouter());

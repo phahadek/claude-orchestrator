@@ -188,6 +188,148 @@ describe('deploy_run: run-state store', () => {
   });
 });
 
+describe('deploy_run: (project, kind) exclusivity — a wrap run is independent of a project\'s deploy lock', () => {
+  it('defaults kind to "deploy" when unset', () => {
+    const run = startDeployRun({
+      project: 'claude-orchestrator',
+      targetSha: 'sha1',
+      startedAt: '2026-07-20T00:00:00.000Z',
+    });
+    expect(run.kind).toBe('deploy');
+  });
+
+  it('allows a deploy run and a wrap run to be active concurrently for the same project', () => {
+    const deployRun = startDeployRun({
+      project: 'claude-orchestrator',
+      kind: 'deploy',
+      targetSha: 'sha1',
+      startedAt: '2026-07-20T00:00:00.000Z',
+    });
+    const wrapRun = startDeployRun({
+      project: 'claude-orchestrator',
+      kind: 'wrap',
+      targetSha: 'closing-milestone-id',
+      startedAt: '2026-07-20T00:00:00.000Z',
+    });
+    expect(getActiveDeployRun('claude-orchestrator', 'deploy')).toEqual(
+      deployRun,
+    );
+    expect(getActiveDeployRun('claude-orchestrator', 'wrap')).toEqual(
+      wrapRun,
+    );
+  });
+
+  it('rejects a second concurrent deploy run for the same project', () => {
+    startDeployRun({
+      project: 'claude-orchestrator',
+      kind: 'deploy',
+      targetSha: 'sha1',
+      startedAt: '2026-07-20T00:00:00.000Z',
+    });
+    expect(() =>
+      startDeployRun({
+        project: 'claude-orchestrator',
+        kind: 'deploy',
+        targetSha: 'sha2',
+        startedAt: '2026-07-20T00:01:00.000Z',
+      }),
+    ).toThrow(DeployRunConflictError);
+  });
+
+  it('rejects a second concurrent wrap run for the same project', () => {
+    startDeployRun({
+      project: 'claude-orchestrator',
+      kind: 'wrap',
+      targetSha: 'closing-milestone-id',
+      startedAt: '2026-07-20T00:00:00.000Z',
+    });
+    expect(() =>
+      startDeployRun({
+        project: 'claude-orchestrator',
+        kind: 'wrap',
+        targetSha: 'closing-milestone-id-2',
+        startedAt: '2026-07-20T00:01:00.000Z',
+      }),
+    ).toThrow(DeployRunConflictError);
+  });
+
+  it('a rejected concurrent run does not disturb the other kind\'s active run', () => {
+    const deployRun = startDeployRun({
+      project: 'claude-orchestrator',
+      kind: 'deploy',
+      targetSha: 'sha1',
+      startedAt: '2026-07-20T00:00:00.000Z',
+    });
+    const wrapRun = startDeployRun({
+      project: 'claude-orchestrator',
+      kind: 'wrap',
+      targetSha: 'closing-milestone-id',
+      startedAt: '2026-07-20T00:00:00.000Z',
+    });
+    expect(() =>
+      startDeployRun({
+        project: 'claude-orchestrator',
+        kind: 'wrap',
+        targetSha: 'closing-milestone-id-2',
+        startedAt: '2026-07-20T00:01:00.000Z',
+      }),
+    ).toThrow(DeployRunConflictError);
+    expect(getActiveDeployRun('claude-orchestrator', 'deploy')).toEqual(
+      deployRun,
+    );
+    expect(getActiveDeployRun('claude-orchestrator', 'wrap')).toEqual(
+      wrapRun,
+    );
+  });
+
+  it('getLatestDeployRun scopes to the given kind independently', () => {
+    const deployRun = startDeployRun({
+      project: 'claude-orchestrator',
+      kind: 'deploy',
+      targetSha: 'sha1',
+      startedAt: '2026-07-20T00:00:00.000Z',
+    });
+    completeDeployRun(deployRun.run_id, 'succeeded', '2026-07-20T00:05:00.000Z');
+    const wrapRun = startDeployRun({
+      project: 'claude-orchestrator',
+      kind: 'wrap',
+      targetSha: 'closing-milestone-id',
+      startedAt: '2026-07-20T00:06:00.000Z',
+    });
+    expect(getLatestDeployRun('claude-orchestrator', 'deploy')?.run_id).toBe(
+      deployRun.run_id,
+    );
+    expect(getLatestDeployRun('claude-orchestrator', 'wrap')?.run_id).toBe(
+      wrapRun.run_id,
+    );
+  });
+
+  it('allows a new active wrap run once the prior wrap run completed, unaffected by an active deploy run', () => {
+    startDeployRun({
+      project: 'claude-orchestrator',
+      kind: 'deploy',
+      targetSha: 'sha1',
+      startedAt: '2026-07-20T00:00:00.000Z',
+    });
+    const firstWrap = startDeployRun({
+      project: 'claude-orchestrator',
+      kind: 'wrap',
+      targetSha: 'closing-milestone-id',
+      startedAt: '2026-07-20T00:01:00.000Z',
+    });
+    completeDeployRun(firstWrap.run_id, 'succeeded', '2026-07-20T00:05:00.000Z');
+    const secondWrap = startDeployRun({
+      project: 'claude-orchestrator',
+      kind: 'wrap',
+      targetSha: 'closing-milestone-id-2',
+      startedAt: '2026-07-20T00:06:00.000Z',
+    });
+    expect(getActiveDeployRun('claude-orchestrator', 'wrap')).toEqual(
+      secondWrap,
+    );
+  });
+});
+
 describe('report-in helper posts the deployed sha', () => {
   it('reportProjectDeploy is the helper the engine calls after verification', () => {
     reportProjectDeploy('claude-orchestrator', 'deployed-sha');

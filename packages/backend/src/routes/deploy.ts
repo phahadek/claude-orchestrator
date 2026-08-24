@@ -17,6 +17,11 @@ import {
 import type { StepDescriptor } from '../deploy/playbookSchema';
 import { loadDeployPlaybook } from '../deploy/loadPlaybook';
 import {
+  buildWrapPlaybook,
+  createWrapShellRunner,
+  WRAP_STATIC_BINDINGS,
+} from '../deploy/wrapPlaybook';
+import {
   getProjectRowById,
   getProjectDeployedShaRow,
   listMergedSince,
@@ -596,6 +601,187 @@ export function createDeployRouter(): Router {
       behind: { count: behindItems.length, items: behindItems },
       plan,
     });
+  });
+
+  return router;
+}
+
+// ─── Milestone wrap ─────────────────────────────────────────────────────────
+// Drives the `wrap` deploy_run kind — the orchestrator-owned milestone-wrap
+// playbook (see deploy/wrapPlaybook.ts) on the same DeployOrchestrator engine
+// a project's deploy runs on. A wrap run's exclusivity lock is scoped to
+// (project, 'wrap'), independent of that project's (project, 'deploy') lock
+// — a deploy and a wrap can run concurrently for the same project.
+
+/**
+ * Resolves a wrap `confirm-gate` step's operator disposition — parked here
+ * (not auto-approved like a deploy's) because, unlike a deploy launch, a
+ * wrap's two confirm-gates (repoint auto-launch, cut the release) are the
+ * live go/no-go the operator hasn't already given by the time
+ * `/wrap/launch` is called.
+ */
+class WrapConfirmGateController {
+  private readonly pending = new Map<string, (approved: boolean) => void>();
+
+  private key(runId: string, stepId: string): string {
+    return `${runId}:${stepId}`;
+  }
+
+  wait(runId: string, stepId: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      this.pending.set(this.key(runId, stepId), resolve);
+    });
+  }
+
+  /** Resolves a pending wait; returns false if there was none (already settled, or never dispatched). */
+  resolve(runId: string, stepId: string, approved: boolean): boolean {
+    const key = this.key(runId, stepId);
+    const resolve = this.pending.get(key);
+    if (!resolve) return false;
+    this.pending.delete(key);
+    resolve(approved);
+    return true;
+  }
+}
+
+const wrapConfirmGates = new WrapConfirmGateController();
+
+export function createWrapRouter(): Router {
+  const router = Router();
+
+  // POST /api/wrap/launch
+  //   { projectId, closingMilestoneId, nextMilestoneId, releaseVersion }
+  // Starts a `wrap` deploy_run for the given project, driving the 5-step
+  // milestone-wrap playbook. A fresh DeployOrchestrator is constructed per
+  // call (the playbook is built with this call's specific milestone ids/
+  // release version baked in — see wrapPlaybook.ts), unlike the cached
+  // per-project deploy orchestrator above.
+  router.post(
+    '/wrap/launch',
+    asyncHandler(async (req: Request, res: Response) => {
+      const body = req.body as {
+        projectId?: unknown;
+        closingMilestoneId?: unknown;
+        nextMilestoneId?: unknown;
+        releaseVersion?: unknown;
+      };
+      const projectId =
+        typeof body.projectId === 'string' ? body.projectId : null;
+      const closingMilestoneId =
+        typeof body.closingMilestoneId === 'string'
+          ? body.closingMilestoneId
+          : null;
+      const nextMilestoneId =
+        typeof body.nextMilestoneId === 'string' ? body.nextMilestoneId : null;
+      const releaseVersion =
+        typeof body.releaseVersion === 'string' ? body.releaseVersion : null;
+      if (
+        !projectId ||
+        !closingMilestoneId ||
+        !nextMilestoneId ||
+        !releaseVersion
+      ) {
+        res.status(400).json({
+          error:
+            'projectId, closingMilestoneId, nextMilestoneId, and releaseVersion are required',
+        });
+        return;
+      }
+
+      const project = getProjectRowById(projectId);
+      if (!project) {
+        res.status(404).json({ error: `unknown project ${projectId}` });
+        return;
+      }
+      const repoUrl = project.github_repo
+        ? `https://github.com/${project.github_repo}.git`
+        : project.project_dir;
+
+      const playbook = buildWrapPlaybook({
+        projectId,
+        closingMilestoneId,
+        nextMilestoneId,
+        releaseVersion,
+        repoUrl,
+      });
+      const orchestrator = new DeployOrchestrator(
+        projectId,
+        project.project_dir,
+        {
+          loadPlaybook: () => ({ ok: true, playbook }),
+          loadDeployBindings: () => ({
+            ok: true,
+            bindings: WRAP_STATIC_BINDINGS,
+            bindingsPath: null,
+          }),
+          runShell: createWrapShellRunner(),
+          spawnAgenticStep: (input) => {
+            logger.error(
+              `[wrap] run ${input.runId}: unexpected agentic step "${input.step.id}" — the wrap playbook declares none`,
+            );
+          },
+          waitForConfirmGate: (input) =>
+            wrapConfirmGates.wait(input.runId, input.step.id),
+        },
+        'wrap',
+      );
+
+      try {
+        const run = await orchestrator.startDeploy(closingMilestoneId);
+        res.status(202).json({ run });
+      } catch (err) {
+        if (err instanceof DeployRunConflictError) {
+          res.status(409).json({ error: err.message });
+          return;
+        }
+        res.status(500).json({
+          error: err instanceof Error ? err.message : 'wrap launch failed',
+        });
+      }
+    }),
+  );
+
+  // POST /api/wrap/confirm  { runId, stepId, approved }
+  // Resolves an in-flight wrap run's pending confirm-gate step.
+  router.post('/wrap/confirm', (req: Request, res: Response) => {
+    const body = req.body as {
+      runId?: unknown;
+      stepId?: unknown;
+      approved?: unknown;
+    };
+    const runId = typeof body.runId === 'string' ? body.runId : null;
+    const stepId = typeof body.stepId === 'string' ? body.stepId : null;
+    if (!runId || !stepId) {
+      res.status(400).json({ error: 'runId and stepId are required' });
+      return;
+    }
+    const resolved = wrapConfirmGates.resolve(
+      runId,
+      stepId,
+      body.approved === true,
+    );
+    if (!resolved) {
+      res.status(404).json({
+        error: `no pending confirm-gate for run ${runId} step ${stepId}`,
+      });
+      return;
+    }
+    res.status(202).json({ runId, stepId, approved: body.approved === true });
+  });
+
+  // GET /api/wrap/status?projectId=...
+  // The project's active wrap run if any, otherwise its most recent
+  // terminal wrap run, plus its event log — mirrors GET /api/deploy/status.
+  router.get('/wrap/status', (req: Request, res: Response) => {
+    const projectId =
+      typeof req.query.projectId === 'string' ? req.query.projectId : null;
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId is required' });
+      return;
+    }
+    const run = getLatestDeployRun(projectId, 'wrap') ?? null;
+    const events = run ? listDeployRunEvents(run.run_id) : [];
+    res.status(200).json({ run, events });
   });
 
   return router;

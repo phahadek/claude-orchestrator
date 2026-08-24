@@ -319,6 +319,7 @@ export function runMigrations(target: Database.Database): void {
     CREATE TABLE IF NOT EXISTS deploy_run (
       run_id       TEXT    PRIMARY KEY,
       project      TEXT    NOT NULL,
+      kind         TEXT    NOT NULL DEFAULT 'deploy',
       target_sha   TEXT    NOT NULL,
       current_step TEXT,
       status       TEXT    NOT NULL,
@@ -326,9 +327,11 @@ export function runMigrations(target: Database.Database): void {
       completed_at TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_deploy_run_project_status ON deploy_run(project, status);
-    -- At most one active (status = 'running') run per project.
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_deploy_run_active_per_project
-      ON deploy_run(project) WHERE status = 'running';
+    -- At most one active (status = 'running') run per (project, kind) — a
+    -- deploy and a wrap can run concurrently for the same project, but two
+    -- runs of the same kind cannot.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_deploy_run_active_per_project_kind
+      ON deploy_run(project, kind) WHERE status = 'running';
 
     CREATE TABLE IF NOT EXISTS deploy_run_event (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3249,6 +3252,28 @@ export function runMigrations(target: Database.Database): void {
       FOREIGN KEY (migration_reservation_id) REFERENCES migration_reservation(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_migration_reservation_event_res_id ON migration_reservation_event(migration_reservation_id);
+  `);
+
+  // deploy_run.kind: distinguishes a project deploy run from a milestone
+  // wrap run (see deploy/wrapPlaybook.ts). Every pre-existing row predates
+  // the wrap run kind and defaults to 'deploy' via the column default.
+  // idx_deploy_run_active_per_project is replaced by a (project, kind)
+  // exclusivity index so a deploy and a wrap can run concurrently for the
+  // same project, while two runs of the same kind still cannot.
+  try {
+    target.exec(
+      `ALTER TABLE deploy_run ADD COLUMN kind TEXT NOT NULL DEFAULT 'deploy'`,
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!message.includes('duplicate column name')) {
+      throw err;
+    }
+  }
+  target.exec(`DROP INDEX IF EXISTS idx_deploy_run_active_per_project`);
+  target.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_deploy_run_active_per_project_kind
+      ON deploy_run(project, kind) WHERE status = 'running';
   `);
 
   runStructuredResultExtractedClearBackfill(target);

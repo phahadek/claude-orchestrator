@@ -655,9 +655,19 @@ export type NewGateItemEventRow = Omit<GateItemEventRow, 'id'>;
 /** Single-field lifecycle: running -> succeeded | failed | aborted. */
 export type DeployRunStatus = 'running' | 'succeeded' | 'failed' | 'aborted';
 
+/**
+ * `deploy` drives a project's production deploy playbook; `wrap` drives the
+ * orchestrator-owned milestone-wrap playbook (see deploy/wrapPlaybook.ts).
+ * Exclusivity (idx_deploy_run_active_per_project_kind) is scoped to
+ * (project, kind), not project alone — a deploy and a wrap can run
+ * concurrently for the same project, but two runs of the same kind cannot.
+ */
+export type DeployRunKind = 'deploy' | 'wrap';
+
 export interface DeployRunRow {
   run_id: string;
   project: string;
+  kind: DeployRunKind;
   target_sha: string;
   current_step: string | null;
   status: DeployRunStatus;

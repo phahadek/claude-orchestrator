@@ -1451,3 +1451,105 @@ async function flush(): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
 }
+
+describe('DeployOrchestrator: run kind (deploy vs wrap)', () => {
+  it('defaults to the "deploy" kind when none is passed', async () => {
+    const playbook = playbookWith([step({ id: 'build', kind: 'shell' })]);
+    const deps = makeDeps(playbook);
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    expect(run.kind).toBe('deploy');
+  });
+
+  it('starts a run tagged with the given kind, and getActiveDeployRun scopes lookups to it', async () => {
+    const playbook = playbookWith([step({ id: 'mark-wrapped', kind: 'shell' })]);
+    const deps = makeDeps(playbook);
+    const orchestrator = new DeployOrchestrator(
+      'proj',
+      '/tmp/proj',
+      deps,
+      'wrap',
+    );
+    const run = await orchestrator.startDeploy('closing-milestone-id');
+    expect(run.kind).toBe('wrap');
+    expect(getActiveDeployRun('proj', 'wrap')?.run_id).toBe(run.run_id);
+    expect(getActiveDeployRun('proj', 'deploy')).toBeUndefined();
+  });
+
+  it('a deploy run and a wrap run for the same project can be active at once', async () => {
+    const deployPlaybook = playbookWith([step({ id: 'build', kind: 'shell' })]);
+    const wrapPlaybook = playbookWith([
+      step({ id: 'mark-wrapped', kind: 'shell' }),
+    ]);
+    const deployOrchestrator = new DeployOrchestrator(
+      'proj',
+      '/tmp/proj',
+      makeDeps(deployPlaybook, {
+        // Never resolves: keeps this run "running" so it's still active
+        // when the wrap run below starts.
+        runShell: vi.fn(() => new Promise<ShellResult>(() => {})),
+      }),
+    );
+    const wrapOrchestrator = new DeployOrchestrator(
+      'proj',
+      '/tmp/proj',
+      makeDeps(wrapPlaybook),
+      'wrap',
+    );
+
+    const deployRun = await deployOrchestrator.startDeploy('sha-target');
+    const wrapRun = await wrapOrchestrator.startDeploy('closing-milestone-id');
+
+    expect(getActiveDeployRun('proj', 'deploy')?.run_id).toBe(
+      deployRun.run_id,
+    );
+    expect(getActiveDeployRun('proj', 'wrap')?.run_id).toBe(wrapRun.run_id);
+  });
+
+  it('does not overwrite the project deployed-sha record on a successful wrap run', async () => {
+    const playbook = playbookWith([step({ id: 'mark-wrapped', kind: 'shell' })]);
+    const deps = makeDeps(playbook);
+    const orchestrator = new DeployOrchestrator(
+      'proj',
+      '/tmp/proj',
+      deps,
+      'wrap',
+    );
+    await orchestrator.startDeploy('closing-milestone-id');
+    await flush();
+    expect(getProjectDeployedSha('proj')).toBeNull();
+  });
+
+  it("resume() looks up the active run scoped to this orchestrator's kind, leaving a same-project deploy run untouched", async () => {
+    const playbook = playbookWith([step({ id: 'mark-wrapped', kind: 'shell' })]);
+    const { startDeployRun } = await import('../deployService');
+    const deployRun = startDeployRun({
+      project: 'proj',
+      kind: 'deploy',
+      targetSha: 'sha-target',
+      startedAt: now(),
+    });
+    startDeployRun({
+      project: 'proj',
+      kind: 'wrap',
+      targetSha: 'closing-milestone-id',
+      startedAt: now(),
+    });
+
+    const deps = makeDeps(playbook);
+    const orchestrator = new DeployOrchestrator(
+      'proj',
+      '/tmp/proj',
+      deps,
+      'wrap',
+    );
+    await orchestrator.resume();
+    await flush();
+
+    expect(deps.runShell).toHaveBeenCalled();
+    expect(getActiveDeployRun('proj', 'wrap')).toBeUndefined();
+    expect(getActiveDeployRun('proj', 'deploy')?.run_id).toBe(
+      deployRun.run_id,
+    );
+  });
+});
