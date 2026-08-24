@@ -2005,6 +2005,43 @@ export function getSessionDeclaredWrites(
   }
 }
 
+/**
+ * Durable per-session capture of a Docs task's declared Target surface
+ * (see docs/targetSurface.ts), written once at SessionManager.start()
+ * spawn time for 'docs' sessions and read back wherever usesWorktree's
+ * worktree-ownership decision must be reconstructed after spawn — e.g.
+ * classifyWorktreeTeardownRefusal in SessionManager.ts, which needs to know
+ * whether a given 'docs' session was worktree-eligible without re-deriving
+ * it from a live task-body fetch. Backed by the `sessions.metadata` JSON
+ * column, same as setSessionDeclaredWrites above.
+ */
+export function setSessionDocsTargetSurface(
+  sessionId: string,
+  docsTargetSurface: string,
+): void {
+  setSessionMetadata(sessionId, { docsTargetSurface });
+}
+
+/** Reads back the Target surface captured by setSessionDocsTargetSurface. Undefined when never captured (non-docs session, or dispatched before this feature). */
+export function getSessionDocsTargetSurface(
+  sessionId: string,
+): string | undefined {
+  const row = db
+    .prepare('SELECT metadata FROM sessions WHERE session_id = ?')
+    .get(sessionId) as { metadata: string | null } | undefined;
+  if (!row?.metadata) return undefined;
+  try {
+    const parsed = JSON.parse(row.metadata) as {
+      docsTargetSurface?: unknown;
+    };
+    return typeof parsed.docsTargetSurface === 'string'
+      ? parsed.docsTargetSurface
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function setSessionMetadata(
   sessionId: string,
   fields: Record<string, unknown>,

@@ -177,6 +177,23 @@ export interface AuditEvent {
 }
 
 /**
+ * Payload shape for worktree_teardown_refused — only emitted for the
+ * anomalous classification (a session type expected to own a worktree
+ * presenting a path that isn't removable). The expected classification
+ * (a planning-type session with no worktree of its own) is reported at
+ * debug log level only and never reaches the audit log — see
+ * classifyWorktreeTeardownRefusal in SessionManager.ts.
+ */
+export interface WorktreeTeardownRefusedPayload {
+  sessionId: string;
+  worktreePath: string;
+  projectDir: string;
+  source: 'cleanupPartialWorktree' | 'cleanupWorktree';
+  expected: boolean;
+  reason?: string;
+}
+
+/**
  * trigger_source discriminates the two dispatch call sites so evaluator vs
  * operator activity can be told apart in the audit record — see
  * DispatchTriggerEvaluator.ts and routes/planningLaunch.ts. milestone_id is
