@@ -2,6 +2,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { randomUUID } from 'crypto';
 import { execSync } from 'child_process';
+import { runWithConcurrency } from '../utils/concurrency';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import {
   BackendTaskWriteCommands,
@@ -7545,12 +7546,111 @@ async function precheckGroupCommit(
 }
 
 /**
+ * A task.setDependsOn whose taskId or any dependsOn entry symbolically
+ * references a task.create staged in the same group (see
+ * SYMBOLIC_CREATE_REF_PREFIX) — the only genuine cross-member ordering
+ * dependency commitGroupIntents' apply phase has to honor. Everything else
+ * (including a task.setDependsOn pointed at an already-real taskId) has no
+ * relationship to any other live member and is free to apply concurrently.
+ */
+function hasSymbolicCreateDependency(row: StagedIntentRow): boolean {
+  if (row.kind !== 'task.setDependsOn') return false;
+  const payload = JSON.parse(row.payload) as SetDependsOnPayload;
+  return (
+    parseSymbolicCreateRef(payload.taskId) !== null ||
+    payload.dependsOn.some((dep) => parseSymbolicCreateRef(dep) !== null)
+  );
+}
+
+type ApplyGroupMemberOutcome =
+  | { ok: true; intent: StagedIntent; committedRow: StagedIntentRow }
+  | { ok: false; row: StagedIntentRow; intent: StagedIntent; error: unknown };
+
+/**
+ * Applies one group member and folds in its post-apply bookkeeping
+ * (transition to committed, broadcast, journal mirror, disposition
+ * handoff) — the unit of work commitGroupIntents fans out across
+ * runWithConcurrency for every phase, so a phase with several independent
+ * members pays the max of their apply latencies rather than the sum.
+ * Never throws: failures are captured in the returned outcome so a caller
+ * driving several of these concurrently can let every in-flight member
+ * settle before deciding how to report a failure, instead of an unhandled
+ * rejection aborting its siblings mid-flight.
+ */
+async function applyGroupMember(
+  row: StagedIntentRow,
+  cache: RowToApiCache,
+  trackedFileSetCache: TrackedFileSetCache,
+  createdTaskIds: Map<string, string>,
+  opts: GroupCommitOptions,
+  sessionManager: SessionManager | undefined,
+  planningOrchestrator: PlanningOrchestrator | undefined,
+): Promise<ApplyGroupMemberOutcome> {
+  const intent = rowToApi(row, cache);
+  try {
+    if (intent.kind === 'task.setDependsOn') {
+      const payload = intent.payload as SetDependsOnPayload;
+      const resolveSymbolic = (value: string): string => {
+        const symbolicIntentId = parseSymbolicCreateRef(value);
+        if (!symbolicIntentId) return value;
+        const resolved = createdTaskIds.get(symbolicIntentId);
+        if (!resolved) {
+          throw new TaskReferenceValidationError(
+            `"${value}" references a task.create intent that has not applied ` +
+              'yet in this commit',
+          );
+        }
+        return resolved;
+      };
+      intent.payload = {
+        ...payload,
+        taskId: resolveSymbolic(payload.taskId),
+        dependsOn: payload.dependsOn.map(resolveSymbolic),
+      };
+    }
+    const result = await applyIntent(
+      intent,
+      opts.override ? { reason: opts.reason } : undefined,
+      opts.actorType,
+      opts.triageMilestoneLabel,
+      sessionManager,
+      undefined,
+      trackedFileSetCache,
+    );
+    if (intent.kind === 'task.create') {
+      createdTaskIds.set(intent.id, (result as { id: string }).id);
+    }
+    const committedRow = transitionStagedIntent(intent.id, 'committed', {
+      annotation: readinessAdvisoryAnnotation(intent, result),
+    });
+    broadcastIntentChange(rowToApi(committedRow, cache));
+    mirrorJournalDecisionIfStagedProposal(
+      intent,
+      (result as { previousState?: OpsState } | undefined)?.previousState,
+    );
+    await planningOrchestrator?.handleDisposition({
+      intent: committedRow,
+      disposition: 'approve',
+    });
+    return { ok: true, intent, committedRow };
+  } catch (error) {
+    return { ok: false, row, intent, error };
+  }
+}
+
+/**
  * Atomic, dependency-ordered commit of one task's intent group: applies
  * every live intent all-or-nothing, non-arming kinds first and
- * task.setStatus -> Ready last. Shared by the single-group commit route and
- * the approve-by-standard batch commit route (one call per group, each
- * group's outcome independent of its siblings) so both surfaces apply,
- * annotate, and audit through the exact same path.
+ * task.setStatus -> Ready last. Within each of those two stages, members
+ * with no relationship to one another apply concurrently (bounded by
+ * GROUP_COMMIT_APPLY_CONCURRENCY) rather than one at a time — the sole
+ * exception is a task.setDependsOn that symbolically references a sibling
+ * task.create, which is held to its own stage so every task.create in the
+ * group has already resolved before any such reference is looked up.
+ * Shared by the single-group commit route and the approve-by-standard batch
+ * commit route (one call per group, each group's outcome independent of its
+ * siblings) so both surfaces apply, annotate, and audit through the exact
+ * same path.
  */
 export async function commitGroupIntents(
   groupId: string,
@@ -7725,10 +7825,11 @@ export async function commitGroupIntents(
   // itself a not-yet-created task.create in this same group — the harder
   // twin of the dependsOn-entry case already handled here) and its symbolic
   // dependsOn entries, to real created task ids before that intent is
-  // applied. `ordered` places every task.create ahead of any intent that
-  // references it (splitSession.ts always stages a sibling's task.create
-  // before any task.setDependsOn naming that sibling — see
-  // stageSplitIntents), so the id is always present here.
+  // applied. Every task.create applies in the first stage below, ahead of
+  // any stage that could reference it (splitSession.ts always stages a
+  // sibling's task.create before any task.setDependsOn naming that sibling
+  // — see stageSplitIntents), so the id is always present by the time a
+  // symbolic reference to it is resolved.
   const createdTaskIds = new Map<string, string>();
   // Shared across every member of this commit so rowToApi's
   // computeGroupBlockedSignals (and its listStagedIntentsByGroup re-read +
@@ -7737,175 +7838,172 @@ export async function commitGroupIntents(
   // quadratic pattern on the GET listing routes but never touched this
   // write-path loop.
   const cache = createRowToApiCache();
-  for (const row of ordered) {
-    const intent = rowToApi(row, cache);
-    try {
-      if (intent.kind === 'task.setDependsOn') {
-        const payload = intent.payload as SetDependsOnPayload;
-        const resolveSymbolic = (value: string): string => {
-          const symbolicIntentId = parseSymbolicCreateRef(value);
-          if (!symbolicIntentId) return value;
-          const resolved = createdTaskIds.get(symbolicIntentId);
-          if (!resolved) {
-            throw new TaskReferenceValidationError(
-              `"${value}" references a task.create intent that has not applied ` +
-                'yet in this commit',
-            );
-          }
-          return resolved;
-        };
-        intent.payload = {
-          ...payload,
-          taskId: resolveSymbolic(payload.taskId),
-          dependsOn: payload.dependsOn.map(resolveSymbolic),
-        };
-      }
-      const result = await applyIntent(
-        intent,
-        opts.override ? { reason: opts.reason } : undefined,
-        opts.actorType,
-        opts.triageMilestoneLabel,
-        sessionManager,
-        undefined,
-        trackedFileSetCache,
-      );
-      if (intent.kind === 'task.create') {
-        createdTaskIds.set(intent.id, (result as { id: string }).id);
-      }
-      const committedRow = transitionStagedIntent(intent.id, 'committed', {
-        annotation: readinessAdvisoryAnnotation(intent, result),
-      });
-      broadcastIntentChange(rowToApi(committedRow, cache));
-      mirrorJournalDecisionIfStagedProposal(
-        intent,
-        (result as { previousState?: OpsState } | undefined)?.previousState,
-      );
-      await planningOrchestrator?.handleDisposition({
-        intent: committedRow,
-        disposition: 'approve',
-      });
-      committed.push(intent.id);
-    } catch (err) {
-      const remaining = ordered
-        .map((r) => r.id)
-        .filter((id) => id !== intent.id && !committed.includes(id));
 
-      if (err instanceof ReadinessGateError) {
-        setStagedIntentAnnotation(
-          intent.id,
-          JSON.stringify({ blocked: true, violations: err.violations }),
-        );
-        broadcastIntentById(intent.id);
-        return {
-          status: 409,
-          body: {
-            error: err.message,
-            violations: err.violations,
-            committed,
-            failedId: intent.id,
-            remaining,
-          },
-        };
-      }
-      if (err instanceof GroomingGateError) {
-        setStagedIntentAnnotation(
-          intent.id,
-          JSON.stringify({ blocked: true, reasons: err.reasons }),
-        );
-        broadcastIntentById(intent.id);
-        return {
-          status: 409,
-          body: {
-            error: err.message,
-            reasons: err.reasons,
-            committed,
-            failedId: intent.id,
-            remaining,
-          },
-        };
-      }
-      if (err instanceof HumanApplyOnlyError) {
-        return {
-          status: 403,
-          body: {
-            error: err.message,
-            committed,
-            failedId: intent.id,
-            remaining,
-          },
-        };
-      }
-      if (err instanceof NotOperatorAppliableError) {
-        return {
-          status: 409,
-          body: {
-            error: err.message,
-            committed,
-            failedId: intent.id,
-            remaining,
-          },
-        };
-      }
-      if (
-        err instanceof DependsOnCompletenessError ||
-        err instanceof ManualVerificationStripCompletenessError
-      ) {
-        return {
-          status: 409,
-          body: {
-            error: err.message,
-            committed,
-            failedId: intent.id,
-            remaining,
-          },
-        };
-      }
-      if (err instanceof DeferralOrphansDependentsError) {
-        return {
-          status: 409,
-          body: {
-            error: err.message,
-            dependentTaskIds: err.dependentTaskIds,
-            committed,
-            failedId: intent.id,
-            remaining,
-          },
-        };
-      }
-      if (
-        err instanceof StaleArchUnitVersionError ||
-        err instanceof ArchUnitAlreadySupersededError
-      ) {
-        setStagedIntentAnnotation(
-          intent.id,
-          JSON.stringify({ blocked: true, reasons: [err.message] }),
-        );
-        return {
-          status: 409,
-          body: {
-            error: err.message,
-            committed,
-            failedId: intent.id,
-            remaining,
-          },
-        };
-      }
-      const { reason, redriven } = await routeApplyTimeFailure(
-        row,
-        err,
-        planningOrchestrator,
+  // Three ordered stages, each run with bounded concurrency across its own
+  // members: (1) every non-arming member with no cross-member dependency —
+  // the bulk of a typical group, and the one this fan-out actually speeds
+  // up; (2) non-arming task.setDependsOn members that symbolically
+  // reference a sibling task.create, held back so every task.create from
+  // stage 1 has already resolved into `createdTaskIds`; (3) the
+  // task.setStatus -> Ready arming member(s), which must never apply ahead
+  // of (or concurrently with) any other member's write. A failure in one
+  // stage aborts before the next stage starts, mirroring the original
+  // sequential loop's all-or-nothing short-circuit.
+  const nonArming = ordered.filter((r) => !isArmingReadyIntent(r));
+  const arming = ordered.filter((r) => isArmingReadyIntent(r));
+  const stages: StagedIntentRow[][] = [
+    nonArming.filter((r) => !hasSymbolicCreateDependency(r)),
+    nonArming.filter((r) => hasSymbolicCreateDependency(r)),
+    arming,
+  ].filter((stage) => stage.length > 0);
+
+  const GROUP_COMMIT_APPLY_CONCURRENCY = 6;
+
+  for (const stageMembers of stages) {
+    const outcomes = await runWithConcurrency(
+      stageMembers,
+      GROUP_COMMIT_APPLY_CONCURRENCY,
+      (row) =>
+        applyGroupMember(
+          row,
+          cache,
+          trackedFileSetCache,
+          createdTaskIds,
+          opts,
+          sessionManager,
+          planningOrchestrator,
+        ),
+    );
+
+    for (const outcome of outcomes) {
+      if (outcome.ok) committed.push(outcome.intent.id);
+    }
+
+    const failure = outcomes.find(
+      (o): o is ApplyGroupMemberOutcome & { ok: false } => !o.ok,
+    );
+    if (!failure) continue;
+
+    const { row, intent, error: err } = failure;
+    const remaining = ordered
+      .map((r) => r.id)
+      .filter((id) => id !== intent.id && !committed.includes(id));
+
+    if (err instanceof ReadinessGateError) {
+      setStagedIntentAnnotation(
+        intent.id,
+        JSON.stringify({ blocked: true, violations: err.violations }),
       );
+      broadcastIntentById(intent.id);
       return {
-        status: 500,
+        status: 409,
         body: {
-          error: reason,
+          error: err.message,
+          violations: err.violations,
           committed,
           failedId: intent.id,
           remaining,
-          redrivenToSession: redriven,
         },
       };
     }
+    if (err instanceof GroomingGateError) {
+      setStagedIntentAnnotation(
+        intent.id,
+        JSON.stringify({ blocked: true, reasons: err.reasons }),
+      );
+      broadcastIntentById(intent.id);
+      return {
+        status: 409,
+        body: {
+          error: err.message,
+          reasons: err.reasons,
+          committed,
+          failedId: intent.id,
+          remaining,
+        },
+      };
+    }
+    if (err instanceof HumanApplyOnlyError) {
+      return {
+        status: 403,
+        body: {
+          error: err.message,
+          committed,
+          failedId: intent.id,
+          remaining,
+        },
+      };
+    }
+    if (err instanceof NotOperatorAppliableError) {
+      return {
+        status: 409,
+        body: {
+          error: err.message,
+          committed,
+          failedId: intent.id,
+          remaining,
+        },
+      };
+    }
+    if (
+      err instanceof DependsOnCompletenessError ||
+      err instanceof ManualVerificationStripCompletenessError
+    ) {
+      return {
+        status: 409,
+        body: {
+          error: err.message,
+          committed,
+          failedId: intent.id,
+          remaining,
+        },
+      };
+    }
+    if (err instanceof DeferralOrphansDependentsError) {
+      return {
+        status: 409,
+        body: {
+          error: err.message,
+          dependentTaskIds: err.dependentTaskIds,
+          committed,
+          failedId: intent.id,
+          remaining,
+        },
+      };
+    }
+    if (
+      err instanceof StaleArchUnitVersionError ||
+      err instanceof ArchUnitAlreadySupersededError
+    ) {
+      setStagedIntentAnnotation(
+        intent.id,
+        JSON.stringify({ blocked: true, reasons: [err.message] }),
+      );
+      return {
+        status: 409,
+        body: {
+          error: err.message,
+          committed,
+          failedId: intent.id,
+          remaining,
+        },
+      };
+    }
+    const { reason, redriven } = await routeApplyTimeFailure(
+      row,
+      err,
+      planningOrchestrator,
+    );
+    return {
+      status: 500,
+      body: {
+        error: reason,
+        committed,
+        failedId: intent.id,
+        remaining,
+        redrivenToSession: redriven,
+      },
+    };
   }
 
   // Advisory-only, same contract as verifyGroup's call: never awaited into

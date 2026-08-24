@@ -3565,3 +3565,67 @@ describe('a groom session staging task.create against its own Design/Planning su
     expect(create.kind).toBe('task.create');
   });
 });
+
+/**
+ * commitGroupIntents' apply loop used to await one member's full network
+ * round trip before starting the next, so a group's wall-clock cost scaled
+ * with the *sum* of every member's latency. Members with no relationship
+ * to one another (no task.create -> task.setDependsOn symbolic reference,
+ * no arming Ready-flip) now apply concurrently, so the cost should scale
+ * with the *max* latency instead.
+ */
+describe('commitGroupIntents — independent members apply concurrently', () => {
+  function delay<T>(ms: number, value: T): Promise<T> {
+    return new Promise((resolve) => setTimeout(() => resolve(value), ms));
+  }
+
+  it('applies several independent task.updateBody members in roughly the slowest member\'s latency, not the sum', async () => {
+    const MEMBER_COUNT = 4;
+    const LATENCY_MS = 150;
+    const calls: string[] = [];
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+      updateBody: vi.fn().mockImplementation(async (taskId: string) => {
+        await delay(LATENCY_MS, undefined);
+        calls.push(taskId);
+      }),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const groupId = 'g-concurrent-1';
+
+    const memberIds: string[] = [];
+    for (let i = 0; i < MEMBER_COUNT; i += 1) {
+      const taskId = `t-concurrent-${i}`;
+      const staged = await agent.post('/api/staged-intents').send({
+        kind: 'task.updateBody',
+        projectId: 'proj-concurrent',
+        groupId,
+        payload: { taskId, sections: sections() },
+      });
+      expect(staged.status).toBe(201);
+      await agent
+        .post(`/api/staged-intents/${staged.body.id}/approve`)
+        .send({});
+      memberIds.push(staged.body.id);
+    }
+
+    const start = Date.now();
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+    const elapsedMs = Date.now() - start;
+
+    expect(commit.status).toBe(200);
+    expect(commit.body.committed.sort()).toEqual(memberIds.sort());
+    expect(calls).toHaveLength(MEMBER_COUNT);
+    // Sequential apply would cost >= MEMBER_COUNT * LATENCY_MS (600ms here);
+    // concurrent apply costs roughly one member's latency. The threshold
+    // sits well under the sequential floor to tolerate scheduling jitter
+    // without being able to pass a still-sequential implementation.
+    expect(elapsedMs).toBeLessThan(MEMBER_COUNT * LATENCY_MS - 100);
+  });
+});
