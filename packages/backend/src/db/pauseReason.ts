@@ -683,7 +683,7 @@ const SEVERITY_RANK: Record<PauseSeverity, number> = {
   recoverable: 1,
 };
 
-export function resolvePauseReasonEntry(
+function resolvePauseReasonEntry(
   entries: PauseReasonStruct[],
 ): PauseReasonStruct | null {
   if (entries.length === 0) return null;
