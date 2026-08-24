@@ -8784,7 +8784,10 @@ export function insertTestRunResults(
         oom_killed: oomKilled ? 1 : 0,
         failure_message: item.failureMessage ?? null,
         failure_trace_excerpt: item.failureTraceExcerpt ?? null,
-        markers: item.markers && item.markers.length > 0 ? JSON.stringify(item.markers) : null,
+        markers:
+          item.markers && item.markers.length > 0
+            ? JSON.stringify(item.markers)
+            : null,
         created_at: now,
       });
     }

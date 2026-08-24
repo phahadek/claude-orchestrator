@@ -624,7 +624,8 @@ function extractMarkers(caseContent: string): string[] | undefined {
   while ((propMatch = PROPERTY_RE.exec(propsMatch[1])) !== null) {
     const attrs = parseXmlAttrs(propMatch[1]);
     if (attrs.name !== 'markers') continue;
-    const value = attrs.value ?? decodeXmlEntities(stripCData(propMatch[2] ?? '')).trim();
+    const value =
+      attrs.value ?? decodeXmlEntities(stripCData(propMatch[2] ?? '')).trim();
     for (const part of value.split(',')) {
       const trimmed = part.trim();
       if (trimmed) markers.push(trimmed);

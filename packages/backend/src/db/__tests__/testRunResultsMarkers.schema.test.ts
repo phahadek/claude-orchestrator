@@ -17,9 +17,9 @@ function freshDb(): Database.Database {
 }
 
 function columnNames(db: Database.Database, table: string): string[] {
-  return (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(
-    (c) => c.name,
-  );
+  return (
+    db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+  ).map((c) => c.name);
 }
 
 describe('test_run_results.markers / test_perf_baselines.markers migration', () => {
@@ -48,7 +48,9 @@ describe('test_run_results.markers / test_perf_baselines.markers migration', () 
        VALUES ('run-1', 'proj', 'tests.test_foo', 'test_foo', 'failed', 10, 0)`,
     ).run();
     const row = db
-      .prepare(`SELECT markers FROM test_run_results WHERE test_request_run_id = 'run-1'`)
+      .prepare(
+        `SELECT markers FROM test_run_results WHERE test_request_run_id = 'run-1'`,
+      )
       .get() as { markers: string | null };
     expect(row.markers).toBeNull();
 
@@ -58,7 +60,9 @@ describe('test_run_results.markers / test_perf_baselines.markers migration', () 
        VALUES ('tests.test_foo', 'proj', 'test_foo', 10, 0, 1, 10, 0, 0)`,
     ).run();
     const baseline = db
-      .prepare(`SELECT markers FROM test_perf_baselines WHERE test_id = 'tests.test_foo'`)
+      .prepare(
+        `SELECT markers FROM test_perf_baselines WHERE test_id = 'tests.test_foo'`,
+      )
       .get() as { markers: string | null };
     expect(baseline.markers).toBeNull();
     db.close();

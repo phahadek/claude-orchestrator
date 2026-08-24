@@ -110,7 +110,7 @@ describe('parseJUnitXml', () => {
     });
   });
 
-  it('extracts marker metadata from a testcase\'s <properties> child', () => {
+  it("extracts marker metadata from a testcase's <properties> child", () => {
     const report = `<?xml version="1.0" encoding="utf-8"?>
 <testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="1.5">
 <testcase classname="tests.test_slow" name="test_slow_thing" time="1.500">
