@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useState } from 'react';
-import type { KeyboardEvent } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ClipboardEvent, KeyboardEvent } from 'react';
 import type {
   InvestigationReport,
   InvestigationReportState,
 } from '../api/reports';
 import { reportsApi } from '../api/reports';
 import { investigateApi } from '../api/investigate';
+import { fetchAuthenticatedImageUrl } from '../api/projects';
 import panelStyles from './DecisionPanel.module.css';
 import styles from './InvestigationReportSection.module.css';
 
@@ -74,12 +75,42 @@ export function InvestigationReportSection({
   const [drafting, setDrafting] = useState(false);
   const [draftTitle, setDraftTitle] = useState('');
   const [draftSymptom, setDraftSymptom] = useState('');
+  const [draftImage, setDraftImage] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [actionInFlightId, setActionInFlightId] = useState<string | null>(null);
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
   const [dispatching, setDispatching] = useState(false);
   const [dispatchError, setDispatchError] = useState<string | null>(null);
+  const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
+  const [imageLoadingId, setImageLoadingId] = useState<string | null>(null);
+  const imageUrlsRef = useRef(imageUrls);
+
+  // Object URLs are only revocable client-side memory — revoke every one
+  // we minted once the component unmounts, mirroring the createObjectURL
+  // contract (nothing else owns their lifetime). The ref is synced in its
+  // own effect (never during render) so the cleanup effect below can read
+  // the latest map without re-registering on every change.
+  useEffect(() => {
+    imageUrlsRef.current = imageUrls;
+  }, [imageUrls]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(imageUrlsRef.current).forEach((url) =>
+        URL.revokeObjectURL(url),
+      );
+    };
+  }, []);
+
+  const viewReportImage = (reportId: string) => {
+    if (imageUrls[reportId]) return;
+    setImageLoadingId(reportId);
+    fetchAuthenticatedImageUrl(`/api/reports/${reportId}/image`)
+      .then((url) => setImageUrls((prev) => ({ ...prev, [reportId]: url })))
+      .catch(() => {})
+      .finally(() => setImageLoadingId(null));
+  };
 
   const refresh = useCallback(() => {
     return reportsApi
@@ -121,7 +152,27 @@ export function InvestigationReportSection({
     setDrafting(true);
     setDraftTitle('');
     setDraftSymptom('');
+    setDraftImage(null);
     setCreateError(null);
+  };
+
+  const handleSymptomPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (!item.type.startsWith('image/')) continue;
+      const file = item.getAsFile();
+      if (!file) continue;
+      e.preventDefault();
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === 'string') setDraftImage(reader.result);
+      };
+      reader.readAsDataURL(file);
+      return;
+    }
+    // No image item present — fall through to the browser's normal text paste.
   };
 
   const submitDraft = () => {
@@ -137,6 +188,7 @@ export function InvestigationReportSection({
         milestoneId: milestone,
         title: draftTitle.trim(),
         symptomText: draftSymptom.trim(),
+        image: draftImage ?? undefined,
         source: 'operator',
       })
       .then((report) => reportsApi.commit(report.id))
@@ -165,6 +217,7 @@ export function InvestigationReportSection({
         milestoneId: milestone,
         title: draftTitle.trim(),
         symptomText: draftSymptom.trim(),
+        image: draftImage ?? undefined,
         source: 'operator',
       })
       .then((report) => {
@@ -375,8 +428,24 @@ export function InvestigationReportSection({
             value={draftSymptom}
             onChange={(e) => setDraftSymptom(e.target.value)}
             onKeyDown={handleDraftKeyDown}
+            onPaste={handleSymptomPaste}
             data-testid="report-draft-symptom"
           />
+          {draftImage && (
+            <div
+              className={styles.draftImagePreview}
+              data-testid="report-draft-image-preview"
+            >
+              <img src={draftImage} alt="Pasted screenshot" />
+              <button
+                type="button"
+                onClick={() => setDraftImage(null)}
+                data-testid="report-draft-image-remove"
+              >
+                Remove image
+              </button>
+            </div>
+          )}
           {createError && (
             <div className={styles.actionError}>{createError}</div>
           )}
@@ -458,6 +527,31 @@ export function InvestigationReportSection({
               )}
             </div>
             <div className={styles.symptomText}>{report.symptom_text}</div>
+            {report.image_path && (
+              <div className={styles.reportImage}>
+                {imageUrls[report.id] ? (
+                  <img
+                    src={imageUrls[report.id]}
+                    alt={`Screenshot for ${report.title}`}
+                    data-testid={`report-image-${report.id}`}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      viewReportImage(report.id);
+                    }}
+                    disabled={imageLoadingId === report.id}
+                    data-testid={`report-image-view-${report.id}`}
+                  >
+                    {imageLoadingId === report.id
+                      ? 'Loading…'
+                      : 'View screenshot'}
+                  </button>
+                )}
+              </div>
+            )}
             {actionErrors[report.id] && (
               <div className={styles.actionError}>
                 {actionErrors[report.id]}

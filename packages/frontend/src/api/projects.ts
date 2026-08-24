@@ -198,6 +198,25 @@ export async function authedFetch(
   return res;
 }
 
+/**
+ * Fetches an authenticated binary route and hands back a blob: object URL
+ * for it. Device auth here lives only in the Authorization header (no
+ * cookie/service-worker fallback), so a bare <img src="/api/..."> can't
+ * carry it — the caller must fetch through authedFetch and render the
+ * response via URL.createObjectURL instead. Callers own revoking the
+ * returned URL (URL.revokeObjectURL) once they're done with it.
+ */
+export async function fetchAuthenticatedImageUrl(
+  input: RequestInfo,
+): Promise<string> {
+  const res = await authedFetch(input);
+  if (!res.ok) {
+    throw new Error(`${res.status} ${res.statusText}`);
+  }
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
+
 export async function apiRequest<T>(
   input: RequestInfo,
   init?: RequestInit,

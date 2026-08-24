@@ -155,3 +155,24 @@
   color: var(--warning, #f38ba8);
   font-size: 0.75rem;
 }
+
+.draftImagePreview {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+.draftImagePreview img {
+  max-width: 240px;
+  max-height: 160px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.reportImage img {
+  max-width: 320px;
+  max-height: 220px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}

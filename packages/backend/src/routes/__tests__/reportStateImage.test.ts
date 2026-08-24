@@ -203,3 +203,45 @@ describe('PATCH /api/reports/:id image handling', () => {
     expect(res.body.error).toMatch(/8 MB/);
   });
 });
+
+describe('GET /api/reports/:id/image', () => {
+  it('serves the image bytes with the correct content-type for an attached image', async () => {
+    const app = makeApp();
+    const bytes = crypto.randomBytes(2048);
+    const created = await request(app)
+      .post('/api/reports')
+      .send({
+        projectId: 'proj-1',
+        title: 't',
+        symptomText: 's',
+        image: pngDataUrl(bytes),
+      });
+    const id = created.body.id as string;
+
+    const res = await request(app).get(`/api/reports/${id}/image`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/^image\/png/);
+    expect(Buffer.compare(res.body, bytes)).toBe(0);
+  });
+
+  it('404s for a report that has no attached image', async () => {
+    const app = makeApp();
+    const created = await request(app).post('/api/reports').send({
+      projectId: 'proj-1',
+      title: 't',
+      symptomText: 's',
+    });
+    const id = created.body.id as string;
+
+    const res = await request(app).get(`/api/reports/${id}/image`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it('404s for a nonexistent report id', async () => {
+    const app = makeApp();
+    const res = await request(app).get('/api/reports/no-such-report/image');
+    expect(res.status).toBe(404);
+  });
+});

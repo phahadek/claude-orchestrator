@@ -248,6 +248,23 @@ export function getReportWithDerived(
   return row ? withDerived(row) : undefined;
 }
 
+/**
+ * Result of a report-image lookup for routes/reportState.ts's GET
+ * .../image route. `report: false` means no such report exists at all;
+ * `report: true, path: null` means the report exists but has no attached
+ * image — both are 404s at the route layer, but distinguishing them keeps
+ * the 404 message accurate.
+ */
+export type ReportImageLookup =
+  | { report: false }
+  | { report: true; path: string | null };
+
+export function getReportImagePath(id: string): ReportImageLookup {
+  const row = getReport(id);
+  if (!row) return { report: false };
+  return { report: true, path: row.image_path };
+}
+
 export interface ListReportsOptions {
   project?: string;
   milestone?: string;

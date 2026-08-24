@@ -26,6 +26,7 @@ function makeReport(
     source: 'operator',
     origin_session_id: null,
     origin_task_id: null,
+    image_path: null,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
     inFlight: false,
@@ -399,6 +400,102 @@ describe('InvestigationReportSection — filing a report is a single action', ()
       'Draft',
     );
     expect(screen.queryByTestId('report-draft-form')).toBeNull();
+  });
+});
+
+describe('InvestigationReportSection — screenshot paste intake', () => {
+  it('stages a pasted image for submission without inserting garbled text into the symptom field', async () => {
+    vi.spyOn(reportsApi, 'list').mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+    });
+
+    render(<InvestigationReportSection projectId="proj-1" milestone="M1" />);
+
+    await screen.findByTestId('investigation-report-section');
+    fireEvent.click(screen.getByTestId('report-start-draft'));
+
+    const textarea = screen.getByTestId(
+      'report-draft-symptom',
+    ) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'It broke in prod' } });
+
+    const file = new File(['fake-png-bytes'], 'screenshot.png', {
+      type: 'image/png',
+    });
+    const clipboardData = {
+      items: [{ type: 'image/png', getAsFile: () => file }],
+    };
+
+    fireEvent.paste(textarea, { clipboardData });
+
+    await screen.findByTestId('report-draft-image-preview');
+    // The symptom text is untouched — the image paste didn't leak garbled
+    // binary/base64 text into the textarea alongside the staged image.
+    expect(textarea.value).toBe('It broke in prod');
+  });
+
+  it('ignores a plain-text paste, leaving normal text-paste behaviour intact', async () => {
+    vi.spyOn(reportsApi, 'list').mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+    });
+
+    render(<InvestigationReportSection projectId="proj-1" milestone="M1" />);
+
+    await screen.findByTestId('investigation-report-section');
+    fireEvent.click(screen.getByTestId('report-start-draft'));
+
+    const textarea = screen.getByTestId('report-draft-symptom');
+    const clipboardData = {
+      items: [{ type: 'text/plain', getAsFile: () => null }],
+    };
+
+    fireEvent.paste(textarea, { clipboardData });
+
+    expect(screen.queryByTestId('report-draft-image-preview')).toBeNull();
+  });
+
+  it('includes the staged image when the report is submitted', async () => {
+    vi.spyOn(reportsApi, 'list').mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+    });
+    const draft = makeReport({
+      id: 'r-with-image',
+      title: 'New symptom',
+      state: 'draft',
+      image_path: '/data/investigation-report-images/r-with-image.png',
+    });
+    const committed = { ...draft, state: 'committed' as const };
+    const createSpy = vi.spyOn(reportsApi, 'create').mockResolvedValue(draft);
+    vi.spyOn(reportsApi, 'commit').mockResolvedValue(committed);
+
+    render(<InvestigationReportSection projectId="proj-1" milestone="M1" />);
+
+    await screen.findByTestId('investigation-report-section');
+    fireEvent.click(screen.getByTestId('report-start-draft'));
+    fireEvent.change(screen.getByTestId('report-draft-title'), {
+      target: { value: 'New symptom' },
+    });
+
+    const textarea = screen.getByTestId('report-draft-symptom');
+    const file = new File(['fake-png-bytes'], 'screenshot.png', {
+      type: 'image/png',
+    });
+    fireEvent.paste(textarea, {
+      clipboardData: { items: [{ type: 'image/png', getAsFile: () => file }] },
+    });
+    await screen.findByTestId('report-draft-image-preview');
+
+    fireEvent.click(screen.getByTestId('report-draft-submit'));
+
+    await waitFor(() => expect(createSpy).toHaveBeenCalledTimes(1));
+    const call = createSpy.mock.calls[0][0];
+    expect(call.image).toMatch(/^data:image\/png;base64,/);
   });
 });
 
