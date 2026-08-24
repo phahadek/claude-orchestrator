@@ -211,9 +211,17 @@ export function updateUnit(
   // Only the fields that actually changed, at their prior values — not a
   // full pre-update snapshot, so a no-op update's event payload carries an
   // empty `before` rather than every field regardless of whether it moved.
-  const before: Partial<Record<keyof ArchUnitUpdateFields, unknown>> = {};
+  const before: Partial<Record<keyof ArchUnitUpdateFields, unknown>> & {
+    version?: number;
+  } = {};
   for (const key of changedFields) {
     before[key] = priorValues[key];
+  }
+  // version isn't a diffable field itself, but a genuine (non-no-op) update
+  // still needs to carry the baseVersion the edit was staged against — omit
+  // it entirely on a true no-op so `before` stays exactly `{}`.
+  if (changedFields.length > 0) {
+    before.version = row.version;
   }
   db.transaction(() => {
     updateArchUnit(next);
