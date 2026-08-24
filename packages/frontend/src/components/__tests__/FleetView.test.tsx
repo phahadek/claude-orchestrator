@@ -104,13 +104,19 @@ describe('FleetView', () => {
       skippedForBudgetHistory: [],
     });
 
+    vi.useFakeTimers();
     render(<FleetView />);
-    await screen.findByText('gate item one');
+    // The initial fetch and its state update run on real microtasks even
+    // under fake timers, so let them flush before advancing the clock.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText('gate item one')).toBeTruthy();
 
     const callCountAfterInitialFetch =
       gateApiMock.getFleetState.mock.calls.length;
 
-    vi.useFakeTimers();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5000);
     });
