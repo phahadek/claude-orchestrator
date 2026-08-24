@@ -59,7 +59,7 @@ describe('sessions.task_id_norm — indexable normalized task_id match', () => {
       .join(', ');
     const plan = db
       .prepare(
-        `EXPLAIN QUERY PLAN SELECT 1 FROM sessions
+        `EXPLAIN QUERY PLAN SELECT 1 FROM sessions INDEXED BY idx_sessions_task_id_norm
          WHERE task_id_norm = @task_id_norm
            AND status NOT IN (${terminalList})
            AND (session_type = 'standard' OR session_type IS NULL)

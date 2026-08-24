@@ -214,3 +214,94 @@ export function getReservationForTaskDirSuffix(
   const row = getMigrationReservationByTaskDirSuffix(taskId, dir, suffix);
   return row ? toReservation(row) : undefined;
 }
+
+/**
+ * Marker embedded in a migration-number-reassignment report.file intent's
+ * evidence_text (see stagedIntents.ts's report.file apply case) so a
+ * committed investigation_report row can be recognized as this claim kind
+ * downstream — e.g. investigationReconciler.ts's dispatch tick skips
+ * auto-dispatching an investigate session onto one, since the claim was
+ * already mechanically re-derived against the live reservation table at
+ * file time and needs only operator disposition, not further investigation.
+ */
+export const MIGRATION_REASSIGNMENT_REPORT_MARKER =
+  'claimKind: migration-number-reassignment';
+
+export interface MigrationReassignmentClaim {
+  project: string;
+  taskId: string;
+  /** The number the reservation table shows for this task's reservation, per the filing session's claim. */
+  expectedNumber: number;
+  /** The number the task's migration actually shipped as, per the filing session's claim. */
+  actualNumber: number;
+}
+
+export interface MigrationReassignmentVerdict {
+  confirmed: boolean;
+  reason: string;
+}
+
+/**
+ * Authoritative re-derivation for a filed migration-number-reassignment
+ * claim (report.file with claimKind 'migration-number-reassignment' — see
+ * stagedIntents.ts's report.file apply case). Independently re-checks the
+ * claim against the live reservation table rather than trusting the filing
+ * session's own arithmetic, mirroring PRReviewService.ts's
+ * applyMigrationReservationOverride precedent of never trusting an LLM's
+ * self-reported number. A claim only stays visible for operator disposition
+ * when this confirms it; otherwise it is auto-dismissed and the discrepancy
+ * is recorded in the returned reason.
+ *
+ * Two independent checks, both required to confirm:
+ *  1. Stale-claim check: the task's live reservation must still show
+ *     `expectedNumber` — a claim filed against a reservation that has since
+ *     moved on (e.g. already reassigned by an earlier disposition) is stale.
+ *  2. Collision check: `actualNumber` must not already be claimed by a
+ *     *different* task's live reservation — reassigning onto an
+ *     already-taken number would just create a new collision.
+ *  3. Genuine-next-free-number check: absent an outright collision,
+ *     `actualNumber` must not leap beyond the project's current allocation
+ *     frontier (max reserved number + 1) — a claim proposing an
+ *     unallocated, non-adjacent number isn't a legitimate renumber, it's a
+ *     fabrication.
+ */
+export function rederiveMigrationReassignment(
+  claim: MigrationReassignmentClaim,
+): MigrationReassignmentVerdict {
+  const existing = getReservationForTask(claim.taskId);
+  if (!existing) {
+    return {
+      confirmed: false,
+      reason: `task ${claim.taskId} holds no migration reservation — nothing to reassign`,
+    };
+  }
+  if (existing.number !== claim.expectedNumber) {
+    return {
+      confirmed: false,
+      reason: `task ${claim.taskId}'s live reservation is ${existing.number}, not the claimed expectedNumber ${claim.expectedNumber} — stale claim`,
+    };
+  }
+
+  const collision = getReservationByNumber(claim.project, claim.actualNumber);
+  if (collision && collision.taskId !== claim.taskId) {
+    return {
+      confirmed: false,
+      reason: `actualNumber ${claim.actualNumber} is already reserved by a different task (${collision.taskId}) — reassigning would collide`,
+    };
+  }
+
+  if (!collision) {
+    const currentMax = getMaxMigrationReservationNumber(claim.project) ?? 0;
+    if (claim.actualNumber > currentMax + 1) {
+      return {
+        confirmed: false,
+        reason: `actualNumber ${claim.actualNumber} exceeds the project's current allocation frontier (max reserved is ${currentMax}) — not a genuine next-free number`,
+      };
+    }
+  }
+
+  return {
+    confirmed: true,
+    reason: `confirmed: task ${claim.taskId}'s reservation reassigns from ${claim.expectedNumber} to ${claim.actualNumber} — no collision, within the allocation frontier`,
+  };
+}

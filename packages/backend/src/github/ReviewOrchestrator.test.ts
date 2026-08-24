@@ -495,6 +495,45 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
     ).toBe(true);
   });
 
+  it('routes to migration_reservation_overtaken (not baseline_escalation_floor) when the shipped number was overtaken by a different, already-merged task', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'needs_changes',
+      dimensions: [],
+      summary: 'Shipped migration number was overtaken by a merged task.',
+      reviewedAt: new Date().toISOString(),
+      escalate: true,
+      escalationReason:
+        'Deterministic migration-reservation check: expected migration number 100 (reserved) for migrations/postgres/widget_table.sql but the PR ships 101, already claimed and merged by task notion:task-b — out-of-band overtake — override fail.',
+      migrationReservationOvertaken: true,
+    });
+
+    const messages: unknown[] = [];
+    sm.on('message', (m: unknown) => messages.push(m));
+
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('pr_opened', baseJob);
+    // Resubmitting the identical job a second time must not loop the pause —
+    // it should keep resolving to the same escalation, not clear/reset it.
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(sm.sendOrResume)).not.toHaveBeenCalled();
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'migration_reservation_overtaken',
+    );
+    expect(
+      messages.some((m) => (m as { type: string }).type === 'review_escalated'),
+    ).toBe(true);
+  });
+
   it('does not send feedback when verdict is approved', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
 

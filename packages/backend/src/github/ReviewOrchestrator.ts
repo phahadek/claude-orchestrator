@@ -995,9 +995,11 @@ export class ReviewOrchestrator {
       logger.warn(`[ReviewOrchestrator] ${message}`);
       setLocalBranchPauseReason(
         job.localBranchId,
-        result.baselineEscalationFloor
-          ? 'baseline_escalation_floor'
-          : 'review_rules_escalation',
+        result.migrationReservationOvertaken
+          ? 'migration_reservation_overtaken'
+          : result.baselineEscalationFloor
+            ? 'baseline_escalation_floor'
+            : 'review_rules_escalation',
       );
       this.sessionManager.emit('message', {
         type: 'review_escalated',
@@ -1255,9 +1257,11 @@ export class ReviewOrchestrator {
       setPauseReason(
         job.prNumber,
         job.repo,
-        result.baselineEscalationFloor
-          ? 'baseline_escalation_floor'
-          : 'review_rules_escalation',
+        result.migrationReservationOvertaken
+          ? 'migration_reservation_overtaken'
+          : result.baselineEscalationFloor
+            ? 'baseline_escalation_floor'
+            : 'review_rules_escalation',
       );
       this.sessionManager.emit('message', {
         type: 'review_escalated',

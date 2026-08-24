@@ -147,6 +147,7 @@ vi.mock('../tasks/TaskStatusEngine', () => ({
 }));
 vi.mock('../tasks/taskId', () => ({
   formatTaskId: vi.fn().mockReturnValue('notion:task-abc123'),
+  normalizeBoardId: vi.fn((id: string) => id),
 }));
 vi.mock('../session/AgentSession', () => ({
   AgentSession: vi.fn().mockImplementation(() => ({

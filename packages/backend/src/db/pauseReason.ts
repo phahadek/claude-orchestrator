@@ -61,7 +61,8 @@ export type CanonicalPauseReason =
   | 'ci_not_completing'
   | 'mcp_unreachable_exhausted'
   | 'verdict_routing_failed'
-  | 'base_attributable_test_excluded';
+  | 'base_attributable_test_excluded'
+  | 'migration_reservation_overtaken';
 
 export interface PauseReasonStruct {
   reason: CanonicalPauseReason;
@@ -264,6 +265,19 @@ export const PAUSE_REASON_REGISTRY: Record<
   // secrets) — always requires human sign-off regardless of review_rules, so
   // it is deliberately not marked automatic/none like other review reasons.
   baseline_escalation_floor: {
+    source: 'review',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  // Out-of-band reservation overtake: the review-gate migration-reservation
+  // dimension override (PRReviewService.ts's applyMigrationReservationOverride)
+  // detected that the shipped migration number belongs, per the reservation
+  // table, to a *different* task whose PR/branch has already merged — not
+  // this task's own drift, which the dimension override fails on its own
+  // without escalation. Always requires human disposition: the reservation
+  // table and the live migrations directory have diverged in a way no
+  // automatic retry resolves.
+  migration_reservation_overtaken: {
     source: 'review',
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
@@ -519,6 +533,10 @@ const RECOVERY_ACTION_MAP: Record<
   // flow. Mirrors the other non-automatable, human-adjudicated escalation
   // reasons rather than inventing new discharge machinery.
   baseline_escalation_floor: 'none',
+  // Same shape as baseline_escalation_floor: the reservation table vs. live
+  // migrations directory divergence is resolved via the reassignment remedy
+  // flow (report.file claim + re-derivation), not a one-click discharge.
+  migration_reservation_overtaken: 'none',
   depth_review_escalation: 'none', // same shape as baseline_escalation_floor; can be raised with no linked session to route to
   depth_review_pending: 'none', // recoverable+automatic: clears itself within dispatchDepthReview's timeout ceiling
   planning_terminal_blocked_members: 'none', // fix is dispositioning stuck staged intents, not a task-level redispatch

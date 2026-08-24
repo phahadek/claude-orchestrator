@@ -162,6 +162,10 @@ import {
   updateReportState,
   getReportsForBatchTaskId,
 } from '../investigation/reportStore';
+import {
+  rederiveMigrationReassignment,
+  MIGRATION_REASSIGNMENT_REPORT_MARKER,
+} from '../db/migrationReservation';
 import { rankDecisions } from '../convergence/decisionRanking';
 import { resolveSessionCompleteForDisplay } from '../convergence/attentionSignals';
 import {
@@ -5162,6 +5166,65 @@ async function applyIntent(
       );
       const session = intent.sessionId ? getSession(intent.sessionId) : null;
       const headSha = resolveReportFileHeadSha(session?.worktree_path ?? null);
+
+      // A migration-number-reassignment claim (see mcp/tools/stageProposalTools.ts's
+      // report.file claimKind field) routes through the authoritative
+      // re-derivation in db/migrationReservation.ts instead of the generic
+      // insertReport-then-commit path below: only a claim the orchestrator
+      // itself confirms against the live reservation table stays visible for
+      // operator disposition — an unconfirmed claim is auto-dismissed
+      // (abandoned) with the discrepancy recorded, never left pending.
+      if (payload.claimKind === 'migration-number-reassignment') {
+        if (
+          !payload.taskId ||
+          payload.expectedNumber === undefined ||
+          payload.actualNumber === undefined
+        ) {
+          throw new Error(
+            `[stagedIntents] report.file apply: migration-number-reassignment claim on intent ${intent.id} is missing taskId/expectedNumber/actualNumber`,
+          );
+        }
+        const verdict = rederiveMigrationReassignment({
+          project: intent.projectId,
+          taskId: payload.taskId,
+          expectedNumber: payload.expectedNumber,
+          actualNumber: payload.actualNumber,
+        });
+        const evidenceText = [
+          `HEAD: ${headSha ?? 'unknown'}`,
+          MIGRATION_REASSIGNMENT_REPORT_MARKER,
+          `taskId: ${payload.taskId}, expectedNumber: ${payload.expectedNumber}, actualNumber: ${payload.actualNumber}`,
+          `re-derivation: ${verdict.reason}`,
+          payload.evidence_text,
+        ]
+          .filter((part): part is string => Boolean(part))
+          .join('\n\n');
+        const now = new Date().toISOString();
+        const report = insertReport({
+          projectId: intent.projectId,
+          milestoneId: milestoneRow.id,
+          title: payload.title,
+          symptomText: payload.symptom_text,
+          evidenceText,
+          source: 'session',
+          originSessionId: intent.sessionId ?? undefined,
+          originTaskId: session?.task_id ?? undefined,
+          createdAt: now,
+        });
+        const final = updateReportState(
+          report.id,
+          verdict.confirmed ? 'committed' : 'abandoned',
+          now,
+          verdict.confirmed ? undefined : verdict.reason,
+        );
+        return {
+          id: final.id,
+          state: final.state,
+          confirmed: verdict.confirmed,
+          reason: verdict.reason,
+        };
+      }
+
       const evidenceText = [
         `HEAD: ${headSha ?? 'unknown'}`,
         payload.evidence_text,

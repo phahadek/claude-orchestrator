@@ -13,9 +13,14 @@ import {
   getSession,
   getPRIntentForPR,
   setPauseReason,
+  getMergedPRForTask,
+  getMergedLocalBranchForTaskId,
 } from '../db/queries';
 import type { OpsPrIntentPayload } from '../db/types';
-import { getReservationForTaskDirSuffix } from '../db/migrationReservation';
+import {
+  getReservationForTaskDirSuffix,
+  getReservationByNumber,
+} from '../db/migrationReservation';
 import { getCachedType } from '../tasks/TaskWriteCommands';
 import { recordEvent } from '../audit/AuditLog';
 import type { GitHubClient } from './GitHubClient';
@@ -287,6 +292,19 @@ export function extractListedMigrationPaths(taskBody: string): string[] {
 }
 
 /**
+ * Whether a task's own PR or local branch has already merged — the "already
+ * merged" half of an out-of-band migration-reservation overtake (see
+ * applyMigrationReservationOverride). A conflicting reservation whose owning
+ * task hasn't merged yet is ordinary in-flight contention, not an overtake.
+ */
+function isTaskAlreadyMerged(taskId: string): boolean {
+  return (
+    getMergedPRForTask(taskId) !== null ||
+    getMergedLocalBranchForTaskId(taskId) !== undefined
+  );
+}
+
+/**
  * Applies an `evaluateMigrationRenumberTolerance` verdict to the parsed
  * review result's Files/paths dimension, overriding the LLM's own
  * passed/notes for that dimension and recomputing the top-level verdict
@@ -347,6 +365,15 @@ export interface PRReviewResult {
    * two record different pause_reasons.
    */
   baselineEscalationFloor?: boolean;
+  /**
+   * True when `escalate` was force-set by applyMigrationReservationOverride
+   * detecting an out-of-band overtake: the shipped migration number belongs,
+   * per the reservation table, to a different task whose PR/branch has
+   * already merged. Distinct from an ordinary same-task drift, which the
+   * dimension override already fails on its own without escalation — see
+   * ReviewOrchestrator.ts's pause-reason selection.
+   */
+  migrationReservationOvertaken?: boolean;
 }
 
 export type WorkItem =
@@ -1588,6 +1615,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     // aggregated pass/fail and all notes concatenated keeps the dimension
     // failed if any *(new)* entry mismatches its reservation.
     const checks: { passed: boolean; note: string }[] = [];
+    let anyOvertaken = false;
     for (const entry of newMigrationEntries) {
       const reservation = getReservationForTaskDirSuffix(
         taskId,
@@ -1614,9 +1642,22 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
           note: `Deterministic migration-reservation check: ${entry.dir}${entry.suffix} ships as ${shippedPath}, matching its reserved number ${reservation.number} — override pass.`,
         });
       } else {
+        const conflicting =
+          shippedNumber !== null
+            ? getReservationByNumber(reservation.project, shippedNumber)
+            : undefined;
+        const overtaken =
+          conflicting !== undefined &&
+          conflicting.taskId !== taskId &&
+          isTaskAlreadyMerged(conflicting.taskId);
+        if (overtaken) anyOvertaken = true;
         checks.push({
           passed: false,
-          note: `Deterministic migration-reservation check: expected migration number ${reservation.number} (reserved) for ${entry.dir}${entry.suffix} but the PR ships ${shippedNumber ?? 'no matching migration file'} — override fail.`,
+          note: `Deterministic migration-reservation check: expected migration number ${reservation.number} (reserved) for ${entry.dir}${entry.suffix} but the PR ships ${shippedNumber ?? 'no matching migration file'}${
+            overtaken
+              ? `, already claimed and merged by task ${conflicting!.taskId} — out-of-band overtake`
+              : ''
+          } — override fail.`,
         });
       }
     }
@@ -1624,7 +1665,18 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
 
     const allPassed = checks.every((c) => c.passed);
     const note = checks.map((c) => c.note).join(' ');
-    return overrideFilesPathsDimension(result, allPassed, note);
+    const overridden = overrideFilesPathsDimension(result, allPassed, note);
+    if (anyOvertaken) {
+      return {
+        ...overridden,
+        escalate: true,
+        escalationReason: overridden.escalationReason
+          ? `${overridden.escalationReason} | ${note}`
+          : note,
+        migrationReservationOvertaken: true,
+      };
+    }
+    return overridden;
   }
 
   private async fetchTaskBodyBestEffort(

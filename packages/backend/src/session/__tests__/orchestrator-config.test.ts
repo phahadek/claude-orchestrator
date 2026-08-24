@@ -1349,11 +1349,15 @@ describe("this repo's own .claude-orchestrator.yml capability_pre_grants", () =>
     const allCapabilities = Object.values(config.capability_pre_grants).flat();
     expect(allCapabilities.length).toBeGreaterThan(0);
     for (const capability of allCapabilities) {
-      expect(capability).not.toContain('claude-orchestrator');
+      // Scoped to the project-id-bearing kinds this assertion is actually
+      // about — a read:path: grant's value is a real filesystem path (e.g.
+      // the OS data dir literally named claude-orchestrator), not a
+      // project-scoped capability string, so it's exempt from this check.
       if (
         capability.startsWith('read:audit-log:') ||
         capability.startsWith('read:session-events:')
       ) {
+        expect(capability).not.toContain('claude-orchestrator');
         expect(capability.endsWith(':claude-dashboard')).toBe(true);
       }
     }

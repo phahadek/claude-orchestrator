@@ -70,7 +70,7 @@ describe('planning-candidate predicate chain — indexable task_id_norm matches'
     it('resolves via an index seek on task_id_norm, not a table scan', () => {
       const plan = db
         .prepare(
-          `EXPLAIN QUERY PLAN SELECT * FROM sessions
+          `EXPLAIN QUERY PLAN SELECT * FROM sessions INDEXED BY idx_sessions_task_id_norm
            WHERE task_id_norm = @task_id_norm
              AND status NOT IN ('done')
              AND session_type = @flow

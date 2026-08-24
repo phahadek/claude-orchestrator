@@ -51,6 +51,7 @@ vi.mock('./AgentSession.js', () => ({
 
 vi.mock('../tasks/taskId.js', () => ({
   formatTaskId: vi.fn((src: string, id: string) => `${src}:${id}`),
+  normalizeBoardId: vi.fn((id: string) => id),
 }));
 
 vi.mock('./ContextBuilder.js', () => ({ buildSessionContext: vi.fn() }));
