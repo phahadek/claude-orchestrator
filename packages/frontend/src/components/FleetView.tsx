@@ -83,15 +83,16 @@ export function FleetView({
       });
   }, []);
 
-  // Forces a re-render every second so elapsed/remaining tick locally,
-  // computed from each session's startedAt + its fetched budget window —
-  // never re-fetched on tick.
-  const [, forceTick] = useState(0);
+  // `now` is read during render but only ever written from inside an
+  // effect — Date.now() itself is never called in the render body, so
+  // elapsed/remaining stay derived state instead of an impure render read.
+  // Ticks every second so elapsed/remaining update locally, computed from
+  // each session's startedAt + its fetched budget window — never re-fetched
+  // on tick.
+  const [now, setNow] = useState<number | null>(null);
   useEffect(() => {
-    const interval = setInterval(
-      () => forceTick((t) => t + 1),
-      TICK_INTERVAL_MS,
-    );
+    setNow(Date.now());
+    const interval = setInterval(() => setNow(Date.now()), TICK_INTERVAL_MS);
     return () => clearInterval(interval);
   }, []);
 
@@ -126,8 +127,12 @@ export function FleetView({
                 // (fixed at fetch time), so ticking never needs the
                 // verifier's DEFAULT_BUDGET_MS constant duplicated here.
                 const budgetMs = session.elapsedMs + session.remainingMs;
-                const liveElapsedMs = Date.now() - session.startedAt;
-                const liveRemainingMs = Math.max(0, budgetMs - liveElapsedMs);
+                const liveElapsedMs =
+                  now != null ? now - session.startedAt : session.elapsedMs;
+                const liveRemainingMs =
+                  now != null
+                    ? Math.max(0, budgetMs - liveElapsedMs)
+                    : session.remainingMs;
                 return (
                   <tr key={session.sessionId}>
                     <td>{session.project}</td>
