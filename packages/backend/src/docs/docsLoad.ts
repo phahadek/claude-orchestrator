@@ -17,6 +17,8 @@
 import { NotionClient } from '../notion/NotionClient';
 import { getMilestoneById } from '../db/queries';
 import { formatTaskId, normalizeBoardId } from '../tasks/taskId';
+import { ProjectService } from '../projects/ProjectService';
+import { GroomTaskSourceUnsupportedError } from '../planning/errors';
 
 /** Extract the body between a heading matching `headRe` and the next heading. */
 function sectionBody(md: string, headRe: RegExp): string {
@@ -120,8 +122,6 @@ export async function loadDocsContext(
   taskId: string,
   opts: LoadDocsContextOptions,
 ): Promise<DocsLoadResult> {
-  const notion = opts.notion ?? new NotionClient();
-
   const milestone = getMilestoneById(milestoneId);
   if (!milestone)
     throw new Error(`docs-load: unknown milestone ${milestoneId}`);
@@ -130,6 +130,21 @@ export async function loadDocsContext(
       `docs-load: milestone ${milestoneId} belongs to project ${milestone.project_id}, not ${opts.project}`,
     );
   }
+  const projectRowForSourceCheck = ProjectService.getById(
+    milestone.project_id,
+  );
+  if (
+    projectRowForSourceCheck &&
+    projectRowForSourceCheck.taskSource !== 'notion'
+  ) {
+    throw new GroomTaskSourceUnsupportedError(
+      milestone.project_id,
+      projectRowForSourceCheck.taskSource,
+    );
+  }
+
+  const notion = opts.notion ?? new NotionClient();
+
   const board = milestone.source_id;
   if (!board)
     throw new Error(

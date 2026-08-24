@@ -802,6 +802,58 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
     expect(result.failed[0].reason).not.toMatch(/groom worklist/);
   });
 
+  it('refuses a design dispatch (no session launched) when the loader reports a non-Notion task source', async () => {
+    const { loadDesignContext } = await import('../../design/designLoad.js');
+    const { GroomTaskSourceUnsupportedError } = await import(
+      '../../planning/errors.js'
+    );
+    (loadDesignContext as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new GroomTaskSourceUnsupportedError('proj-1', 'yaml'),
+    );
+
+    const launcher = new OpsSessionLauncher(sessionManager as never);
+    const task = { id: 'task-1', title: 'task-1', url: '', blockingDepIds: [] };
+
+    const result = await launcher.launchSelected({
+      projectId: 'proj-1',
+      projectContextUrl: 'https://www.notion.so/context',
+      milestoneId: 'milestone-1',
+      sessionType: 'design',
+      tasks: [task],
+    });
+
+    expect(start).not.toHaveBeenCalled();
+    expect(result.launched).toEqual([]);
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0].reason).toMatch(/task source "yaml"/);
+  });
+
+  it('refuses a docs dispatch (no session launched) when the loader reports a non-Notion task source', async () => {
+    const { loadDocsContext } = await import('../../docs/docsLoad.js');
+    const { GroomTaskSourceUnsupportedError } = await import(
+      '../../planning/errors.js'
+    );
+    (loadDocsContext as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new GroomTaskSourceUnsupportedError('proj-1', 'yaml'),
+    );
+
+    const launcher = new OpsSessionLauncher(sessionManager as never);
+    const task = { id: 'task-1', title: 'task-1', url: '', blockingDepIds: [] };
+
+    const result = await launcher.launchSelected({
+      projectId: 'proj-1',
+      projectContextUrl: 'https://www.notion.so/context',
+      milestoneId: 'milestone-1',
+      sessionType: 'docs',
+      tasks: [task],
+    });
+
+    expect(start).not.toHaveBeenCalled();
+    expect(result.launched).toEqual([]);
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0].reason).toMatch(/task source "yaml"/);
+  });
+
   it('puts a task in failed[] with the rejection message when sessionManager.start rejects, not in launched[]', async () => {
     start.mockRejectedValue(
       new Error('Max concurrent planning sessions (5) reached'),

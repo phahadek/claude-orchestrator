@@ -29,6 +29,7 @@ import {
 } from '../../db/queries.js';
 import { createUnit } from '../../architecture/ArchUnitStore.js';
 import { loadDesignContext } from '../designLoad.js';
+import { GroomTaskSourceUnsupportedError } from '../../planning/errors.js';
 
 const TARGET_BOARD = 'target-board-id';
 const PROJECT = 'proj-1';
@@ -549,5 +550,19 @@ describe('loadDesignContext', () => {
         manifest: { context_pages: [] },
       }),
     ).rejects.toThrow(/unknown milestone/);
+  });
+
+  it('refuses with GroomTaskSourceUnsupportedError instead of reaching Notion for a YAML-backed project', async () => {
+    updateProject(PROJECT, { task_source: 'yaml' });
+    const fetchSpy = global.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchSpy.mockClear();
+
+    await expect(
+      loadDesignContext(MILESTONE, TASK_ID, {
+        repoRoot: '/tmp/design-load-test-nonexistent-repo',
+        manifest: { context_pages: [] },
+      }),
+    ).rejects.toThrow(GroomTaskSourceUnsupportedError);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
