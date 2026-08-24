@@ -23,7 +23,10 @@ const seedApiMock = vi.hoisted(() => ({
   listSeedItems: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1 }),
   recordSeedItemEvent: vi.fn(),
 }));
-vi.mock('../../api/seed', () => ({ seedApi: seedApiMock }));
+vi.mock('../../api/seed', () => ({
+  seedApi: seedApiMock,
+  SEED_EVENT_OUTCOMES: ['applied', 'confirmed', 'blocked', 'discarded'],
+}));
 
 const deployApiMock = vi.hoisted(() => ({
   launch: vi.fn(),
@@ -215,6 +218,98 @@ describe('GateReadinessPanel — seed item disposition controls', () => {
     });
 
     promptSpy.mockRestore();
+  });
+
+  it('prompts for evidence before posting a discarded outcome, and skips the POST when declined', async () => {
+    const item = makeSeedItem('s1', { state: 'blocked' });
+    seedApiMock.listSeedItems.mockResolvedValue({
+      items: [item],
+      total: 1,
+      page: 1,
+    });
+    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue(null);
+
+    render(
+      <GateReadinessPanel
+        activeProjectId="proj-1"
+        activeBoardMilestone="M12"
+      />,
+    );
+    await screen.findByText('seed s1');
+
+    fireEvent.click(screen.getByTestId('seed-item-discarded-s1'));
+
+    expect(promptSpy).toHaveBeenCalled();
+    expect(seedApiMock.recordSeedItemEvent).not.toHaveBeenCalled();
+
+    promptSpy.mockRestore();
+  });
+
+  it('offers a discarded outcome and posts it with the prompted evidence', async () => {
+    const item = makeSeedItem('s1', { state: 'blocked' });
+    seedApiMock.listSeedItems.mockResolvedValue({
+      items: [item],
+      total: 1,
+      page: 1,
+    });
+    seedApiMock.recordSeedItemEvent.mockResolvedValue({
+      ...item,
+      state: 'discarded',
+    });
+    const promptSpy = vi
+      .spyOn(window, 'prompt')
+      .mockReturnValue('re-homed to M16 as ddda775b');
+
+    render(
+      <GateReadinessPanel
+        activeProjectId="proj-1"
+        activeBoardMilestone="M12"
+      />,
+    );
+    await screen.findByText('seed s1');
+
+    fireEvent.click(screen.getByTestId('seed-item-discarded-s1'));
+
+    await waitFor(() => {
+      expect(seedApiMock.recordSeedItemEvent).toHaveBeenCalledWith('s1', {
+        outcome: 'discarded',
+        filedFollowon: undefined,
+        evidence: 're-homed to M16 as ddda775b',
+        operator: undefined,
+      });
+    });
+
+    promptSpy.mockRestore();
+  });
+
+  it("renders a discarded item's event history entry with its evidence text", async () => {
+    const item = makeSeedItem('s1', {
+      state: 'discarded',
+      events: [
+        {
+          outcome: 'discarded',
+          evidence: 're-homed to M16 as ddda775b',
+          at: '2026-08-23T00:00:00Z',
+        },
+      ],
+    });
+    seedApiMock.listSeedItems.mockResolvedValue({
+      items: [item],
+      total: 1,
+      page: 1,
+    });
+
+    render(
+      <GateReadinessPanel
+        activeProjectId="proj-1"
+        activeBoardMilestone="M12"
+      />,
+    );
+    await screen.findByText('seed s1');
+
+    expect(
+      screen.getByTestId('seed-item-latest-event-s1').textContent,
+    ).toContain('re-homed to M16 as ddda775b');
   });
 
   it('surfaces the server error on a rejected disposition without changing the item state', async () => {

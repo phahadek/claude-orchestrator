@@ -26,6 +26,12 @@
 //     '{"outcome":"applied","evidence":"row inserted via analyzer_configs CRUD"}'
 //   node seed-state-client.mjs event si-43 \
 //     '{"outcome":"blocked","evidence":"CRUD rejected: missing dependent row","filedFollowon":"81f3"}'
+//   node seed-state-client.mjs event si-44 \
+//     '{"outcome":"discarded","evidence":"un-appliable — re-homed to M16 as ddda775b"}'
+//     // discarded: terminal, non-blocking — for a void, mis-accreted, or
+//     // re-homed item. Requires non-empty evidence, same as blocked requires
+//     // filedFollowon. Distinct from confirmed, which asserts the seed was
+//     // actually applied and reconciled.
 //   node seed-state-client.mjs accrete \
 //     '{"project":"p1","taskId":"notion:t1","title":"Add retry","milestone":"M12",
 //       "decision":"seeds","seeds":[{"spec":"analyzer_configs row for retry-backoff"}]}'

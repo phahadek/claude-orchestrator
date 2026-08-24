@@ -8,6 +8,7 @@ import {
   listSeedItems,
   listSeedMilestoneReadiness,
   appendSeedItemEvent,
+  isValidSeedItemEventOutcome,
   reopenSeedItem,
   backfillSeedTask,
   rehomeSeedItem,
@@ -188,14 +189,16 @@ export function createSeedStateRouter(): Router {
       filedFollowon?: unknown;
       operator?: unknown;
     };
-    const outcome =
-      typeof body.outcome === 'string'
-        ? (body.outcome as SeedItemEventOutcome)
-        : null;
-    if (!outcome) {
+    const outcomeRaw = typeof body.outcome === 'string' ? body.outcome : null;
+    if (!outcomeRaw) {
       res.status(400).json({ error: 'outcome is required' });
       return;
     }
+    if (!isValidSeedItemEventOutcome(outcomeRaw)) {
+      res.status(400).json({ error: `unknown outcome: ${outcomeRaw}` });
+      return;
+    }
+    const outcome: SeedItemEventOutcome = outcomeRaw;
     try {
       const updated = appendSeedItemEvent(id, {
         outcome,

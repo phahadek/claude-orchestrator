@@ -247,6 +247,55 @@ describe('appendSeedItemEvent', () => {
       evidence: { observed: 'config write succeeded' },
     });
   });
+
+  it('advances a discarded event to the discarded state', () => {
+    const item = makeItem();
+    appendSeedItemEvent(item.id, {
+      outcome: 'discarded',
+      operator: 'pedro',
+      evidence: 'un-appliable — re-homed to M16 as ddda775b',
+    });
+    expect(getSeedItem(item.id)?.state).toBe('discarded');
+  });
+
+  it('requires non-empty evidence on a discarded outcome', () => {
+    const item = makeItem();
+    expect(() =>
+      appendSeedItemEvent(item.id, { outcome: 'discarded', operator: 'pedro' }),
+    ).toThrow();
+    expect(getItem(item.id)?.state).toBe('pending');
+
+    appendSeedItemEvent(item.id, {
+      outcome: 'discarded',
+      operator: 'pedro',
+      evidence: 're-homed to M16 as ddda775b',
+    });
+    expect(getSeedItem(item.id)?.state).toBe('discarded');
+  });
+
+  it('reports green in getSeedReadiness for a milestone whose only non-confirmed item is discarded', () => {
+    const item = makeItem();
+    appendSeedItemEvent(item.id, {
+      outcome: 'discarded',
+      evidence: 're-homed to M16',
+    });
+
+    const readiness = getSeedReadiness('polimarket-analyser', 'M12');
+    expect(readiness.status).toBe('green');
+    expect(readiness.blocking).toEqual([]);
+  });
+
+  it('carries a distinct discarded bucket in the counts map, not folded into confirmed', () => {
+    const discarded = makeItem({ spec: 'a' });
+    makeItem({ spec: 'b' });
+    appendSeedItemEvent(discarded.id, {
+      outcome: 'discarded',
+      evidence: 'void',
+    });
+
+    const readiness = getSeedReadiness('polimarket-analyser', 'M12');
+    expect(readiness.counts).toEqual({ discarded: 1, pending: 1 });
+  });
 });
 
 describe('reopenSeedItem', () => {
@@ -383,6 +432,18 @@ describe('listSeedItems', () => {
     const result = listSeedItems({ order: 'not-done-first' });
     expect(result.items.map((i) => i.id)).toEqual([pending.id, confirmed.id]);
   });
+
+  it('order: not-done-first sorts a discarded item with the done group, not at the top', () => {
+    const discarded = makeItem({ spec: 'discarded' });
+    const pending = makeItem({ spec: 'pending' });
+    appendSeedItemEvent(discarded.id, {
+      outcome: 'discarded',
+      evidence: 'void',
+    });
+
+    const result = listSeedItems({ order: 'not-done-first' });
+    expect(result.items.map((i) => i.id)).toEqual([pending.id, discarded.id]);
+  });
 });
 
 describe('listSeedMilestoneReadiness', () => {
@@ -420,6 +481,22 @@ describe('listSeedMilestoneReadiness', () => {
     const result = listSeedMilestoneReadiness();
     expect(result.map((r) => r.project)).toEqual(['p1', 'p2']);
     expect(result.every((r) => r.status === 'blocked')).toBe(true);
+  });
+
+  it('agrees with getSeedReadiness on a milestone containing a discarded item', () => {
+    const item = makeItem({ project: 'p1', milestone: 'M12' });
+    appendSeedItemEvent(item.id, {
+      outcome: 'discarded',
+      evidence: 're-homed',
+    });
+
+    const rollup = listSeedMilestoneReadiness({ project: 'p1' });
+    expect(rollup).toEqual([
+      { project: 'p1', milestone: 'M12', status: 'green', blockingCount: 0 },
+    ]);
+
+    const readiness = getSeedReadiness('p1', 'M12');
+    expect(readiness.status).toBe('green');
   });
 });
 

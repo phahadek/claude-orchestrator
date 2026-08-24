@@ -14,8 +14,35 @@ import {
   type TaskCandidate,
 } from './seedBackfill';
 
-/** Terminal state: the item no longer blocks milestone completion. */
-const RESOLVED_STATE = 'confirmed';
+/**
+ * States that no longer block milestone completion. `discarded` is
+ * terminal-but-not-applied — for a void, mis-accreted, or re-homed item —
+ * distinct from `confirmed`, which asserts the seed was actually applied and
+ * reconciled.
+ */
+const RESOLVED_STATES: ReadonlySet<string> = new Set([
+  'confirmed',
+  'discarded',
+]);
+
+/**
+ * The closed outcome vocabulary an event may carry. Anything outside this
+ * set is rejected at the API boundary (POST /seed/items/:id/events) rather
+ * than written straight into state.
+ */
+export const SEED_ITEM_EVENT_OUTCOMES: readonly SeedItemEventOutcome[] = [
+  'applied',
+  'confirmed',
+  'blocked',
+  'discarded',
+  'reopened',
+];
+
+export function isValidSeedItemEventOutcome(
+  value: string,
+): value is SeedItemEventOutcome {
+  return (SEED_ITEM_EVENT_OUTCOMES as readonly string[]).includes(value);
+}
 
 export interface SeedBlockingItem {
   id: string;
@@ -45,7 +72,7 @@ export function getSeedReadiness(
 ): SeedReadiness {
   const items = seedStore.listByMilestone(project, milestone);
   const blocking = items
-    .filter((item) => item.state !== RESOLVED_STATE)
+    .filter((item) => !RESOLVED_STATES.has(item.state))
     .map((item) => ({
       id: item.id,
       project: item.project,
@@ -99,7 +126,7 @@ export function nextApplyableSeedItems(
     .listByMilestone(project, milestone)
     .filter(
       (item) =>
-        item.state !== RESOLVED_STATE &&
+        !RESOLVED_STATES.has(item.state) &&
         item.minDeployedCommit !== undefined &&
         ancestry.isAncestor(item.minDeployedCommit, deploySha),
     );
@@ -224,7 +251,7 @@ export function listSeedMilestoneReadiness(
   return Array.from(groups.values())
     .map((group) => {
       const blockingCount = group.items.filter(
-        (item) => item.state !== RESOLVED_STATE,
+        (item) => !RESOLVED_STATES.has(item.state),
       ).length;
       const status: 'green' | 'blocked' =
         blockingCount === 0 ? 'green' : 'blocked';
@@ -271,6 +298,11 @@ export function appendSeedItemEvent(
   if (event.outcome === 'blocked' && !event.filedFollowon) {
     throw new Error(
       `seed_item ${seedItemId}: a blocked outcome must carry a filedFollowon`,
+    );
+  }
+  if (event.outcome === 'discarded' && !event.evidence) {
+    throw new Error(
+      `seed_item ${seedItemId}: a discarded outcome must carry non-empty evidence`,
     );
   }
   const now = new Date().toISOString();

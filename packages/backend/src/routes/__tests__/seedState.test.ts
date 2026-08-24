@@ -18,6 +18,13 @@ const seedServiceMock = vi.hoisted(() => ({
   listSeedItems: vi.fn(),
   listSeedMilestoneReadiness: vi.fn(),
   appendSeedItemEvent: vi.fn(),
+  isValidSeedItemEventOutcome: vi.fn((value: string) =>
+    ['applied', 'confirmed', 'blocked', 'discarded', 'reopened'].includes(
+      value,
+    ),
+  ),
+  reopenSeedItem: vi.fn(),
+  rehomeSeedItem: vi.fn(),
   backfillSeedTask: vi.fn(),
 }));
 
@@ -250,6 +257,34 @@ describe('POST /api/seed/items/:id/events', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/filedFollowon/);
+  });
+
+  it('rejects an unrecognized outcome string with a 400 instead of writing an unknown state', async () => {
+    const res = await request(makeApp())
+      .post('/api/seed/items/seed-1/events')
+      .send({ outcome: 'bogus' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/unknown outcome/);
+    expect(seedServiceMock.appendSeedItemEvent).not.toHaveBeenCalled();
+  });
+
+  it('accepts a discarded outcome and posts it through to appendSeedItemEvent', async () => {
+    const updated = { id: 'seed-1', state: 'discarded' };
+    seedServiceMock.appendSeedItemEvent.mockReturnValue(updated);
+
+    const res = await request(makeApp())
+      .post('/api/seed/items/seed-1/events')
+      .send({ outcome: 'discarded', evidence: 're-homed to M16' });
+
+    expect(seedServiceMock.appendSeedItemEvent).toHaveBeenCalledWith('seed-1', {
+      outcome: 'discarded',
+      evidence: 're-homed to M16',
+      filedFollowon: undefined,
+      operator: undefined,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(updated);
   });
 });
 

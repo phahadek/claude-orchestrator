@@ -164,6 +164,20 @@ describe('seedStore', () => {
     expect(item?.state).toBe('confirmed');
   });
 
+  it('advances to the discarded state', () => {
+    const created = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      spec: 'Set test_max_rss_mb ceiling',
+      sources: [{ sourceTaskId: 'notion:d1', sourceTaskTitle: 'Add ceiling' }],
+      updatedAt: new Date(0).toISOString(),
+    });
+
+    advanceState(created.id, 'discarded', new Date(2).toISOString());
+    const item = getItem(created.id);
+    expect(item?.state).toBe('discarded');
+  });
+
   it('sets min_deployed_commit at source-task merge time', () => {
     const created = insertItem({
       project: 'polimarket-analyser',

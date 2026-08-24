@@ -1,13 +1,26 @@
 import { apiRequest } from './projects';
 
-type SeedItemState = 'pending' | 'applied' | 'confirmed' | 'blocked';
+type SeedItemState =
+  | 'pending'
+  | 'applied'
+  | 'confirmed'
+  | 'blocked'
+  | 'discarded';
 
 export type SeedItemClassification =
   | 'operational-seed'
   | 'in-pr'
   | 'needs-triage';
 
-export type SeedItemEventOutcome = 'applied' | 'confirmed' | 'blocked';
+/** Mirrors the outcomes the POST /seed/items/:id/events route accepts (seedService.ts). */
+export const SEED_EVENT_OUTCOMES = [
+  'applied',
+  'confirmed',
+  'blocked',
+  'discarded',
+] as const;
+
+export type SeedItemEventOutcome = (typeof SEED_EVENT_OUTCOMES)[number];
 
 interface SeedItemSource {
   sourceTaskId: string;
