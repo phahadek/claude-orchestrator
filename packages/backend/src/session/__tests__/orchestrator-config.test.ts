@@ -1349,6 +1349,10 @@ describe("this repo's own .claude-orchestrator.yml capability_pre_grants", () =>
     const allCapabilities = Object.values(config.capability_pre_grants).flat();
     expect(allCapabilities.length).toBeGreaterThan(0);
     for (const capability of allCapabilities) {
+      // read:path: grants a real filesystem path, which may legitimately
+      // embed the app's own data-dir name ("claude-orchestrator") — only
+      // the project-scoped `:<id>` capability strings are checked here.
+      if (capability.startsWith('read:path:')) continue;
       expect(capability).not.toContain('claude-orchestrator');
       if (
         capability.startsWith('read:audit-log:') ||
