@@ -169,7 +169,7 @@ vi.mock('../github/NoOpInvestigator', () => ({
 
 vi.mock('../tasks/TaskBackend', () => ({
   getTaskBackend: vi.fn(() => ({
-    type: 'local',
+    type: 'yaml',
     updateStatus: vi.fn(async () => {}),
     fetchReadyTasks: vi.fn(async () => []),
     attachPR: vi.fn(async () => {}),

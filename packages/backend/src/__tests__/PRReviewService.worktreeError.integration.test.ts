@@ -108,7 +108,7 @@ function makeMockGitHub(): GitHubClient {
 
 function makeMockTaskBackend(): TaskTrackerBackend {
   return {
-    type: 'local',
+    type: 'yaml',
     fetchTaskPage: vi.fn().mockResolvedValue(''),
     updateStatus: vi.fn().mockResolvedValue(undefined),
     fetchTasks: vi.fn().mockResolvedValue([]),

@@ -24,7 +24,7 @@ vi.mock('./NotionTaskBackend', () => ({
 
 vi.mock('./LocalTaskBackend', () => ({
   LocalTaskBackend: vi.fn().mockImplementation(() => ({
-    type: 'local',
+    type: 'yaml',
     fetchReadyTasks: vi.fn(),
     attachPR: vi.fn(),
     updateStatus: vi.fn(),
@@ -192,7 +192,7 @@ describe('getTaskBackend — regression: existing source types', () => {
       makeProject('yaml') as never,
     );
     const backend = getTaskBackend('proj-1');
-    expect(backend.type).toBe('local');
+    expect(backend.type).toBe('yaml');
     expect(LocalTaskBackend).toHaveBeenCalledOnce();
   });
 

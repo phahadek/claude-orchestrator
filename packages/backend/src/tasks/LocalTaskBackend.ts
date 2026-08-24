@@ -170,7 +170,7 @@ const resolver = new DependencyResolver();
  * the prefix before operating on the file.
  */
 export class LocalTaskBackend implements TaskBackend {
-  readonly type = 'local' as const;
+  readonly type = 'yaml' as const;
 
   constructor(
     private readonly projectDir: string,
