@@ -100,9 +100,8 @@ describe('classifyTestRunOutcome', () => {
     const outcomes = [
       classifyTestRunOutcome(makeRun({ state: 'running' })).outcome,
       classifyTestRunOutcome(makeRun({ state: 'passed' })).outcome,
-      classifyTestRunOutcome(
-        makeRun({ state: 'passed', run_kind: 'scoped' }),
-      ).outcome,
+      classifyTestRunOutcome(makeRun({ state: 'passed', run_kind: 'scoped' }))
+        .outcome,
       classifyTestRunOutcome(
         makeRun({ state: 'failed', structured_result: structuredWithTests }),
       ).outcome,
