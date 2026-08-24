@@ -468,20 +468,32 @@ async function executeTestRequestRun(
   requestedAt: number,
   permitPromise: Promise<() => void>,
 ): Promise<TestCommandResult & { runId: string }> {
-  const release = await permitPromise;
-  await waitForMemoryAdmission(
-    spec.projectId,
-    getEffectiveProjectLimit(spec.projectId),
-  );
-
-  const semaphore = getProjectSemaphore(spec.projectId);
-  const startedAt = Date.now();
-  // Peer occupancy right after acquiring, excluding this run itself, so 0
-  // genuinely means "ran alone" — matching the concurrent_run_count = 0
-  // validity predicate consumers filter on (listRecentValidTestDurations,
-  // computeTestFlipRateFlag).
-  const concurrentRunCount = semaphore.inUse() - 1;
+  // Tracked outside the try so the catch/finally below can react correctly
+  // regardless of how early a failure happens: `release` is only ever
+  // called if a permit was actually acquired, and `startedAt` — used for
+  // both the failure broadcast and (in the happy path) the row's real
+  // started_at — is set as soon as it's known, not assumed.
+  let release: (() => void) | undefined;
+  let startedAt: number | undefined;
   try {
+    // The row already exists as 'queued' (inserted by admitTestRequest
+    // before this permit was even requested) — a failure anywhere in this
+    // try, including here while still waiting on the permit/memory-headroom
+    // gate, must not leave that row stranded in 'queued' forever. See the
+    // catch block below.
+    release = await permitPromise;
+    await waitForMemoryAdmission(
+      spec.projectId,
+      getEffectiveProjectLimit(spec.projectId),
+    );
+
+    const semaphore = getProjectSemaphore(spec.projectId);
+    startedAt = Date.now();
+    // Peer occupancy right after acquiring, excluding this run itself, so 0
+    // genuinely means "ran alone" — matching the concurrent_run_count = 0
+    // validity predicate consumers filter on (listRecentValidTestDurations,
+    // computeTestFlipRateFlag).
+    const concurrentRunCount = semaphore.inUse() - 1;
     markTestRequestRunRunning(runId, startedAt, concurrentRunCount);
     broadcastRunStatus({
       runId,
@@ -599,12 +611,18 @@ async function executeTestRequestRun(
       output,
       sessionId: spec.sessionId,
       requestedAt,
-      startedAt,
+      // startedAt may never have been set — a permit-acquire or
+      // memory-admission failure throws before it's assigned, while the
+      // row (inserted 'queued' by admitTestRequest before this permit was
+      // even requested) still needs a concrete startedAt for this payload.
+      startedAt: startedAt ?? requestedAt,
       finishedAt: Date.now(),
     });
     return { passed: false, output, runId };
   } finally {
-    release();
+    // Only ever set once permitPromise actually resolves — a failure before
+    // that point never acquired a permit, so there is nothing to release.
+    release?.();
   }
 }
 
