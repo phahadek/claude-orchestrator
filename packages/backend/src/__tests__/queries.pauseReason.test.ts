@@ -9,11 +9,16 @@ import { db } from '../db/db.js';
 import {
   getApprovedOpenPRs,
   getPausedPrReasonForTask,
+  getStaleAutoMergeFailedPRs,
   resetReviewIteration,
   setPauseReason,
 } from '../db/queries.js';
 import { deriveDisplayStatus } from '../tasks/TaskStatusEngine.js';
-import { pauseReasonFromCanonical } from '../db/pauseReason.js';
+import {
+  pauseReasonFromCanonical,
+  parsePauseReasonSet,
+  isMergeBlockingPause,
+} from '../db/pauseReason.js';
 
 const NOW = '2024-01-01T00:00:00Z';
 
@@ -253,5 +258,210 @@ describe('resetReviewIteration() — review_failed reset coverage', () => {
     // Post-reset: unblocked
     expect(getApprovedOpenPRs()).toHaveLength(1);
     expect(getPausedPrReasonForTask('task-review-failed-2')).toBeNull();
+  });
+});
+
+function rawPauseReason(prNumber: number): string | null {
+  const row = db
+    .prepare('SELECT pause_reason FROM pull_requests WHERE pr_number = ?')
+    .get(prNumber) as { pause_reason: string | null };
+  return row.pause_reason;
+}
+
+describe('setPauseReason() — concurrent per-source stacking', () => {
+  it('a write from a source with no live entry adds a new concurrent entry without disturbing existing entries from other sources', () => {
+    insertPR({ pr_number: 50, task_id: 'notion:task-stack-1' });
+    // 'ci' source
+    setPauseReason(50, 'owner/repo', 'ci_failing');
+    // 'review' source — different source, should stack alongside ci_failing
+    setPauseReason(50, 'owner/repo', 'review_failed');
+
+    const set = parsePauseReasonSet(rawPauseReason(50));
+    expect(set).toHaveLength(2);
+    const reasons = set.map((e) => e.reason).sort();
+    expect(reasons).toEqual(['ci_failing', 'review_failed']);
+    const sources = set.map((e) => e.source).sort();
+    expect(sources).toEqual(['ci', 'review']);
+  });
+
+  it('a second write from the same source replaces only that source own entry, leaving other sources entries untouched', () => {
+    insertPR({ pr_number: 51, task_id: 'notion:task-stack-2' });
+    setPauseReason(51, 'owner/repo', 'ci_failing'); // source: ci
+    setPauseReason(51, 'owner/repo', 'review_failed'); // source: review
+    setPauseReason(51, 'owner/repo', 'ci_billing_blocked'); // source: ci — replaces ci_failing only
+
+    const set = parsePauseReasonSet(rawPauseReason(51));
+    expect(set).toHaveLength(2);
+    const bySource = Object.fromEntries(set.map((e) => [e.source, e.reason]));
+    expect(bySource.ci).toBe('ci_billing_blocked');
+    expect(bySource.review).toBe('review_failed');
+  });
+
+  it('reason=null clears the entire concurrent set', () => {
+    insertPR({ pr_number: 52, task_id: 'notion:task-stack-3' });
+    setPauseReason(52, 'owner/repo', 'ci_failing');
+    setPauseReason(52, 'owner/repo', 'review_failed');
+    setPauseReason(52, 'owner/repo', null);
+    expect(rawPauseReason(52)).toBeNull();
+    expect(parsePauseReasonSet(rawPauseReason(52))).toEqual([]);
+  });
+});
+
+describe('isMergeBlockingPause() — ORs across concurrent entries', () => {
+  it('returns true when any live entry (not just the highest-severity one) has blocks_merge:true, even when the other entry is advisory', () => {
+    insertPR({ pr_number: 60, task_id: 'notion:task-block-1' });
+    // ci_not_completing is blocks_merge:false and needs_attention severity
+    setPauseReason(60, 'owner/repo', 'ci_not_completing');
+    // merge_conflict is blocks_merge:true (implicit) — a different source
+    setPauseReason(60, 'owner/repo', 'merge_conflict');
+
+    const raw = rawPauseReason(60);
+    const set = parsePauseReasonSet(raw);
+    expect(set).toHaveLength(2);
+    expect(isMergeBlockingPause(raw)).toBe(true);
+  });
+
+  it('returns false when every live entry is advisory (blocks_merge:false)', () => {
+    insertPR({ pr_number: 61, task_id: 'notion:task-block-2' });
+    setPauseReason(61, 'owner/repo', 'ci_not_completing'); // source: ci, advisory
+    setPauseReason(61, 'owner/repo', 'test_report_acquisition_failed'); // source: tests, advisory
+
+    const raw = rawPauseReason(61);
+    expect(parsePauseReasonSet(raw)).toHaveLength(2);
+    expect(isMergeBlockingPause(raw)).toBe(false);
+  });
+});
+
+describe('legacy pause_reason row shapes still parse correctly', () => {
+  it('a legacy single-struct JSON row parses as a one-element set', () => {
+    insertPR({
+      pr_number: 70,
+      task_id: 'notion:task-legacy-struct',
+      pause_reason: JSON.stringify(
+        pauseReasonFromCanonical('auto_merge_failed'),
+      ),
+    });
+    const set = parsePauseReasonSet(rawPauseReason(70));
+    expect(set).toHaveLength(1);
+    expect(set[0].reason).toBe('auto_merge_failed');
+    expect(set[0].source).toBe('merge');
+    expect(isMergeBlockingPause(rawPauseReason(70))).toBe(true);
+  });
+
+  it('a legacy bare-string row continues to parse as before', () => {
+    insertPR({
+      pr_number: 71,
+      task_id: 'notion:task-legacy-bare',
+      pause_reason: 'stuck_timeout',
+    });
+    const set = parsePauseReasonSet(rawPauseReason(71));
+    expect(set).toHaveLength(1);
+    expect(set[0].reason).toBe('stuck_timeout');
+    expect(set[0].source).toBe('session');
+  });
+});
+
+describe('getStaleAutoMergeFailedPRs() — per-entry set_at, not the shared column', () => {
+  it('still detects staleness when an unrelated source refreshes the shared pause_reason_set_at column', () => {
+    insertPR({ pr_number: 80, task_id: 'notion:task-stale-1' });
+    const staleSetAt = Date.now() - 10 * 60_000;
+    // The row-level column reflects the most recent write from ANY source
+    // (here 'ci'), which under the old column-only check would mask the
+    // still-stale 'merge' entry underneath it.
+    const columnRefreshedByUnrelatedSource = Date.now();
+    const rawSet = JSON.stringify([
+      {
+        reason: 'auto_merge_failed',
+        source: 'merge',
+        severity: 'needs_attention',
+        retry_strategy: 'manual_action',
+        blocks_merge: true,
+        set_at: staleSetAt,
+      },
+      {
+        reason: 'ci_failing',
+        source: 'ci',
+        severity: 'needs_attention',
+        retry_strategy: 'automatic',
+        blocks_merge: true,
+        set_at: columnRefreshedByUnrelatedSource,
+      },
+    ]);
+    db.prepare(
+      'UPDATE pull_requests SET pause_reason = ?, pause_reason_set_at = ? WHERE pr_number = ?',
+    ).run(rawSet, columnRefreshedByUnrelatedSource, 80);
+
+    const stale = getStaleAutoMergeFailedPRs(5 * 60_000);
+    expect(stale.map((r) => r.pr_number)).toContain(80);
+  });
+
+  it('does not report a fresh auto_merge_failed entry as stale even when the shared column is old', () => {
+    insertPR({ pr_number: 82, task_id: 'notion:task-stale-2' });
+    const freshSetAt = Date.now();
+    const oldColumnTimestamp = Date.now() - 10 * 60_000;
+    const rawSet = JSON.stringify([
+      {
+        reason: 'auto_merge_failed',
+        source: 'merge',
+        severity: 'needs_attention',
+        retry_strategy: 'manual_action',
+        blocks_merge: true,
+        set_at: freshSetAt,
+      },
+    ]);
+    db.prepare(
+      'UPDATE pull_requests SET pause_reason = ?, pause_reason_set_at = ? WHERE pr_number = ?',
+    ).run(rawSet, oldColumnTimestamp, 82);
+
+    const stale = getStaleAutoMergeFailedPRs(5 * 60_000);
+    expect(stale.map((r) => r.pr_number)).not.toContain(82);
+  });
+
+  it('falls back to the row-level column for a legacy entry with no per-entry set_at', () => {
+    insertPR({ pr_number: 81, task_id: 'notion:task-stale-legacy' });
+    const oldTimestamp = Date.now() - 10 * 60_000;
+    const legacyStruct = pauseReasonFromCanonical('auto_merge_failed');
+    db.prepare(
+      'UPDATE pull_requests SET pause_reason = ?, pause_reason_set_at = ? WHERE pr_number = ?',
+    ).run(JSON.stringify(legacyStruct), oldTimestamp, 81);
+
+    const stale = getStaleAutoMergeFailedPRs(5 * 60_000);
+    expect(stale.map((r) => r.pr_number)).toContain(81);
+  });
+});
+
+describe('parsePauseReasonSet() — malformed array element degrades safely instead of vanishing', () => {
+  it('keeps a malformed entry in the set as a fail-closed fallback rather than dropping it', () => {
+    const raw = JSON.stringify([
+      {
+        reason: 'ci_failing',
+        source: 'ci',
+        severity: 'needs_attention',
+        retry_strategy: 'automatic',
+        blocks_merge: true,
+      },
+      { garbage: true },
+    ]);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const set = parsePauseReasonSet(raw);
+    warnSpy.mockRestore();
+    expect(set).toHaveLength(2);
+    expect(set[1].blocks_merge).toBe(true);
+  });
+
+  it('a malformed entry keeps isMergeBlockingPause fail-closed instead of under-reporting', () => {
+    const raw = JSON.stringify([
+      {
+        reason: 'test_report_acquisition_failed',
+        source: 'tests',
+        severity: 'needs_attention',
+        retry_strategy: 'manual_action',
+        blocks_merge: false,
+      },
+      { garbage: true },
+    ]);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(isMergeBlockingPause(raw)).toBe(true);
+    warnSpy.mockRestore();
   });
 });

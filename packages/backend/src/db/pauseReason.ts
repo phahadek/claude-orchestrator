@@ -76,6 +76,14 @@ export interface PauseReasonStruct {
    */
   blocks_merge: boolean;
   detail?: string;
+  /**
+   * Per-entry timestamp used only to tie-break resolution order among
+   * concurrent entries (see resolvePauseReasonEntry below) — never for
+   * merge-blocking, which ORs across every live entry regardless of age.
+   * Absent on structs built for non-concurrent storage (task_pause_reasons,
+   * session_pause_intervals) where a single column-level timestamp suffices.
+   */
+  set_at?: number;
 }
 
 type RegistryEntry = {
@@ -540,19 +548,25 @@ export function pauseReasonFromCanonical(
 
 /**
  * Whether a stored pause_reason should block AutoMerger from merging the PR.
- * Consults the reason's classification (blocks_merge), not merely whether a
- * pause is present — an advisory pause (e.g. test_report_acquisition_failed)
- * must not halt a merge whose underlying tests passed. Fails closed: no
- * pause blocks nothing (returns false), but any pause that fails to parse or
- * carries no explicit blocks_merge:false is treated as blocking.
+ * ORs blocks_merge across every live concurrent entry — not just the one
+ * resolution order would pick for display — since a single advisory entry
+ * (e.g. test_report_acquisition_failed) must never mask a concurrently-live
+ * blocking entry from a different source. Fails closed: no pause blocks
+ * nothing (returns false), but any entry that carries no explicit
+ * blocks_merge:false is treated as blocking.
  */
 export function isMergeBlockingPause(pauseReasonRaw: string | null): boolean {
-  const parsed = parsePauseReason(pauseReasonRaw);
-  return parsed !== null && parsed.blocks_merge !== false;
+  const set = parsePauseReasonSet(pauseReasonRaw);
+  return set.some((entry) => entry.blocks_merge !== false);
 }
 
 export function serializePauseReason(struct: PauseReasonStruct): string {
   return JSON.stringify(struct);
+}
+
+/** Serializes a concurrent pause-reason set for storage in pull_requests.pause_reason. */
+export function serializePauseReasonSet(entries: PauseReasonStruct[]): string {
+  return JSON.stringify(entries);
 }
 
 /**
@@ -578,41 +592,132 @@ export function isAutomaticRecoveryPending(
   );
 }
 
-export function parsePauseReason(raw: string | null): PauseReasonStruct | null {
-  if (raw === null || raw === '') return null;
+/** Coerces one parsed JSON object into a PauseReasonStruct, or null if it isn't shaped like one. */
+function coercePauseReasonObject(
+  parsed: Record<string, unknown>,
+): PauseReasonStruct | null {
+  if (
+    typeof parsed.reason !== 'string' ||
+    typeof parsed.source !== 'string' ||
+    typeof parsed.severity !== 'string' ||
+    typeof parsed.retry_strategy !== 'string'
+  ) {
+    return null;
+  }
+  // Rows persisted before blocks_merge existed lack the field — re-derive
+  // it from the registry (fail-closed to true if the reason is unknown)
+  // rather than trusting an absent value as non-blocking.
+  if (typeof parsed.blocks_merge !== 'boolean') {
+    const registryEntry =
+      PAUSE_REASON_REGISTRY[parsed.reason as CanonicalPauseReason];
+    parsed.blocks_merge = registryEntry
+      ? registryEntry.blocks_merge !== false
+      : true;
+  }
+  return parsed as unknown as PauseReasonStruct;
+}
+
+function unknownPauseReasonFallback(raw: string): PauseReasonStruct {
+  console.warn(
+    `[pauseReason] Unknown pause reason: "${raw}", using safe default`,
+  );
+  return { reason: raw as CanonicalPauseReason, ...UNKNOWN_FALLBACK };
+}
+
+/**
+ * Coerces one element of a concurrent-set JSON array, degrading a malformed
+ * element to the same safe fallback as an unknown bare-string reason rather
+ * than dropping it — a corrupt array element must never silently vanish from
+ * the set, since that would make isMergeBlockingPause under-report a pause
+ * that fails to parse (see UNKNOWN_FALLBACK's fail-closed blocks_merge:true).
+ */
+function coerceArrayElementOrFallback(item: unknown, index: number): PauseReasonStruct {
+  if (item !== null && typeof item === 'object') {
+    const coerced = coercePauseReasonObject(item as Record<string, unknown>);
+    if (coerced) return coerced;
+    const record = item as Record<string, unknown>;
+    if (typeof record.reason === 'string') {
+      return unknownPauseReasonFallback(record.reason);
+    }
+  }
+  return unknownPauseReasonFallback(`malformed_entry_${index}`);
+}
+
+/**
+ * Parses pull_requests.pause_reason into the full concurrent set of live
+ * entries (at most one per PauseSource). Handles every storage shape the
+ * column has ever held:
+ *  - current: a JSON array of PauseReasonStruct entries.
+ *  - legacy struct: a single JSON object — treated as a one-element set.
+ *  - legacy bare string: a canonical reason name — treated as a one-element
+ *    set via pauseReasonFromCanonical.
+ * Never throws: a malformed/unknown value degrades to a safe single-entry
+ * fallback rather than losing the pause signal entirely.
+ */
+export function parsePauseReasonSet(raw: string | null): PauseReasonStruct[] {
+  if (raw === null || raw === '') return [];
+
+  if (raw.startsWith('[')) {
+    try {
+      const parsedArray = JSON.parse(raw) as unknown[];
+      return parsedArray.map((item, index) =>
+        coerceArrayElementOrFallback(item, index),
+      );
+    } catch {
+      // fall through to legacy handling
+    }
+  }
 
   if (raw.startsWith('{')) {
     try {
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      if (
-        typeof parsed.reason === 'string' &&
-        typeof parsed.source === 'string' &&
-        typeof parsed.severity === 'string' &&
-        typeof parsed.retry_strategy === 'string'
-      ) {
-        // Rows persisted before blocks_merge existed lack the field — re-derive
-        // it from the registry (fail-closed to true if the reason is unknown)
-        // rather than trusting an absent value as non-blocking.
-        if (typeof parsed.blocks_merge !== 'boolean') {
-          const registryEntry =
-            PAUSE_REASON_REGISTRY[parsed.reason as CanonicalPauseReason];
-          parsed.blocks_merge = registryEntry
-            ? registryEntry.blocks_merge !== false
-            : true;
-        }
-        return parsed as unknown as PauseReasonStruct;
-      }
+      const parsed = coercePauseReasonObject(
+        JSON.parse(raw) as Record<string, unknown>,
+      );
+      if (parsed) return [parsed];
     } catch {
       // fall through to legacy handling
     }
   }
 
   if (CANONICAL_SET.has(raw)) {
-    return pauseReasonFromCanonical(raw as CanonicalPauseReason);
+    return [pauseReasonFromCanonical(raw as CanonicalPauseReason)];
   }
 
-  console.warn(
-    `[pauseReason] Unknown pause reason: "${raw}", using safe default`,
-  );
-  return { reason: raw as CanonicalPauseReason, ...UNKNOWN_FALLBACK };
+  return [unknownPauseReasonFallback(raw)];
+}
+
+/**
+ * Resolution order for single-value display/precedence contexts (never for
+ * merge-blocking — see isMergeBlockingPause): ranks by severity (terminal >
+ * needs_attention > recoverable), tie-broken by the most recent per-entry
+ * set_at.
+ */
+const SEVERITY_RANK: Record<PauseSeverity, number> = {
+  terminal: 3,
+  needs_attention: 2,
+  recoverable: 1,
+};
+
+function resolvePauseReasonEntry(
+  entries: PauseReasonStruct[],
+): PauseReasonStruct | null {
+  if (entries.length === 0) return null;
+  return entries.reduce((best, candidate) => {
+    const bestRank = SEVERITY_RANK[best.severity];
+    const candidateRank = SEVERITY_RANK[candidate.severity];
+    if (candidateRank !== bestRank) {
+      return candidateRank > bestRank ? candidate : best;
+    }
+    return (candidate.set_at ?? 0) > (best.set_at ?? 0) ? candidate : best;
+  });
+}
+
+/**
+ * Single-value view of pull_requests.pause_reason for display/precedence
+ * contexts, resolved from the full concurrent set — see
+ * resolvePauseReasonEntry. Never use this to decide merge-blocking; use
+ * isMergeBlockingPause, which ORs across every live entry instead.
+ */
+export function parsePauseReason(raw: string | null): PauseReasonStruct | null {
+  return resolvePauseReasonEntry(parsePauseReasonSet(raw));
 }

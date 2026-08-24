@@ -19,7 +19,9 @@ import {
 import {
   pauseReasonFromCanonical,
   serializePauseReason,
+  serializePauseReasonSet,
   parsePauseReason,
+  parsePauseReasonSet,
 } from './pauseReason';
 import type {
   Session,
@@ -3689,17 +3691,34 @@ export function markReviewerRequested(prNumber: number, repo: string): void {
   ).run({ pr_number: prNumber, repo, now: Date.now() });
 }
 
+/**
+ * Source-scoped replace-or-add: a write from a source with no live entry
+ * adds a new concurrent entry alongside any other sources' live entries; a
+ * second write from the same source replaces only that source's own entry.
+ * Passing reason=null clears the entire concurrent set (used by terminal PR
+ * transitions), not just one source's entry.
+ */
 export function setPauseReason(
   prNumber: number,
   repo: string,
   reason: PauseReason | null,
   detail?: string,
 ): void {
-  const serialized =
-    reason !== null
-      ? serializePauseReason(pauseReasonFromCanonical(reason, detail))
-      : null;
   const before = getPRByNumber(prNumber, repo);
+  let serialized: string | null;
+  if (reason === null) {
+    serialized = null;
+  } else {
+    const newEntry: PauseReasonStruct = {
+      ...pauseReasonFromCanonical(reason, detail),
+      set_at: Date.now(),
+    };
+    const nextSet = parsePauseReasonSet(before?.pause_reason ?? null).filter(
+      (entry) => entry.source !== newEntry.source,
+    );
+    nextSet.push(newEntry);
+    serialized = serializePauseReasonSet(nextSet);
+  }
   db.prepare<{
     pr_number: number;
     repo: string;
@@ -3832,26 +3851,68 @@ export function getOrphanMergeablePRs(): Array<{
 }
 
 /**
- * PRs with pause_reason='auto_merge_failed' whose pause_reason_set_at is older
- * than thresholdMs milliseconds ago. These are stale transient failures eligible
+ * SQL fragment matching a pause_reason column that has a live
+ * 'auto_merge_failed' entry, across every storage shape the column has ever
+ * held: a bare legacy string, a legacy single-struct JSON object (via the
+ * top-level $.reason extract), or the current concurrent-set JSON array
+ * (via json_each — json_valid guards against attempting json_each on a
+ * non-JSON bare string, which would otherwise throw).
+ */
+const PAUSE_REASON_HAS_AUTO_MERGE_FAILED_SQL = `
+        pause_reason = 'auto_merge_failed'
+        OR json_extract(pause_reason, '$.reason') = 'auto_merge_failed'
+        OR (
+          json_valid(pause_reason) AND EXISTS (
+            SELECT 1 FROM json_each(pause_reason) je
+            WHERE json_extract(je.value, '$.reason') = 'auto_merge_failed'
+          )
+        )
+`;
+
+/**
+ * PRs with a live 'auto_merge_failed' entry whose own set_at is older than
+ * thresholdMs milliseconds ago. These are stale transient failures eligible
  * for automatic retry.
+ *
+ * Filters in JS rather than purely in SQL: pause_reason_set_at is a single
+ * column shared across the whole concurrent set, so it gets refreshed by
+ * *any* source's write to the PR — including one from a source other than
+ * 'merge'. Comparing that shared column against the threshold would let an
+ * unrelated source's activity mask a genuinely stale auto_merge_failed entry
+ * indefinitely. The per-entry set_at stamped by setPauseReason is the
+ * authoritative signal; the column is only a fallback for legacy rows
+ * written before per-entry timestamps existed.
  */
 export function getStaleAutoMergeFailedPRs(thresholdMs: number): Array<{
   pr_number: number;
   repo: string;
 }> {
   const cutoff = Date.now() - thresholdMs;
-  return db
+  const candidates = db
     .prepare(
       `
-    SELECT pr_number, repo FROM pull_requests
+    SELECT pr_number, repo, pause_reason, pause_reason_set_at FROM pull_requests
     WHERE state = 'open'
-      AND (pause_reason = 'auto_merge_failed' OR json_extract(pause_reason, '$.reason') = 'auto_merge_failed')
+      AND (${PAUSE_REASON_HAS_AUTO_MERGE_FAILED_SQL})
       AND pause_reason_set_at IS NOT NULL
-      AND pause_reason_set_at < @cutoff
   `,
     )
-    .all({ cutoff }) as Array<{ pr_number: number; repo: string }>;
+    .all() as Array<{
+    pr_number: number;
+    repo: string;
+    pause_reason: string | null;
+    pause_reason_set_at: number | null;
+  }>;
+
+  return candidates
+    .filter((row) => {
+      const entry = parsePauseReasonSet(row.pause_reason).find(
+        (e) => e.reason === 'auto_merge_failed',
+      );
+      const setAt = entry?.set_at ?? row.pause_reason_set_at;
+      return setAt != null && setAt < cutoff;
+    })
+    .map(({ pr_number, repo }) => ({ pr_number, repo }));
 }
 
 /**
@@ -3876,8 +3937,7 @@ export function getConflictNudgeCandidates(): Array<{
       AND head_sha IS NOT NULL
       AND (conflict_nudge_sha IS NULL OR head_sha != conflict_nudge_sha)
       AND (
-        pause_reason = 'auto_merge_failed'
-        OR json_extract(pause_reason, '$.reason') = 'auto_merge_failed'
+        ${PAUSE_REASON_HAS_AUTO_MERGE_FAILED_SQL}
         OR (pause_reason IS NULL AND merge_state IN ('dirty', 'blocked'))
       )
   `,
