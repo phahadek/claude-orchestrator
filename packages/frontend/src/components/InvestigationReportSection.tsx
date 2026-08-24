@@ -85,11 +85,16 @@ export function InvestigationReportSection({
   const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
   const [imageLoadingId, setImageLoadingId] = useState<string | null>(null);
   const imageUrlsRef = useRef(imageUrls);
-  imageUrlsRef.current = imageUrls;
 
   // Object URLs are only revocable client-side memory — revoke every one
   // we minted once the component unmounts, mirroring the createObjectURL
-  // contract (nothing else owns their lifetime).
+  // contract (nothing else owns their lifetime). The ref is synced in its
+  // own effect (never during render) so the cleanup effect below can read
+  // the latest map without re-registering on every change.
+  useEffect(() => {
+    imageUrlsRef.current = imageUrls;
+  }, [imageUrls]);
+
   useEffect(() => {
     return () => {
       Object.values(imageUrlsRef.current).forEach((url) =>
