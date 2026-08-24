@@ -206,6 +206,17 @@ export function runMigrations(target: Database.Database): void {
       last_crash_at       INTEGER NOT NULL
     );
 
+    -- task_display_status_log: last-recorded displayStatus per task, used to
+    -- edge-trigger task_display_status_changed audit events (see
+    -- TaskStatusEngine.ts's recordDisplayStatusTransition). Kept in its own
+    -- table rather than a task_cache column so it survives task_cache
+    -- refreshes without spuriously re-emitting.
+    CREATE TABLE IF NOT EXISTS task_display_status_log (
+      task_id         TEXT    PRIMARY KEY,
+      display_status  TEXT    NOT NULL,
+      updated_at      INTEGER NOT NULL
+    );
+
     -- session_poke_retry_counts: persisted counter of consecutive failed
     -- poke/resume attempts on the sendOrResume/_doSendOrResume live path
     -- (SessionManager.ts), keyed per session_id (not per task, unlike
