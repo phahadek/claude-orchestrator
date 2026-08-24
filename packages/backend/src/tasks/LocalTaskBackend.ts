@@ -471,7 +471,7 @@ export class LocalTaskBackend implements TaskBackend {
     const existingIds = new Set(
       file.milestones.flatMap((m) => m.tasks.map((t) => t.id)),
     );
-    const base = slugify(fields.title);
+    const base = `${this.projectId}-${slugify(fields.title)}`;
     let id = base;
     let suffix = 2;
     while (existingIds.has(id)) {
