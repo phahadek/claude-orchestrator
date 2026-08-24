@@ -22,7 +22,15 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import crypto from 'crypto';
-import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  beforeEach,
+  afterEach,
+  vi,
+} from 'vitest';
 
 vi.mock('../../db/db.js', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
@@ -31,7 +39,10 @@ vi.mock('../../db/db.js', async () => {
 
 import { db } from '../../db/db.js';
 import { ProjectService } from '../../projects/ProjectService.js';
-import { createReportStateRouter, reportImageBodyParser } from '../reportState.js';
+import {
+  createReportStateRouter,
+  reportImageBodyParser,
+} from '../reportState.js';
 
 function makeApp() {
   const app = express();
@@ -128,12 +139,14 @@ describe('POST /api/reports image handling', () => {
 describe('PATCH /api/reports/:id image handling', () => {
   it('replaces a draft report image', async () => {
     const app = makeApp();
-    const created = await request(app).post('/api/reports').send({
-      projectId: 'proj-1',
-      title: 't',
-      symptomText: 's',
-      image: pngDataUrl(Buffer.from('original-bytes')),
-    });
+    const created = await request(app)
+      .post('/api/reports')
+      .send({
+        projectId: 'proj-1',
+        title: 't',
+        symptomText: 's',
+        image: pngDataUrl(Buffer.from('original-bytes')),
+      });
     const id = created.body.id as string;
     const originalPath = created.body.image_path as string;
 
@@ -151,12 +164,14 @@ describe('PATCH /api/reports/:id image handling', () => {
 
   it('clears a draft report image', async () => {
     const app = makeApp();
-    const created = await request(app).post('/api/reports').send({
-      projectId: 'proj-1',
-      title: 't',
-      symptomText: 's',
-      image: pngDataUrl(Buffer.from('original-bytes')),
-    });
+    const created = await request(app)
+      .post('/api/reports')
+      .send({
+        projectId: 'proj-1',
+        title: 't',
+        symptomText: 's',
+        image: pngDataUrl(Buffer.from('original-bytes')),
+      });
     const id = created.body.id as string;
     const originalPath = created.body.image_path as string;
     expect(fs.existsSync(originalPath)).toBe(true);

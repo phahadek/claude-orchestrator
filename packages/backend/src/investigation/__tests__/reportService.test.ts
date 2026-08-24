@@ -13,7 +13,15 @@
  * raises rather than persisting/matching an unresolved value.
  */
 
-import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  beforeEach,
+  afterEach,
+  vi,
+} from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -361,9 +369,9 @@ describe('screenshot image handling', () => {
       image: pngDataUrl(bytes),
     });
     expect(report.image_path).toBeTruthy();
-    expect(
-      fs.readFileSync(report.image_path as string).equals(bytes),
-    ).toBe(true);
+    expect(fs.readFileSync(report.image_path as string).equals(bytes)).toBe(
+      true,
+    );
   });
 
   it('createReport rejects a decoded image over the 8MB cap, naming the cap', () => {
@@ -389,9 +397,9 @@ describe('screenshot image handling', () => {
     const updated = updateDraftReport(report.id, {
       image: pngDataUrl(newBytes),
     });
-    expect(
-      fs.readFileSync(updated.image_path as string).equals(newBytes),
-    ).toBe(true);
+    expect(fs.readFileSync(updated.image_path as string).equals(newBytes)).toBe(
+      true,
+    );
   });
 
   it('updateDraftReport clears a draft report image', () => {

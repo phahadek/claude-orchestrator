@@ -151,7 +151,12 @@ export function createReport(
     createdAt: now,
   });
   if (decodedImage) {
-    row = writeReportImage(row.id, decodedImage.bytes, decodedImage.extension, now);
+    row = writeReportImage(
+      row.id,
+      decodedImage.bytes,
+      decodedImage.extension,
+      now,
+    );
   }
   return withDerived(row);
 }
@@ -180,7 +185,9 @@ export function updateDraftReport(
     );
   }
   const decodedImage =
-    typeof fields.image === 'string' ? decodeImageField(fields.image) : undefined;
+    typeof fields.image === 'string'
+      ? decodeImageField(fields.image)
+      : undefined;
   const { image: _image, ...textFields } = fields;
   const resolvedFields: UpdateDraftReportInput = { ...textFields };
   if (fields.milestoneId !== undefined) {
