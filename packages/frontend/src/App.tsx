@@ -41,6 +41,7 @@ import {
 } from './components/AdmissionStallBanner';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { GateReadinessPanel } from './components/GateReadinessPanel';
+import { TestsView } from './components/TestsView';
 import { ArchitecturePanel } from './components/ArchitecturePanel';
 import { MilestoneView } from './components/MilestoneView';
 import { Notifications } from './components/Notifications';
@@ -931,6 +932,7 @@ export default function App() {
     architecture: null,
     milestone: milestonePanelDeclaration,
     settings: null,
+    tests: null,
   };
   const activePanel = resolvePanelKeyboardDeclaration(
     topView,
@@ -1691,6 +1693,14 @@ export default function App() {
                 setSessionFavorited={setSessionFavorited}
                 project={activeProject}
               />
+            </div>
+          </ErrorBoundary>
+        )}
+
+        {topView === 'tests' && (
+          <ErrorBoundary name="TestsView">
+            <div className={styles.analyticsView}>
+              <TestsView activeProjectId={activeProjectId} />
             </div>
           </ErrorBoundary>
         )}

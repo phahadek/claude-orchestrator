@@ -1,0 +1,90 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 16px;
+}
+
+.emptyState {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  padding: 8px 0;
+}
+
+.errorBanner {
+  font-size: 0.85rem;
+  color: var(--danger, #d33);
+}
+
+.runList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.runRow {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.runHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.outcomeBadge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.outcome--passed {
+  background: var(--success-bg, #1f4d2c);
+  color: var(--success-fg, #7ee0a0);
+}
+
+.outcome--failed-with-named-tests,
+.outcome--failed-with-no-report-acquired,
+.outcome--crashed-oom,
+.outcome--timed-out,
+.outcome--execution-failed {
+  background: var(--danger-bg, #4d1f1f);
+  color: var(--danger-fg, #f0a0a0);
+}
+
+.outcome--running {
+  background: var(--info-bg, #1f3a4d);
+  color: var(--info-fg, #a0cdf0);
+}
+
+.outcome--queued {
+  background: var(--warning-bg, #4d3f1f);
+  color: var(--warning-fg, #f0d0a0);
+}
+
+.producerBadge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 8px;
+  background: var(--surface-secondary, #2a2a2a);
+  color: var(--text-secondary);
+}
+
+.runMeta {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.nextAction {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  font-style: italic;
+}
