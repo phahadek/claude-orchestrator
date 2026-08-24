@@ -248,6 +248,7 @@ import {
   SessionManager,
   gitWorktreeAddWithRetry,
   isRemovableWorktree,
+  classifyWorktreeTeardownRefusal,
   isDegradedSpawnFailure,
   BACKEND_SPAWN_DEGRADED_REASON,
   buildResumeMessage,
@@ -2176,6 +2177,113 @@ describe('cleanupWorktree — refuses non-worktree paths', () => {
         ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
       );
     expect(removeCalls).toHaveLength(1);
+  });
+});
+
+// ── classifyWorktreeTeardownRefusal ──────────────────────────────────────────
+
+describe('classifyWorktreeTeardownRefusal', () => {
+  it('classifies a planning-type session with no worktree of its own as expected', () => {
+    expect(
+      classifyWorktreeTeardownRefusal('design', PROJECT_DIR, PROJECT_DIR),
+    ).toEqual({ expected: true });
+    expect(
+      classifyWorktreeTeardownRefusal('groom', PROJECT_DIR, PROJECT_DIR),
+    ).toEqual({ expected: true });
+  });
+
+  it('classifies a worktree-owning session type presenting a non-removable path as anomalous, with a reason', () => {
+    const result = classifyWorktreeTeardownRefusal(
+      'standard',
+      PROJECT_DIR,
+      PROJECT_DIR,
+    );
+    expect(result.expected).toBe(false);
+    expect(result.reason).toEqual(expect.stringContaining('standard'));
+    expect(result.reason).toEqual(expect.stringContaining(PROJECT_DIR));
+  });
+
+  it('classifies an "ops" session (worktree-owning, per usesWorktree) as anomalous even though it plans', () => {
+    const result = classifyWorktreeTeardownRefusal(
+      'ops',
+      PROJECT_DIR,
+      PROJECT_DIR,
+    );
+    expect(result.expected).toBe(false);
+    expect(result.reason).toBeDefined();
+  });
+});
+
+// ── cleanupWorktree — expected vs anomalous refusal reporting ───────────────
+
+describe('cleanupWorktree — classifies the refusal it reports', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+  });
+
+  it('planning session, worktreePath === projectDir: refused, no audit event (expected case)', () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'done',
+      session_type: 'design',
+    });
+
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      PROJECT_DIR,
+      undefined,
+      PROJECT_DIR,
+    );
+
+    expect(vi.mocked(recordEvent)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'worktree_teardown_refused' }),
+    );
+    const removeCalls = vi
+      .mocked(execSync)
+      .mock.calls.filter(
+        ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
+      );
+    expect(removeCalls).toHaveLength(0);
+    expect(vi.mocked((fsModule as any).default.rmSync)).not.toHaveBeenCalled();
+  });
+
+  it('worktree-owning session type, non-removable path: refused, audit event with expected:false and reason (anomalous case)', () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'done',
+      session_type: 'standard',
+    });
+
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      PROJECT_DIR,
+      undefined,
+      PROJECT_DIR,
+    );
+
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'worktree_teardown_refused',
+        payload: expect.objectContaining({
+          worktreePath: PROJECT_DIR,
+          projectDir: PROJECT_DIR,
+          expected: false,
+          reason: expect.stringContaining('standard'),
+        }),
+      }),
+    );
+    const removeCalls = vi
+      .mocked(execSync)
+      .mock.calls.filter(
+        ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
+      );
+    expect(removeCalls).toHaveLength(0);
+    expect(vi.mocked((fsModule as any).default.rmSync)).not.toHaveBeenCalled();
   });
 });
 

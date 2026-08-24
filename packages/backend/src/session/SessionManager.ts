@@ -562,6 +562,35 @@ export function isRemovableWorktree(
   return (resolvedWorktree + path.sep).startsWith(worktreesRoot);
 }
 
+export interface WorktreeTeardownRefusalClassification {
+  expected: boolean;
+  reason?: string;
+}
+
+/**
+ * Classifies an isRemovableWorktree refusal as `expected` (a planning-type
+ * session that legitimately owns no per-session worktree — worktreePath is
+ * absent or === projectDir, e.g. groom/design/split/undeclared-docs) or
+ * `anomalous` (a session type that usesWorktree presenting a path that
+ * still isn't removable — the 2026-07-20 incident shape). Reporting-only:
+ * the refusal itself (no teardown of a path failing isRemovableWorktree) is
+ * identical either way — see the two call sites in cleanupPartialWorktree
+ * and cleanupWorktree.
+ */
+export function classifyWorktreeTeardownRefusal(
+  sessionType: string,
+  worktreePath: string,
+  projectDir: string,
+): WorktreeTeardownRefusalClassification {
+  if (isPlanningSession(sessionType) && !usesWorktree(sessionType)) {
+    return { expected: true };
+  }
+  return {
+    expected: false,
+    reason: `session type ${sessionType} was expected to own a worktree; path ${worktreePath} is not removable under ${projectDir}`,
+  };
+}
+
 /**
  * Error causes that are operator-intentional or infra-level and should NOT
  * count against the crash budget. All other causes increment the per-task
@@ -2570,19 +2599,32 @@ export class SessionManager extends EventEmitter {
     // never remove it as if it were a disposable worktree.
     if (!worktreePath || !isRemovableWorktree(worktreePath, projectDir)) {
       if (worktreePath) {
-        recordEvent({
-          event_type: 'worktree_teardown_refused',
-          actor_type: 'system',
-          actor_id: sessionId,
-          project_id: null,
-          task_id: null,
-          payload: {
-            sessionId,
-            worktreePath,
-            projectDir,
-            source: 'cleanupPartialWorktree',
-          },
-        });
+        const classification = classifyWorktreeTeardownRefusal(
+          row.session_type || 'standard',
+          worktreePath,
+          projectDir,
+        );
+        if (classification.expected) {
+          logger.debug(
+            `[SessionManager] cleanupPartialWorktree: expected worktree-less refusal for ${sessionId.slice(0, 8)} (planning session, no worktree owned)`,
+          );
+        } else {
+          recordEvent({
+            event_type: 'worktree_teardown_refused',
+            actor_type: 'system',
+            actor_id: sessionId,
+            project_id: null,
+            task_id: null,
+            payload: {
+              sessionId,
+              worktreePath,
+              projectDir,
+              source: 'cleanupPartialWorktree',
+              expected: classification.expected,
+              reason: classification.reason,
+            },
+          });
+        }
       }
       return;
     }
@@ -3701,22 +3743,35 @@ export class SessionManager extends EventEmitter {
     // itself (2026-07-20 incident: a planning session's worktreePath ===
     // projectDir caused fs.rmSync to delete a production checkout).
     if (!isRemovableWorktree(worktreePath, projectDir)) {
-      logger.error(
-        `[SessionManager] cleanupWorktree refused: worktreePath ${worktreePath} is not a removable worktree under ${projectDir} — skipping teardown for ${sessionId.slice(0, 8)}`,
+      const classification = classifyWorktreeTeardownRefusal(
+        sessionRow?.session_type || 'standard',
+        worktreePath,
+        projectDir,
       );
-      recordEvent({
-        event_type: 'worktree_teardown_refused',
-        actor_type: 'system',
-        actor_id: sessionId,
-        project_id: null,
-        task_id: null,
-        payload: {
-          sessionId,
-          worktreePath,
-          projectDir,
-          source: 'cleanupWorktree',
-        },
-      });
+      if (classification.expected) {
+        logger.debug(
+          `[SessionManager] cleanupWorktree: expected worktree-less refusal for ${sessionId.slice(0, 8)} (planning session, no worktree owned)`,
+        );
+      } else {
+        logger.error(
+          `[SessionManager] cleanupWorktree refused: worktreePath ${worktreePath} is not a removable worktree under ${projectDir} — skipping teardown for ${sessionId.slice(0, 8)}`,
+        );
+        recordEvent({
+          event_type: 'worktree_teardown_refused',
+          actor_type: 'system',
+          actor_id: sessionId,
+          project_id: null,
+          task_id: null,
+          payload: {
+            sessionId,
+            worktreePath,
+            projectDir,
+            source: 'cleanupWorktree',
+            expected: classification.expected,
+            reason: classification.reason,
+          },
+        });
+      }
       return;
     }
 
