@@ -38,6 +38,7 @@ import {
   createLocalAsyncGitAncestrySource,
   isFollowupTaskDone,
   proposeGateItemReclassification,
+  GATE_VERIFICATION_RECONCILER_JOB,
   type GateReadiness,
   type ReconcileGateRunnabilityResult,
   type AsyncDeployAncestrySource,
@@ -1281,7 +1282,7 @@ export function register(
   options: GateReconcilerOptions = {},
 ): void {
   scheduler.register({
-    name: 'gate_verification_reconciler',
+    name: GATE_VERIFICATION_RECONCILER_JOB,
     intervalMs: () => runtimeSettings.gate_verification_interval_ms,
     concurrency: 'skip-if-running',
     enabled: () => runtimeSettings.gate_verification_enabled,

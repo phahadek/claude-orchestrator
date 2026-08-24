@@ -1298,6 +1298,24 @@ export function getLiveVerifySessionItemIds(itemIds: string[]): Set<string> {
 }
 
 /**
+ * The single live-gate-verify-session predicate — task_id `gate-item:<id>`,
+ * status not terminal. Backs countLiveVerifySessions and
+ * getLiveGateVerifySessions, so both (and any future consumer, e.g. the
+ * cross-project fleet route) read the exact same row set rather than each
+ * reimplementing the filter and risking drift.
+ */
+function selectLiveGateVerifySessionRows(): Session[] {
+  return db
+    .prepare(
+      `SELECT * FROM sessions
+       WHERE task_id LIKE '${GATE_ITEM_TASK_PREFIX}%'
+         AND status NOT IN (${TERMINAL_STATUS_SQL_LIST})
+       ORDER BY started_at DESC`,
+    )
+    .all() as Session[];
+}
+
+/**
  * Count of live (non-terminal) gate-verify sessions — task_id
  * `gate-item:<id>`, the same convention hasLiveVerifySessionForGateItem
  * keys on. Discriminates on task_id rather than session_type='ops' so an
@@ -1305,14 +1323,32 @@ export function getLiveVerifySessionItemIds(itemIds: string[]): Set<string> {
  * the verify-specific cap (see isGateVerifySession).
  */
 export function countLiveVerifySessions(): number {
-  const row = db
-    .prepare<[], { c: number }>(
-      `SELECT COUNT(*) as c FROM sessions
-       WHERE task_id LIKE '${GATE_ITEM_TASK_PREFIX}%'
-         AND status NOT IN ('done', 'error', 'killed', 'superseded')`,
-    )
-    .get();
-  return row?.c ?? 0;
+  return selectLiveGateVerifySessionRows().length;
+}
+
+export interface LiveGateVerifySession {
+  itemId: string;
+  sessionId: string;
+  projectId: string | null;
+  status: string;
+  startedAt: number;
+}
+
+/**
+ * The full row set behind countLiveVerifySessions, for consumers (the
+ * cross-project gate-verify fleet route) that need more than the count —
+ * one session per row, most recent first. Same WHERE clause as the count,
+ * via selectLiveGateVerifySessionRows, so the count and the listed rows can
+ * never drift apart.
+ */
+export function getLiveGateVerifySessions(): LiveGateVerifySession[] {
+  return selectLiveGateVerifySessionRows().map((row) => ({
+    itemId: (row.task_id ?? '').slice(GATE_ITEM_TASK_PREFIX.length),
+    sessionId: row.session_id,
+    projectId: row.project_id,
+    status: row.status,
+    startedAt: row.started_at,
+  }));
 }
 
 /**
@@ -6289,6 +6325,35 @@ export function insertSchedulerAudit(row: NewSchedulerAuditRow): void {
     error: null,
     ...row,
   });
+}
+
+export interface SkippedForBudgetAuditRow {
+  startedAt: string;
+  skippedCount: number;
+}
+
+/**
+ * Recent skippedForBudget history for `job`, read from scheduler_audit's
+ * existing negative-items_processed convention (see GateReconciler.register:
+ * a tick that found runnable gate-verify work but dispatched none of it for
+ * want of dispatch budget records items_processed as -skippedForBudget,
+ * distinct from a genuinely idle tick's 0). Most recent first.
+ */
+export function getSkippedForBudgetHistory(
+  job: string,
+  limit = 20,
+): SkippedForBudgetAuditRow[] {
+  const rows = db
+    .prepare<{ job: string; limit: number }>(
+      `SELECT started_at, items_processed FROM scheduler_audit
+       WHERE job = @job AND items_processed < 0
+       ORDER BY started_at DESC LIMIT @limit`,
+    )
+    .all({ job, limit }) as { started_at: string; items_processed: number }[];
+  return rows.map((r) => ({
+    startedAt: r.started_at,
+    skippedCount: -r.items_processed,
+  }));
 }
 
 /** Rows retained per job by pruneSchedulerAudit's daily sweep — see server.ts's scheduler_audit_pruner registration. */

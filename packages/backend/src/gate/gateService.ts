@@ -8,9 +8,13 @@ import {
   getTaskCache,
   getVerifySessionsForGateItems,
   getLiveVerifySessionItemIds,
+  getLiveGateVerifySessions,
+  getSkippedForBudgetHistory,
+  hasActiveCapabilityRequestForSession,
 } from '../db/queries';
 import type { GateItemListOrder, GateItemVerifySession } from '../db/queries';
 import { backfillGateBody, type GateBackfillResult } from './gateBackfill';
+import { DEFAULT_BUDGET_MS } from './gateItemVerifier';
 import { normalizeTaskId } from '../tasks/taskId';
 import { getCachedType, getCachedStatus } from '../tasks/TaskWriteCommands';
 import { yieldToEventLoop, runWithConcurrency } from '../utils/concurrency';
@@ -1267,4 +1271,66 @@ export async function backfillGateTask(
     milestoneBoardIds: input.milestoneBoardIds,
     now: new Date().toISOString(),
   });
+}
+
+/** scheduler_audit job name for the gate-verify reconciler tick — see gateReconciler.register() and getGateVerifyFleetState. */
+export const GATE_VERIFICATION_RECONCILER_JOB = 'gate_verification_reconciler';
+
+export interface GateVerifyFleetSession {
+  sessionId: string;
+  itemId: string;
+  project: string;
+  milestone: string;
+  text: string;
+  status: string;
+  startedAt: number;
+  elapsedMs: number;
+  remainingMs: number;
+  suspended: boolean;
+}
+
+export interface GateVerifyFleetState {
+  liveCount: number;
+  sessions: GateVerifyFleetSession[];
+  skippedForBudgetHistory: ReturnType<typeof getSkippedForBudgetHistory>;
+}
+
+/**
+ * The cross-project gate-verify fleet snapshot: every in-flight verify
+ * session across every project, with elapsed/remaining budget (computed
+ * from sessions.started_at + the verifier's fixed DEFAULT_BUDGET_MS, so it
+ * survives a process restart without needing one) and capability-suspension
+ * state (a live join against staged_intent, mirroring
+ * hasActiveCapabilityRequestForSession's own check and the boot-time
+ * gate_verify_reattachment step). liveCount is the length of the same
+ * live-session row set returned in `sessions`, never a second query. No
+ * project filter — every row carries its own project/milestone from
+ * gate_item.
+ */
+export function getGateVerifyFleetState(now: number = Date.now()): GateVerifyFleetState {
+  const liveSessions = getLiveGateVerifySessions();
+  const sessions: GateVerifyFleetSession[] = liveSessions.map((session) => {
+    const item = gateStore.getItem(session.itemId);
+    const elapsedMs = Math.max(0, now - session.startedAt);
+    const remainingMs = Math.max(0, DEFAULT_BUDGET_MS - elapsedMs);
+    return {
+      sessionId: session.sessionId,
+      itemId: session.itemId,
+      project: item?.project ?? session.projectId ?? '',
+      milestone: item?.milestone ?? '',
+      text: item?.text ?? '',
+      status: session.status,
+      startedAt: session.startedAt,
+      elapsedMs,
+      remainingMs,
+      suspended: hasActiveCapabilityRequestForSession(session.sessionId),
+    };
+  });
+  return {
+    liveCount: sessions.length,
+    sessions,
+    skippedForBudgetHistory: getSkippedForBudgetHistory(
+      GATE_VERIFICATION_RECONCILER_JOB,
+    ),
+  };
 }
