@@ -759,6 +759,16 @@ describe('PreReviewPipeline — verify gate', () => {
       SESSION_ID,
       expect.stringContaining('CI Failure'),
     );
+    // A pre-review verify failure must write the same pause_reason
+    // PRMergeWatcher.handleVerifiedFlakyDisposition matches gate:'ci'
+    // against (ci_failing) — otherwise a flaky.confirm disposition against
+    // it can never actuate a re-run (see verdictTools.ts's actuatability
+    // check, which refuses instead of a false "ok" when this is missing).
+    expect(mockSetPauseReason).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'ci_failing',
+    );
   });
 
   it('passes when verify succeeds', async () => {

@@ -22,6 +22,7 @@ import {
 } from '../../session/test-runner';
 import { getChangedFiles } from '../../session/autofix-runner';
 import { typedGetSetting } from '../../config/settings';
+import { parsePauseReason } from '../../db/pauseReason';
 
 /** Per-connection context a verdict-delivery tool call is scoped to. */
 export interface VerdictToolContext {
@@ -143,14 +144,15 @@ export function registerVerdictTools(
         const session = ctx.getSession();
         if (!session) return notLive();
 
+        const pr = getPRBySessionId(ctx.sessionId);
+        if (!pr) return invalid('no open PR for this session');
+
         if (args.gate !== 'analyze') {
           if (!args.testId || !args.testName) {
             return invalid(
               `gate "${args.gate}" requires testId and testName identifying the failing test so the backend can check it against the cross-SHA corpus`,
             );
           }
-          const pr = getPRBySessionId(ctx.sessionId);
-          if (!pr) return invalid('no open PR for this session');
           const beforeMs = pr.created_at ? Date.parse(pr.created_at) : NaN;
           if (!Number.isFinite(beforeMs)) {
             return invalid(
@@ -200,6 +202,24 @@ export function registerVerdictTools(
               `${touchedFile ?? `${args.testName}'s own file`} is in this session's diff — a session cannot wave through a failure it may have caused`,
             );
           }
+        }
+
+        // The backend only ever actuates a disposition when the PR is
+        // currently paused on the exact reason the gate it names would set
+        // (PRMergeWatcher.handleVerifiedFlakyDisposition's exact-match
+        // check) — e.g. a pre-review verify failure that never wrote
+        // ci_failing, or a disposition arriving after the PR already moved
+        // on. Refusing here up front means a session never gets a false
+        // "ok" for a confirmation that would be silently discarded, and
+        // means no flake-corpus/recovery accounting records a disposition
+        // that never actuates.
+        const expectedPauseReason =
+          args.gate === 'analyze' ? 'analyze_failing' : 'ci_failing';
+        const pauseStruct = parsePauseReason(pr.pause_reason ?? null);
+        if (pauseStruct?.reason !== expectedPauseReason) {
+          return invalid(
+            `this PR is not currently paused on "${expectedPauseReason}" (actual: ${pauseStruct?.reason ?? 'none'}) — a gate "${args.gate}" confirmation would not actuate a re-run against this PR's current state. Wait for this gate to fail on the current commit before confirming, or check whether it already recovered.`,
+          );
         }
 
         session.recordVerifiedFlakyDisposition({
