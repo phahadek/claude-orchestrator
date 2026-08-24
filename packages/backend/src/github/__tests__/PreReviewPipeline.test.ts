@@ -77,6 +77,25 @@ vi.mock('../../orchestration/verifyRunner', () => ({
   runVerifyAsGate: (...args: unknown[]) => mockRunVerifyAsGate(...args),
 }));
 
+const mockFilterBaseAttributableFailuresForF2Gate = vi
+  .fn()
+  .mockResolvedValue({
+    result: { outcome: 'unfiltered', passed: false },
+    guardBlocked: [],
+  });
+const mockFilterVerifyFailureByBaseHealth = vi.fn().mockResolvedValue(null);
+const mockRenderBaseAttributableFilterDigest = vi
+  .fn()
+  .mockReturnValue('digest');
+vi.mock('../../orchestration/baseAttributableFilter', () => ({
+  filterBaseAttributableFailuresForF2Gate: (...args: unknown[]) =>
+    mockFilterBaseAttributableFailuresForF2Gate(...args),
+  filterVerifyFailureByBaseHealth: (...args: unknown[]) =>
+    mockFilterVerifyFailureByBaseHealth(...args),
+  renderBaseAttributableFilterDigest: (...args: unknown[]) =>
+    mockRenderBaseAttributableFilterDigest(...args),
+}));
+
 const mockValidateAndRepairGitConfig = vi
   .fn()
   .mockResolvedValue({ healthy: true, repaired: false, backupAvailable: true });
@@ -199,6 +218,12 @@ beforeEach(() => {
   mockGetPRByNumber.mockReturnValue(makePRRow());
   mockGetSession.mockReturnValue(makeSessionRow());
   mockRunVerifyAsGate.mockResolvedValue({ passed: true });
+  mockFilterBaseAttributableFailuresForF2Gate.mockResolvedValue({
+    result: { outcome: 'unfiltered', passed: false },
+    guardBlocked: [],
+  });
+  mockFilterVerifyFailureByBaseHealth.mockResolvedValue(null);
+  mockRenderBaseAttributableFilterDigest.mockReturnValue('digest');
   mockRunAutofix.mockResolvedValue({
     success: true,
     summary: 'ok',
@@ -759,6 +784,166 @@ describe('PreReviewPipeline — verify gate', () => {
         type: 'pipeline_stage_passed',
         stage: 'verify',
       }),
+    );
+  });
+
+  it('passes verify when every failing test in the structured report is a confirmed base-attributable break', async () => {
+    const structuredResult = {
+      format: 'junit-xml',
+      suites: [],
+      totals: { passed: 6686, failed: 4, skipped: 0, errors: 0 },
+      durationMsTotal: 1000,
+    };
+    mockRunVerifyAsGate.mockResolvedValue({
+      passed: false,
+      failedCommand: 'pytest',
+      truncatedOutput: '4 failed, 6686 passed',
+      structuredResult,
+    });
+    mockFilterVerifyFailureByBaseHealth.mockResolvedValue({
+      outcome: 'filtered_pass',
+      passed: true,
+      excludedTests: [
+        { test_id: 't1', name: 'test_a' },
+        { test_id: 't2', name: 'test_b' },
+        { test_id: 't3', name: 'test_c' },
+        { test_id: 't4', name: 'test_d' },
+      ],
+      flakyExcludedTests: [],
+      remainingTests: [],
+      baseRun: null,
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(mockFilterVerifyFailureByBaseHealth).toHaveBeenCalledWith(
+      makeProject(),
+      structuredResult,
+    );
+    expect(result.passed).toBe(true);
+    expect(mockSetPauseReason).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'base_attributable_test_excluded',
+      expect.any(String),
+    );
+    expect(mockSetPRReviewResult).not.toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      expect.stringContaining('verify_failed'),
+    );
+  });
+
+  it('still fails verify, reporting only the non-base-attributable remainder, when one failing test is not base-attributable', async () => {
+    const structuredResult = {
+      format: 'junit-xml',
+      suites: [],
+      totals: { passed: 10, failed: 2, skipped: 0, errors: 0 },
+      durationMsTotal: 1000,
+    };
+    mockRunVerifyAsGate.mockResolvedValue({
+      passed: false,
+      failedCommand: 'pytest',
+      truncatedOutput: '2 failed',
+      structuredResult,
+    });
+    mockFilterVerifyFailureByBaseHealth.mockResolvedValue({
+      outcome: 'filtered_partial',
+      passed: false,
+      excludedTests: [{ test_id: 't1', name: 'test_a' }],
+      flakyExcludedTests: [],
+      remainingTests: [{ test_id: 't2', name: 'test_b' }],
+      baseRun: null,
+    });
+    mockRenderBaseAttributableFilterDigest.mockReturnValue(
+      '1 failed (t2) — 1 additional excluded as base-attributable',
+    );
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(false);
+    expect(mockSetPRReviewResult).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      expect.stringContaining('verify_failed'),
+    );
+    expect(sm.sendOrResume).toHaveBeenCalledWith(
+      SESSION_ID,
+      expect.stringContaining('t2'),
+    );
+    expect(sm.sendOrResume).not.toHaveBeenCalledWith(
+      SESSION_ID,
+      expect.stringContaining('t1'),
+    );
+  });
+
+  it('leaves verify failure unfiltered when the failing command produced no structured report', async () => {
+    mockRunVerifyAsGate.mockResolvedValue({
+      passed: false,
+      failedCommand: 'tsc',
+      truncatedOutput: 'type error',
+      structuredResult: null,
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(mockFilterVerifyFailureByBaseHealth).toHaveBeenCalledWith(
+      makeProject(),
+      null,
+    );
+    expect(result.passed).toBe(false);
+    expect(mockSetPRReviewResult).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      expect.stringContaining('verify_failed'),
+    );
+    expect(mockSetPauseReason).not.toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'base_attributable_test_excluded',
+      expect.any(String),
+    );
+  });
+
+  it('fails closed (unfiltered) when the base-health probe is unavailable', async () => {
+    const structuredResult = {
+      format: 'junit-xml',
+      suites: [],
+      totals: { passed: 5, failed: 1, skipped: 0, errors: 0 },
+      durationMsTotal: 500,
+    };
+    mockRunVerifyAsGate.mockResolvedValue({
+      passed: false,
+      failedCommand: 'pytest',
+      truncatedOutput: '1 failed',
+      structuredResult,
+    });
+    // filterVerifyFailureByBaseHealth returns 'unfiltered' when the base
+    // probe outcome is unknown/inconclusive — fail closed, same as today.
+    mockFilterVerifyFailureByBaseHealth.mockResolvedValue({
+      outcome: 'unfiltered',
+      passed: false,
+      excludedTests: [],
+      flakyExcludedTests: [],
+      remainingTests: [],
+      baseRun: null,
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(false);
+    expect(mockSetPRReviewResult).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      expect.stringContaining('verify_failed'),
     );
   });
 });

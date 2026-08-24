@@ -46,10 +46,11 @@ vi.mock('../../audit/baseHealthRemediationFiling', () => ({
 
 import {
   filterBaseAttributableFailures,
+  filterVerifyFailureByBaseHealth,
   renderBaseAttributableFilterDigest,
 } from '../baseAttributableFilter';
 import type { ProjectConfig } from '../../config';
-import type { TestRequestRunRow } from '../../db/types';
+import type { StructuredTestResult, TestRequestRunRow } from '../../db/types';
 
 const PROJECT = { id: 'proj-1', projectDir: '/tmp/x' } as ProjectConfig;
 
@@ -428,6 +429,187 @@ describe('filterBaseAttributableFailures', () => {
     expect(result.outcome).toBe('unfiltered');
     expect(result.passed).toBe(true);
     expect(mockCheckBaseBranchHealth).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * filterVerifyFailureByBaseHealth — the pre-review verify gate's own
+ * narrower sibling: filters a verify report's parsed failing tests (not a
+ * TestRequestRunRow) against checkBaseBranchHealth directly.
+ */
+function makeStructuredResult(
+  failing: { id: string; name: string }[],
+  passedCount = 0,
+): StructuredTestResult {
+  return {
+    format: 'junit-xml',
+    suites: [
+      {
+        name: 'suite',
+        tests: failing.map((f) => ({
+          id: f.id,
+          name: f.name,
+          outcome: 'failed',
+          durationMs: 1,
+        })),
+      },
+    ],
+    totals: {
+      passed: passedCount,
+      failed: failing.length,
+      skipped: 0,
+      errors: 0,
+    },
+    durationMsTotal: 1000,
+  };
+}
+
+describe('filterVerifyFailureByBaseHealth', () => {
+  it('returns null when the verify failure has no structured report', async () => {
+    const result = await filterVerifyFailureByBaseHealth(PROJECT, null);
+
+    expect(result).toBeNull();
+    expect(mockCheckBaseBranchHealth).not.toHaveBeenCalled();
+  });
+
+  it('returns null when the structured report has no failing tests', async () => {
+    const result = await filterVerifyFailureByBaseHealth(
+      PROJECT,
+      makeStructuredResult([], 10),
+    );
+
+    expect(result).toBeNull();
+    expect(mockCheckBaseBranchHealth).not.toHaveBeenCalled();
+  });
+
+  it('reports a passing verify gate when every failing test in the report is also failing on the base tree', async () => {
+    mockCheckBaseBranchHealth.mockResolvedValue({
+      outcome: 'partial_fail',
+      projectId: 'proj-1',
+      contentHash: 'base-hash',
+      cacheHit: true,
+      run: BASE_RUN,
+    });
+    mockGetFailingTestIdsForRun.mockReturnValue([
+      { test_id: 't1', name: 'a' },
+      { test_id: 't2', name: 'b' },
+      { test_id: 't3', name: 'c' },
+      { test_id: 't4', name: 'd' },
+    ]);
+    const sr = makeStructuredResult(
+      [
+        { id: 't1', name: 'a' },
+        { id: 't2', name: 'b' },
+        { id: 't3', name: 'c' },
+        { id: 't4', name: 'd' },
+      ],
+      6686,
+    );
+
+    const result = await filterVerifyFailureByBaseHealth(PROJECT, sr);
+
+    expect(result?.outcome).toBe('filtered_pass');
+    expect(result?.passed).toBe(true);
+    expect(result?.excludedTests.map((t) => t.test_id).sort()).toEqual([
+      't1',
+      't2',
+      't3',
+      't4',
+    ]);
+    expect(result?.remainingTests).toHaveLength(0);
+  });
+
+  it('still fails verify, reporting only the non-base-attributable remainder, when one failing test is not base-attributable', async () => {
+    mockCheckBaseBranchHealth.mockResolvedValue({
+      outcome: 'partial_fail',
+      projectId: 'proj-1',
+      contentHash: 'base-hash',
+      cacheHit: true,
+      run: BASE_RUN,
+    });
+    mockGetFailingTestIdsForRun.mockReturnValue([{ test_id: 't1', name: 'a' }]);
+    const sr = makeStructuredResult([
+      { id: 't1', name: 'a' },
+      { id: 't2', name: 'b' },
+    ]);
+
+    const result = await filterVerifyFailureByBaseHealth(PROJECT, sr);
+
+    expect(result?.outcome).toBe('filtered_partial');
+    expect(result?.passed).toBe(false);
+    expect(result?.excludedTests.map((t) => t.test_id)).toEqual(['t1']);
+    expect(result?.remainingTests.map((t) => t.test_id)).toEqual(['t2']);
+  });
+
+  it('is unaffected (unfiltered) when the project has no structured report support', async () => {
+    // No structured report at all — collectStructuredTestResult returned
+    // null upstream, so runVerifyAsGate never populates structuredResult.
+    const result = await filterVerifyFailureByBaseHealth(PROJECT, undefined);
+
+    expect(result).toBeNull();
+    expect(mockCheckBaseBranchHealth).not.toHaveBeenCalled();
+  });
+
+  it('fails closed (unfiltered) when the base-health probe outcome is unknown', async () => {
+    mockCheckBaseBranchHealth.mockResolvedValue({
+      outcome: 'unknown',
+      projectId: 'proj-1',
+      contentHash: null,
+      cacheHit: false,
+      run: null,
+    });
+    const sr = makeStructuredResult([{ id: 't1', name: 'a' }]);
+
+    const result = await filterVerifyFailureByBaseHealth(PROJECT, sr);
+
+    expect(result?.outcome).toBe('unfiltered');
+    expect(result?.passed).toBe(false);
+  });
+
+  it('fails closed (unfiltered) when the base-health probe outcome is total_fail (inconclusive)', async () => {
+    mockCheckBaseBranchHealth.mockResolvedValue({
+      outcome: 'total_fail',
+      projectId: 'proj-1',
+      contentHash: 'base-hash',
+      cacheHit: true,
+      run: BASE_RUN,
+    });
+    const sr = makeStructuredResult([{ id: 't1', name: 'a' }]);
+
+    const result = await filterVerifyFailureByBaseHealth(PROJECT, sr);
+
+    expect(result?.outcome).toBe('unfiltered');
+    expect(result?.passed).toBe(false);
+  });
+
+  it('replays PR #1037: 4 base-attributable failures with 6,686 passing yields no verify_failed', async () => {
+    mockCheckBaseBranchHealth.mockResolvedValue({
+      outcome: 'partial_fail',
+      projectId: 'proj-1',
+      contentHash: 'base-hash',
+      cacheHit: true,
+      run: BASE_RUN,
+    });
+    const failingIds = [
+      'tests/ops/test_invariant_sweep.py::test_a',
+      'tests/ops/test_invariant_sweep.py::test_b',
+      'tests/ops/test_invariant_sweep.py::test_c',
+      'tests/ops/test_invariant_sweep.py::test_d',
+    ];
+    mockGetFailingTestIdsForRun.mockReturnValue(
+      failingIds.map((id) => ({ test_id: id, name: id })),
+    );
+    const sr = makeStructuredResult(
+      failingIds.map((id) => ({ id, name: id })),
+      6686,
+    );
+
+    const result = await filterVerifyFailureByBaseHealth(PROJECT, sr);
+
+    expect(result?.outcome).toBe('filtered_pass');
+    expect(result?.passed).toBe(true);
+    expect(result?.excludedTests).toHaveLength(4);
+    expect(result?.remainingTests).toHaveLength(0);
   });
 });
 

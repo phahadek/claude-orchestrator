@@ -199,8 +199,27 @@ export async function filterBaseAttributableFailures(
     // attribute granularly against, so leave it charged as a raw failure.
     return UNFILTERED(false);
   }
+
+  return attributeFailingTests(project, sessionFailing, health.run);
+}
+
+/**
+ * Shared tail of the partial_fail attribution path — splits `sessionFailing`
+ * into base-attributable (excluded), flaky-flagged (excluded), and
+ * genuinely-remaining buckets against `baseRun`'s own per-test breakdown.
+ * Used by both filterBaseAttributableFailures (a TestRequestRunRow's own
+ * breakdown, read via getFailingTestIdsForRun) and
+ * filterVerifyFailureByBaseHealth (a verify report's own parsed failing
+ * tests) so the two call sites can never disagree about how attribution is
+ * computed once a base run is in hand.
+ */
+function attributeFailingTests(
+  project: ProjectConfig,
+  sessionFailing: FailingTest[],
+  baseRun: TestRequestRunRow,
+): BaseAttributableFilterResult {
   const baseFailingIds = new Set(
-    getFailingTestIdsForRun(health.run.id).map((t) => t.test_id),
+    getFailingTestIdsForRun(baseRun.id).map((t) => t.test_id),
   );
 
   const excludedTests = sessionFailing.filter((t) =>
@@ -225,7 +244,7 @@ export async function filterBaseAttributableFailures(
       excludedTests,
       flakyExcludedTests,
       remainingTests: [],
-      baseRun: health.run,
+      baseRun,
     };
   }
 
@@ -235,8 +254,59 @@ export async function filterBaseAttributableFailures(
     excludedTests,
     flakyExcludedTests,
     remainingTests,
-    baseRun: health.run,
+    baseRun,
   };
+}
+
+/**
+ * Filters a pre-review verify gate's own failure against the current
+ * base-branch health — a narrower sibling of filterBaseAttributableFailures
+ * scoped to the case where verify's failing command produced a structured
+ * report (matching the project's test_report_glob), rather than a
+ * TestRequestRunRow. `structuredResult` is the report parsed from verify's
+ * own worktree (see verifyRunner.ts's runVerifyAsGate); `checkBaseBranchHealth`
+ * is consulted directly rather than through filterBaseAttributableFailures,
+ * since a verify report is never itself persisted as a test_request_runs row
+ * to key that function's DB-row-keyed path off of.
+ *
+ * Returns null when `structuredResult` is absent or carries no failing
+ * tests — the caller falls through to today's unfiltered verify-gate
+ * behavior in that case. Otherwise mirrors filterBaseAttributableFailures's
+ * outcomes: `unfiltered` when the base probe is unavailable (unknown base
+ * outcome) or clean, `filtered_pass`/`filtered_partial` when a per-test
+ * breakdown exists to attribute against. Never returns `inconclusive` or
+ * `unknown` — a total_fail/unknown base probe here just fails closed to
+ * `unfiltered`, matching today's unfiltered behavior rather than the
+ * test.request lane's distinct non-charging outcomes (there is no retry
+ * budget on the verify gate to protect from being charged).
+ */
+export async function filterVerifyFailureByBaseHealth(
+  project: ProjectConfig,
+  structuredResult: StructuredTestResult | null | undefined,
+): Promise<BaseAttributableFilterResult | null> {
+  if (!structuredResult) return null;
+
+  const failing = new Map<string, string>();
+  for (const suite of structuredResult.suites ?? []) {
+    for (const test of suite.tests ?? []) {
+      if (test.outcome === 'failed' || test.outcome === 'error') {
+        failing.set(test.id, test.name);
+      }
+    }
+  }
+  if (failing.size === 0) return null;
+
+  const sessionFailing: FailingTest[] = Array.from(failing.entries()).map(
+    ([test_id, name]) => ({ test_id, name }),
+  );
+
+  const health = await checkBaseBranchHealth(project);
+
+  if (health.outcome !== 'partial_fail' || !health.run) {
+    return UNFILTERED(false);
+  }
+
+  return attributeFailingTests(project, sessionFailing, health.run);
 }
 
 /**

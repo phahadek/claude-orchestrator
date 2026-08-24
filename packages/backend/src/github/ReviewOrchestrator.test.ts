@@ -84,6 +84,11 @@ vi.mock('../orchestration/verifyRunner.js', () => ({
   runVerifyAsGate: vi.fn().mockResolvedValue({ passed: true }),
 }));
 
+vi.mock('../orchestration/baseAttributableFilter.js', () => ({
+  filterVerifyFailureByBaseHealth: vi.fn().mockResolvedValue(null),
+  renderBaseAttributableFilterDigest: vi.fn().mockReturnValue('digest'),
+}));
+
 vi.mock('../session/orchestrator-config.js', () => ({
   loadOrchestratorConfig: vi.fn().mockReturnValue({
     verify: [],
@@ -124,6 +129,7 @@ import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
 import { recordEvent } from '../audit/AuditLog';
 import { runVerifyAsGate } from '../orchestration/verifyRunner';
+import { filterVerifyFailureByBaseHealth } from '../orchestration/baseAttributableFilter';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import type { PRReviewService } from './PRReviewService';
 import type { GitHubClient } from './GitHubClient';
@@ -2683,6 +2689,7 @@ describe('ReviewOrchestrator — verify-as-gate: local-only, all verify commands
     expect(vi.mocked(runVerifyAsGate)).toHaveBeenCalledWith(
       expect.any(String),
       ['npm run lint', 'npm test'],
+      undefined,
     );
     expect(vi.mocked(rs.reviewPR)).toHaveBeenCalled();
   });
@@ -2762,6 +2769,170 @@ describe('ReviewOrchestrator — verify-as-gate: local-only, first verify comman
   });
 });
 
+describe('ReviewOrchestrator — verify-as-gate: base-attributable filtering', () => {
+  it('proceeds to review when every failing test in the structured report is a confirmed base-attributable break', async () => {
+    vi.mocked(getSession).mockReturnValue(verifySessionRow as any);
+    vi.mocked(getLocalBranchBySession).mockReturnValue(
+      verifyLocalBranchRow as any,
+    );
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      verify: ['pytest'],
+      autofix: [],
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    });
+    const structuredResult = {
+      format: 'junit-xml',
+      suites: [],
+      totals: { passed: 6686, failed: 4, skipped: 0, errors: 0 },
+      durationMsTotal: 1000,
+    };
+    vi.mocked(runVerifyAsGate).mockResolvedValue({
+      passed: false,
+      failedCommand: 'pytest',
+      truncatedOutput: '4 failed, 6686 passed',
+      structuredResult,
+    });
+    vi.mocked(filterVerifyFailureByBaseHealth).mockResolvedValue({
+      outcome: 'filtered_pass',
+      passed: true,
+      excludedTests: [
+        { test_id: 't1', name: 'a' },
+        { test_id: 't2', name: 'b' },
+        { test_id: 't3', name: 'c' },
+        { test_id: 't4', name: 'd' },
+      ],
+      flakyExcludedTests: [],
+      remainingTests: [],
+      baseRun: null,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('message', {
+      type: 'local_branch_submitted',
+      projectId: 'proj-local',
+      sessionId: 'coding-session-local',
+      branchName: 'feature/my-task',
+      baseBranch: 'dev',
+    });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setLocalBranchPauseReason)).toHaveBeenCalledWith(
+      5,
+      'base_attributable_test_excluded',
+      expect.any(String),
+    );
+    expect(vi.mocked(sm.enqueueFeedback)).not.toHaveBeenCalled();
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalled();
+  });
+
+  it('still blocks with only the non-base-attributable remainder when one failing test is not base-attributable', async () => {
+    vi.mocked(getSession).mockReturnValue(verifySessionRow as any);
+    vi.mocked(getLocalBranchBySession).mockReturnValue(
+      verifyLocalBranchRow as any,
+    );
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      verify: ['pytest'],
+      autofix: [],
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    });
+    const structuredResult = {
+      format: 'junit-xml',
+      suites: [],
+      totals: { passed: 10, failed: 2, skipped: 0, errors: 0 },
+      durationMsTotal: 1000,
+    };
+    vi.mocked(runVerifyAsGate).mockResolvedValue({
+      passed: false,
+      failedCommand: 'pytest',
+      truncatedOutput: '2 failed',
+      structuredResult,
+    });
+    vi.mocked(filterVerifyFailureByBaseHealth).mockResolvedValue({
+      outcome: 'filtered_partial',
+      passed: false,
+      excludedTests: [{ test_id: 't1', name: 'a' }],
+      flakyExcludedTests: [],
+      remainingTests: [{ test_id: 't2', name: 'b' }],
+      baseRun: null,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('message', {
+      type: 'local_branch_submitted',
+      projectId: 'proj-local',
+      sessionId: 'coding-session-local',
+      branchName: 'feature/my-task',
+      baseBranch: 'dev',
+    });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setLocalBranchPauseReason)).toHaveBeenCalledWith(
+      5,
+      'ci_failing',
+    );
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledOnce();
+    const [, , message] = vi.mocked(sm.enqueueFeedback).mock.calls[0];
+    expect(message).toContain('digest');
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+  });
+
+  it('leaves verify failure unfiltered when the failing command produced no structured report', async () => {
+    vi.mocked(getSession).mockReturnValue(verifySessionRow as any);
+    vi.mocked(getLocalBranchBySession).mockReturnValue(
+      verifyLocalBranchRow as any,
+    );
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      verify: ['npm run lint'],
+      autofix: [],
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    });
+    vi.mocked(runVerifyAsGate).mockResolvedValue({
+      passed: false,
+      failedCommand: 'npm run lint',
+      truncatedOutput: 'error: lint failed on line 42',
+      structuredResult: null,
+    });
+    vi.mocked(filterVerifyFailureByBaseHealth).mockResolvedValue(null);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('message', {
+      type: 'local_branch_submitted',
+      projectId: 'proj-local',
+      sessionId: 'coding-session-local',
+      branchName: 'feature/my-task',
+      baseBranch: 'dev',
+    });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setLocalBranchPauseReason)).toHaveBeenCalledWith(
+      5,
+      'ci_failing',
+    );
+    const [, , message] = vi.mocked(sm.enqueueFeedback).mock.calls[0];
+    expect(message).toContain('npm run lint');
+    expect(message).toContain('error: lint failed on line 42');
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+  });
+});
+
 describe('ReviewOrchestrator — verify-as-gate: verify runs AFTER autofix (ordering check)', () => {
   it('calls runVerifyAsGate with the worktreePath from the submitted job', async () => {
     vi.mocked(getLocalBranchBySession).mockReturnValue(
@@ -2797,6 +2968,7 @@ describe('ReviewOrchestrator — verify-as-gate: verify runs AFTER autofix (orde
     expect(vi.mocked(runVerifyAsGate)).toHaveBeenCalledWith(
       '/repos/local/worktree-42',
       expect.any(Array),
+      undefined,
     );
   });
 });
