@@ -104,11 +104,7 @@ describe('createUnit / getUnit / updateUnit / supersedeUnit round-trip', () => {
       at: '2026-01-01T00:00:00Z',
     });
 
-    updateUnit(
-      unit.id,
-      { body: 'revised body' },
-      '2026-01-02T00:00:00Z',
-    );
+    updateUnit(unit.id, { body: 'revised body' }, '2026-01-02T00:00:00Z');
 
     const events = getUnitEvents(unit.id);
     const updatedEvent = events.find((e) => e.eventType === 'updated');
