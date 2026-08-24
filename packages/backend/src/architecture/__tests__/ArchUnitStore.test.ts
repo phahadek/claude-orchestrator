@@ -366,7 +366,10 @@ describe('project scoping', () => {
 });
 
 describe('updateUnit edit history', () => {
-  function latestAuditPayload(eventType: string): { archUnitId: string; fields: string[] } {
+  function latestAuditPayload(eventType: string): {
+    archUnitId: string;
+    fields: string[];
+  } {
     const row = db
       .prepare(
         `SELECT payload FROM audit_log WHERE event_type = ? ORDER BY id DESC LIMIT 1`,
@@ -375,7 +378,10 @@ describe('updateUnit edit history', () => {
     return JSON.parse(row.payload) as { archUnitId: string; fields: string[] };
   }
 
-  function latestEventPayload(unitId: string): { before: Record<string, unknown>; after: unknown } {
+  function latestEventPayload(unitId: string): {
+    before: Record<string, unknown>;
+    after: unknown;
+  } {
     const events = getUnitEvents(unitId);
     return events[events.length - 1].payload as {
       before: Record<string, unknown>;

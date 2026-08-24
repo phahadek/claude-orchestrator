@@ -198,16 +198,16 @@ export function updateUnit(
     status: row.status,
     body: row.body,
   };
-  const changedFields = (Object.keys(fields) as (keyof ArchUnitUpdateFields)[]).filter(
-    (key) => {
-      const value = fields[key];
-      if (value === undefined) return false;
-      if (key === 'regions') {
-        return JSON.stringify(value) !== row.regions;
-      }
-      return value !== priorValues[key];
-    },
-  );
+  const changedFields = (
+    Object.keys(fields) as (keyof ArchUnitUpdateFields)[]
+  ).filter((key) => {
+    const value = fields[key];
+    if (value === undefined) return false;
+    if (key === 'regions') {
+      return JSON.stringify(value) !== row.regions;
+    }
+    return value !== priorValues[key];
+  });
   const before: Record<string, unknown> = {};
   for (const key of changedFields) {
     before[key] = priorValues[key];
