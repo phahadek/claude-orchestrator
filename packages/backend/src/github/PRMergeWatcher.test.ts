@@ -3581,7 +3581,7 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
     expect(vi.mocked(github.categorizeMergeability)).toHaveBeenCalled();
   });
 
-  it("triggers a full run when the only settled row at this content_hash is scoped-passed — a scoped pass never satisfies F2", async () => {
+  it('triggers a full run when the only settled row at this content_hash is scoped-passed — a scoped pass never satisfies F2', async () => {
     const pr = makePRRow({
       head_sha: 'sha-scoped-only',
       session_id: 'coding-session',
