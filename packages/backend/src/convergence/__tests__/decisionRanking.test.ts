@@ -115,6 +115,34 @@ describe('hasNeedsAttentionBoost', () => {
     expect(hasNeedsAttentionBoost(r)).toBe(true);
   });
 
+  it('boosts a row with an errored Tier-3 advisory', () => {
+    const r = row({
+      advisory: JSON.stringify({
+        tier: 'semantic',
+        status: 'errored',
+        confidence: 0,
+        findings: [],
+        model: 'x',
+        checkedAt: 0,
+      }),
+    });
+    expect(hasNeedsAttentionBoost(r)).toBe(true);
+  });
+
+  it('boosts a row with a usage_limited Tier-3 advisory', () => {
+    const r = row({
+      advisory: JSON.stringify({
+        tier: 'semantic',
+        status: 'usage_limited',
+        confidence: 0,
+        findings: [],
+        model: 'x',
+        checkedAt: 0,
+      }),
+    });
+    expect(hasNeedsAttentionBoost(r)).toBe(true);
+  });
+
   it('boosts an unanswered decision.pickOne', () => {
     const r = row({ kind: 'decision.pickOne', task_id: null, answer: null });
     expect(hasNeedsAttentionBoost(r)).toBe(true);
