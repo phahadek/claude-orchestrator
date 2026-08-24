@@ -52,7 +52,11 @@ function recordClassify(
 
 describe('getTier3ClassifierErrorRates', () => {
   it('returns a null rate for both kinds when there is no data (zero-total)', () => {
-    const result = getTier3ClassifierErrorRates('proj-1', 7 * 24 * 60 * 60, NOW);
+    const result = getTier3ClassifierErrorRates(
+      'proj-1',
+      7 * 24 * 60 * 60,
+      NOW,
+    );
     expect(result).toEqual([
       {
         project: 'proj-1',
@@ -81,7 +85,11 @@ describe('getTier3ClassifierErrorRates', () => {
     recordClassify('proj-1', 'clean', NOW);
     recordClassify('proj-1', 'flagged', NOW);
 
-    const result = getTier3ClassifierErrorRates('proj-1', 7 * 24 * 60 * 60, NOW);
+    const result = getTier3ClassifierErrorRates(
+      'proj-1',
+      7 * 24 * 60 * 60,
+      NOW,
+    );
     const errored = result.find((r) => r.kind === 'errored');
     const usageLimited = result.find((r) => r.kind === 'usage_limited');
 
@@ -131,7 +139,11 @@ describe('getTier3ClassifierErrorRates', () => {
     recordClassify('proj-1', 'errored', NOW - 30 * DAY_MS);
     recordClassify('proj-1', 'errored', NOW - 1 * DAY_MS);
 
-    const result = getTier3ClassifierErrorRates('proj-1', 7 * 24 * 60 * 60, NOW);
+    const result = getTier3ClassifierErrorRates(
+      'proj-1',
+      7 * 24 * 60 * 60,
+      NOW,
+    );
     expect(result.find((r) => r.kind === 'errored')).toMatchObject({
       total: 1,
       matched: 1,
@@ -144,7 +156,11 @@ describe('getTier3ClassifierErrorRates', () => {
     recordClassify('proj-2', 'errored', NOW);
     recordClassify('proj-2', 'errored', NOW);
 
-    const result = getTier3ClassifierErrorRates('proj-1', 7 * 24 * 60 * 60, NOW);
+    const result = getTier3ClassifierErrorRates(
+      'proj-1',
+      7 * 24 * 60 * 60,
+      NOW,
+    );
     expect(result.find((r) => r.kind === 'errored')).toMatchObject({
       total: 1,
       matched: 1,
@@ -161,7 +177,11 @@ describe('getTier3ClassifierErrorRates', () => {
       payload: { reason: 'operator_override' },
     });
 
-    const result = getTier3ClassifierErrorRates('proj-1', 7 * 24 * 60 * 60, NOW);
+    const result = getTier3ClassifierErrorRates(
+      'proj-1',
+      7 * 24 * 60 * 60,
+      NOW,
+    );
     expect(result.every((r) => r.total === 0)).toBe(true);
   });
 });

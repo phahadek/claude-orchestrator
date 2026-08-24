@@ -68,8 +68,9 @@ export function Tier3ErrorRateCard({ activeProjectId }: Props) {
                 {formatPct(entry.rate)}
               </span>
               <span className={styles.detail}>
-                {entry.matched}/{entry.total} · {formatWindow(entry.windowSeconds)}{' '}
-                window · threshold {formatPct(entry.threshold)}
+                {entry.matched}/{entry.total} ·{' '}
+                {formatWindow(entry.windowSeconds)} window · threshold{' '}
+                {formatPct(entry.threshold)}
               </span>
             </div>
           ))}

@@ -154,8 +154,8 @@ describe('GET /api/gate/tier3-error-rate', () => {
     );
 
     expect(res.status).toBe(200);
-    expect(res.body.every((r: { chronic: boolean }) => r.chronic === false)).toBe(
-      true,
-    );
+    expect(
+      res.body.every((r: { chronic: boolean }) => r.chronic === false),
+    ).toBe(true);
   });
 });
