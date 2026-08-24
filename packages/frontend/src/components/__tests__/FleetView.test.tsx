@@ -107,7 +107,8 @@ describe('FleetView', () => {
     render(<FleetView />);
     await screen.findByText('gate item one');
 
-    const callCountAfterInitialFetch = gateApiMock.getFleetState.mock.calls.length;
+    const callCountAfterInitialFetch =
+      gateApiMock.getFleetState.mock.calls.length;
 
     vi.useFakeTimers();
     await act(async () => {

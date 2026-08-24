@@ -127,10 +127,7 @@ export function FleetView({
                 // verifier's DEFAULT_BUDGET_MS constant duplicated here.
                 const budgetMs = session.elapsedMs + session.remainingMs;
                 const liveElapsedMs = Date.now() - session.startedAt;
-                const liveRemainingMs = Math.max(
-                  0,
-                  budgetMs - liveElapsedMs,
-                );
+                const liveRemainingMs = Math.max(0, budgetMs - liveElapsedMs);
                 return (
                   <tr key={session.sessionId}>
                     <td>{session.project}</td>
@@ -140,9 +137,7 @@ export function FleetView({
                     <td>{formatMs(liveRemainingMs)}</td>
                     <td>
                       {session.suspended ? (
-                        <span className={styles.suspendedBadge}>
-                          Suspended
-                        </span>
+                        <span className={styles.suspendedBadge}>Suspended</span>
                       ) : (
                         session.status
                       )}

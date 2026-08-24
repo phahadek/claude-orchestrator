@@ -5,7 +5,11 @@ import type {
 } from '@claude-orchestrator/backend/src/db/queries';
 import type { GateVerifyFleetState } from '@claude-orchestrator/backend/src/gate/gateService';
 
-export type { FlowRejectionRateResult, TrustPrecisionFlow, GateVerifyFleetState };
+export type {
+  FlowRejectionRateResult,
+  TrustPrecisionFlow,
+  GateVerifyFleetState,
+};
 
 /** Mirrors the backend's TRUST_PRECISION_FLOWS (routes/gateState.ts) — the flows the /api/gate/trust-rate route accepts. */
 export const TRUST_PRECISION_FLOWS: TrustPrecisionFlow[] = [
