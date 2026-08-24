@@ -1097,9 +1097,9 @@ export function insertSessionOrIgnore(s: NewSession): void {
  */
 export function getOpenPRBySessionId(sessionId: string): PullRequestRow | null {
   return db
-    .prepare<{ session_id: string }>(
-      `SELECT * FROM pull_requests WHERE session_id = @session_id AND state = 'open' LIMIT 1`,
-    )
+    .prepare<{
+      session_id: string;
+    }>(`SELECT * FROM pull_requests WHERE session_id = @session_id AND state = 'open' LIMIT 1`)
     .get({ session_id: sessionId }) as PullRequestRow | null;
 }
 

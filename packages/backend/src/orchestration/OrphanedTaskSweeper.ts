@@ -298,8 +298,7 @@ export class OrphanedTaskSweeper {
     const prMergedOrClosed =
       (!!taskPR && (taskPR.state === 'merged' || taskPR.state === 'closed')) ||
       (latestSession !== undefined &&
-        getLocalBranchBySession(latestSession.session_id)?.status ===
-          'merged');
+        getLocalBranchBySession(latestSession.session_id)?.status === 'merged');
 
     if (prMergedOrClosed) {
       await this.revertTask(
