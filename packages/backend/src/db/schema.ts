@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { logger } from '../logger';
 import { normalizeTaskId } from '../tasks/taskId';
+import { parsePauseReasonSet, serializePauseReasonSet } from './pauseReason';
 
 export function runMigrations(target: Database.Database): void {
   target.exec(`
@@ -2520,6 +2521,72 @@ export function runMigrations(target: Database.Database): void {
           `INSERT INTO schema_backfills (name, applied_at) VALUES (?, ?)`,
         )
         .run('test_run_results_project_id_v1', Date.now());
+    }
+  }
+
+  // ── reconcile_exhausted backfill (one-time, guarded via schema_backfills) ──
+  // Rows escalated under the old model carry a live 'stalled_reconcile_cap'
+  // entry in pause_reason (a JSON bare string, single struct, or one element
+  // of the concurrent-set array — every shape parsePauseReasonSet handles).
+  // reconcile_exhausted defaults to 0 for every pre-existing row, and every
+  // consumer this migration's code changes re-scoped (isTerminalStalePR,
+  // classifyStalledPR, TERMINAL_MERGE_PAUSE_REASONS, clearTerminalPRFlags'
+  // gating, StalledPRReconciler's re-drive skip) now reads the flag instead
+  // of the retired reason — so without this backfill, every already-escalated
+  // PR would silently lose its parked status on deploy and get re-driven and
+  // re-polled from scratch. Sets the flag, stamps reconcile_exhausted_set_at
+  // from the row's own pause_reason_set_at (falling back to now), and strips
+  // the now-unrecognized entry out of the concurrent set so it stops being
+  // parsed as an unknown-reason fallback (see pauseReason.ts) going forward.
+  {
+    const marker = target
+      .prepare(`SELECT 1 FROM schema_backfills WHERE name = ?`)
+      .get('reconcile_exhausted_backfill_v1');
+    if (!marker) {
+      target.exec(`
+        CREATE TABLE IF NOT EXISTS schema_backfills (
+          name        TEXT    PRIMARY KEY,
+          applied_at  INTEGER NOT NULL
+        );
+      `);
+      const rows = target
+        .prepare(
+          `SELECT id, pause_reason, pause_reason_set_at FROM pull_requests WHERE pause_reason IS NOT NULL`,
+        )
+        .all() as Array<{
+        id: number;
+        pause_reason: string;
+        pause_reason_set_at: number | null;
+      }>;
+      const updateStmt = target.prepare<{
+        id: number;
+        pause_reason: string | null;
+        set_at: number;
+      }>(
+        `UPDATE pull_requests SET pause_reason = @pause_reason, reconcile_exhausted = 1, reconcile_exhausted_set_at = @set_at WHERE id = @id`,
+      );
+      for (const row of rows) {
+        const entries = parsePauseReasonSet(row.pause_reason);
+        if (
+          !entries.some((e) => (e.reason as string) === 'stalled_reconcile_cap')
+        ) {
+          continue;
+        }
+        const remaining = entries.filter(
+          (e) => (e.reason as string) !== 'stalled_reconcile_cap',
+        );
+        updateStmt.run({
+          id: row.id,
+          pause_reason:
+            remaining.length > 0 ? serializePauseReasonSet(remaining) : null,
+          set_at: row.pause_reason_set_at ?? Date.now(),
+        });
+      }
+      target
+        .prepare(
+          `INSERT INTO schema_backfills (name, applied_at) VALUES (?, ?)`,
+        )
+        .run('reconcile_exhausted_backfill_v1', Date.now());
     }
   }
 

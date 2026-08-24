@@ -4314,6 +4314,7 @@ export interface TaskAggregateRow {
   pr_pause_reason: string | null;
   pr_pre_review_stage: string | null;
   pr_flake_recovery_attempts: number | null;
+  pr_reconcile_exhausted: number | null;
   session_pr_creation_failed_pause_reason: string | null;
   // depth-review session, resolved via this task's PR (pr_number + repo) —
   // see getDepthReviewVerdict; depth_review has no task_id of its own.
@@ -4418,6 +4419,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       pr.pause_reason        AS pr_pause_reason,
       pr.pre_review_stage    AS pr_pre_review_stage,
       pr.flake_recovery_attempts AS pr_flake_recovery_attempts,
+      pr.reconcile_exhausted AS pr_reconcile_exhausted,
       CASE
         WHEN pr.pr_number IS NULL
           AND cs.pause_reason IN ('pr_creation_failed', 'stalled_idle')

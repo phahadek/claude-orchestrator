@@ -528,6 +528,13 @@ export interface TaskRecoveryContext {
   hasPR: boolean;
   /** Whether the task's most recent code session ended in a terminal status (done/error/killed). */
   sessionTerminal: boolean;
+  /** pull_requests.reconcile_exhausted — StalledPRReconciler's retry-cap
+   *  escalation flag. Falls back to 'rerun' (mirroring the retired
+   *  stalled_reconcile_cap reason's own mapping) only when neither taskReason
+   *  nor prReason is present — an existing live reason's own recovery action
+   *  always takes precedence, since reconcile_exhausted gates only the
+   *  reconciler's own re-drive decision, not recovery-action precedence. */
+  reconcileExhausted?: boolean;
 }
 
 /**
@@ -545,6 +552,9 @@ export function deriveTaskRecoveryDescriptor(
   const effectiveReason = ctx.taskReason ?? ctx.prReason ?? null;
   if (effectiveReason != null) {
     return deriveRecoveryDescriptor(effectiveReason);
+  }
+  if (ctx.reconcileExhausted) {
+    return { available: true, action: 'rerun', label: RECOVERY_LABELS.rerun };
   }
   if (!ctx.hasPR && ctx.sessionTerminal) {
     return {
