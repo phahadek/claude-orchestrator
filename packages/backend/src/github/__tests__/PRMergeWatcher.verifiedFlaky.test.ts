@@ -345,6 +345,32 @@ describe('PRMergeWatcher.handleVerifiedFlakyDisposition — same-SHA re-run actu
     expect(vi.mocked(incrementFlakeRecoveryAttempts)).not.toHaveBeenCalled();
   });
 
+  it('actuates a same-commit re-run for a gate:"ci" disposition against a pre-review verify failure (PreReviewPipeline writes ci_failing on verify failure, same as post-review CI)', async () => {
+    const github = makeMockGitHub();
+    const { watcher } = makeWatcher(github);
+    // PreReviewPipeline.buildVerifyStage now declares pauseReason:
+    // 'ci_failing' on gate failure — same shape as the post-review path —
+    // so this PR row is indistinguishable from one paused by AutoMerger.
+    const pr = makePRRow({ pause_reason: CI_FAILING_PAUSE });
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+
+    await watcher.handleVerifiedFlakyDisposition(
+      makePayload({
+        disposition: { gate: 'ci', reason: 'unrelated pytest flake' },
+      }),
+    );
+
+    expect(vi.mocked(github.rerunFailedJobs)).toHaveBeenCalledWith(
+      HEAD_SHA,
+      REPO,
+      [],
+    );
+    expect(vi.mocked(incrementFlakeRecoveryAttempts)).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+    );
+  });
+
   it('no-ops when the PR is not currently paused as ci_failing', async () => {
     const github = makeMockGitHub();
     const { watcher } = makeWatcher(github);

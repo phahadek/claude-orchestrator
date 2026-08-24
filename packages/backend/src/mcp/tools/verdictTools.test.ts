@@ -21,6 +21,10 @@ import {
   evaluateTestFlakinessCorpus,
 } from '../../db/queries';
 import { getChangedFiles } from '../../session/autofix-runner';
+import {
+  pauseReasonFromCanonical,
+  serializePauseReason,
+} from '../../db/pauseReason';
 
 vi.mock('../../db/queries', () => ({
   getPRBySessionId: vi.fn(),
@@ -166,6 +170,13 @@ describe('review.disposition', () => {
   });
 });
 
+const CI_FAILING_PAUSE = serializePauseReason(
+  pauseReasonFromCanonical('ci_failing'),
+);
+const ANALYZE_FAILING_PAUSE = serializePauseReason(
+  pauseReasonFromCanonical('analyze_failing'),
+);
+
 describe('flaky.confirm', () => {
   const TEST_ID = 'tests.test_foo.test_something';
   const TEST_NAME = 'test_something';
@@ -176,6 +187,7 @@ describe('flaky.confirm', () => {
       repo: 'owner/repo',
       created_at: '2026-08-01T00:00:00.000Z',
       base_branch: 'dev',
+      pause_reason: CI_FAILING_PAUSE,
     } as never);
     vi.mocked(evaluateTestFlakinessCorpus).mockReturnValue({
       testId: TEST_ID,
@@ -207,6 +219,13 @@ describe('flaky.confirm', () => {
   });
 
   it('delegates to session.recordVerifiedFlakyDisposition for the analyze gate without a testId', async () => {
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      pr_number: 7,
+      repo: 'owner/repo',
+      created_at: '2026-08-01T00:00:00.000Z',
+      base_branch: 'dev',
+      pause_reason: ANALYZE_FAILING_PAUSE,
+    } as never);
     const session = fakeSession();
     const { client, close } = await connectedClient(() => session);
     const result = await client.callTool({
@@ -288,6 +307,78 @@ describe('flaky.confirm', () => {
       arguments: { gate: 'staging', reason: 'x' },
     });
     expect(result.isError).toBe(true);
+    expect(session.recordVerifiedFlakyDisposition).not.toHaveBeenCalled();
+    await close();
+  });
+
+  it('actuates for gate "ci" when the PR is paused on ci_failing from a pre-review verify failure (post-review CI regression guard)', async () => {
+    // beforeEach already sets pause_reason to CI_FAILING_PAUSE — this is the
+    // exact shape PreReviewPipeline's verify stage now writes, and is the
+    // same shape AutoMerger's post-review CI path writes. Both must actuate
+    // identically through this same check.
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session);
+    const result = await client.callTool({
+      name: 'flaky.confirm',
+      arguments: {
+        gate: 'ci',
+        reason: 'unrelated infra flake',
+        testId: TEST_ID,
+        testName: TEST_NAME,
+      },
+    });
+    expect(resultOf(result as never)).toEqual({ status: 'ok' });
+    expect(session.recordVerifiedFlakyDisposition).toHaveBeenCalledWith({
+      gate: 'ci',
+      reason: 'unrelated infra flake',
+    });
+    await close();
+  });
+
+  it('refuses gate "ci"/"f2" with an actionable, distinguishable message when the PR is not paused on ci_failing (e.g. a pre-review verify failure that never actuates)', async () => {
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      pr_number: 7,
+      repo: 'owner/repo',
+      created_at: '2026-08-01T00:00:00.000Z',
+      base_branch: 'dev',
+      pause_reason: null,
+    } as never);
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session);
+    const result = await client.callTool({
+      name: 'flaky.confirm',
+      arguments: {
+        gate: 'ci',
+        reason: 'seems flaky',
+        testId: TEST_ID,
+        testName: TEST_NAME,
+      },
+    });
+    expect(result.isError).toBe(true);
+    const error = resultOf(result as never).error as string;
+    expect(error).toContain('ci_failing');
+    expect(error).not.toContain('cross-SHA flakiness bar');
+    expect(error).not.toContain('is in this session');
+    expect(session.recordVerifiedFlakyDisposition).not.toHaveBeenCalled();
+    await close();
+  });
+
+  it('refuses gate "analyze" with an actionable message when the PR is not paused on analyze_failing', async () => {
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      pr_number: 7,
+      repo: 'owner/repo',
+      created_at: '2026-08-01T00:00:00.000Z',
+      base_branch: 'dev',
+      pause_reason: CI_FAILING_PAUSE,
+    } as never);
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session);
+    const result = await client.callTool({
+      name: 'flaky.confirm',
+      arguments: { gate: 'analyze', reason: 'unrelated static-analysis flake' },
+    });
+    expect(result.isError).toBe(true);
+    expect(resultOf(result as never).error).toContain('analyze_failing');
     expect(session.recordVerifiedFlakyDisposition).not.toHaveBeenCalled();
     await close();
   });
