@@ -134,7 +134,9 @@ export function createReportStateRouter(): Router {
     const id = String(req.params.id);
     const lookup = getReportImagePath(id);
     if (!lookup.report || !lookup.path || !fs.existsSync(lookup.path)) {
-      res.status(404).json({ error: `no image for investigation report ${id}` });
+      res
+        .status(404)
+        .json({ error: `no image for investigation report ${id}` });
       return;
     }
     const extension = path.extname(lookup.path).toLowerCase();
