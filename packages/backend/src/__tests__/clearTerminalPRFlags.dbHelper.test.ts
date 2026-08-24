@@ -28,7 +28,7 @@ import {
   setPreReviewStage,
   upsertPullRequest,
 } from '../db/queries.js';
-import { isMergeBlockingPause } from '../db/pauseReason.js';
+import { isMergeBlockingPause, parsePauseReasonSet } from '../db/pauseReason.js';
 
 const NOW = '2024-01-01T00:00:00Z';
 
@@ -129,9 +129,9 @@ describe('clearTerminalPRFlags — DB helper', () => {
 
     const after = getPRRow(4);
     expect(after?.pause_reason).not.toBeNull();
-    expect(JSON.parse(after!.pause_reason!).reason).toBe(
-      'stalled_reconcile_cap',
-    );
+    const set = parsePauseReasonSet(after?.pause_reason ?? null);
+    expect(set).toHaveLength(1);
+    expect(set[0].reason).toBe('stalled_reconcile_cap');
   });
 
   it.each(['merged', 'closed', 'head_sha_advance', 'human_unpark'] as const)(
