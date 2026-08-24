@@ -513,6 +513,22 @@ describe('admitTestRequest — durable queued state', () => {
     expect(row.state).toBe('queued');
     expect(row.producer).toBe('session_request');
   });
+
+  it('marks the row failed rather than stranding it in queued when the memory-admission check throws before the run ever starts', async () => {
+    mockHasAdmission.mockImplementation(() => {
+      throw new Error('admission check exploded');
+    });
+
+    const result = await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-admission-throws' }),
+    );
+
+    expect(result.passed).toBe(false);
+    const row = db
+      .prepare(`SELECT state FROM test_request_runs WHERE content_hash = ?`)
+      .get('hash-admission-throws') as { state: string };
+    expect(row.state).toBe('failed');
+  });
 });
 
 // ── concurrent_run_count / oom_killed — validity signals captured at run time ──
