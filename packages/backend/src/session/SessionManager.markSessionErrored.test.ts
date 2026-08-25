@@ -195,7 +195,10 @@ describe('SessionManager.markSessionErrored — open-PR demotion guard', () => {
     expect(updateStatus).toHaveBeenCalledWith(
       NOTION_TASK_ID,
       '🗂️ Ready',
-      expect.objectContaining({ source: 'orchestrator', sessionId: SESSION_ID }),
+      expect.objectContaining({
+        source: 'orchestrator',
+        sessionId: SESSION_ID,
+      }),
     );
   });
 
@@ -242,7 +245,9 @@ describe('SessionManager.markSessionErrored — open-PR demotion guard', () => {
 
   it('records an audit event when the demotion is skipped for an open PR', () => {
     vi.mocked(getSession).mockReturnValue(makeRow());
-    getPRByNotionTaskId.mockReturnValue(makePrRow({ state: 'open', pr_number: 1060 }));
+    getPRByNotionTaskId.mockReturnValue(
+      makePrRow({ state: 'open', pr_number: 1060 }),
+    );
 
     const sm = new SessionManager();
     sm.markSessionErrored(SESSION_ID, 'error', 'run_error');
