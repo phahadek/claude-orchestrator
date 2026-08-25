@@ -287,3 +287,226 @@ describe('schema.ts static guard — no STORED generated-column ALTER TABLE', ()
     expect(schemaSource.match(alterAddColumnGeneratedStored)).toBeNull();
   });
 });
+
+// Regression coverage for the 2026-08-24 outage: the baseline CREATE TABLE
+// block's `CREATE UNIQUE INDEX idx_deploy_run_active_per_project_kind ON
+// deploy_run(project, kind)` succeeded on a fresh database (where the
+// baseline CREATE TABLE already declares `kind`), but threw
+// `no such column: kind` on any pre-existing database — `kind` is only
+// added there by the guarded `ALTER TABLE deploy_run ADD COLUMN kind`
+// migration ~2,740 lines later. CREATE TABLE IF NOT EXISTS is a no-op
+// against an existing table, so the early index statement ran before that
+// ALTER ever had a chance to add the column, crash-looping the process on
+// every boot. See schema.ts's deploy_run.kind migration for the fix.
+
+function preMigrationDeployRunShape(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE deploy_run (
+      run_id       TEXT    PRIMARY KEY,
+      project      TEXT    NOT NULL,
+      target_sha   TEXT    NOT NULL,
+      current_step TEXT,
+      status       TEXT    NOT NULL,
+      started_at   TEXT    NOT NULL,
+      completed_at TEXT
+    );
+    CREATE INDEX idx_deploy_run_project_status ON deploy_run(project, status);
+    CREATE UNIQUE INDEX idx_deploy_run_active_per_project
+      ON deploy_run(project) WHERE status = 'running';
+  `);
+}
+
+function realisticDeployRunRows(): Array<Record<string, unknown>> {
+  return [
+    {
+      run_id: 'run-a1b2',
+      project: 'dashboard',
+      target_sha: 'abc123',
+      current_step: 'deploy',
+      status: 'completed',
+      started_at: '2026-08-20T00:00:00Z',
+      completed_at: '2026-08-20T00:05:00Z',
+    },
+    {
+      run_id: 'run-c3d4',
+      project: 'dashboard',
+      target_sha: 'def456',
+      current_step: null,
+      status: 'completed',
+      started_at: '2026-08-21T00:00:00Z',
+      completed_at: '2026-08-21T00:05:00Z',
+    },
+  ];
+}
+
+function sqliteIndexExists(db: Database.Database, name: string): boolean {
+  return (
+    db
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?`,
+      )
+      .get(name) !== undefined
+  );
+}
+
+describe('populated-database migration fixture — deploy_run.kind', () => {
+  it('completes runMigrations without throwing against a deploy_run table that predates the kind column', () => {
+    const db = new Database(':memory:');
+    preMigrationDeployRunShape(db);
+    insertRows(db, 'deploy_run', realisticDeployRunRows());
+
+    expect(
+      (
+        db.prepare('SELECT COUNT(*) AS n FROM deploy_run').get() as {
+          n: number;
+        }
+      ).n,
+    ).toBe(2);
+
+    expect(() => runMigrations(db)).not.toThrow();
+  });
+
+  it('backfills kind to the default for every pre-existing row', () => {
+    const db = new Database(':memory:');
+    preMigrationDeployRunShape(db);
+    insertRows(db, 'deploy_run', realisticDeployRunRows());
+    runMigrations(db);
+
+    const rows = db
+      .prepare('SELECT kind FROM deploy_run ORDER BY run_id')
+      .all() as Array<{ kind: string }>;
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.kind).toBe('deploy');
+    }
+  });
+
+  it('creates idx_deploy_run_active_per_project_kind and drops the superseded idx_deploy_run_active_per_project', () => {
+    const db = new Database(':memory:');
+    preMigrationDeployRunShape(db);
+    insertRows(db, 'deploy_run', realisticDeployRunRows());
+    runMigrations(db);
+
+    expect(
+      sqliteIndexExists(db, 'idx_deploy_run_active_per_project_kind'),
+    ).toBe(true);
+    expect(sqliteIndexExists(db, 'idx_deploy_run_active_per_project')).toBe(
+      false,
+    );
+  });
+
+  it('produces the same deploy_run shape and final index set from a fresh database', () => {
+    const db = new Database(':memory:');
+    expect(() => runMigrations(db)).not.toThrow();
+
+    expect(tableXinfoColumnNames(db, 'deploy_run')).toContain('kind');
+    expect(
+      sqliteIndexExists(db, 'idx_deploy_run_active_per_project_kind'),
+    ).toBe(true);
+    expect(sqliteIndexExists(db, 'idx_deploy_run_active_per_project')).toBe(
+      false,
+    );
+  });
+
+  it('is idempotent: running twice against the migrated database leaves one kind column and one active-per-project-kind index', () => {
+    const db = new Database(':memory:');
+    preMigrationDeployRunShape(db);
+    insertRows(db, 'deploy_run', realisticDeployRunRows());
+
+    expect(() => runMigrations(db)).not.toThrow();
+    expect(() => runMigrations(db)).not.toThrow();
+
+    const kindColumnCount = tableXinfoColumnNames(db, 'deploy_run').filter(
+      (name) => name === 'kind',
+    ).length;
+    expect(kindColumnCount).toBe(1);
+
+    const indexCount = (
+      db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'index' AND name = 'idx_deploy_run_active_per_project_kind'`,
+        )
+        .get() as { n: number }
+    ).n;
+    expect(indexCount).toBe(1);
+  });
+});
+
+// Durable guard against the whole defect class, not just this one column: no
+// CREATE INDEX in the baseline schema block may reference a column that is
+// absent from that same table's baseline CREATE TABLE definition (i.e. a
+// column only a later ALTER TABLE adds). CREATE TABLE IF NOT EXISTS is a
+// no-op against a pre-existing table, so any index in the baseline block
+// that depends on a not-yet-added column throws on every non-fresh database.
+describe('schema.ts static guard — no baseline index references a later-ALTER-only column', () => {
+  it("every column referenced by a baseline CREATE INDEX exists in that table's baseline CREATE TABLE definition", () => {
+    const schemaSource = fs.readFileSync(
+      path.join(__dirname, '../db/schema.ts'),
+      'utf8',
+    );
+
+    // The baseline block is the first `target.exec(\`...\`)` call in
+    // runMigrations — every later migration step runs as its own
+    // target.exec()/try-block outside it.
+    const baselineMatch = schemaSource.match(
+      /target\.exec\(`([\s\S]*?)\n\s*`\);/,
+    );
+    if (!baselineMatch) {
+      throw new Error(
+        'Could not locate the baseline target.exec block in schema.ts',
+      );
+    }
+    const baseline = baselineMatch[1];
+
+    const SQL_KEYWORDS = new Set([
+      'FOREIGN',
+      'PRIMARY',
+      'UNIQUE',
+      'CONSTRAINT',
+      'CHECK',
+    ]);
+
+    const tableColumns = new Map<string, Set<string>>();
+    const createTableRe =
+      /CREATE TABLE IF NOT EXISTS (\w+)\s*\(([\s\S]*?)\n\s*\);/g;
+    let tableMatch: RegExpExecArray | null;
+    while ((tableMatch = createTableRe.exec(baseline))) {
+      const [, tableName, body] = tableMatch;
+      const columns = new Set<string>();
+      for (const rawLine of body.split('\n')) {
+        const line = rawLine.trim().replace(/,$/, '');
+        if (!line) continue;
+        const firstToken = line.split(/\s+/)[0].toUpperCase();
+        if (SQL_KEYWORDS.has(firstToken)) continue;
+        columns.add(line.split(/\s+/)[0]);
+      }
+      tableColumns.set(tableName, columns);
+    }
+
+    expect(tableColumns.size).toBeGreaterThan(0);
+
+    const createIndexRe =
+      /CREATE (?:UNIQUE )?INDEX IF NOT EXISTS \w+ ON (\w+)\s*\(([^)]*)\)/g;
+    let indexMatch: RegExpExecArray | null;
+    let indexesChecked = 0;
+    while ((indexMatch = createIndexRe.exec(baseline))) {
+      const [, tableName, columnList] = indexMatch;
+      const columns = tableColumns.get(tableName);
+      if (!columns) continue; // index on a table not defined in this block
+      indexesChecked += 1;
+      for (const rawCol of columnList.split(',')) {
+        // Strip an ORDER BY-style ASC/DESC suffix (e.g. "started_at DESC")
+        // to isolate the bare column name.
+        const col = rawCol.trim().split(/\s+/)[0];
+        if (!col) continue;
+        expect({
+          table: tableName,
+          column: col,
+          exists: columns.has(col),
+        }).toEqual({ table: tableName, column: col, exists: true });
+      }
+    }
+
+    expect(indexesChecked).toBeGreaterThan(0);
+  });
+});

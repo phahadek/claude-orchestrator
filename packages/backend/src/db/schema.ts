@@ -327,11 +327,11 @@ export function runMigrations(target: Database.Database): void {
       completed_at TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_deploy_run_project_status ON deploy_run(project, status);
-    -- At most one active (status = 'running') run per (project, kind) — a
-    -- deploy and a wrap can run concurrently for the same project, but two
-    -- runs of the same kind cannot.
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_deploy_run_active_per_project_kind
-      ON deploy_run(project, kind) WHERE status = 'running';
+    -- idx_deploy_run_active_per_project_kind is NOT created here: it depends
+    -- on the kind column, which a pre-existing database only gains via the
+    -- guarded ALTER TABLE deploy_run ADD COLUMN kind migration further down.
+    -- Creating it here would throw "no such column: kind" against any
+    -- database that predates that column. See that migration for the index.
 
     CREATE TABLE IF NOT EXISTS deploy_run_event (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
