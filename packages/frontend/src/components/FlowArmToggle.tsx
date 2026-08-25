@@ -1,7 +1,12 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { FLOW_IDS } from '@claude-orchestrator/backend/src/orchestration/flowArm';
 import type { FlowId } from '@claude-orchestrator/backend/src/orchestration/flowArm';
-import { flowArmApi, type FlowArmState } from '../api/flowArm';
+import {
+  flowArmApi,
+  gateVerifyPolicyApi,
+  type FlowArmState,
+  type GateVerifyPolicyState,
+} from '../api/flowArm';
 import {
   gateApi,
   TRUST_PRECISION_FLOWS,
@@ -59,6 +64,11 @@ export function FlowArmToggle({
   const [trustRates, setTrustRates] = useState<
     Partial<Record<TrustPrecisionFlow, FlowRejectionRateResult>>
   >({});
+  const [policy, setPolicy] = useState<GateVerifyPolicyState | null>(null);
+  const [policyPending, setPolicyPending] = useState<
+    Partial<Record<string, boolean>>
+  >({});
+  const [policyError, setPolicyError] = useState<string | null>(null);
 
   useEffect(() => {
     setState(null);
@@ -74,6 +84,28 @@ export function FlowArmToggle({
       .catch((err: unknown) => {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : String(err));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [milestoneId]);
+
+  useEffect(() => {
+    setPolicy(null);
+    setPolicyError(null);
+    if (!milestoneId) return;
+
+    let cancelled = false;
+    gateVerifyPolicyApi
+      .get(milestoneId)
+      .then((res) => {
+        if (!cancelled) setPolicy(res);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setPolicyError(err instanceof Error ? err.message : String(err));
         }
       });
 
@@ -133,6 +165,30 @@ export function FlowArmToggle({
         setPending((prev) => {
           const next = { ...prev };
           delete next[flow];
+          return next;
+        });
+      });
+  };
+
+  const handlePolicyToggle = (dispositionClass: string, next: boolean) => {
+    if (!milestoneId) return;
+    setPolicyError(null);
+    setPolicyPending((prev) => ({ ...prev, [dispositionClass]: true }));
+    gateVerifyPolicyApi
+      .set(milestoneId, dispositionClass, next)
+      .then((res) => {
+        setPolicy((prev) => ({
+          ...(prev ?? {}),
+          [dispositionClass]: { armed: res.armed },
+        }));
+      })
+      .catch((err: unknown) => {
+        setPolicyError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        setPolicyPending((prev) => {
+          const next = { ...prev };
+          delete next[dispositionClass];
           return next;
         });
       });
@@ -226,6 +282,48 @@ export function FlowArmToggle({
             </div>
           );
         })}
+      </div>
+
+      <div className={styles.header}>
+        <span className={styles.title}>Gate-verify auto-commit policy</span>
+      </div>
+
+      {policyError && (
+        <div className={styles.error} data-testid="gate-verify-policy-error">
+          {policyError}
+        </div>
+      )}
+
+      <div className={styles.rows}>
+        {policy &&
+          Object.keys(policy).map((dispositionClass) => {
+            const armed = policy[dispositionClass]?.armed ?? false;
+            const isPending = policyPending[dispositionClass] === true;
+
+            return (
+              <div
+                key={dispositionClass}
+                className={styles.row}
+                data-testid={`gate-verify-policy-row-${dispositionClass}`}
+              >
+                <span className={styles.flowLabel}>{dispositionClass}</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={armed}
+                  aria-label={`Toggle gate-verify auto-commit policy for ${dispositionClass}`}
+                  disabled={isPending}
+                  className={`${styles.toggle} ${armed ? styles.toggleArmed : ''}`}
+                  data-testid={`gate-verify-policy-switch-${dispositionClass}`}
+                  onClick={() => handlePolicyToggle(dispositionClass, !armed)}
+                >
+                  <span className={styles.toggleText}>
+                    {armed ? 'Armed' : 'Disarmed'}
+                  </span>
+                </button>
+              </div>
+            );
+          })}
       </div>
     </div>
   );
