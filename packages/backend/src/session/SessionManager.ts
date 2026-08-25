@@ -114,7 +114,7 @@ import {
   setSessionDeclaredWrites,
   setSessionDocsTargetSurface,
   getSessionDocsTargetSurface,
-  expireStagedIntentsForSession,
+  reapStagedIntentsForNeverStagedSession,
   hasStagedIntentForTask,
   hasUndispositionedStagedIntentsForSession,
   sweepStagedIntentsForTerminalSessions,
@@ -763,12 +763,15 @@ function formatExpiredIntentsFeedback(
 }
 
 /**
- * True when the session has at least one staged_intent row expired by
- * markSessionErrored's reap (state=superseded, disposition_reason starting
- * "session_" — see expireStagedIntentsForSession's `session_${status}`
- * reason string). Used by buildPlanningResumeMessage to avoid pairing a
- * restart-resume with the false "nothing was decided or rejected" claim when
- * something in fact was: the expiry itself. Deliberately does not
+ * True when the session has at least one staged_intent row expired with a
+ * disposition_reason starting "session_" — the shape left behind by a
+ * direct expireStagedIntentsForSession call (e.g. a manual/ops disposition,
+ * or historical rows from before status-keyed auto-reaping was removed).
+ * markSessionErrored's own automatic reap no longer produces rows like this
+ * for a session with real staged-intent history — see
+ * reapStagedIntentsForNeverStagedSession. Used by buildPlanningResumeMessage
+ * to avoid pairing a restart-resume with the false "nothing was decided or
+ * rejected" claim when something in fact was expired. Deliberately does not
  * distinguish delivered-vs-undelivered — even after the expiry notice has
  * been delivered, PLANNING_RESTART_RESUME_MESSAGE's claim about *this*
  * session's history remains false.
@@ -1460,26 +1463,38 @@ export class SessionManager extends EventEmitter {
     updateSessionStatus(sessionId, status, endedAt);
     setSessionTerminalCompletionReason(sessionId, reason);
 
-    // Reap any uncommitted staged intents this session left behind — a dead
-    // session can never resolve them, and a parked proposal (e.g. a
-    // task.setStatus -> Ready) would otherwise sit forever on the decision
-    // surface as if still live. See expireStagedIntentsForSession.
+    // A session ending is not a disposition of the staged intents it
+    // already produced — a staged (or already operator-approved) intent
+    // from a session that emitted a clean result must stay on the decision
+    // surface after that session dies, so an operator can still act on it.
+    // See "A killed session must not void the findings it already staged".
+    // The only case still safe to auto-reap here is a session that never
+    // staged anything of its own — reapStagedIntentsForNeverStagedSession
+    // is an inert no-op for every other session.
     //
     // Exception: a grant-respawn kill is not a real death — the same session
     // id is about to come back with --resume, and its staged intents are
     // exactly the work it will continue. That caller passes
     // suppressReap:true for this single call only (never a persistent flag),
-    // so a genuine kill of the same session later still reaps normally.
+    // so a genuine kill of the same session later still runs this path.
     if (!opts?.suppressReap) {
       try {
         // Read the about-to-be-superseded rows before expiring them so the
         // resumed session can be told exactly what it lost — expiry itself
-        // only flips state, it does not say who needs to know.
+        // only flips state, it does not say who needs to know. Gated on the
+        // actual reaped count, not just this list, because
+        // reapStagedIntentsForNeverStagedSession only ever reaps a session
+        // with zero staged_intent rows of its own — for which `expiring` is
+        // always empty anyway, so this notice never fires in practice.
         const expiring = listStagedIntentsBySession(sessionId).filter(
           (intent) => intent.state === 'staged' || intent.state === 'approved',
         );
-        expireStagedIntentsForSession(sessionId, `session_${status}`, endedAt);
-        if (expiring.length > 0) {
+        const reapedCount = reapStagedIntentsForNeverStagedSession(
+          sessionId,
+          'session_killed_no_artifact',
+          endedAt,
+        );
+        if (reapedCount > 0 && expiring.length > 0) {
           // Persist to the inbox only — do not go through the full
           // enqueueFeedback path here, which would attempt an immediate
           // terminal resume. A session that just went error/killed is not
@@ -4298,17 +4313,23 @@ export class SessionManager extends EventEmitter {
       // The live session (if any) was already killed above with the reap
       // suppressed, or there was no live session to kill. Either way, no
       // replacement session gets created here, so the grant respawn has
-      // definitively not happened and the session is genuinely down now —
-      // reap explicitly, mirroring abortSession's own explicit-call pattern,
-      // rather than relying solely on the periodic backstop sweep. Deferred
-      // admission means nothing gets respawned in its place right now — the
-      // grant takes effect on the next resume (resumeOrphanSessions on this
-      // row once the deferral clears) instead.
+      // definitively not happened and the session is genuinely down now.
+      // This session already existed before the failed respawn, so it may
+      // already carry staged intents — reapStagedIntentsForNeverStagedSession
+      // only reaps it if it never staged anything at all; a session with
+      // real findings is left untouched here and picked up on its next
+      // resume instead. Deferred admission means nothing gets respawned in
+      // its place right now — the grant takes effect on the next resume
+      // (resumeOrphanSessions on this row once the deferral clears) instead.
       logger.warn(
         `[SessionManager] respawnForCapabilityGrant: usage-admission deferred for ${sessionId.slice(0, 8)} — grant will take effect on next resume instead`,
       );
       try {
-        expireStagedIntentsForSession(sessionId, 'session_killed', Date.now());
+        reapStagedIntentsForNeverStagedSession(
+          sessionId,
+          'session_killed_no_artifact',
+          Date.now(),
+        );
       } catch {
         // Best-effort — DB may be unavailable or mocked without this function.
       }
@@ -4411,7 +4432,11 @@ export class SessionManager extends EventEmitter {
         `[SessionManager] respawnForMcpUnreachable: respawnSession deferred/failed for ${sessionId.slice(0, 8)}`,
       );
       try {
-        expireStagedIntentsForSession(sessionId, 'session_killed', Date.now());
+        reapStagedIntentsForNeverStagedSession(
+          sessionId,
+          'session_killed_no_artifact',
+          Date.now(),
+        );
       } catch {
         // Best-effort — DB may be unavailable or mocked without this function.
       }
@@ -4565,10 +4590,16 @@ export class SessionManager extends EventEmitter {
     updateSessionStatus(sessionId, 'killed', endedAt);
     setSessionTerminalCompletionReason(sessionId, 'operator_abort');
 
-    // Reap this session's uncommitted staged intents — abortSession bypasses
-    // markSessionErrored, so it needs its own call (see that method for why).
+    // abortSession bypasses markSessionErrored, so it needs its own call —
+    // see that method for why this only ever reaps a session that never
+    // staged anything of its own; a genuinely operator-abandoned finding
+    // stays on the decision surface for the operator to disposition.
     try {
-      expireStagedIntentsForSession(sessionId, 'session_killed', endedAt);
+      reapStagedIntentsForNeverStagedSession(
+        sessionId,
+        'session_killed_no_artifact',
+        endedAt,
+      );
     } catch {
       // Best-effort — DB may be unavailable or mocked without this function.
     }
@@ -5882,16 +5913,14 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
-   * Backstop for expireStagedIntentsForSession: reaps staged/approved intents
-   * left behind by sessions that reached a terminal status (done/error/killed)
-   * without going through the terminal-transition hook — e.g. a process crash.
-   * Safe to call repeatedly (a scheduled job, or at boot). Tells each swept
-   * session what it lost, reusing markSessionErrored's expiry notice —
-   * persist-only (enqueueFeedbackItem, not the full enqueueFeedback path),
-   * for the same reason markSessionErrored's call site documents: a swept
-   * session is terminal and not necessarily coming back right now, so
-   * delivery is left to reconcileInboxAtBoot / redeliverUndeliveredFeedback
-   * on its next actual resume.
+   * Backstop for the terminal-transition hook — historically reaped every
+   * staged/approved intent left behind by a session that reached a terminal
+   * status (done/error/killed) without going through the hook, keyed on
+   * status alone. sweepStagedIntentsForTerminalSessions (db/queries.ts) is
+   * now permanently a no-op for the reason documented there: a session's
+   * termination is not a disposition of the artifacts it already staged.
+   * Kept as the documented call site for that function and for any future
+   * content-based backstop.
    */
   reapStagedIntentsBackstopSweep(): number {
     const swept = sweepStagedIntentsForTerminalSessions(

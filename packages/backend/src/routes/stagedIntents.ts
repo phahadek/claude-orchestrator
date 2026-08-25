@@ -4505,13 +4505,14 @@ const STRANDED_DISPOSITIONABLE_STATES: StagedIntentState[] = [
  * intent this verb exists to handle, since a stranded intent's owner is by
  * definition someone other than the (live) caller.
  *
- * expireStagedIntentsForSession / sweepStagedIntentsForTerminalSessions (see
- * db/queries.ts) already reap `staged`/`approved` rows automatically once
- * their owning session terminates; this verb exists for the residual they
- * don't touch — a row wedged in the transient `pending_verification` /
- * `needs_revision` states (a dispatched group's verify pass never resolved
- * before its session died) — plus a manual escape hatch for the automatic
- * cases. Moves the intent to the terminal `superseded` state (not
+ * A session's termination no longer auto-reaps its `staged`/`approved`
+ * rows (see reapStagedIntentsForNeverStagedSession, db/queries.ts) — those
+ * are findings awaiting operator disposition, not invalidated by the
+ * session's own death. This verb is the operator-driven disposition path
+ * for exactly that case, plus the residual reaping never covered: a row
+ * wedged in the transient `pending_verification` / `needs_revision` states
+ * (a dispatched group's verify pass never resolved before its session
+ * died). Moves the intent to the terminal `superseded` state (not
  * `withdrawn` — that state is reserved for a session's own self-correction)
  * with the supplied reason recorded as its `dispositionReason`.
  */

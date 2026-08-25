@@ -90,6 +90,7 @@ vi.mock('../db/queries', () => ({
   addGrantedCapability: vi.fn(() => []),
   removeGrantedCapability: vi.fn(() => []),
   expireStagedIntentsForSession: vi.fn(() => 0),
+  reapStagedIntentsForNeverStagedSession: vi.fn(() => 0),
   insertSession: vi.fn(),
   updateSessionStatus: vi.fn(),
   updateSessionWorktreePath: vi.fn(),
@@ -745,7 +746,7 @@ describe('SessionManager grant-respawn: staged-intent reap suppression', () => {
     ).toBe(true);
   });
 
-  it('a grant respawn that fails at usage-admission-deferred (respawnSession returns null after a reap-suppressed kill) explicitly reaps via expireStagedIntentsForSession', async () => {
+  it('a grant respawn that fails at usage-admission-deferred (respawnSession returns null after a reap-suppressed kill) only calls the narrowed, content-based reap — not the raw expireStagedIntentsForSession', async () => {
     const killSpy = vi.fn().mockResolvedValue(undefined);
     const sm = new SessionManager();
     withLiveSession(sm, killSpy);
@@ -754,14 +755,19 @@ describe('SessionManager grant-respawn: staged-intent reap suppression', () => {
     await sm.grantCapability('sess-grant', 'Bash(find *)');
 
     expect(killSpy).toHaveBeenCalledWith({ suppressReap: true });
-    expect(queries.expireStagedIntentsForSession).toHaveBeenCalledWith(
+    expect(queries.reapStagedIntentsForNeverStagedSession).toHaveBeenCalledWith(
       'sess-grant',
-      'session_killed',
+      'session_killed_no_artifact',
       expect.any(Number),
     );
+    // Raw bulk expiry is never invoked directly from this failure branch —
+    // this session already existed before the failed respawn and may
+    // already carry real staged intents, so only the narrowed no-op-for-
+    // any-content reap is safe here. See reapStagedIntentsForNeverStagedSession.
+    expect(queries.expireStagedIntentsForSession).not.toHaveBeenCalled();
   });
 
-  it('a grant respawn where no live in-memory session exists (kill() never called) and the respawn attempt fails at usage-admission-deferred also reaps via the same failure-branch call', async () => {
+  it('a grant respawn where no live in-memory session exists (kill() never called) and the respawn attempt fails at usage-admission-deferred also only calls the narrowed reap', async () => {
     const sm = new SessionManager();
     // No entry in sessions map — this.sessions.get returns undefined.
     vi.spyOn(sm as never, 'respawnSession').mockReturnValue(null as never);
@@ -769,11 +775,12 @@ describe('SessionManager grant-respawn: staged-intent reap suppression', () => {
     const respawned = await sm.respawnForTransientOverload('sess-grant');
 
     expect(respawned).toBe(false);
-    expect(queries.expireStagedIntentsForSession).toHaveBeenCalledWith(
+    expect(queries.reapStagedIntentsForNeverStagedSession).toHaveBeenCalledWith(
       'sess-grant',
-      'session_killed',
+      'session_killed_no_artifact',
       expect.any(Number),
     );
+    expect(queries.expireStagedIntentsForSession).not.toHaveBeenCalled();
   });
 
   it('intents belonging to a different session are untouched by a grant respawn', async () => {
