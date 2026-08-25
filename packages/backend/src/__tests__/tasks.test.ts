@@ -1513,11 +1513,9 @@ describe('POST /api/tasks/:taskId/recover', () => {
         '/api/tasks/task-1/recover?projectId=proj-1',
       );
       expect(res.status).toBe(200);
-      expect(sendOrResume).toHaveBeenCalledWith(
-        'sess-1',
-        expect.any(String),
-        { allowTerminal: true },
-      );
+      expect(sendOrResume).toHaveBeenCalledWith('sess-1', expect.any(String), {
+        allowTerminal: true,
+      });
     });
 
     it('records a task_recovered audit event with resume action', async () => {
