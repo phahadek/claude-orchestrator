@@ -12,12 +12,30 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mockDbQueries } from '../__tests__/helpers/mockDbQueries';
 
 // ── Heavy deps mocked before SessionManager is imported ───────────────────────
+//
+// vi.mock() factories are hoisted above all other statements, so any shared
+// mock fn they reference must come from vi.hoisted() — a plain top-level
+// const would still be uninitialized at hoist time.
 
-const getPRByNotionTaskId = vi.fn().mockReturnValue(null);
-const getTaskCache = vi.fn().mockReturnValue(undefined);
-const incrementTaskCrashCount = vi.fn().mockReturnValue(1);
-const setTaskPauseReason = vi.fn();
-const updateSessionStatus = vi.fn();
+const {
+  getPRByNotionTaskId,
+  getTaskCache,
+  incrementTaskCrashCount,
+  setTaskPauseReason,
+  updateSessionStatus,
+  recordEvent,
+  updateStatus,
+  getTaskBackend,
+} = vi.hoisted(() => ({
+  getPRByNotionTaskId: vi.fn().mockReturnValue(null),
+  getTaskCache: vi.fn().mockReturnValue(undefined),
+  incrementTaskCrashCount: vi.fn().mockReturnValue(1),
+  setTaskPauseReason: vi.fn(),
+  updateSessionStatus: vi.fn(),
+  recordEvent: vi.fn(),
+  updateStatus: vi.fn().mockResolvedValue(undefined),
+  getTaskBackend: vi.fn(),
+}));
 
 vi.mock('../db/queries.js', () =>
   mockDbQueries({
@@ -50,7 +68,6 @@ vi.mock('../db/queries.js', () =>
   }),
 );
 
-const recordEvent = vi.fn();
 vi.mock('../audit/AuditLog.js', () => ({ recordEvent }));
 
 vi.mock('../security/scrubSecrets.js', () => ({
@@ -112,8 +129,7 @@ vi.mock('./sessionRecovery.js', () => ({ recoverSession: vi.fn() }));
 
 vi.mock('./eventKind.js', () => ({ eventKind: vi.fn() }));
 
-const updateStatus = vi.fn().mockResolvedValue(undefined);
-const getTaskBackend = vi.fn().mockReturnValue({ updateStatus });
+getTaskBackend.mockReturnValue({ updateStatus });
 vi.mock('../tasks/TaskBackend.js', () => ({ getTaskBackend }));
 
 vi.mock('../tasks/TaskStatusEngine.js', () => ({
