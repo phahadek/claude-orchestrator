@@ -1937,6 +1937,34 @@ export class PRMergeWatcher extends EventEmitter {
           setLastReviewedSha(prRow.pr_number, prRow.repo, headSha);
           if (result.verdict === 'approved') {
             clearTerminalPRFlags(prRow.pr_number, prRow.repo, 'review_verdict');
+            // Re-approval on a push doesn't mean the depth review's earlier
+            // finding was fixed — it means conformance still matches spec.
+            // The depth pass must actually re-run on the new commit so a
+            // depth_review_pending / depth_review_escalation hold is
+            // discharged by a fresh verdict, never just by this conformance
+            // re-approval (see ReviewOrchestrator.dispatchDepthReview's
+            // "session's next push re-triggers conformance + depth review"
+            // comment, which this call site fulfills).
+            const depthProject = getProjectByGithubRepo(prRow.repo);
+            if (depthProject && this.reviewOrchestrator) {
+              const depthSession = getSession(sessionId);
+              this.reviewOrchestrator
+                .runDepthReviewAfterPushApproval(
+                  {
+                    prNumber: prRow.pr_number,
+                    repo: prRow.repo,
+                    taskId: prRow.task_id ?? '',
+                    taskUrl: depthSession?.task_url ?? '',
+                    contextUrl: depthProject.contextUrl,
+                  },
+                  depthProject.id,
+                )
+                .catch((e) => {
+                  logger.warn(
+                    `[PRMergeWatcher] post-push depth review dispatch failed for PR #${prRow.pr_number} (${prRow.repo}): ${e}`,
+                  );
+                });
+            }
           }
           this.broadcast({
             type: 'review_verdict',

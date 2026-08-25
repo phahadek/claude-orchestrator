@@ -114,6 +114,7 @@ function makeReviewOrchestrator(): ReviewOrchestrator {
     consumeAutofixSha: vi.fn().mockReturnValue(false),
     isReviewInFlight: vi.fn().mockReturnValue(false),
     enqueueReview: vi.fn(),
+    runDepthReviewAfterPushApproval: vi.fn().mockResolvedValue(undefined),
   } as unknown as ReviewOrchestrator;
 }
 
@@ -211,5 +212,84 @@ describe('PRMergeWatcher push re-review — project id forwarding', () => {
     );
     expect(emptyIdCalls).toHaveLength(0);
     expect(reviewService.reReviewPR).not.toHaveBeenCalled();
+  });
+});
+
+describe('PRMergeWatcher push re-review — re-triggers a fresh depth-review pass on re-approval', () => {
+  let github: GitHubClient;
+  let sessions: SessionManager;
+  let reviewService: PRReviewService;
+  let reviewOrchestrator: ReviewOrchestrator;
+  let watcher: PRMergeWatcher;
+  let broadcast: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    github = makeGithubClient();
+    sessions = makeSessionManager();
+    reviewOrchestrator = makeReviewOrchestrator();
+    broadcast = vi.fn();
+
+    watcher = new PRMergeWatcher(github, sessions, undefined, broadcast);
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    vi.mocked(getProjectByGithubRepo).mockReturnValue(makeProject());
+  });
+
+  it('dispatches a fresh depth-review pass — not just a bare pause-flag clear — when the push re-review re-approves', async () => {
+    reviewService = {
+      reReviewPR: vi.fn().mockResolvedValue({
+        verdict: 'approved',
+        summary: 'Looks good now.',
+        dimensions: [],
+        prNumber: PR_NUMBER,
+        repo: REPO,
+        reviewedAt: new Date().toISOString(),
+      } as PRReviewResult),
+    } as unknown as PRReviewService;
+    watcher.setPRReviewService(reviewService);
+
+    await watcher.handlePushDetected(
+      makePRRow({
+        // A finding was previously routed to the session and the hold is
+        // still armed — this is the exact scenario the bug describes: the
+        // session addressed it and pushed, conformance re-approves, and the
+        // depth finding must be re-verified, not silently discarded.
+        pause_reason: 'depth_review_pending',
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(
+      reviewOrchestrator.runDepthReviewAfterPushApproval,
+    ).toHaveBeenCalledTimes(1);
+    const [job, projectId] = vi.mocked(
+      reviewOrchestrator.runDepthReviewAfterPushApproval,
+    ).mock.calls[0];
+    expect(job).toMatchObject({ prNumber: PR_NUMBER, repo: REPO });
+    expect(projectId).toBe(makeProject().id);
+  });
+
+  it('does not dispatch a depth-review pass when the push re-review still returns needs_changes', async () => {
+    reviewService = {
+      reReviewPR: vi.fn().mockResolvedValue({
+        verdict: 'needs_changes',
+        summary: 'Please fix',
+        dimensions: [],
+        prNumber: PR_NUMBER,
+        repo: REPO,
+        reviewedAt: new Date().toISOString(),
+      } as PRReviewResult),
+    } as unknown as PRReviewService;
+    watcher.setPRReviewService(reviewService);
+
+    await watcher.handlePushDetected(
+      makePRRow({ pause_reason: 'depth_review_pending' }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(
+      reviewOrchestrator.runDepthReviewAfterPushApproval,
+    ).not.toHaveBeenCalled();
   });
 });

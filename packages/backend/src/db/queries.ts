@@ -3983,6 +3983,71 @@ const RECONCILE_EXHAUSTED_CLEAR_ALLOWED_TRIGGERS: ReadonlySet<ClearTerminalPRFla
   ]);
 
 /**
+ * Canonical reasons that only ReviewOrchestrator's own depth-review dispatch
+ * is entitled to discharge (see ReviewOrchestrator.clearDepthReviewHoldAndRemerge,
+ * which only clears once a fresh depth pass has actually produced that
+ * outcome). A bare conformance-approved verdict must never silently drop
+ * these — see clearTerminalPRFlags's 'review_verdict' trigger below.
+ */
+const DEPTH_REVIEW_HOLD_REASONS: ReadonlySet<CanonicalPauseReason> = new Set([
+  'depth_review_pending',
+  'depth_review_escalation',
+]);
+
+/**
+ * Scoped clear used by clearTerminalPRFlags's 'review_verdict' trigger: drops
+ * every 'review'-source entry EXCEPT a live depth-review hold, and leaves
+ * every other source's entry untouched entirely. Mirrors the source-scoped
+ * replace-or-add path setPauseReason already uses for non-null writes — a
+ * bare conformance re-approval clears its own prior review-cycle flags
+ * (review_failed, max_reviews, ...) without ever wiping an unrelated
+ * source's hold, or a depth-review hold that hasn't yet been re-verified by
+ * a fresh depth pass (see PRMergeWatcher.handlePushDetected /
+ * ReviewOrchestrator.dispatchDepthReview).
+ */
+function clearReviewVerdictPauseReasons(prNumber: number, repo: string): void {
+  const before = getPRByNumber(prNumber, repo);
+  const preserved = parsePauseReasonSet(before?.pause_reason ?? null).filter(
+    (entry) =>
+      entry.source !== 'review' || DEPTH_REVIEW_HOLD_REASONS.has(entry.reason),
+  );
+  const serialized = preserved.length
+    ? serializePauseReasonSet(preserved)
+    : null;
+  db.prepare<{
+    pr_number: number;
+    repo: string;
+    pause_reason: string | null;
+    pause_reason_set_at: number | null;
+  }>(
+    `
+    UPDATE pull_requests
+    SET pause_reason = @pause_reason,
+        pause_reason_set_at = @pause_reason_set_at
+    WHERE pr_number = @pr_number AND repo = @repo
+  `,
+  ).run({
+    pr_number: prNumber,
+    repo,
+    pause_reason: serialized,
+    pause_reason_set_at: serialized ? Date.now() : null,
+  });
+  if (before && before.pause_reason !== serialized) {
+    recordEvent({
+      event_type: 'pr_pause_reason_changed',
+      actor_type: 'system',
+      task_id: before.task_id ?? null,
+      payload: {
+        pr_number: prNumber,
+        repo,
+        from: before.pause_reason,
+        to: serialized,
+      },
+    });
+  }
+}
+
+/**
  * Clears pause_reason (the full concurrent set) and pre_review_stage on
  * terminal PR transitions (merged, closed, or approved verdict). Composes
  * the existing setters so that pause_reason_set_at is also nulled correctly.
@@ -4001,7 +4066,11 @@ export function clearTerminalPRFlags(
   trigger: ClearTerminalPRFlagsTrigger,
 ): void {
   const pr = getPRByNumber(prNumber, repo);
-  setPauseReason(prNumber, repo, null);
+  if (trigger === 'review_verdict') {
+    clearReviewVerdictPauseReasons(prNumber, repo);
+  } else {
+    setPauseReason(prNumber, repo, null);
+  }
   setPreReviewStage(prNumber, repo, null);
   if (pr?.reconcile_exhausted) {
     if (RECONCILE_EXHAUSTED_CLEAR_ALLOWED_TRIGGERS.has(trigger)) {

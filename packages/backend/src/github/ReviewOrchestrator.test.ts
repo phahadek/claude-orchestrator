@@ -1605,6 +1605,81 @@ describe('ReviewOrchestrator — depth review hold: clears depth_review_pending 
   });
 });
 
+describe('ReviewOrchestrator — runDepthReviewAfterPushApproval (push-triggered re-review dispatches a fresh depth pass)', () => {
+  const depthReviewPendingRow = {
+    ...basePRRow,
+    pause_reason: serializePauseReason(
+      pauseReasonFromCanonical('depth_review_pending'),
+    ),
+  };
+
+  function makeMockAutoMerger() {
+    return { attempt: vi.fn() };
+  }
+
+  it('runs a fresh depth-review pass on the new head SHA rather than trusting the stale hold', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(depthReviewPendingRow as any);
+    vi.mocked(getDepthReviewVerdict).mockReturnValue(undefined);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const runDepthReview = vi.fn().mockResolvedValue(makeDepthResult({}));
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+    const autoMerger = makeMockAutoMerger();
+    orch.setAutoMerger(autoMerger as any);
+
+    await orch.runDepthReviewAfterPushApproval(baseJob, 'proj-1');
+
+    expect(runDepthReview).toHaveBeenCalledOnce();
+    const [prNumber, repo] = runDepthReview.mock.calls[0];
+    expect(prNumber).toBe(1);
+    expect(repo).toBe('owner/repo');
+    // A clean fresh pass discharges the stale hold and re-drives the merge —
+    // the push's own re-verification, not a blind carry-over of the prior
+    // (possibly stale) depth_review_pending state.
+    expect(autoMerger.attempt).toHaveBeenCalledWith(1, 'owner/repo');
+  });
+
+  it('keeps the hold (does not re-attempt merge) when the fresh pass on the new commit still finds a non-size defect', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(depthReviewPendingRow as any);
+    vi.mocked(getDepthReviewVerdict).mockReturnValue(undefined);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const runDepthReview = vi.fn().mockResolvedValue(
+      makeDepthResult({
+        hasNonSizeFailure: true,
+        dimensions: [
+          { name: 'Security', passed: false, notes: 'Still unsanitized.' },
+        ],
+        summary: 'Still found a security defect.',
+      }),
+    );
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+    const autoMerger = makeMockAutoMerger();
+    orch.setAutoMerger(autoMerger as any);
+
+    await orch.runDepthReviewAfterPushApproval(baseJob, 'proj-1');
+
+    expect(runDepthReview).toHaveBeenCalledOnce();
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledOnce();
+    expect(autoMerger.attempt).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op (never throws) when no depth-review service is wired', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(depthReviewPendingRow as any);
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+
+    await expect(
+      orch.runDepthReviewAfterPushApproval(baseJob, 'proj-1'),
+    ).resolves.toBeUndefined();
+  });
+});
+
 // ── Push detection and re-review ──────────────────────────────────────────────
 // Push-detected re-review is wired in server.ts, not ReviewOrchestrator.
 // See packages/backend/src/server.ts for the push_detected listener and

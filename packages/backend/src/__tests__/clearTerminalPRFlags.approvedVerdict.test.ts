@@ -151,6 +151,7 @@ describe('PRMergeWatcher — approved verdict clears terminal flags', () => {
       runAutofixPipeline: vi.fn().mockResolvedValue(undefined),
       runTestPipeline: vi.fn().mockResolvedValue(undefined),
       isReviewInFlight: vi.fn().mockReturnValue(false),
+      runDepthReviewAfterPushApproval: vi.fn().mockResolvedValue(undefined),
     } as unknown as ReviewOrchestrator;
 
     const watcher = new PRMergeWatcher(github, sessions, undefined, vi.fn());
@@ -199,6 +200,7 @@ describe('PRMergeWatcher — approved verdict clears terminal flags', () => {
       runAutofixPipeline: vi.fn().mockResolvedValue(undefined),
       runTestPipeline: vi.fn().mockResolvedValue(undefined),
       isReviewInFlight: vi.fn().mockReturnValue(false),
+      runDepthReviewAfterPushApproval: vi.fn().mockResolvedValue(undefined),
     } as unknown as ReviewOrchestrator;
 
     const watcher = new PRMergeWatcher(github, sessions, undefined, vi.fn());
@@ -249,6 +251,7 @@ describe('PRMergeWatcher — approved verdict clears terminal flags', () => {
       runAutofixPipeline: vi.fn().mockResolvedValue(undefined),
       runTestPipeline: vi.fn().mockResolvedValue(undefined),
       isReviewInFlight: vi.fn().mockReturnValue(false),
+      runDepthReviewAfterPushApproval: vi.fn().mockResolvedValue(undefined),
     } as unknown as ReviewOrchestrator;
 
     const watcher = new PRMergeWatcher(github, sessions, undefined, vi.fn());
