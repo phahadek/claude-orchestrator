@@ -118,6 +118,31 @@ import type { NotionClient } from '../notion/NotionClient.js';
 import type { PRMergeWatcher } from '../github/PRMergeWatcher.js';
 import type { PullRequestRow } from '../db/types.js';
 import { formatReviewFeedback } from '../github/reviewUtils.js';
+import {
+  pauseReasonFromCanonical,
+  parsePauseReasonSet,
+  serializePauseReasonSet,
+} from '../db/pauseReason.js';
+import type { CanonicalPauseReason } from '../db/pauseReason.js';
+
+// Mirrors queries.setPauseReason's write path (source-scoped replace-or-add
+// over the concurrent set), using the real pauseReason.ts serialization
+// helpers rather than a hand-crafted JSON string. '../db/queries.js' is
+// fully mocked in this file, so the actual exported setPauseReason can't be
+// exercised directly — this reproduces its exact body against those real,
+// unmocked helpers instead.
+function setPauseReasonViaRealWritePath(
+  existingRaw: string | null,
+  reason: CanonicalPauseReason,
+  detail?: string,
+): string {
+  const newEntry = { ...pauseReasonFromCanonical(reason, detail), set_at: 1 };
+  const nextSet = parsePauseReasonSet(existingRaw).filter(
+    (entry) => entry.source !== newEntry.source,
+  );
+  nextSet.push(newEntry);
+  return serializePauseReasonSet(nextSet);
+}
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -323,6 +348,78 @@ describe('GET /api/prs/depth-dispositions', () => {
       '/api/prs/depth-dispositions?prNumbers=42',
     );
     expect(res.status).toBe(400);
+  });
+
+  // ── escalated field ────────────────────────────────────────────────────
+
+  const depthVerdictFixture = {
+    pr_number: 42,
+    repo: 'owner/repo',
+    head_sha: 'abc123',
+    verdict: 'fail' as const,
+    dimensions: JSON.stringify([
+      { name: 'reliability', passed: false, notes: 'bad' },
+    ]),
+    summary: 'Found a defect',
+    depth_session_id: 'depth-session-1',
+    route_count: 0,
+    recorded_at: '2024-01-01T00:00:00Z',
+  };
+
+  async function getEscalated(pauseReason: string | null): Promise<boolean> {
+    vi.mocked(queries.getPRByNumber).mockImplementation((prNumber: number) =>
+      prNumber === 42 ? { ...mockPRRow, pause_reason: pauseReason } : null,
+    );
+    vi.mocked(queries.getDepthReviewVerdict).mockReturnValue(
+      depthVerdictFixture,
+    );
+    const res = await supertest(buildApp()).get(
+      '/api/prs/depth-dispositions?projectId=proj-1&prNumbers=42',
+    );
+    expect(res.status).toBe(200);
+    return res.body[0].depthVerdict.escalated;
+  }
+
+  it('is true when depth_review_escalation was set via the real setPauseReason write path', async () => {
+    const pauseReason = setPauseReasonViaRealWritePath(
+      null,
+      'depth_review_escalation',
+    );
+    expect(await getEscalated(pauseReason)).toBe(true);
+  });
+
+  it('is false when no pause reason is set', async () => {
+    expect(await getEscalated(null)).toBe(false);
+  });
+
+  it('is false for an unrelated, non-escalation pause reason', async () => {
+    const pauseReason = setPauseReasonViaRealWritePath(null, 'ci_failing');
+    expect(await getEscalated(pauseReason)).toBe(false);
+  });
+
+  it('resolves correctly for a legacy bare-string pause_reason row without throwing', async () => {
+    expect(await getEscalated('depth_review_escalation')).toBe(true);
+    expect(await getEscalated('ci_failing')).toBe(false);
+  });
+
+  it('resolves correctly for a legacy single-struct object pause_reason row without throwing', async () => {
+    const legacyObject = JSON.stringify(
+      pauseReasonFromCanonical('depth_review_escalation'),
+    );
+    expect(await getEscalated(legacyObject)).toBe(true);
+  });
+
+  it('is true for a concurrent pause-reason set containing depth_review_escalation alongside a higher-severity terminal entry', async () => {
+    let pauseReason = setPauseReasonViaRealWritePath(
+      null,
+      'depth_review_escalation',
+    );
+    // pr_closed is 'terminal' severity, outranking depth_review_escalation's
+    // 'needs_attention' — parsePauseReason's single top-severity resolution
+    // would mask the escalation entry entirely; the set-membership check
+    // used by prs.ts must not.
+    pauseReason = setPauseReasonViaRealWritePath(pauseReason, 'pr_closed');
+    expect(await getEscalated(pauseReason)).toBe(true);
   });
 });
 
