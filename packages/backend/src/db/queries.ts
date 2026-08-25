@@ -878,6 +878,30 @@ export function recordSessionErroredWriteSkipped(
   });
 }
 
+/**
+ * Records the skip audit event for a would-be task demotion onto a task
+ * whose PR is already open — the markSessionErrored counterpart to
+ * recordSessionErroredWriteSkipped above, for the sibling hazard: the task
+ * isn't in a terminal *status* (that guard is isTaskStatusTerminal), but a
+ * second implementation session can never land while a PR is already open
+ * for this task, so the attempted demotion is skipped and recorded here
+ * instead of silently dropped.
+ */
+export function recordTaskDemotionSkippedOpenPr(
+  sessionId: string,
+  taskId: string,
+  attemptedStatus: string,
+  prNumber: number,
+): void {
+  recordEvent({
+    event_type: 'session_errored_write_skipped_open_pr',
+    actor_type: 'system',
+    actor_id: sessionId,
+    task_id: taskId,
+    payload: { attempted_status: attemptedStatus, pr_number: prNumber },
+  });
+}
+
 export interface StuckResultSessionRow {
   session_id: string;
   task_id: string | null;

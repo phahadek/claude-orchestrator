@@ -78,6 +78,7 @@ import {
   insertSession,
   updateSessionStatus,
   recordSessionErroredWriteSkipped,
+  recordTaskDemotionSkippedOpenPr,
   updateSessionWorktreePath,
   markSessionDone,
   markSessionIdle,
@@ -1614,6 +1615,28 @@ export class SessionManager extends EventEmitter {
     // failure falls back to the pre-existing revert behaviour so an
     // unreadable cache can never strand a task at In Progress.
     if (isTaskStatusTerminal(notionTaskId)) return;
+
+    // A dying session must also never demote a task whose PR is already
+    // open — the work already exists, a second dispatch cannot land it, and
+    // both sessions would race the same branch. This is deliberately below
+    // the crash-count/Blocked handling above: the crash-count increment and
+    // the 🚫 Blocked pause-reason write (and its audit event/broadcast)
+    // still happen even when a PR is open, since a task can legitimately
+    // crash-loop while its PR sits open awaiting review and AutoLauncher
+    // still needs to know. Only the visible task-status write is skipped
+    // here, leaving the task at 👀 In Review rather than flipping it to
+    // 🗂️ Ready or 🚫 Blocked. Merged/closed PRs are already covered above
+    // via the task's terminal status.
+    const openPr = getPRByNotionTaskId(notionTaskId);
+    if (openPr && openPr.state === 'open') {
+      recordTaskDemotionSkippedOpenPr(
+        sessionId,
+        notionTaskId,
+        notionStatus,
+        openPr.pr_number,
+      );
+      return;
+    }
 
     // Update Notion task status (fire-and-forget; failures logged, not thrown)
     getTaskBackend(projectId)
