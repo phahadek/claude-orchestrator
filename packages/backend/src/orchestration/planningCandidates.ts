@@ -67,34 +67,71 @@ export function passesGroomDepGate(
 }
 
 /**
+ * Result of a project-wide dependency lookup for a dep id absent from a
+ * single board's `tasksById` — see DispatchTriggerEvaluator.resolveProjectDepStatus,
+ * the only code path that actually scans every milestone board of a project.
+ * `dangling` means the id was checked against every board's task_cache row
+ * and matched none; `unknown` means at least one board had no cache row yet,
+ * so absence can't be confirmed (a cold cache must never read as dangling).
+ */
+export type ProjectDepResolution =
+  | { status: 'found'; task: NotionTask }
+  | { status: 'dangling' }
+  | { status: 'unknown' };
+
+export interface GroomBlockingDeps {
+  /** Titles of deps that fail the gate (decision-type not Done, or Deferred) — resolved either on this board or, via resolveDep, elsewhere in the project. */
+  blockingTitles: string[];
+  /** Raw ids of deps confirmed absent from every board of the project — a dead reference, distinct from an ordinary blocker. */
+  danglingDepIds: string[];
+}
+
+/**
  * Same per-dep Type+Status logic as passesGroomDepGate, but returns the
  * titles of the deps that fail the gate rather than a single boolean — feeds
  * the TaskView `groomDepBlockedReason` surfaced to the frontend. A dep
- * missing from `tasksById` is reported by its raw id, since there's no title
- * to show.
+ * missing from `tasksById` is resolved project-wide via `resolveDep` (see
+ * DispatchTriggerEvaluator.resolveProjectDepStatus): a dep found on another
+ * board is evaluated by the same Type+Status rule as a same-board dep and
+ * reported by its title; a dep confirmed dangling (absent from every board)
+ * is reported separately via `danglingDepIds`, not folded into
+ * `blockingTitles`; a dep whose resolution is `unknown` (some board isn't
+ * cached yet) falls back to reporting the raw id as blocking, the same
+ * fail-closed behavior as when `resolveDep` is omitted entirely.
  */
 export function groomBlockingDepTitles(
   task: NotionTask,
   tasksById: Map<string, NotionTask>,
-): string[] {
-  const titles: string[] = [];
+  resolveDep?: (depId: string) => ProjectDepResolution,
+): GroomBlockingDeps {
+  const blockingTitles: string[] = [];
+  const danglingDepIds: string[] = [];
   for (const depId of task.dependsOn) {
-    const dep = tasksById.get(normalizeBoardId(depId));
+    let dep = tasksById.get(normalizeBoardId(depId));
     if (!dep) {
-      titles.push(depId);
-      continue;
+      const resolution = resolveDep?.(depId);
+      if (resolution?.status === 'dangling') {
+        danglingDepIds.push(depId);
+        continue;
+      }
+      if (resolution?.status === 'found') {
+        dep = resolution.task;
+      } else {
+        blockingTitles.push(depId);
+        continue;
+      }
     }
     const isDecisionType =
       dep.type.includes(DESIGN_TOKEN) ||
       dep.type.includes(PLANNING_TOKEN) ||
       dep.type.includes(INVESTIGATION_TOKEN);
     if (isDecisionType) {
-      if (!dep.status.includes(DONE_TOKEN)) titles.push(dep.title);
+      if (!dep.status.includes(DONE_TOKEN)) blockingTitles.push(dep.title);
     } else if (dep.status.includes(DEFERRED_TOKEN)) {
-      titles.push(dep.title);
+      blockingTitles.push(dep.title);
     }
   }
-  return titles;
+  return { blockingTitles, danglingDepIds };
 }
 
 export interface GroomCandidateDeps {

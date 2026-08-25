@@ -142,6 +142,10 @@ export interface TaskView {
   groomDepBlocked?: boolean;
   /** Human-readable reason when groomDepBlocked, e.g. "waiting on <dep title>". */
   groomDepBlockedReason?: string | null;
+  /** True when at least one Depends-On id resolves to no task on any board of the project — a dead reference, distinct from an ordinary (possibly cross-board) blocker. */
+  groomDepDangling?: boolean;
+  /** Raw dangling dependency ids, for display — absent/empty when groomDepDangling is false. */
+  groomDepDanglingIds?: string[];
   codeSession: {
     sessionId: string;
     status: string;

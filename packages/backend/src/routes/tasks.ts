@@ -37,6 +37,7 @@ import {
 } from '../db/pauseReason';
 import { computeOpsBlockingDeps, isOpsEligibleType } from '../ops/opsLoad';
 import { groomBlockingDepTitles } from '../orchestration/planningCandidates';
+import { resolveProjectDepStatus } from '../orchestration/DispatchTriggerEvaluator';
 import { normalizeTaskId, normalizeBoardId } from '../tasks/taskId';
 import yaml from 'js-yaml';
 import { asyncHandler } from './asyncHandler';
@@ -181,15 +182,23 @@ async function annotateOpsDepBlocking(
 }
 
 /**
- * Mutates `views` in place with groomDepBlocked/groomDepBlockedReason for
- * every 🔲 Backlog task — mirrors passesGroomDepGate's per-dep Type+Status
- * logic so the frontend can exclude dep-blocked tasks from Select All / the
- * Groom(N) count instead of offering them as though they were eligible.
- * Unlike the ops case, this needs no deploy lookup, so it's synchronous.
+ * Mutates `views` in place with groomDepBlocked/groomDepBlockedReason (and
+ * groomDepDangling/groomDepDanglingIds) for every 🔲 Backlog task — mirrors
+ * passesGroomDepGate's per-dep Type+Status logic so the frontend can exclude
+ * dep-blocked tasks from Select All / the Groom(N) count instead of offering
+ * them as though they were eligible. Resolves a dep missing from this
+ * board's `tasksById` project-wide via resolveProjectDepStatus — off
+ * task_cache rows only, zero Notion network calls — so a dep that lands on
+ * a different milestone board (the common, by-design case) isn't reported
+ * as blocking at all, while a dep absent from every board is surfaced via
+ * the distinct dangling field instead of being folded into the same
+ * free-text reason as a healthy cross-board dep. Unlike the ops case, this
+ * needs no deploy lookup, so it's synchronous.
  */
 function annotateGroomDepBlocking(
   views: TaskView[],
   allTasks: NotionTask[],
+  projectId: string,
 ): void {
   const backlogTasks = allTasks.filter((t) => t.status.includes('Backlog'));
   if (backlogTasks.length === 0) return;
@@ -197,12 +206,20 @@ function annotateGroomDepBlocking(
   for (const task of backlogTasks) {
     const view = views.find((v) => v.taskId === task.id);
     if (!view) continue;
-    const blockingTitles = groomBlockingDepTitles(task, tasksById);
-    view.groomDepBlocked = blockingTitles.length > 0;
+    const { blockingTitles, danglingDepIds } = groomBlockingDepTitles(
+      task,
+      tasksById,
+      (depId) => resolveProjectDepStatus(projectId, depId),
+    );
+    view.groomDepBlocked =
+      blockingTitles.length > 0 || danglingDepIds.length > 0;
     view.groomDepBlockedReason =
       blockingTitles.length > 0
         ? `waiting on ${blockingTitles.join(', ')}`
         : null;
+    view.groomDepDangling = danglingDepIds.length > 0;
+    view.groomDepDanglingIds =
+      danglingDepIds.length > 0 ? danglingDepIds : undefined;
   }
 }
 
@@ -257,11 +274,10 @@ async function buildTaskView(notionTaskId: string): Promise<TaskView | null> {
   if (notionTask) {
     const contextTasks = collectDependencyContext(notionTask);
     resolveDependencyBlocking([view], contextTasks);
-    annotateGroomDepBlocking([view], contextTasks);
-
-    if (isOpsEligibleType(notionTask.type)) {
-      const projectId = findProjectIdForTask(notionTaskId);
-      if (projectId) {
+    const projectId = findProjectIdForTask(notionTaskId);
+    if (projectId) {
+      annotateGroomDepBlocking([view], contextTasks, projectId);
+      if (isOpsEligibleType(notionTask.type)) {
         await annotateOpsDepBlocking([view], contextTasks, projectId);
       }
     }
@@ -726,7 +742,7 @@ export function createTasksRouter(
 
       resolveDependencyBlocking(views, notionTasks);
 
-      annotateGroomDepBlocking(views, notionTasks);
+      annotateGroomDepBlocking(views, notionTasks, projectId);
 
       await annotateOpsDepBlocking(views, notionTasks, projectId);
 
@@ -790,7 +806,7 @@ export function createTasksRouter(
 
       resolveDependencyBlocking(views, allBoardTasks);
 
-      annotateGroomDepBlocking(views, allBoardTasks);
+      annotateGroomDepBlocking(views, allBoardTasks, projectId);
 
       await annotateOpsDepBlocking(views, allBoardTasks, projectId);
 

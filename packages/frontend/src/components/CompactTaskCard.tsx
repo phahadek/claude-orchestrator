@@ -121,6 +121,20 @@ export function CompactTaskCard({
           <span className={styles.blockerName}>↳ {blockedReason}</span>
         </div>
       )}
+
+      {task.groomDepDangling && (
+        <div
+          className={styles.blockers}
+          data-testid="groom-dep-dangling-reason"
+        >
+          <span className={`${styles.blockerName} ${styles.dangling}`}>
+            ⚠ dangling dependency
+            {task.groomDepDanglingIds && task.groomDepDanglingIds.length > 0
+              ? `: ${task.groomDepDanglingIds.join(', ')}`
+              : ''}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
