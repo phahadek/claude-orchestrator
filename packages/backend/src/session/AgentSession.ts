@@ -1054,7 +1054,15 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         return;
       }
 
-      if (exitCode === 0) {
+      // exitCode === null is only ever reached via a kill() call — this
+      // runner's own post-result grace-timeout kill, the first-event
+      // escalation watchdog, or StuckSessionMonitor's hard-stop. Gating the
+      // broadened branch on wasLastEventSuccessfulResult() (rather than
+      // treating every null exit as clean) is what separates "we force-killed
+      // a subprocess that had already told us it was done" from "we killed a
+      // subprocess that never got that far" — the latter must keep falling
+      // through to the killed/runner_killed_unexpected classification below.
+      if (exitCode === 0 || (exitCode === null && this.wasLastEventSuccessfulResult())) {
         this.retryCount = 0;
         if (this.isUsageLimitTermination()) {
           this.recordUsageLimitTermination();
