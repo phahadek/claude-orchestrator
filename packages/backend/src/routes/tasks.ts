@@ -211,7 +211,8 @@ function annotateGroomDepBlocking(
       tasksById,
       (depId) => resolveProjectDepStatus(projectId, depId),
     );
-    view.groomDepBlocked = blockingTitles.length > 0 || danglingDepIds.length > 0;
+    view.groomDepBlocked =
+      blockingTitles.length > 0 || danglingDepIds.length > 0;
     view.groomDepBlockedReason =
       blockingTitles.length > 0
         ? `waiting on ${blockingTitles.join(', ')}`

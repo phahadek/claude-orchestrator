@@ -123,7 +123,10 @@ export function CompactTaskCard({
       )}
 
       {task.groomDepDangling && (
-        <div className={styles.blockers} data-testid="groom-dep-dangling-reason">
+        <div
+          className={styles.blockers}
+          data-testid="groom-dep-dangling-reason"
+        >
           <span className={`${styles.blockerName} ${styles.dangling}`}>
             ⚠ dangling dependency
             {task.groomDepDanglingIds && task.groomDepDanglingIds.length > 0
