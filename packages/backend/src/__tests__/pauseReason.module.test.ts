@@ -305,6 +305,11 @@ describe('deriveRecoveryDescriptor', () => {
     },
   );
 
+  it('stalled_reconcile_cap (legacy bare-string, pre-dating reconcile_exhausted) → rerun', () => {
+    const d = deriveRecoveryDescriptor('stalled_reconcile_cap');
+    expect(d).toEqual({ available: true, action: 'rerun', label: 'Rerun' });
+  });
+
   it.each([
     'max_reviews',
     'stuck_timeout',

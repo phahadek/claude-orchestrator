@@ -1045,6 +1045,7 @@ export function createPrsRouter(
       const sessionId = await sessionManager.sendOrResume(
         prRow.session_id,
         message,
+        { allowTerminal: true },
       );
       // Reset merge state so PRMergeWatcher will re-check after the push
       updateMergeState(prNumber, repo, null, null);
@@ -1121,7 +1122,9 @@ export function createPrsRouter(
         .filter((s): s is string => Boolean(s))
         .join(' ');
       const fixMessage = `PR #${prNumber} review findings — please address the following:\n\n${lines}\n\nOverall: ${overall}`;
-      await sessionManager.sendOrResume(prRow.session_id, fixMessage);
+      await sessionManager.sendOrResume(prRow.session_id, fixMessage, {
+        allowTerminal: true,
+      });
       res.json({ sessionId: prRow.session_id });
     }),
   );

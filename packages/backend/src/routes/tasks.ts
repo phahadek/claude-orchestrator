@@ -528,7 +528,11 @@ export function summarizeEvent(payload: string): string {
 }
 
 interface SessionManagerLike {
-  sendOrResume(sessionId: string, text: string): Promise<string | null>;
+  sendOrResume(
+    sessionId: string,
+    text: string,
+    opts?: { allowTerminal?: boolean },
+  ): Promise<string | null>;
   findLiveSessionIdForTask(taskId: string): string | undefined;
   abortSession(sessionId: string): Promise<void>;
 }
@@ -1125,6 +1129,7 @@ export function createTasksRouter(
             await sessionManager.sendOrResume(
               sessionId,
               'Recovery requested. Please review the current state and continue working on the task.',
+              { allowTerminal: true },
             );
           }
 

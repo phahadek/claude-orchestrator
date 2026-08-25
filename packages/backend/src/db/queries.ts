@@ -4075,20 +4075,22 @@ export function clearTerminalPRFlags(
   if (pr?.reconcile_exhausted) {
     if (RECONCILE_EXHAUSTED_CLEAR_ALLOWED_TRIGGERS.has(trigger)) {
       setReconcileExhausted(prNumber, repo, false);
-      // An operator's own human_unpark action discharging a live
-      // reconcile_exhausted escalation must also restore the retry budget
-      // that produced it — otherwise the very next reconciler tick (or the
-      // rerun this trigger accompanies) can fail and re-hit an
-      // already-exhausted counter with zero new attempts, producing a
-      // re-escalation loop the operator has no way out of.
-      if (trigger === 'human_unpark') {
-        resetStalledPRRetryBudget(prNumber, repo);
-      }
     } else {
       logger.info(
         `[clearTerminalPRFlags] PR #${prNumber} (${repo}): leaving reconcile_exhausted set — trigger '${trigger}' is not a trusted escalation-clearing signal`,
       );
     }
+  }
+  // An operator's own human_unpark action must restore the retry budget that
+  // caps dispatch (stalled_pr_retry_count) whenever it's actually charged —
+  // independent of reconcile_exhausted, which is a separate flag that can be
+  // 0 while stalled_pr_retry_count is already at the reconciler's cap (see
+  // StalledPRReconciler's retryCap check). Otherwise the very next reconciler
+  // tick (or the rerun this trigger accompanies) can fail and re-hit an
+  // already-exhausted counter with zero new attempts, producing a
+  // re-escalation loop the operator has no way out of.
+  if (trigger === 'human_unpark' && (pr?.stalled_pr_retry_count ?? 0) > 0) {
+    resetStalledPRRetryBudget(prNumber, repo);
   }
   recordEvent({
     event_type: 'pr_terminal_flags_cleared',

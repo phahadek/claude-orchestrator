@@ -1277,6 +1277,24 @@ describe('POST /api/tasks/:taskId/recover', () => {
     expect(res.status).toBe(422);
   });
 
+  it('returns success (rerun) for a PR paused at stalled_reconcile_cap', async () => {
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-1', '⚠️ Needs Attention', {
+        pr_pause_reason: 'stalled_reconcile_cap',
+      }),
+    ]);
+    vi.mocked(queries.getPRByNotionTaskId).mockReturnValue({
+      pr_number: 42,
+      repo: 'owner/repo',
+      task_id: 'task-1',
+    } as never);
+    const res = await supertest(buildApp()).post(
+      '/api/tasks/task-1/recover?projectId=proj-1',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, action: 'rerun' });
+  });
+
   describe('action: redispatch', () => {
     beforeEach(() => {
       vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
@@ -1476,7 +1494,28 @@ describe('POST /api/tasks/:taskId/recover', () => {
       expect(sendOrResume).toHaveBeenCalledWith(
         'sess-1',
         expect.stringContaining('Recovery requested'),
+        { allowTerminal: true },
       );
+    });
+
+    it('passes allowTerminal:true so a killed session can be respawned', async () => {
+      vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+        makeAggregate('task-1', '⚠️ Needs Attention', {
+          pr_pause_reason: 'ci_failing',
+          code_session_id: 'sess-1',
+          code_session_status: 'killed',
+        }),
+      ]);
+      const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+      const app = buildAppWithServices({ sendOrResume });
+
+      const res = await supertest(app).post(
+        '/api/tasks/task-1/recover?projectId=proj-1',
+      );
+      expect(res.status).toBe(200);
+      expect(sendOrResume).toHaveBeenCalledWith('sess-1', expect.any(String), {
+        allowTerminal: true,
+      });
     });
 
     it('records a task_recovered audit event with resume action', async () => {
