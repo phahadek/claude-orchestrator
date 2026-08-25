@@ -2893,6 +2893,10 @@ describe('reclaimSessionProcess — reclaims the OS process without terminating 
   it('a reclaimed session (hasEnded set) is routed to the --resume respawn path, never the live direct-send path, on the next sendOrResume', async () => {
     const session = await registerLiveSession(sm);
     vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'idle' });
+    // registerLiveSession's own boot delivery already called
+    // session.sendMessage once — clear that call history so the assertion
+    // below isolates what happens *after* reclaim.
+    session.sendMessage.mockClear();
 
     sm.reclaimSessionProcess(SESSION_ID);
     expect(session.hasEnded).toBe(true);
