@@ -731,7 +731,9 @@ describe('TaskWriteCommands.moveTask — yaml backend end-to-end', () => {
       originalDisposition: 'archive',
     });
 
-    expect(result.droppedEdges).toEqual([{ from: 'yaml:task-b', to: 'yaml:task-a' }]);
+    expect(result.droppedEdges).toEqual([
+      { from: 'yaml:task-b', to: 'yaml:task-a' },
+    ]);
     const file = readTasksYaml(tmpDir);
     const ms1 = file.milestones.find((m) => m.id === 'ms-1')!;
     const taskB = ms1.tasks.find((t) => t.id === 'task-b');
