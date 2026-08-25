@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { getTaskBackend } from '../tasks/TaskBackend';
+import { assertTaskIdResolves } from '../tasks/taskReferenceValidation';
 import {
   BackendTaskWriteCommands,
   type FlipReadyParams,
@@ -212,6 +213,10 @@ export function createGroomFlipRouter(
           });
           res.status(202).json({ routed: 'split', candidate, confirm, launch });
           return;
+        }
+
+        for (const depId of dependsOn) {
+          await assertTaskIdResolves(depId, project);
         }
 
         const backend = getTaskBackend(project);

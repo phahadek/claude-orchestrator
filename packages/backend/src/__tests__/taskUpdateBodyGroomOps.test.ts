@@ -13,6 +13,15 @@ vi.mock('../db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
+const { mockGetTaskBackend } = vi.hoisted(() => ({
+  mockGetTaskBackend: vi.fn(),
+}));
+
+vi.mock('../tasks/TaskBackend', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../tasks/TaskBackend')>();
+  return { ...actual, getTaskBackend: mockGetTaskBackend };
+});
+
 import { vi, beforeEach } from 'vitest';
 import { db } from '../db/db';
 import { GROOM_ALLOWED_TOOLS, OPS_ALLOWED_TOOLS } from '../config';
@@ -57,6 +66,10 @@ describe('GROOM_ALLOWED_TOOLS / OPS_ALLOWED_TOOLS — CLI-sanitized task_updateB
 describe('a staged task.updateBody intent from a groom session', () => {
   it('persists with state = "staged" and is not auto-applied', async () => {
     upsertTaskCache('notion:t-1', JSON.stringify({ status: '🔲 Backlog' }));
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nok'),
+    });
     const server = new McpServer({ name: 'test', version: '1.0.0' });
     registerStageProposalTools(server, {
       sessionId: 'session-groom-1',

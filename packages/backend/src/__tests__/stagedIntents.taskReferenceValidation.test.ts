@@ -27,7 +27,18 @@ import { db } from '../db/db';
 import { createStagedIntentsRouter } from '../routes/stagedIntents';
 import { upsertTaskCache } from '../db/queries';
 
-const KNOWN_TASK_IDS = new Set(['notion:known-task-1', 'notion:known-task-2']);
+const KNOWN_TASK_IDS = new Set([
+  'notion:known-task-1',
+  'notion:known-task-2',
+  // Ids only ever seeded into the task cache by individual tests below, not
+  // fetched live before this suite's assertTaskIdResolves stopped trusting
+  // the cache — must also resolve via fetchTaskPage now that every
+  // existence check is a live call.
+  'notion:t-1',
+  'notion:3aa22f91-52f3-81a7-a58b-db94fe13e649',
+  'jira:PROJ-123',
+  'notion:code-2',
+]);
 
 function makeBackend() {
   return {

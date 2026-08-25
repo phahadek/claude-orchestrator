@@ -85,6 +85,7 @@ interface NotionRichTextItem {
 interface NotionPage {
   id: string;
   url: string;
+  archived?: boolean;
   properties: {
     'Task Name': { type: 'title'; title: NotionRichTextItem[] };
     Status: { type: 'select'; select: { name: string } | null };
@@ -248,6 +249,7 @@ function mapPageToTask(page: NotionPage): NotionTask {
     notionUrl: page.url,
     prUrl,
     priority,
+    archived: page.archived === true,
   };
 }
 
