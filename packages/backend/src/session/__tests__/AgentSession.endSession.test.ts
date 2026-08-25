@@ -99,7 +99,7 @@ describe('AgentSession.endSession — audits only on escalation', () => {
 });
 
 describe('AgentSession.reclaimProcess — reclaims the OS process without concluding the session', () => {
-  it('sets hasEnded so run()\'s exit-handling never writes a terminal status once the process exits', async () => {
+  it("sets hasEnded so run()'s exit-handling never writes a terminal status once the process exits", async () => {
     const runner = makeFakeRunner(false);
     const session = makeSession(runner);
 
