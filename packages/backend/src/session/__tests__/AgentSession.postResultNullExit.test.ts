@@ -166,6 +166,34 @@ describe('AgentSession — null exit after a successful result event', () => {
     expect(row?.status).not.toBe('error');
   });
 
+  it('a CliSessionRunner post-result grace-kill (reported as null per its own contract) routes into handleCleanExit, not the delivery-race resume or runner_non_zero', async () => {
+    const sessionId = 'sess-grace-killed-after-result';
+    seedSession(sessionId);
+    upsertSessionEvent({
+      session_id: sessionId,
+      event_type: 'system',
+      payload: JSON.stringify({ type: 'result', is_error: false }),
+      timestamp: Date.now(),
+    });
+
+    // CliSessionRunner's contract: its own post-result grace-timer kill
+    // reports null (not the child's raw 143 exit code) so this gate can
+    // fire. The runner mock reflects that contract directly.
+    const { runner, resolveRun } = makeFakeRunner();
+    const sm = makeSessionManager();
+    const session = makeSession(sessionId, sm, runner);
+
+    const runPromise = session.run();
+    resolveRun(null);
+    await runPromise;
+
+    expect(sm.markSessionErrored).not.toHaveBeenCalled();
+    const row = db
+      .prepare('SELECT status FROM sessions WHERE session_id = ?')
+      .get(sessionId) as { status: string } | undefined;
+    expect(row?.status).toBe('idle');
+  });
+
   it('a null exit with no successful result on record is still classified as runner_killed_unexpected', async () => {
     const sessionId = 'sess-null-exit-no-result';
     seedSession(sessionId);

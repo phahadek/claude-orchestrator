@@ -124,6 +124,68 @@ describe('CliSessionRunner.run — post-result grace timeout', () => {
     expect(exitCode).toBeNull();
   });
 
+  it('resolves null when the grace-killed process actually exits with code 143 (SIGTERM handled by the CLI)', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    const events: Record<string, unknown>[] = [];
+    const runPromise = runner.run('hello', undefined, defaultOptions, (event) =>
+      events.push(event),
+    );
+    await Promise.resolve();
+    expect(lastProc).not.toBeNull();
+
+    lastProc!.stdout.push(
+      JSON.stringify({ type: 'result', is_error: false }) + '\n',
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Grace timer fires and force-kills; the CLI installs its own SIGTERM
+    // handler and exits 143 rather than being reaped by SIGKILL.
+    await vi.advanceTimersByTimeAsync(RESULT_EVENT_EXIT_GRACE_MS);
+    expect(killSpy).toHaveBeenCalledWith(-4242, 'SIGTERM');
+
+    lastProc!.stdout.push(null);
+    lastProc!.emit('exit', 143);
+    const exitCode = await runPromise;
+
+    expect(exitCode).toBeNull();
+  });
+
+  it('resolves the real exit code (143) when the process exits on its own with no result event seen', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    const runPromise = runner.run('hello', undefined, defaultOptions, () => {});
+    await Promise.resolve();
+    expect(lastProc).not.toBeNull();
+
+    lastProc!.stdout.push(null);
+    lastProc!.emit('exit', 143);
+    const exitCode = await runPromise;
+
+    expect(exitCode).toBe(143);
+    expect(killSpy).not.toHaveBeenCalled();
+  });
+
+  it('resolves the real exit code (143) when the process exits with 143 after a result event but before the grace timer fires', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    const runPromise = runner.run('hello', undefined, defaultOptions, () => {});
+    await Promise.resolve();
+    expect(lastProc).not.toBeNull();
+
+    lastProc!.stdout.push(
+      JSON.stringify({ type: 'result', is_error: false }) + '\n',
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Process exits with 143 on its own, well within the grace window —
+    // the grace timer never fires, so this is the pre-existing (correct)
+    // delivery-race classification, unaffected by the new flag.
+    lastProc!.stdout.push(null);
+    lastProc!.emit('exit', 143);
+    const exitCode = await runPromise;
+
+    expect(exitCode).toBe(143);
+    expect(killSpy).not.toHaveBeenCalled();
+  });
+
   it('does not arm the grace timer when no result event has been seen', async () => {
     const runner = new CliSessionRunner(SESSION_ID);
     const runPromise = runner.run('hello', undefined, defaultOptions, () => {});
