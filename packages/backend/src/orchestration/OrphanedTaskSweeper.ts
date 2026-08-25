@@ -31,7 +31,7 @@ import {
   countNudgeEvents,
   getLatestNudgeTimestamp,
 } from '../audit/AuditLog';
-import type { Session, PullRequestRow } from '../db/types';
+import type { Session } from '../db/types';
 import { GitHubClient } from '../github/GitHubClient';
 import type { PullRequest } from '../github/types';
 
@@ -63,11 +63,6 @@ const AWAITING_OPERATOR_DECISION_WINDOW_MS = 24 * 60 * 60 * 1000;
 /** Nudge message sent to a stalled idle session that hasn't opened a PR. */
 const NO_PR_NUDGE_MESSAGE =
   'You appear to have finished your work but no PR was opened. Please open a draft PR now so your changes can be reviewed. If you are done with your task, follow the PR format in CLAUDE.md and emit the <pr-body>…</pr-body> marker.';
-
-/** Nudge message sent to a stalled idle session that already has an open PR. */
-function openPrNudgeMessage(pr: PullRequestRow): string {
-  return `Your PR #${pr.pr_number} appears stalled — check for and address any pending review feedback, then wait.`;
-}
 
 /**
  * Periodic sweep that detects tasks stuck at "🔄 In Progress" in Notion with no
@@ -304,30 +299,16 @@ export class OrphanedTaskSweeper {
 
     // If the task has an open PR, the session did its job — skip revert.
     // (Merged/closed PRs fall through to the Done path below.)
-    // Exception: an idle session with a parked/stalled open PR should still be
-    // nudged — the StalledPRReconciler re-drives the review, but the idle
-    // session may need a prompt to act on the incoming feedback.
+    // No idle nudge here: review/CI feedback is delivered to the session via
+    // SessionManager.enqueueFeedback's inbox, never discovered by the session
+    // "checking" for it, so a bare elapsed-idle-time nudge asks it to perform
+    // an action it has no channel to accomplish. StalledPRReconciler's
+    // session_inert path is the sole mechanism that wakes an idle
+    // implementing session about an open PR — it only fires once the session
+    // has gone silent past session_inert_threshold_seconds *and*
+    // countUndeliveredInboxItems confirms there is actually something
+    // undelivered waiting for it.
     if (taskPR && taskPR.state !== 'merged' && taskPR.state !== 'closed') {
-      // The docs execution flow's never-auto-merged gate: an open
-      // human_merge_only PR is legitimately waiting for a human merge —
-      // it runs no review session, so there is no incoming feedback to
-      // nudge the idle session about. Skip the stalled-PR nudge entirely.
-      // A nudge also requires a live session to nudge — none of that
-      // applies once the session row is gone; the open PR alone is enough
-      // to protect the task from revert.
-      if (
-        latestSession !== undefined &&
-        !taskPR.human_merge_only &&
-        latestSession.status === 'idle' &&
-        !latestSession.archived
-      ) {
-        await this.maybeNudgeIdleSession(
-          latestSession,
-          taskId,
-          effectiveProjectId,
-          openPrNudgeMessage(taskPR),
-        );
-      }
       return;
     }
 

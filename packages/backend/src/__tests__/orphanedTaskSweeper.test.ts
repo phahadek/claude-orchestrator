@@ -2096,7 +2096,7 @@ describe('OrphanedTaskSweeper', () => {
     expect(upsertPullRequest).not.toHaveBeenCalled();
   });
 
-  it('idle session with open PR in DB is nudged (stalled-PR path) and not reverted', async () => {
+  it('idle session with a non-stalled open PR is never sent the "check for feedback" nudge purely from elapsed idle time', async () => {
     const backend = makeBackend([makeTask('notion:abc')]);
     const endedAt = Date.now() - 10 * 60 * 1000;
     vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
@@ -2123,16 +2123,14 @@ describe('OrphanedTaskSweeper', () => {
 
     await sweeper.sweepOnce();
 
-    // Stalled-PR idle path: session IS nudged (to act on review feedback),
-    // referencing the existing PR rather than claiming none was opened.
-    expect(enqueueFeedback).toHaveBeenCalledWith(
-      'sess-1',
-      'system:nudge',
-      expect.stringContaining('#510'),
-    );
-    const [, , message] = enqueueFeedback.mock.calls[0];
-    expect(message).not.toContain('no PR was opened');
-    // Task is NOT reverted — open PR means session did its job
+    // Review/CI feedback is delivered to the session's inbox, never
+    // discovered by the session "checking" for it — an idle session with an
+    // open, non-stalled PR must not receive a "check for feedback" nudge
+    // purely from elapsed idle time. StalledPRReconciler's session_inert
+    // path (gated on countUndeliveredInboxItems) is the sole mechanism that
+    // wakes an idle implementing session about PR feedback.
+    expect(enqueueFeedback).not.toHaveBeenCalled();
+    // Task is NOT reverted — open PR means the session did its job.
     expect(backend.updateStatus).not.toHaveBeenCalled();
   });
 
