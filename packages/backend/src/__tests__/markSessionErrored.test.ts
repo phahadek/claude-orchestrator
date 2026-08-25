@@ -1255,9 +1255,7 @@ describe('SessionManager.reapStagedIntentsBackstopSweep() — now a permanent no
     const total = sm.reapStagedIntentsBackstopSweep();
 
     expect(total).toBe(0);
-    expect(queries.listUndeliveredInboxItems('sess-backstop')).toHaveLength(
-      0,
-    );
+    expect(queries.listUndeliveredInboxItems('sess-backstop')).toHaveLength(0);
     expect(queries.getStagedIntent(staged)!.state).toBe('staged');
     expect(queries.getStagedIntent(approved)!.state).toBe('approved');
   });

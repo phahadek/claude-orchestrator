@@ -12117,8 +12117,7 @@ export function sessionHasNeverStagedAnyIntent(sessionId: string): boolean {
     `SELECT 1 FROM staged_intent WHERE session_id = @session_id LIMIT 1`,
   );
   return (
-    _stmtSessionHasAnyStagedIntent.get({ session_id: sessionId }) ===
-    undefined
+    _stmtSessionHasAnyStagedIntent.get({ session_id: sessionId }) === undefined
   );
 }
 
