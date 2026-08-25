@@ -7,6 +7,10 @@ import yaml from 'js-yaml';
 vi.mock('../db/queries', () => ({
   getGrantedCapabilities: vi.fn(() => []),
   upsertTaskCache: vi.fn(),
+  deleteTaskCacheRow: vi.fn(),
+  getTaskCache: vi.fn(),
+  getMergeCommitForTask: vi.fn(() => null),
+  getAllBoardCacheTasks: vi.fn(() => []),
 }));
 
 vi.mock('../projects/ProjectService', () => ({
@@ -21,12 +25,26 @@ vi.mock('../projects/ProjectService', () => ({
         createdAt: 0,
         updatedAt: 0,
       },
+      {
+        id: 'db-ms-2',
+        projectId: 'proj-1',
+        name: 'Milestone 2',
+        sourceId: 'ms-2',
+        displayOrder: 1,
+        createdAt: 0,
+        updatedAt: 0,
+      },
     ]),
   },
 }));
 
+vi.mock('../audit/AuditLog', () => ({
+  recordEvent: vi.fn(),
+}));
+
 import { LocalTaskBackend } from './LocalTaskBackend';
 import { upsertTaskCache } from '../db/queries';
+import { BackendTaskWriteCommands } from './TaskWriteCommands';
 
 function writeTempTasksYaml(
   dir: string,
@@ -574,5 +592,151 @@ describe('LocalTaskBackend.appendImplementationNote / updateNotes — body recon
     const task = raw.milestones[0].tasks[0];
     expect(task.notes).toBe('New.');
     expect(task.body).toBeUndefined();
+  });
+});
+
+describe('LocalTaskBackend.updateBodyRaw', () => {
+  it('writes markdown verbatim to body, bypassing the section renderer', async () => {
+    writeTempTasksYaml(tmpDir, [
+      { id: 'task-a', name: 'Task A', status: 'Ready' },
+    ]);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+
+    await backend.updateBodyRaw!('yaml:task-a', '## Custom\nRaw content here.');
+
+    expect(readTaskBody(tmpDir, 'task-a')).toBe('## Custom\nRaw content here.');
+    const page = await backend.fetchTaskPage('yaml:task-a');
+    expect(page).toBe('## Custom\nRaw content here.');
+  });
+
+  it('overwrites an existing body verbatim', async () => {
+    writeTempTasksYaml(tmpDir, [
+      {
+        id: 'task-a',
+        name: 'Task A',
+        status: 'Ready',
+        body: '## Summary\nOld body.',
+      },
+    ]);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+
+    await backend.updateBodyRaw!('yaml:task-a', 'plain text, no headings');
+
+    expect(readTaskBody(tmpDir, 'task-a')).toBe('plain text, no headings');
+  });
+
+  it('throws for a missing task', async () => {
+    writeTempTasksYaml(tmpDir, []);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+
+    await expect(
+      backend.updateBodyRaw!('yaml:missing', 'content'),
+    ).rejects.toThrow('task not found');
+  });
+});
+
+function writeTwoMilestoneTasksYaml(
+  dir: string,
+  ms1Tasks: Array<Record<string, unknown>>,
+  ms2Tasks: Array<Record<string, unknown>> = [],
+): void {
+  const content = yaml.dump({
+    milestones: [
+      { id: 'ms-1', name: 'Milestone 1', tasks: ms1Tasks },
+      { id: 'ms-2', name: 'Milestone 2', tasks: ms2Tasks },
+    ],
+  });
+  fs.writeFileSync(path.join(dir, 'tasks.yaml'), content, 'utf-8');
+}
+
+describe('TaskWriteCommands.moveTask — yaml backend end-to-end', () => {
+  it('creates the task on the target milestone, restores status, resolves depends-on, and archives the original', async () => {
+    writeTwoMilestoneTasksYaml(tmpDir, [
+      { id: 'task-a', name: 'Task A', status: 'In Progress' },
+    ]);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+    const commands = new BackendTaskWriteCommands(backend);
+
+    const result = await commands.moveTask({
+      taskId: 'yaml:task-a',
+      content: {
+        title: 'Task A',
+        bodyMarkdown: '## Summary\nMoved body content.',
+        status: 'In Progress',
+      },
+      sourceMilestone: { id: 'ms-1', displayOrder: 0 },
+      targetMilestone: { id: 'ms-2', displayOrder: 1, databaseId: 'ms-2' },
+      originalDisposition: 'archive',
+    });
+
+    expect(result.newTaskId).toMatch(/^yaml:/);
+    expect(result.newTaskId).not.toBe('yaml:task-a');
+
+    const file = readTasksYaml(tmpDir);
+    const ms1 = file.milestones.find((m) => m.id === 'ms-1')!;
+    const ms2 = file.milestones.find((m) => m.id === 'ms-2')!;
+    expect(ms1.tasks.find((t) => t.id === 'task-a')).toBeUndefined();
+
+    const movedRawId = result.newTaskId.replace(/^yaml:/, '');
+    const moved = ms2.tasks.find((t) => t.id === movedRawId);
+    expect(moved).toBeDefined();
+    expect(moved.status).toBe('In Progress');
+    expect(moved.body).toContain('Moved body content.');
+  });
+
+  it('defers the original task and appends a moved-to note when originalDisposition is defer', async () => {
+    writeTwoMilestoneTasksYaml(tmpDir, [
+      { id: 'task-a', name: 'Task A', status: 'In Progress' },
+    ]);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+    const commands = new BackendTaskWriteCommands(backend);
+
+    const result = await commands.moveTask({
+      taskId: 'yaml:task-a',
+      content: {
+        title: 'Task A',
+        bodyMarkdown: '## Summary\nMoved body content.',
+        status: 'In Progress',
+      },
+      sourceMilestone: { id: 'ms-1', displayOrder: 0 },
+      targetMilestone: { id: 'ms-2', displayOrder: 1, databaseId: 'ms-2' },
+      originalDisposition: 'defer',
+    });
+
+    const file = readTasksYaml(tmpDir);
+    const ms1 = file.milestones.find((m) => m.id === 'ms-1')!;
+    const original = ms1.tasks.find((t) => t.id === 'task-a');
+    expect(original).toBeDefined();
+    expect(original.status).toBe('Deferred');
+    expect(original.notes).toContain(result.newTaskId);
+  });
+
+  it('drops the dependent edge to the moved task for a later move (order now implies it)', async () => {
+    writeTwoMilestoneTasksYaml(tmpDir, [
+      { id: 'task-a', name: 'Task A', status: 'In Progress' },
+      { id: 'task-b', name: 'Task B', status: 'Ready', depends_on: ['task-a'] },
+    ]);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+    const commands = new BackendTaskWriteCommands(backend);
+
+    const result = await commands.moveTask({
+      taskId: 'yaml:task-a',
+      content: {
+        title: 'Task A',
+        bodyMarkdown: '## Summary\nMoved body content.',
+        status: 'In Progress',
+      },
+      sourceMilestone: { id: 'ms-1', displayOrder: 0 },
+      targetMilestone: { id: 'ms-2', displayOrder: 1, databaseId: 'ms-2' },
+      originalDisposition: 'archive',
+    });
+
+    expect(result.droppedEdges).toEqual([
+      { from: 'yaml:task-b', to: 'yaml:task-a' },
+    ]);
+    const file = readTasksYaml(tmpDir);
+    const ms1 = file.milestones.find((m) => m.id === 'ms-1')!;
+    const taskB = ms1.tasks.find((t) => t.id === 'task-b');
+    expect(taskB.depends_on).toEqual([]);
   });
 });
