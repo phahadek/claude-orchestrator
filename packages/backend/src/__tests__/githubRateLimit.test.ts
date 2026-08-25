@@ -80,6 +80,7 @@ import { recordEvent } from '../audit/AuditLog.js';
 import { PRMergeWatcher } from '../github/PRMergeWatcher.js';
 import { ReviewerCommentsWatcher } from '../github/ReviewerCommentsWatcher.js';
 import { AutoMerger } from '../github/AutoMerger.js';
+import { __resetGitHubRateLimitForTests } from '../github/rateLimitBackoff.js';
 import {
   getAllOpenPRs,
   getApprovedOpenPRs,
@@ -88,6 +89,10 @@ import {
 } from '../db/queries.js';
 import { getProjectByGithubRepo } from '../config.js';
 import type { PullRequestRow } from '../db/types.js';
+
+beforeEach(() => {
+  __resetGitHubRateLimitForTests();
+});
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

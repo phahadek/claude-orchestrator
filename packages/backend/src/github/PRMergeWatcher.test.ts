@@ -29,6 +29,8 @@ vi.mock('../db/queries.js', () =>
     setHeadBranch: vi.fn(),
     clearSessionInitiatedPRClose: vi.fn(),
     recordMergeCommitForSession: vi.fn(),
+    getApprovedDraftPRs: vi.fn().mockReturnValue([]),
+    updatePRDraftStatus: vi.fn(),
   }),
 );
 
@@ -101,6 +103,8 @@ vi.mock('../orchestration/testRequestLane.js', async (importOriginal) => {
 });
 
 import { PRMergeWatcher } from './PRMergeWatcher';
+import { GitHubRateLimitError } from './types';
+import { __resetGitHubRateLimitForTests } from './rateLimitBackoff';
 import {
   getAllOpenPRs,
   updatePRState,
@@ -120,6 +124,8 @@ import {
   setConflictNudgeSha,
   recordMergeCommitForSession,
   recordTestPerfDigestSample,
+  getApprovedDraftPRs,
+  updatePRDraftStatus,
 } from '../db/queries';
 import {
   loadAutofixCommands,
@@ -261,6 +267,7 @@ function makePRRow(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __resetGitHubRateLimitForTests();
   // vi.clearAllMocks() resets calls, not implementations — re-arm the
   // default here so a test that overrides getProjectByGithubRepo to null
   // doesn't leak that into later tests that don't care about the gate.
@@ -489,6 +496,83 @@ describe('PRMergeWatcher.poll()', () => {
       prNumber: 42,
       repo: 'owner/repo',
     });
+  });
+});
+
+// ── poll() — listOpenPRStates rate-limit handling ──────────────────────────────
+
+describe('PRMergeWatcher.poll() — listOpenPRStates rate-limit handling', () => {
+  it('does not fall back to individual getPRState calls when listOpenPRStates throws GitHubRateLimitError', async () => {
+    const pr1 = makePRRow({ pr_number: 42 });
+    const pr2 = makePRRow({ pr_number: 43 });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr1, pr2]);
+    const github = makeMockGitHub();
+    const resetAt = new Date(Date.now() + 60_000);
+    (
+      github as unknown as { listOpenPRStates: ReturnType<typeof vi.fn> }
+    ).listOpenPRStates = vi
+      .fn()
+      .mockRejectedValue(
+        new GitHubRateLimitError('rate limited', resetAt, 5000, 5000),
+      );
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(github.getPRState)).not.toHaveBeenCalled();
+  });
+
+  it('still falls back to individual getPRState calls when listOpenPRStates throws a non-rate-limit error', async () => {
+    const pr1 = makePRRow({ pr_number: 42 });
+    const pr2 = makePRRow({ pr_number: 43 });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr1, pr2]);
+    const github = makeMockGitHub();
+    (
+      github as unknown as { listOpenPRStates: ReturnType<typeof vi.fn> }
+    ).listOpenPRStates = vi.fn().mockRejectedValue(new Error('ECONNRESET'));
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(github.getPRState)).toHaveBeenCalledWith(42, 'owner/repo');
+    expect(vi.mocked(github.getPRState)).toHaveBeenCalledWith(43, 'owner/repo');
+  });
+
+  it('stops the individual-fallback loop early once a rate-limit pause is set mid-loop', async () => {
+    const pr1 = makePRRow({ pr_number: 42 });
+    const pr2 = makePRRow({ pr_number: 43 });
+    const pr3 = makePRRow({ pr_number: 44 });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr1, pr2, pr3]);
+    const github = makeMockGitHub();
+    (
+      github as unknown as { listOpenPRStates: ReturnType<typeof vi.fn> }
+    ).listOpenPRStates = vi.fn().mockRejectedValue(new Error('ECONNRESET'));
+    const resetAt = new Date(Date.now() + 60_000);
+    vi.mocked(github.getPRState).mockRejectedValueOnce(
+      new GitHubRateLimitError('rate limited', resetAt, 5000, 5000),
+    );
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    // Fallback loop hits pr1 first (rate limit), then must stop before pr2/pr3.
+    expect(vi.mocked(github.getPRState)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(github.getPRState)).toHaveBeenCalledWith(42, 'owner/repo');
   });
 });
 
@@ -5605,5 +5689,78 @@ describe('PRMergeWatcher.poll() — clearStalePauses wiring', () => {
     await watcher.poll();
 
     expect(callOrder[0]).toBe('clearStalePauses');
+  });
+});
+
+// ── sweepStuckDraftApprovedPRs() — recovery for a dropped markPRReady ─────────
+
+describe('PRMergeWatcher.sweepStuckDraftApprovedPRs()', () => {
+  it('retries markPRReady for approved-but-still-draft PRs and clears draft on success', async () => {
+    const stuckPR = makePRRow({ pr_number: 55, draft: 1 });
+    vi.mocked(getApprovedDraftPRs).mockReturnValue([stuckPR]);
+    const github = makeMockGitHub();
+    (
+      github as unknown as { markPRReady: ReturnType<typeof vi.fn> }
+    ).markPRReady = vi.fn().mockResolvedValue(undefined);
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    const processed = await watcher.sweepStuckDraftApprovedPRs();
+
+    expect(vi.mocked(github.markPRReady)).toHaveBeenCalledWith(
+      'owner/repo',
+      55,
+    );
+    expect(vi.mocked(updatePRDraftStatus)).toHaveBeenCalledWith(
+      55,
+      'owner/repo',
+      0,
+    );
+    expect(processed).toBe(1);
+  });
+
+  it('leaves the PR draft and does not throw when markPRReady rate-limits again', async () => {
+    const stuckPR = makePRRow({ pr_number: 56, draft: 1 });
+    vi.mocked(getApprovedDraftPRs).mockReturnValue([stuckPR]);
+    const github = makeMockGitHub();
+    const resetAt = new Date(Date.now() + 60_000);
+    (
+      github as unknown as { markPRReady: ReturnType<typeof vi.fn> }
+    ).markPRReady = vi
+      .fn()
+      .mockRejectedValue(
+        new GitHubRateLimitError('rate limited', resetAt, 5000, 5000),
+      );
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    const processed = await watcher.sweepStuckDraftApprovedPRs();
+
+    expect(vi.mocked(updatePRDraftStatus)).not.toHaveBeenCalled();
+    expect(processed).toBe(0);
+  });
+
+  it('does nothing when no PRs are stuck draft+approved', async () => {
+    vi.mocked(getApprovedDraftPRs).mockReturnValue([]);
+    const github = makeMockGitHub();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    const processed = await watcher.sweepStuckDraftApprovedPRs();
+
+    expect(processed).toBe(0);
+    expect(vi.mocked(updatePRDraftStatus)).not.toHaveBeenCalled();
   });
 });

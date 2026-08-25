@@ -8,6 +8,10 @@ import type {
   RerequestedCheckRun,
 } from './types';
 import { GitHubRateLimitError } from './types';
+import {
+  isGitHubRateLimitActive,
+  recordGitHubRateLimit,
+} from './rateLimitBackoff';
 import type { SessionManager } from '../session/SessionManager';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
@@ -61,6 +65,8 @@ import {
   updatePRState,
   updateMergeState,
   getPRByNumber,
+  getApprovedDraftPRs,
+  updatePRDraftStatus,
   setPauseReason,
   setCiRemediationAttemptedSha,
   getSession,
@@ -172,8 +178,6 @@ export class PRMergeWatcher extends EventEmitter {
    */
   private firstPollPending = true;
   private autoMerger: AutoMerger | undefined;
-  private pausedUntil: Date | null = null;
-  private rateLimitBroadcasted = false;
   private prReviewService: PRReviewService | undefined;
   private reviewOrchestrator: ReviewOrchestrator | undefined;
   private readonly pendingReReviews = new Map<string, number>();
@@ -264,6 +268,55 @@ export class PRMergeWatcher extends EventEmitter {
           (err as Error).message,
         ),
     });
+    scheduler.register({
+      name: 'pr_merge_watcher_draft_ready_sweep',
+      intervalMs: () => STALE_OPEN_SWEEP_INTERVAL_MS,
+      runOnBoot: true,
+      concurrency: 'skip-if-running',
+      run: async () => {
+        const items_processed = await this.sweepStuckDraftApprovedPRs();
+        return { items_processed };
+      },
+      onError: (err: unknown) =>
+        logger.warn(
+          '[PRMergeWatcher] draft-ready sweep error:',
+          (err as Error).message,
+        ),
+    });
+  }
+
+  /**
+   * Retries the markPRReady GitHub call for PRs whose review verdict is
+   * approved but that are still marked draft in our DB — the recovery path
+   * for PRReviewService.handleApprovedVerdict's markPRReady call failing
+   * (most commonly a quota 403). Without this sweep such a PR is stranded as
+   * a draft forever even after its task has already moved on to review.
+   */
+  async sweepStuckDraftApprovedPRs(): Promise<number> {
+    if (isGitHubRateLimitActive(this.broadcast)) return 0;
+    const stuck = getApprovedDraftPRs();
+    let items_processed = 0;
+    for (const pr of stuck) {
+      if (isGitHubRateLimitActive(this.broadcast)) break;
+      try {
+        await this.github.markPRReady(pr.repo, pr.pr_number);
+        updatePRDraftStatus(pr.pr_number, pr.repo, 0);
+        items_processed++;
+        logger.info(
+          `[PRMergeWatcher] draft-ready sweep: PR #${pr.pr_number} in ${pr.repo} transitioned out of draft`,
+        );
+      } catch (err) {
+        if (err instanceof GitHubRateLimitError) {
+          this.handleRateLimit(err);
+          break;
+        }
+        logger.warn(
+          `[PRMergeWatcher] draft-ready sweep: markPRReady failed for PR #${pr.pr_number}:`,
+          (err as Error).message,
+        );
+      }
+    }
+    return items_processed;
   }
 
   /**
@@ -347,28 +400,11 @@ export class PRMergeWatcher extends EventEmitter {
   }
 
   private handleRateLimit(err: GitHubRateLimitError): void {
-    this.pausedUntil = err.resetAt;
-    if (!this.rateLimitBroadcasted) {
-      this.rateLimitBroadcasted = true;
-      logger.warn(
-        `[PRMergeWatcher] GitHub rate-limited; backing off until ${err.resetAt.toISOString()}`,
-      );
-      this.broadcast({
-        type: 'github_rate_limit_hit',
-        resetAt: err.resetAt.toISOString(),
-        limit: err.limit,
-        used: err.used,
-      });
-    }
+    recordGitHubRateLimit(err, '[PRMergeWatcher]', this.broadcast);
   }
 
   async poll(): Promise<void> {
-    if (this.pausedUntil !== null) {
-      if (Date.now() < this.pausedUntil.getTime()) return;
-      this.pausedUntil = null;
-      this.rateLimitBroadcasted = false;
-      this.broadcast({ type: 'github_rate_limit_cleared' });
-    }
+    if (isGitHubRateLimitActive(this.broadcast)) return;
     this.sweepStalePendingReReviews();
     this.sweepPendingPushDeadLetters();
     this.autoMerger?.clearStalePauses();
@@ -409,11 +445,19 @@ export class PRMergeWatcher extends EventEmitter {
       try {
         batchStates = await this.github.listOpenPRStates(repo);
       } catch (err) {
+        if (err instanceof GitHubRateLimitError) {
+          // A quota 403 on the batch call means the quota is exhausted, not
+          // that this one call failed — fanning out into N individual calls
+          // is the worst possible response. Back off and skip the repo.
+          this.handleRateLimit(err);
+          continue;
+        }
         logger.warn(
           `[PRMergeWatcher] listOpenPRStates failed for ${repo}, falling back to individual:`,
           (err as Error).message,
         );
         for (const pr of prs) {
+          if (isGitHubRateLimitActive(this.broadcast)) break;
           await this.checkPR(pr, silentMerges);
         }
         continue;

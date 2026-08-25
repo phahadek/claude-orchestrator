@@ -60,7 +60,8 @@ import { recordEvent } from '../audit/AuditLog';
 import { getCachedType } from '../tasks/TaskWriteCommands';
 import { getReservationForTaskDirSuffix } from '../db/migrationReservation';
 import type { GitHubClient } from './GitHubClient';
-import { GitHubApiError } from './types';
+import { GitHubApiError, GitHubRateLimitError } from './types';
+import { __resetGitHubRateLimitForTests } from './rateLimitBackoff';
 import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
 import type { PullRequest, PRDiff } from './types';
 import type { SessionEvent } from '../db/types';
@@ -188,6 +189,7 @@ function makeSessionEventMessage(sessionId: string, text: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __resetGitHubRateLimitForTests();
 });
 
 // ── tryParseVerdict() — fence stripping and JSON extraction ──────────────────
@@ -1007,6 +1009,41 @@ describe('PRReviewService.handleApprovedVerdict()', () => {
     expect(vi.mocked(updatePRDraftStatus)).not.toHaveBeenCalled();
     expect(result).toBe(false);
     warnSpy.mockRestore();
+  });
+
+  it('recognises a GitHubRateLimitError from markPRReady and leaves a review_side_effect_failed record for the recovery sweep, rather than treating it as a generic failure', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+
+    const mockGH = makeMockGitHub();
+    const resetAt = new Date(Date.now() + 60_000);
+    vi.mocked(mockGH.markPRReady).mockRejectedValue(
+      new GitHubRateLimitError('rate limited', resetAt, 5000, 5000),
+    );
+    const service = new PRReviewService(
+      mockGH,
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const result = await service.handleApprovedVerdict(
+      42,
+      'owner/repo',
+      'task-abc123',
+    );
+
+    expect(vi.mocked(updatePRDraftStatus)).not.toHaveBeenCalled();
+    expect(result).toBe(false);
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'review_side_effect_failed',
+        payload: expect.objectContaining({
+          pr_number: 42,
+          side_effect: 'markPRReady',
+        }),
+      }),
+    );
   });
 
   it('updates Notion status to In Review when taskId is provided', async () => {

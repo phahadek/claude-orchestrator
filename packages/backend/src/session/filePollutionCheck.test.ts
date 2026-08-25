@@ -20,6 +20,8 @@ import { runFilePollutionCheck } from './filePollutionCheck';
 import { validatePRFiles } from '../github/PRFileValidator';
 import { revertBannedFiles } from '../github/PRFileReverter';
 import { recordEvent } from '../audit/AuditLog';
+import { GitHubRateLimitError } from '../github/types';
+import { __resetGitHubRateLimitForTests } from '../github/rateLimitBackoff';
 import type { GitHubClient } from '../github/GitHubClient';
 
 function makeGitHub(
@@ -47,6 +49,7 @@ const BASE_OPTS = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __resetGitHubRateLimitForTests();
   vi.mocked(validatePRFiles).mockReturnValue({ valid: true, bannedFiles: [] });
   vi.mocked(revertBannedFiles).mockResolvedValue({
     commitSha: null,
@@ -399,5 +402,50 @@ describe('runFilePollutionCheck — file_pollution_check_failed audit event', ()
         ([e]) => e.event_type === 'file_pollution_check_failed',
       );
     expect(failedEvents).toHaveLength(0);
+  });
+});
+
+// ── GitHub rate-limit backoff ─────────────────────────────────────────────────
+
+describe('runFilePollutionCheck — GitHub rate-limit backoff', () => {
+  it('recognises GitHubRateLimitError and backs off instead of a generic failure', async () => {
+    const resetAt = new Date(Date.now() + 60_000);
+    const github = makeGitHub({
+      getPRFiles: vi
+        .fn()
+        .mockRejectedValue(
+          new GitHubRateLimitError('rate limited', resetAt, 5000, 5000),
+        ),
+    });
+
+    const result = await runFilePollutionCheck({ github, ...BASE_OPTS });
+
+    expect(result.revertCommitSha).toBeNull();
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'file_pollution_check_failed',
+        payload: expect.objectContaining({ pr_number: 42 }),
+      }),
+    );
+  });
+
+  it('skips the GitHub call entirely while a shared rate-limit pause is active', async () => {
+    const resetAt = new Date(Date.now() + 60_000);
+    const rateLimited = makeGitHub({
+      getPRFiles: vi
+        .fn()
+        .mockRejectedValue(
+          new GitHubRateLimitError('rate limited', resetAt, 5000, 5000),
+        ),
+    });
+    await runFilePollutionCheck({ github: rateLimited, ...BASE_OPTS });
+
+    const github = makeGitHub();
+    const result = await runFilePollutionCheck({ github, ...BASE_OPTS });
+
+    expect(
+      vi.mocked(github.fetchPR as ReturnType<typeof vi.fn>),
+    ).not.toHaveBeenCalled();
+    expect(result).toEqual({ headSha: null, revertCommitSha: null });
   });
 });

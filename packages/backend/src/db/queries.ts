@@ -4252,6 +4252,26 @@ export function clearPausedPrReasonForTask(taskId: string): void {
  * via any pause_reason (e.g. stuck_timeout) so the Auto-merger skips tasks that
  * a human needs to look at first — see AC under "Stuck session timer".
  */
+/**
+ * PRs whose latest review verdict is approved but that are still marked
+ * draft in our DB — the recovery set for a markPRReady call that failed
+ * (e.g. a rate-limit 403) and never got retried inline. Independent of
+ * pause_reason: a draft PR can't merge regardless, so this doesn't need to
+ * exclude paused rows the way getApprovedOpenPRs does.
+ */
+export function getApprovedDraftPRs(): PullRequestRow[] {
+  return db
+    .prepare(
+      `
+    SELECT * FROM pull_requests
+    WHERE state = 'open'
+      AND draft = 1
+      AND json_extract(review_result, '$.verdict') = 'approved'
+  `,
+    )
+    .all() as PullRequestRow[];
+}
+
 export function getApprovedOpenPRs(): PullRequestRow[] {
   return db
     .prepare(
