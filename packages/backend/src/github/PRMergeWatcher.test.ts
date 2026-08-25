@@ -197,6 +197,7 @@ function makeMockReviewOrchestrator(): ReviewOrchestrator {
     runTestPipeline: vi.fn().mockResolvedValue(undefined),
     isReviewInFlight: vi.fn().mockReturnValue(false),
     enqueueReview: vi.fn(),
+    runDepthReviewAfterPushApproval: vi.fn().mockResolvedValue(undefined),
   } as unknown as ReviewOrchestrator;
 }
 

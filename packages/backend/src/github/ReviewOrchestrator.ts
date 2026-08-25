@@ -1440,6 +1440,33 @@ export class ReviewOrchestrator {
    * outstanding finding) rather than clearing it, and escalation replaces it
    * with depth_review_escalation.
    */
+  /**
+   * Public fire-and-forget entry point for dispatchDepthReview, used by
+   * PRMergeWatcher.handlePushDetected: a push-triggered re-review that
+   * re-approves must re-run the depth pass on the new commit too, exactly
+   * like the first-review path in executeReview above — otherwise a
+   * depth_review_pending / depth_review_escalation hold set by an earlier
+   * pass is never actually re-verified once the session pushes a fix (see
+   * PRReviewService.handleApprovedVerdict, which re-arms
+   * depth_review_pending on every approved verdict, push-triggered re-review
+   * included). Same safety net as executeReview's call site: a throw before
+   * or during dispatch still clears the hold and re-drives the merge rather
+   * than stranding the PR unmerged.
+   */
+  async runDepthReviewAfterPushApproval(
+    job: ReviewJob,
+    projectId: string,
+  ): Promise<void> {
+    try {
+      await this.dispatchDepthReview(job, projectId);
+    } catch (e) {
+      logger.warn(
+        `[ReviewOrchestrator] post-push depth review dispatch failed for PR #${job.prNumber} (${job.repo}) — failing open: ${e}`,
+      );
+      this.clearDepthReviewHoldAndRemerge(job);
+    }
+  }
+
   private async dispatchDepthReview(
     job: ReviewJob,
     projectId: string,

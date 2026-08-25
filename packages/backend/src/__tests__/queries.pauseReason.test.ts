@@ -7,6 +7,7 @@ vi.mock('../db/db.js', async () => {
 
 import { db } from '../db/db.js';
 import {
+  clearTerminalPRFlags,
   getApprovedOpenPRs,
   getConflictNudgeCandidates,
   getPausedPrReasonForTask,
@@ -272,6 +273,58 @@ function rawPauseReason(prNumber: number): string | null {
     .get(prNumber) as { pause_reason: string | null };
   return row.pause_reason;
 }
+
+describe("clearTerminalPRFlags('review_verdict') — depth-review holds survive a bare conformance re-approval", () => {
+  it('does not discharge a depth_review_pending hold', () => {
+    insertPR({ pr_number: 60, task_id: 'notion:task-depth-1' });
+    setPauseReason(60, 'owner/repo', 'depth_review_pending');
+
+    clearTerminalPRFlags(60, 'owner/repo', 'review_verdict');
+
+    const set = parsePauseReasonSet(rawPauseReason(60));
+    expect(set.map((e) => e.reason)).toEqual(['depth_review_pending']);
+  });
+
+  it('does not discharge a depth_review_escalation hold', () => {
+    insertPR({ pr_number: 61, task_id: 'notion:task-depth-2' });
+    setPauseReason(61, 'owner/repo', 'depth_review_escalation');
+
+    clearTerminalPRFlags(61, 'owner/repo', 'review_verdict');
+
+    const set = parsePauseReasonSet(rawPauseReason(61));
+    expect(set.map((e) => e.reason)).toEqual(['depth_review_escalation']);
+  });
+
+  it('still clears a plain review-source hold (e.g. review_failed) left from a prior cycle', () => {
+    insertPR({ pr_number: 62, task_id: 'notion:task-depth-3' });
+    setPauseReason(62, 'owner/repo', 'review_failed');
+
+    clearTerminalPRFlags(62, 'owner/repo', 'review_verdict');
+
+    expect(parsePauseReasonSet(rawPauseReason(62))).toEqual([]);
+  });
+
+  it('never wipes a pause reason owned by another source (e.g. ci_failing) alongside a depth-review hold', () => {
+    insertPR({ pr_number: 63, task_id: 'notion:task-depth-4' });
+    setPauseReason(63, 'owner/repo', 'ci_failing'); // source: ci
+    setPauseReason(63, 'owner/repo', 'depth_review_pending'); // source: review
+
+    clearTerminalPRFlags(63, 'owner/repo', 'review_verdict');
+
+    const set = parsePauseReasonSet(rawPauseReason(63));
+    const reasons = set.map((e) => e.reason).sort();
+    expect(reasons).toEqual(['ci_failing', 'depth_review_pending']);
+  });
+
+  it('a genuinely terminal trigger (merged) still wipes a depth-review hold', () => {
+    insertPR({ pr_number: 64, task_id: 'notion:task-depth-5' });
+    setPauseReason(64, 'owner/repo', 'depth_review_pending');
+
+    clearTerminalPRFlags(64, 'owner/repo', 'merged');
+
+    expect(parsePauseReasonSet(rawPauseReason(64))).toEqual([]);
+  });
+});
 
 describe('setPauseReason() — concurrent per-source stacking', () => {
   it('a write from a source with no live entry adds a new concurrent entry without disturbing existing entries from other sources', () => {
