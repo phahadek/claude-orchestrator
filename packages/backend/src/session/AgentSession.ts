@@ -1062,7 +1062,10 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       // a subprocess that had already told us it was done" from "we killed a
       // subprocess that never got that far" — the latter must keep falling
       // through to the killed/runner_killed_unexpected classification below.
-      if (exitCode === 0 || (exitCode === null && this.wasLastEventSuccessfulResult())) {
+      if (
+        exitCode === 0 ||
+        (exitCode === null && this.wasLastEventSuccessfulResult())
+      ) {
         this.retryCount = 0;
         if (this.isUsageLimitTermination()) {
           this.recordUsageLimitTermination();

@@ -95,11 +95,8 @@ describe('CliSessionRunner.run — post-result grace timeout', () => {
   it('force-kills and resolves run() when the process emits a terminal result event but never exits', async () => {
     const runner = new CliSessionRunner(SESSION_ID);
     const events: Record<string, unknown>[] = [];
-    const runPromise = runner.run(
-      'hello',
-      undefined,
-      defaultOptions,
-      (event) => events.push(event),
+    const runPromise = runner.run('hello', undefined, defaultOptions, (event) =>
+      events.push(event),
     );
     await Promise.resolve();
     expect(lastProc).not.toBeNull();
