@@ -634,6 +634,40 @@ describe('classifyReadyProposal — Tier-3 route-back', () => {
     expect(mockIncrementRouteBackCount).not.toHaveBeenCalled();
     expect(mockPushBackGroupToOriginatingSession).not.toHaveBeenCalled();
   });
+
+  it('does not double-increment when a row already durably flagged is re-classified (e.g. after the in-memory dedup Set is lost)', async () => {
+    // __resetClassifiedIntentIdsForTest (beforeEach) clears the in-memory
+    // dedup, simulating a process restart between the pre-commit and
+    // post-commit calls — the row's persisted advisory is the only surviving
+    // signal that it was already counted once.
+    mockListStagedIntentsByGroup.mockReturnValue([
+      makeRow({
+        advisory: JSON.stringify({
+          tier: 'semantic',
+          status: 'flagged',
+          confidence: 0.9,
+          findings: [{ quote: 'q', detail: 'd' }],
+          model: 'm',
+          checkedAt: 1,
+        }),
+      }),
+    ]);
+    mockGetTaskCache.mockReturnValue({
+      raw_json: JSON.stringify({ type: '💻 Code' }),
+    });
+    stubSpawn({
+      stdout: cliJsonWrap({
+        status: 'flagged',
+        confidence: 0.9,
+        findings: [{ quote: 'q', detail: 'd' }],
+      }),
+    });
+
+    await classifyReadyProposal('group-1', { preCommit: false });
+
+    expect(mockIncrementRouteBackCount).not.toHaveBeenCalled();
+    expect(mockPushBackGroupToOriginatingSession).not.toHaveBeenCalled();
+  });
 });
 
 describe('classifyReadyProposal — task id normalization', () => {

@@ -499,6 +499,16 @@ async function computeGroupProposedBody(
   return composeProposedBody(stored, payload.sections);
 }
 
+/** True when a row's durably-persisted advisory (written by an earlier classifyReadyProposal call) is already 'flagged' — the DB-backed half of the route-back idempotency guard, robust across a process restart clearing classifiedIntentIds' in-memory dedup. */
+function wasFlagged(advisoryJson: string | null): boolean {
+  if (!advisoryJson) return false;
+  try {
+    return (JSON.parse(advisoryJson) as { status?: unknown }).status === 'flagged';
+  } catch {
+    return false;
+  }
+}
+
 export interface ClassifyReadyProposalOptions {
   /**
    * True only at the pre-commit call site (verifyGroup, where group members
@@ -544,7 +554,17 @@ export async function classifyReadyProposal(
     return;
   }
 
-  const advisories = await Promise.all(
+  // Captured before this call overwrites any row's advisory below — lets a
+  // freshly (re-)computed 'flagged' verdict be told apart from one that was
+  // already durably flagged by an earlier call (e.g. verifyGroup's
+  // pre-commit pass), so a route-back is only ever counted once per genuine
+  // flagged classification even across a process restart, which would clear
+  // classifiedIntentIds' in-memory dedup below.
+  const previouslyFlagged = new Set(
+    readyFlips.filter((row) => wasFlagged(row.advisory)).map((row) => row.id),
+  );
+
+  const newlyFlaggedFlags = await Promise.all(
     readyFlips.map(async (row) => {
       const payload = JSON.parse(row.payload) as SetStatusPayload;
       const taskType = getCachedType(payload.taskId);
@@ -553,7 +573,7 @@ export async function classifyReadyProposal(
           `[deferralClassifier] skip taskId=${payload.taskId} guard=task-type ` +
             `taskType=${taskType ?? 'null'}`,
         );
-        return;
+        return false;
       }
 
       const backend = getTaskBackend(row.project_id);
@@ -569,10 +589,10 @@ export async function classifyReadyProposal(
           `[deferralClassifier] skip taskId=${payload.taskId} guard=readiness ` +
             `violations=${readinessViolations.map((v) => v.tier).join(',')}`,
         );
-        return;
+        return false;
       }
 
-      if (classifiedIntentIds.has(row.id)) return;
+      if (classifiedIntentIds.has(row.id)) return false;
       classifiedIntentIds.add(row.id);
 
       const release = await classifySemaphore.acquire();
@@ -605,11 +625,11 @@ export async function classifyReadyProposal(
         },
       });
 
-      return advisory;
+      return advisory.status === 'flagged' && !previouslyFlagged.has(row.id);
     }),
   );
 
-  if (!advisories.some((a) => a?.status === 'flagged')) return;
+  if (!newlyFlaggedFlags.some(Boolean)) return;
 
   const { escalated } = incrementRouteBackCount(groupId);
   if (escalated || !opts.preCommit) {
