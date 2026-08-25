@@ -275,7 +275,10 @@ describe('groomBlockingDepTitles', () => {
         status: '🔲 Backlog',
       }),
     ]);
-    expect(groomBlockingDepTitles(t, stillBacklog)).toEqual([]);
+    expect(groomBlockingDepTitles(t, stillBacklog)).toEqual({
+      blockingTitles: [],
+      danglingDepIds: [],
+    });
   });
 
   it('is empty for a 💻 Code dep at 🔄 In Progress, 👀 In Review, or 🗂️ Ready', () => {
@@ -284,7 +287,10 @@ describe('groomBlockingDepTitles', () => {
       const tasksById = depsMap([
         task({ id: 'code-dep', title: 'Code dep', type: '💻 Code', status }),
       ]);
-      expect(groomBlockingDepTitles(t, tasksById)).toEqual([]);
+      expect(groomBlockingDepTitles(t, tasksById)).toEqual({
+        blockingTitles: [],
+        danglingDepIds: [],
+      });
     }
   });
 
@@ -298,7 +304,10 @@ describe('groomBlockingDepTitles', () => {
         status: '⏭️ Deferred',
       }),
     ]);
-    expect(groomBlockingDepTitles(t, deferred)).toEqual(['Code dep']);
+    expect(groomBlockingDepTitles(t, deferred)).toEqual({
+      blockingTitles: ['Code dep'],
+      danglingDepIds: [],
+    });
   });
 
   it('lists a non-Done 📐 Design dep by title', () => {
@@ -311,7 +320,73 @@ describe('groomBlockingDepTitles', () => {
         status: '📐 In Progress',
       }),
     ]);
-    expect(groomBlockingDepTitles(t, notDone)).toEqual(['Design dep']);
+    expect(groomBlockingDepTitles(t, notDone)).toEqual({
+      blockingTitles: ['Design dep'],
+      danglingDepIds: [],
+    });
+  });
+
+  it('reports a dep resolved on another board (via resolveDep) as not blocking, by title, when it clears the gate', () => {
+    const t = task({ dependsOn: ['cross-board-dep'] });
+    const crossBoardDone = task({
+      id: 'cross-board-dep',
+      title: 'Cross-board dep',
+      type: '📐 Design',
+      status: '✅ Done',
+    });
+    const result = groomBlockingDepTitles(t, new Map(), () => ({
+      status: 'found',
+      task: crossBoardDone,
+    }));
+    expect(result).toEqual({ blockingTitles: [], danglingDepIds: [] });
+  });
+
+  it('reports a dep resolved on another board (via resolveDep) by its title, not raw id, when it still fails the gate', () => {
+    const t = task({ dependsOn: ['cross-board-dep'] });
+    const crossBoardNotDone = task({
+      id: 'cross-board-dep',
+      title: 'Cross-board dep',
+      type: '📐 Design',
+      status: '📐 In Progress',
+    });
+    const result = groomBlockingDepTitles(t, new Map(), () => ({
+      status: 'found',
+      task: crossBoardNotDone,
+    }));
+    expect(result).toEqual({
+      blockingTitles: ['Cross-board dep'],
+      danglingDepIds: [],
+    });
+  });
+
+  it('reports a dep confirmed absent from every board via the distinct danglingDepIds field, not blockingTitles', () => {
+    const t = task({ dependsOn: ['dead-dep'] });
+    const result = groomBlockingDepTitles(t, new Map(), () => ({
+      status: 'dangling',
+    }));
+    expect(result).toEqual({
+      blockingTitles: [],
+      danglingDepIds: ['dead-dep'],
+    });
+  });
+
+  it('falls back to reporting the raw id as blocking (not dangling) when resolveDep reports unknown — a cold cache must not mass-flag deps as dangling', () => {
+    const t = task({ dependsOn: ['dep-on-uncached-board'] });
+    const result = groomBlockingDepTitles(t, new Map(), () => ({
+      status: 'unknown',
+    }));
+    expect(result).toEqual({
+      blockingTitles: ['dep-on-uncached-board'],
+      danglingDepIds: [],
+    });
+  });
+
+  it('falls back to reporting the raw id as blocking when resolveDep is omitted entirely', () => {
+    const t = task({ dependsOn: ['missing-dep'] });
+    expect(groomBlockingDepTitles(t, new Map())).toEqual({
+      blockingTitles: ['missing-dep'],
+      danglingDepIds: [],
+    });
   });
 });
 

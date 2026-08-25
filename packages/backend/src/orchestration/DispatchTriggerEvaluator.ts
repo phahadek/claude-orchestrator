@@ -33,6 +33,7 @@ import {
   isDesignEligibleType,
   isDocsCandidate,
 } from './planningCandidates';
+import type { ProjectDepResolution } from './planningCandidates';
 
 const MIN_POLL_INTERVAL_MS = 5_000;
 
@@ -66,6 +67,68 @@ interface FlowCandidate {
   projectId: string;
   milestone: MilestoneRow;
   task: NotionTask;
+}
+
+/**
+ * Reads a milestone board straight off its task_cache row — no Notion round
+ * trip, no memo. Returns null when the board has no cache row (or the row
+ * fails to parse), distinct from an empty-but-cached board: a caller doing
+ * project-wide dep resolution needs to tell "this board proves the dep
+ * absent" apart from "this board hasn't been fetched yet, so it proves
+ * nothing" (see resolveProjectDepStatus). The class's own `loadBoardTasks`
+ * collapses that same case to `[]` instead, which is fine for its callers
+ * (they only care found-vs-not, not why), but wrong for a caller that must
+ * distinguish dangling from unknown.
+ */
+function loadBoardTasksFromCache(milestoneId: string): NotionTask[] | null {
+  const row = getTaskCache(`board:${milestoneId}`);
+  if (!row) return null;
+  try {
+    return JSON.parse(row.raw_json) as NotionTask[];
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Project-wide dependency resolution off task_cache board rows only (zero
+ * Notion network calls) — the shared logic behind
+ * DispatchTriggerEvaluator.resolveProjectDep, exposed here so the route-side
+ * groom-dep-blocked annotator (routes/tasks.ts) can reuse the exact same
+ * "absent from every board" determination the dispatcher uses, instead of
+ * re-deriving it. `loadBoardTasks` is injectable so the class can thread its
+ * memoized reader through for the dispatcher's own hot loop; callers with no
+ * particular perf need (e.g. a single route request) can omit it and get
+ * `loadBoardTasksFromCache`.
+ */
+export function resolveProjectDepStatus(
+  projectId: string,
+  depId: string,
+  loadBoardTasks: (
+    milestoneId: string,
+  ) => NotionTask[] | null = loadBoardTasksFromCache,
+): ProjectDepResolution {
+  const normalized = normalizeBoardId(depId);
+  let sawUncachedBoard = false;
+  for (const milestone of listMilestonesByProject(projectId)) {
+    const tasks = loadBoardTasks(milestone.id);
+    if (tasks === null) {
+      sawUncachedBoard = true;
+      continue;
+    }
+    const found = tasks.find((t) => normalizeBoardId(t.id) === normalized);
+    if (found) return { status: 'found', task: found };
+  }
+  return sawUncachedBoard ? { status: 'unknown' } : { status: 'dangling' };
+}
+
+/** Convenience wrapper over resolveProjectDepStatus for callers (e.g. passesGroomDepGate's resolveDep) that only need found-or-not, collapsing dangling/unknown to undefined. */
+export function resolveProjectDep(
+  projectId: string,
+  depId: string,
+): NotionTask | undefined {
+  const result = resolveProjectDepStatus(projectId, depId);
+  return result.status === 'found' ? result.task : undefined;
 }
 
 /**
@@ -394,14 +457,10 @@ export class DispatchTriggerEvaluator {
     projectId: string,
     depId: string,
   ): NotionTask | undefined {
-    const normalized = normalizeBoardId(depId);
-    for (const milestone of listMilestonesByProject(projectId)) {
-      const found = this.loadBoardTasks(milestone.id).find(
-        (t) => normalizeBoardId(t.id) === normalized,
-      );
-      if (found) return found;
-    }
-    return undefined;
+    const result = resolveProjectDepStatus(projectId, depId, (milestoneId) =>
+      this.loadBoardTasks(milestoneId),
+    );
+    return result.status === 'found' ? result.task : undefined;
   }
 
   /**
