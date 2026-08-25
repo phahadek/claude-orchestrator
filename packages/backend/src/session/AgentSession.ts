@@ -3391,6 +3391,32 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     if (concludedCleanly) {
       this.hasEnded = true;
     }
+    await this._closeAndVerifyProcess(
+      concludedCleanly,
+      row?.terminal_completion_reason ?? null,
+    );
+  }
+
+  /**
+   * Reclaim this session's OS process without concluding the session —
+   * unlike endSession(), hasEnded is set unconditionally (not gated on a
+   * terminal_completion_reason already being recorded), so run()'s
+   * exit-handling never writes a terminal DB status once the process
+   * exits. The row is left exactly as it was (idle) for the existing
+   * resume machinery (sendOrResume/resumeSession) to reattach — see
+   * SessionManager.reclaimSessionProcess, used by StuckSessionMonitor's
+   * alive-subprocess-park escalation to free the memory a lingering
+   * subprocess holds without killing a legitimately-idle session.
+   */
+  async reclaimProcess(): Promise<void> {
+    this.hasEnded = true;
+    await this._closeAndVerifyProcess(false, null);
+  }
+
+  private async _closeAndVerifyProcess(
+    concludedCleanly: boolean,
+    terminalCompletionReason: string | null,
+  ): Promise<void> {
     const escalated = await this.runner.endSession(concludedCleanly);
     if (escalated) {
       recordEvent({
@@ -3403,7 +3429,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
           sessionId: this.sessionId,
           reason: 'graceful_stdin_close_timed_out',
           concludedCleanly,
-          terminalCompletionReason: row?.terminal_completion_reason ?? null,
+          terminalCompletionReason,
         },
       });
     }

@@ -15,6 +15,7 @@ type MockSession = EventEmitter & {
   sendMessage: ReturnType<typeof vi.fn>;
   kill: ReturnType<typeof vi.fn>;
   endSession: ReturnType<typeof vi.fn>;
+  reclaimProcess: ReturnType<typeof vi.fn>;
   gracefulPause: ReturnType<typeof vi.fn>;
   setPendingOverflowText: ReturnType<typeof vi.fn>;
   lockFileForNextInjection: ReturnType<typeof vi.fn>;
@@ -32,6 +33,13 @@ function makeMockSession(): MockSession {
   ee.sendMessage = vi.fn().mockReturnValue(true);
   ee.kill = vi.fn().mockResolvedValue(undefined);
   ee.endSession = vi.fn();
+  // Mirrors AgentSession.reclaimProcess's real contract: hasEnded flips
+  // unconditionally so a later sendOrResume's live-session fast path is
+  // skipped in favor of a fresh --resume respawn.
+  ee.reclaimProcess = vi.fn().mockImplementation(() => {
+    ee.hasEnded = true;
+    return Promise.resolve();
+  });
   ee.gracefulPause = vi.fn().mockResolvedValue(undefined);
   ee.setPendingOverflowText = vi.fn();
   ee.lockFileForNextInjection = vi.fn();
@@ -2826,6 +2834,78 @@ describe('endSession — refuses to escalate against a non-terminal (idle) sessi
       expect(session.endSession).toHaveBeenCalledTimes(1);
     },
   );
+});
+
+// ── reclaimSessionProcess: process-only reclamation, no session-kill ─────────
+
+describe('reclaimSessionProcess — reclaims the OS process without terminating the session', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+  });
+
+  it('calls session.reclaimProcess() against a live, idle (non-terminal) row — unlike endSession(), no terminal-status guard applies', async () => {
+    const session = await registerLiveSession(sm);
+    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'idle' });
+
+    sm.reclaimSessionProcess(SESSION_ID);
+
+    expect(session.reclaimProcess).toHaveBeenCalledTimes(1);
+    expect(session.endSession).not.toHaveBeenCalled();
+  });
+
+  it('never writes a session status or session_errored audit row', async () => {
+    const session = await registerLiveSession(sm);
+    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'idle' });
+
+    sm.reclaimSessionProcess(SESSION_ID);
+
+    expect(session.reclaimProcess).toHaveBeenCalledTimes(1);
+    expect(updateSessionStatus).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'session_errored' }),
+    );
+  });
+
+  it('falls back to killSessionCgroup only when no in-memory handle exists (no worktree teardown)', () => {
+    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'idle' });
+
+    sm.reclaimSessionProcess(SESSION_ID);
+
+    expect(killSessionCgroup).toHaveBeenCalledWith(SESSION_ID);
+    expect(updateSessionStatus).not.toHaveBeenCalled();
+  });
+
+  it('a reclaimed session (hasEnded set, map entry stale) is subsequently resumed via the --resume respawn path rather than the live fast path', async () => {
+    const session = await registerLiveSession(sm);
+    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'idle' });
+
+    sm.reclaimSessionProcess(SESSION_ID);
+    expect(session.hasEnded).toBe(true);
+
+    const beforeCount = capturedSessions.length;
+    vi.mocked(getSession).mockReturnValue(makeDeadRow()); // idle — resumable
+    const p = sm.sendOrResume(SESSION_ID, 'follow-up after reclaim');
+    await vi.waitFor(() =>
+      expect(capturedSessions.length).toBeGreaterThan(beforeCount),
+    );
+    const respawned = capturedSessions[capturedSessions.length - 1];
+    respawned.emit('message', {
+      type: 'session_event' as const,
+      sessionId: SESSION_ID,
+      eventType: 'system' as const,
+      content: 'boot',
+    });
+    await p;
+
+    // A fresh AgentSession was spawned — the stale, hasEnded map entry's
+    // live-fast-path (session.sendMessage) was never used for delivery.
+    expect(session.sendMessage).not.toHaveBeenCalled();
+  });
 });
 
 describe('archiveAndEndSession — honours its "reap any live subprocess" docstring', () => {

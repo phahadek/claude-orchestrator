@@ -97,3 +97,45 @@ describe('AgentSession.endSession — audits only on escalation', () => {
     );
   });
 });
+
+describe('AgentSession.reclaimProcess — reclaims the OS process without concluding the session', () => {
+  it('sets hasEnded so run()\'s exit-handling never writes a terminal status once the process exits', async () => {
+    const runner = makeFakeRunner(false);
+    const session = makeSession(runner);
+
+    expect(session.hasEnded).toBe(false);
+    await session.reclaimProcess();
+
+    expect(runner.endSession).toHaveBeenCalledWith(false);
+    expect(session.hasEnded).toBe(true);
+  });
+
+  it('does not record an audit event when the runner reports a clean exit (no escalation)', async () => {
+    const runner = makeFakeRunner(false);
+    const session = makeSession(runner);
+
+    await session.reclaimProcess();
+
+    expect(recordEvent).not.toHaveBeenCalled();
+  });
+
+  it('still records session_teardown_escalated when the graceful close does not land in time', async () => {
+    const runner = makeFakeRunner(true);
+    const session = makeSession(runner);
+
+    await session.reclaimProcess();
+
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'session_teardown_escalated',
+        actor_type: 'system',
+        actor_id: 'test-end-session',
+        payload: expect.objectContaining({
+          sessionId: 'test-end-session',
+          reason: 'graceful_stdin_close_timed_out',
+          concludedCleanly: false,
+        }),
+      }),
+    );
+  });
+});
