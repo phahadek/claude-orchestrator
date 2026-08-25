@@ -4059,18 +4059,24 @@ export function getOrphanMergeablePRs(): Array<{
  * 'auto_merge_failed' entry, across every storage shape the column has ever
  * held: a bare legacy string, a legacy single-struct JSON object (via the
  * top-level $.reason extract), or the current concurrent-set JSON array
- * (via json_each — json_valid guards against attempting json_each on a
- * non-JSON bare string, which would otherwise throw).
+ * (via json_each, restricted to array-shaped values). A sibling
+ * `json_valid(x) AND <json call>` does not reliably short-circuit the json_*
+ * call in SQLite, so each json_* call is individually guarded by its own
+ * CASE — json_valid does NOT guard json_each from throwing on a legacy
+ * object shape, whose json_each yields bare scalar members rather than
+ * {reason: ...} entries.
  */
 const PAUSE_REASON_HAS_AUTO_MERGE_FAILED_SQL = `
         pause_reason = 'auto_merge_failed'
-        OR json_extract(pause_reason, '$.reason') = 'auto_merge_failed'
-        OR (
-          json_valid(pause_reason) AND EXISTS (
-            SELECT 1 FROM json_each(pause_reason) je
-            WHERE json_extract(je.value, '$.reason') = 'auto_merge_failed'
-          )
-        )
+        OR (CASE WHEN json_valid(pause_reason)
+                 THEN json_extract(pause_reason, '$.reason') = 'auto_merge_failed'
+                 ELSE 0 END)
+        OR (CASE WHEN json_valid(pause_reason) AND json_type(pause_reason) = 'array'
+                 THEN EXISTS (
+                   SELECT 1 FROM json_each(pause_reason) je
+                   WHERE json_extract(je.value, '$.reason') = 'auto_merge_failed'
+                 )
+                 ELSE 0 END)
 `;
 
 /**
