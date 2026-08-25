@@ -200,17 +200,40 @@ describe('clearTerminalPRFlags — DB helper', () => {
     expect(getPRRow(7)?.reconcile_exhausted).toBe(0);
   });
 
-  it('does NOT restore the retry budget for a human_unpark that clears a non-exhausted pause (e.g. baseline_escalation_floor)', () => {
+  it('restores the retry budget on human_unpark even when reconcile_exhausted was never set — the counter that caps dispatch, not the orthogonal flag, is what gates the reset', () => {
     insertPR(8);
     setPauseReason(8, 'owner/repo', 'baseline_escalation_floor');
     incrementStalledPRRetryCount(8, 'owner/repo');
 
     clearTerminalPRFlags(8, 'owner/repo', 'human_unpark');
 
-    // reconcile_exhausted was never set for this PR, so the budget is left
-    // untouched — nothing charged it in the first place for this pause.
+    // A PR can sit at stalled_pr_retry_count > 0 with reconcile_exhausted = 0
+    // (StalledPRReconciler's retryCap check escalates on the counter alone).
+    // human_unpark must still restore it, or the very next stall re-hits an
+    // already-exhausted counter with zero fresh attempts.
     const after = getRetryBudgetRow(8);
-    expect(after?.stalled_pr_retry_count).toBe(1);
+    expect(after?.stalled_pr_retry_count).toBe(0);
+  });
+
+  it('does NOT restore the retry budget for a human_unpark when the counter is already 0', () => {
+    insertPR(10);
+    setPauseReason(10, 'owner/repo', 'baseline_escalation_floor');
+
+    clearTerminalPRFlags(10, 'owner/repo', 'human_unpark');
+
+    const after = getRetryBudgetRow(10);
+    expect(after?.stalled_pr_retry_count).toBe(0);
+  });
+
+  it('does NOT restore the retry budget for a non-human_unpark trigger', () => {
+    insertPR(11);
+    incrementStalledPRRetryCount(11, 'owner/repo');
+    incrementStalledPRRetryCount(11, 'owner/repo');
+
+    clearTerminalPRFlags(11, 'owner/repo', 'closed');
+
+    const after = getRetryBudgetRow(11);
+    expect(after?.stalled_pr_retry_count).toBe(2);
   });
 
   it('an operator rerun (budget restored) does not immediately re-hit the cap — re-escalation only after the restored budget is genuinely spent', () => {

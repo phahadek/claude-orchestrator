@@ -1543,11 +1543,15 @@ describe('POST /api/prs/:prNumber/fix', () => {
 
     expect(res.status).toBe(200);
     expect(vi.mocked(sessionManager.sendOrResume)).toHaveBeenCalledOnce();
-    const [, message] = vi.mocked(sessionManager.sendOrResume).mock.calls[0];
+    const [, message, opts] = vi.mocked(sessionManager.sendOrResume).mock
+      .calls[0];
     expect(message).toContain('Data integrity & parsing correctness');
     expect(message).toContain(
       'Duplicated planningSessionTypeLabel mapping docs/split to Ops.',
     );
+    // allowTerminal:true so an operator can recover a PR whose session was
+    // killed — the terminal-refusal guard otherwise blocks the respawn.
+    expect(opts).toEqual({ allowTerminal: true });
   });
 
   it('sends the conformance failing dimensions unchanged when there is no depth verdict', async () => {
@@ -1629,6 +1633,42 @@ describe('POST /api/prs/:prNumber/fix', () => {
 
     expect(res.status).toBe(422);
     expect(res.body.error).toMatch(/Run a review/);
+    expect(vi.mocked(sessionManager.sendOrResume)).not.toHaveBeenCalled();
+  });
+});
+
+// ── POST /api/prs/:owner/:repoName/:prNumber/fix-conflicts ──────────────────
+
+describe('POST /api/prs/:owner/:repoName/:prNumber/fix-conflicts', () => {
+  it('respawns a killed session (allowTerminal:true)', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const sessionManager = makeMockSessionManager();
+    vi.mocked(sessionManager.sendOrResume).mockResolvedValue('session-xyz');
+
+    const res = await supertest(
+      buildApp(undefined, undefined, sessionManager),
+    ).post('/api/prs/owner/repo/42/fix-conflicts');
+
+    expect(res.status).toBe(200);
+    expect(vi.mocked(sessionManager.sendOrResume)).toHaveBeenCalledWith(
+      'session-xyz',
+      expect.stringContaining('merge conflicts'),
+      { allowTerminal: true },
+    );
+  });
+
+  it('returns 422 when the PR has no linked session', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue({
+      ...mockPRRow,
+      session_id: null,
+    });
+    const sessionManager = makeMockSessionManager();
+
+    const res = await supertest(
+      buildApp(undefined, undefined, sessionManager),
+    ).post('/api/prs/owner/repo/42/fix-conflicts');
+
+    expect(res.status).toBe(422);
     expect(vi.mocked(sessionManager.sendOrResume)).not.toHaveBeenCalled();
   });
 });

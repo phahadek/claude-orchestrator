@@ -557,10 +557,26 @@ const RECOVERY_LABELS: Record<RecoveryAction, string> = {
   resume: 'Resume',
 };
 
+/**
+ * 'stalled_reconcile_cap' predates the extraction of the orthogonal
+ * reconcile_exhausted flag (see schema.ts) and is no longer written for new
+ * escalations, but old PR rows can still carry it as a legacy bare-string
+ * pause_reason (parsePauseReasonSet's unknown-string fallback preserves the
+ * original string rather than discarding it). It is deliberately not a
+ * CanonicalPauseReason / RECOVERY_ACTION_MAP entry — that registry is for
+ * live-written reasons — so it's special-cased here instead, mapped to the
+ * same 'rerun' action the deprecated /unpark route already performs for it
+ * via executeRerunPipeline.
+ */
+const LEGACY_STALLED_RECONCILE_CAP = 'stalled_reconcile_cap';
+
 export function deriveRecoveryDescriptor(
-  reason: CanonicalPauseReason | null | undefined,
+  reason: CanonicalPauseReason | 'stalled_reconcile_cap' | null | undefined,
 ): RecoveryDescriptor {
   if (reason == null) return { available: false };
+  if (reason === LEGACY_STALLED_RECONCILE_CAP) {
+    return { available: true, action: 'rerun', label: RECOVERY_LABELS.rerun };
+  }
   const action = RECOVERY_ACTION_MAP[reason];
   if (action == null || action === 'none') return { available: false };
   return { available: true, action, label: RECOVERY_LABELS[action] };
