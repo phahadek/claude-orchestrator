@@ -5,6 +5,10 @@ import { execSync } from 'child_process';
 import { runWithConcurrency } from '../utils/concurrency';
 import { getTaskBackend, type TaskBackend } from '../tasks/TaskBackend';
 import {
+  assertTaskIdResolves,
+  TaskReferenceValidationError,
+} from '../tasks/taskReferenceValidation';
+import {
   BackendTaskWriteCommands,
   NotionWriteCommands,
   getCachedType,
@@ -82,7 +86,6 @@ import {
   setStagedIntentAppliedTaskId,
   setStagedIntentGroup,
   clearStagedIntentGroup,
-  getTaskCache,
   getSession,
   getGrantedCapabilities,
   hasActiveCapabilityRequestForSession,
@@ -2698,13 +2701,6 @@ function validateReviewDisputePayload(
  * 404 or a parser exception (see taskId.ts's parseTaskId) days later, after
  * an operator has already spent the staged/apply review window on it.
  */
-class TaskReferenceValidationError extends Error {
-  constructor(message: string) {
-    super(`[stagedIntents] ${message}`);
-    this.name = 'TaskReferenceValidationError';
-  }
-}
-
 /**
  * Prefix marking a `task.setDependsOn` `dependsOn` entry as a group-local
  * symbolic reference to a sibling `task.create` intent staged in the same
@@ -3010,28 +3006,6 @@ function normalizeOrRejectTaskId(raw: unknown, fieldLabel: string): string {
     }
   }
   return normalizeTaskId(raw);
-}
-
-/**
- * Live-existence check for a normalized task id. The task cache (cheap,
- * synchronous, populated by TaskCacheRefresher) is checked first; a miss
- * falls back to a live backend fetch before rejecting, so a cold or
- * never-populated cache never spuriously rejects a real task id.
- */
-async function assertTaskIdResolves(
-  taskId: string,
-  projectId: string,
-): Promise<void> {
-  if (getTaskCache(taskId)) return;
-  try {
-    const page = await getTaskBackend(projectId).fetchTaskPage(taskId);
-    if (page !== null && page !== undefined) return;
-  } catch {
-    // falls through to the rejection below
-  }
-  throw new TaskReferenceValidationError(
-    `task id "${taskId}" does not resolve to an existing task`,
-  );
 }
 
 /** Kinds whose payload.taskId is a subject reference that must resolve to an existing task. */

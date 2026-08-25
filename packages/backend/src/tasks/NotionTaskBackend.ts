@@ -123,7 +123,12 @@ export class NotionTaskBackend implements TaskBackend {
   async fetchTaskSummary(taskId: string): Promise<TaskSummary | null> {
     const task = await this.client.fetchTaskSummary(normalizeTaskId(taskId));
     return task
-      ? { title: task.title, type: task.type, status: task.status }
+      ? {
+          title: task.title,
+          type: task.type,
+          status: task.status,
+          archived: task.archived === true,
+        }
       : null;
   }
 

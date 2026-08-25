@@ -4,6 +4,7 @@ import request from 'supertest';
 
 const mockFlipToReady = vi.fn();
 const mockGetTaskBackend = vi.fn();
+const mockFetchTaskSummary = vi.fn();
 const mockResolveMilestoneForProject = vi.fn();
 const mockGetProjectRowById = vi.fn();
 
@@ -78,9 +79,19 @@ const validBody = {
 beforeEach(() => {
   mockFlipToReady.mockReset();
   mockGetTaskBackend.mockReset();
+  mockFetchTaskSummary.mockReset();
+  mockFetchTaskSummary.mockResolvedValue({
+    title: 'Some dep',
+    type: '💻 Code',
+    status: '🗂️ Ready',
+    archived: false,
+  });
   mockResolveMilestoneForProject.mockReset();
   mockResolveMilestoneForProject.mockReturnValue('M12');
-  mockGetTaskBackend.mockReturnValue({ type: 'notion' });
+  mockGetTaskBackend.mockReturnValue({
+    type: 'notion',
+    fetchTaskSummary: (...args: unknown[]) => mockFetchTaskSummary(...args),
+  });
   mockGetProjectRowById.mockReset();
   mockGetProjectRowById.mockReturnValue({
     id: 'polimarket-analyser',
@@ -271,5 +282,86 @@ describe('POST /api/groom/flip — split_now routing', () => {
 
     expect(res.status).toBe(400);
     expect(mockLaunchSelected).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/groom/flip — dependsOn existence validation', () => {
+  it('400s and does not write when a dependsOn id resolves to no live task', async () => {
+    mockFetchTaskSummary.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .post('/api/groom/flip')
+      .send(validBody);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('notion:dep-1');
+    expect(mockFlipToReady).not.toHaveBeenCalled();
+  });
+
+  it('400s and does not write when a dependsOn id resolves to an archived page', async () => {
+    mockFetchTaskSummary.mockResolvedValue({
+      title: 'Archived dep',
+      type: '💻 Code',
+      status: '✅ Done',
+      archived: true,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/groom/flip')
+      .send(validBody);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('notion:dep-1');
+    expect(mockFlipToReady).not.toHaveBeenCalled();
+  });
+
+  it('leaves the task unchanged (no write) when only one of several dependsOn entries is unresolvable', async () => {
+    mockFetchTaskSummary.mockImplementation((id: string) =>
+      id === 'notion:dep-bad'
+        ? Promise.resolve(null)
+        : Promise.resolve({
+            title: 'Some dep',
+            type: '💻 Code',
+            status: '🗂️ Ready',
+            archived: false,
+          }),
+    );
+
+    const res = await request(makeApp())
+      .post('/api/groom/flip')
+      .send({
+        ...validBody,
+        dependsOn: ['notion:dep-good', 'notion:dep-bad'],
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('notion:dep-bad');
+    expect(mockFlipToReady).not.toHaveBeenCalled();
+  });
+
+  it('succeeds when a dependsOn entry resolves on a different (cross-milestone) board of the same project', async () => {
+    mockFetchTaskSummary.mockResolvedValue({
+      title: 'Cross-milestone dep',
+      type: '💻 Code',
+      status: '✅ Done',
+      archived: false,
+    });
+    mockFlipToReady.mockResolvedValue({
+      gate: { itemIds: ['gate-item-1'], marker: {} },
+      seed: { itemIds: ['seed-item-1'], marker: {} },
+    });
+
+    const res = await request(makeApp())
+      .post('/api/groom/flip')
+      .send({
+        ...validBody,
+        dependsOn: ['notion:dep-on-other-milestone'],
+      });
+
+    expect(res.status).toBe(200);
+    expect(mockFetchTaskSummary).toHaveBeenCalledWith(
+      'notion:dep-on-other-milestone',
+    );
+    expect(mockFlipToReady).toHaveBeenCalled();
   });
 });

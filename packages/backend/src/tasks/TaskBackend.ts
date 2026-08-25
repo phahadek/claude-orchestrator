@@ -112,6 +112,13 @@ export interface TaskSummary {
   title: string;
   type: string;
   status: string;
+  /**
+   * True if the underlying page has been archived (soft-deleted). Only
+   * Notion-backed tasks currently report this; other backends leave it
+   * undefined, which callers must treat as "not known to be archived", not
+   * as "confirmed live".
+   */
+  archived?: boolean;
 }
 
 /**
