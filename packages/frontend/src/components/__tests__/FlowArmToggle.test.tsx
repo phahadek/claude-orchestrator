@@ -485,9 +485,7 @@ describe('FlowArmToggle', () => {
           screen.getByTestId(`gate-verify-policy-row-${cls}`),
         ).toBeTruthy();
       }
-      expect(
-        screen.getAllByTestId(/^gate-verify-policy-row-/),
-      ).toHaveLength(5);
+      expect(screen.getAllByTestId(/^gate-verify-policy-row-/)).toHaveLength(5);
 
       expect(
         screen
@@ -503,16 +501,12 @@ describe('FlowArmToggle', () => {
 
     it('renders inside FlowArmToggle below the per-flow arm rows, in the same container', async () => {
       vi.spyOn(flowArmApi, 'get').mockResolvedValue(makeState());
-      vi.spyOn(gateVerifyPolicyApi, 'get').mockResolvedValue(
-        makePolicyState(),
-      );
+      vi.spyOn(gateVerifyPolicyApi, 'get').mockResolvedValue(makePolicyState());
 
       render(<FlowArmToggle milestoneId="m1" />);
 
       await waitFor(() => {
-        expect(
-          screen.getByTestId('gate-verify-policy-row-pass'),
-        ).toBeTruthy();
+        expect(screen.getByTestId('gate-verify-policy-row-pass')).toBeTruthy();
       });
 
       const container = screen.getByTestId('flow-arm-toggle');
@@ -523,15 +517,13 @@ describe('FlowArmToggle', () => {
       expect(container.contains(policyRow)).toBe(true);
       const position = flowRow.compareDocumentPosition(policyRow);
       // flowRow precedes policyRow in document order.
-      // eslint-disable-next-line no-bitwise
+       
       expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
     it('toggling a disposition class issues the PUT route with { armed } and renders the returned state', async () => {
       vi.spyOn(flowArmApi, 'get').mockResolvedValue(makeState());
-      vi.spyOn(gateVerifyPolicyApi, 'get').mockResolvedValue(
-        makePolicyState(),
-      );
+      vi.spyOn(gateVerifyPolicyApi, 'get').mockResolvedValue(makePolicyState());
       const setSpy = vi.spyOn(gateVerifyPolicyApi, 'set').mockResolvedValue({
         milestoneId: 'm1',
         dispositionClass: 'fail',
@@ -567,9 +559,7 @@ describe('FlowArmToggle', () => {
 
     it('surfaces an error from the policy PUT route instead of swallowing it', async () => {
       vi.spyOn(flowArmApi, 'get').mockResolvedValue(makeState());
-      vi.spyOn(gateVerifyPolicyApi, 'get').mockResolvedValue(
-        makePolicyState(),
-      );
+      vi.spyOn(gateVerifyPolicyApi, 'get').mockResolvedValue(makePolicyState());
       vi.spyOn(gateVerifyPolicyApi, 'set').mockRejectedValue(
         new Error('armed must be a boolean'),
       );

@@ -48,7 +48,11 @@ export const gateVerifyPolicyApi = {
     milestoneId: string,
     dispositionClass: string,
     armed: boolean,
-  ): Promise<{ milestoneId: string; dispositionClass: string; armed: boolean }> {
+  ): Promise<{
+    milestoneId: string;
+    dispositionClass: string;
+    armed: boolean;
+  }> {
     return apiRequest<{
       milestoneId: string;
       dispositionClass: string;
