@@ -122,15 +122,6 @@ export function resolveProjectDepStatus(
   return sawUncachedBoard ? { status: 'unknown' } : { status: 'dangling' };
 }
 
-/** Convenience wrapper over resolveProjectDepStatus for callers (e.g. passesGroomDepGate's resolveDep) that only need found-or-not, collapsing dangling/unknown to undefined. */
-export function resolveProjectDep(
-  projectId: string,
-  depId: string,
-): NotionTask | undefined {
-  const result = resolveProjectDepStatus(projectId, depId);
-  return result.status === 'found' ? result.task : undefined;
-}
-
 /**
  * Auto-dispatch trigger evaluator — a Scheduler job (sibling to AutoLauncher)
  * that scans armed flows across projects/milestones and dispatches planning
