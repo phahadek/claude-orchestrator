@@ -175,6 +175,7 @@ vi.mock('../../db/queries', () => ({
   incrementSessionPokeRetryCount: vi.fn().mockReturnValue(1),
   resetSessionPokeRetryCount: vi.fn(),
   expireStagedIntentsForSession: vi.fn(),
+  reapStagedIntentsForNeverStagedSession: vi.fn(() => 0),
   listLiveSessionRows: vi.fn(() => liveSessionRows),
   hasMcpConnectionEstablishedSince: vi.fn(
     (sessionId: string) => mcpConnectedSince[sessionId] ?? false,

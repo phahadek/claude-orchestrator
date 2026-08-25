@@ -184,6 +184,7 @@ vi.mock('../../db/queries', () => ({
   ),
   setSessionDeclaredWrites: vi.fn(),
   expireStagedIntentsForSession: vi.fn(),
+  reapStagedIntentsForNeverStagedSession: vi.fn(() => 0),
   hasStagedIntentForTask: vi.fn().mockReturnValue(false),
   hasUndispositionedStagedIntentsForSession: vi.fn().mockReturnValue(false),
   sweepStagedIntentsForTerminalSessions: vi.fn(),
