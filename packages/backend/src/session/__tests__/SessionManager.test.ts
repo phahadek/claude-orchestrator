@@ -2899,21 +2899,22 @@ describe('reclaimSessionProcess — reclaims the OS process without terminating 
 
     const beforeCount = capturedSessions.length;
     vi.mocked(getSession).mockReturnValue(makeDeadRow()); // idle — resumable
-    const p = sm.sendOrResume(SESSION_ID, 'follow-up after reclaim');
-    await vi.waitFor(() =>
-      expect(capturedSessions.length).toBeGreaterThan(beforeCount),
-    );
-    const respawned = capturedSessions[capturedSessions.length - 1];
-    respawned.emit('message', {
-      type: 'session_event' as const,
-      sessionId: SESSION_ID,
-      eventType: 'system' as const,
-      content: 'boot',
-    });
-    await p;
+    // sendOrResume's very first check is `liveSession && !liveSession.hasEnded`
+    // — with hasEnded now true, the live direct-send branch (this.send(),
+    // which reads session.sendMessage) is structurally unreachable, so this
+    // holds regardless of how the respawn below plays out. Swallow any
+    // rejection from the respawn attempt itself; it isn't what this test
+    // is verifying.
+    sm.sendOrResume(SESSION_ID, 'follow-up after reclaim').catch(() => {});
+    expect(session.sendMessage).not.toHaveBeenCalled();
 
-    // A fresh AgentSession was spawned — the stale, hasEnded map entry's
-    // live-fast-path (session.sendMessage) was never used for delivery.
+    // A fresh AgentSession was spawned via the --resume respawn path
+    // instead — respawnSession's synchronous `new AgentSession(...)` runs
+    // before it awaits the first-event gate.
+    await vi.waitFor(
+      () => expect(capturedSessions.length).toBeGreaterThan(beforeCount),
+      { timeout: 5000 },
+    );
     expect(session.sendMessage).not.toHaveBeenCalled();
   });
 });
