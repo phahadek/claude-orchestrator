@@ -29,10 +29,6 @@ export function isGitHubRateLimitActive(
   return false;
 }
 
-export function getGitHubRateLimitPausedUntil(): Date | null {
-  return pausedUntil;
-}
-
 /**
  * Records a GitHubRateLimitError against the shared clock and broadcasts
  * github_rate_limit_hit at most once per pause episode, regardless of how
