@@ -36,6 +36,15 @@ import {
  */
 export const GRACEFUL_END_TIMEOUT_MS = 15_000;
 
+/**
+ * How long run() waits, after observing a terminal `result` event on
+ * stdout, for the OS process to actually exit before force-killing it.
+ * Some subprocesses finish the turn (emit `result`) but never exit on
+ * their own — without this, run()'s exit-wait promise hangs forever and
+ * AgentSession's clean-exit gate is never reached.
+ */
+export const RESULT_EVENT_EXIT_GRACE_MS = 15_000;
+
 function log(sessionId: string, ...args: unknown[]) {
   logger.info(`[CliSessionRunner ${sessionId.slice(0, 8)}]`, ...args);
 }
@@ -270,6 +279,14 @@ export class CliSessionRunner implements ISessionRunner {
     // Capture readline completion early so we can drain after exit.
     const rlDone = new Promise<void>((resolve) => rl.once('close', resolve));
 
+    // Armed once a terminal `result` event is observed on stdout — some
+    // subprocesses finish the turn but never exit on their own, which would
+    // otherwise hang the exit-wait promise below indefinitely. Force-kills
+    // via the existing SIGTERM->SIGKILL escalation in kill() rather than a
+    // second kill mechanism.
+    let resultEventSeen = false;
+    let resultGraceTimer: NodeJS.Timeout | null = null;
+
     rl.on('line', (line) => {
       if (!line.trim()) return;
       let event: Record<string, unknown>;
@@ -286,12 +303,23 @@ export class CliSessionRunner implements ISessionRunner {
           err,
         );
       }
+      if (!resultEventSeen && event.type === 'result') {
+        resultEventSeen = true;
+        resultGraceTimer = setTimeout(() => {
+          log(
+            this.sessionId,
+            `did not exit within ${RESULT_EVENT_EXIT_GRACE_MS}ms of emitting terminal result event; force-killing`,
+          );
+          void this.kill();
+        }, RESULT_EVENT_EXIT_GRACE_MS);
+      }
     });
 
     // Wait for the subprocess to exit.
     const exitCode = await new Promise<number | null>((resolve) => {
       this.proc!.once('exit', (code) => resolve(code));
     });
+    if (resultGraceTimer) clearTimeout(resultGraceTimer);
 
     // Drain remaining buffered lines (5s guard).
     await Promise.race([
