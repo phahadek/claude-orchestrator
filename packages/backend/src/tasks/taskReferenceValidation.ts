@@ -27,12 +27,7 @@ export async function assertTaskIdResolves(
   const backend = getTaskBackend(projectId);
 
   if (typeof backend.fetchTaskSummary === 'function') {
-    let summary = null;
-    try {
-      summary = await backend.fetchTaskSummary(taskId);
-    } catch {
-      summary = null;
-    }
+    const summary = await backend.fetchTaskSummary(taskId).catch(() => null);
     if (summary !== null && summary.archived !== true) return;
   } else {
     try {
