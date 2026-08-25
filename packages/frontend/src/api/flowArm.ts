@@ -31,3 +31,39 @@ export const flowArmApi = {
     );
   },
 };
+
+/** Gate-verify auto-commit policy state, keyed by disposition-class — the key set is server-defined, never hardcoded on the frontend. */
+export type GateVerifyPolicyState = Record<string, { armed: boolean }>;
+
+export const gateVerifyPolicyApi = {
+  /** GET /api/milestones/:milestoneId/gate-verify-policy — effective per-disposition-class policy. */
+  get(milestoneId: string): Promise<GateVerifyPolicyState> {
+    return apiRequest<GateVerifyPolicyState>(
+      `/api/milestones/${encodeURIComponent(milestoneId)}/gate-verify-policy`,
+    );
+  },
+
+  /** PUT /api/milestones/:milestoneId/gate-verify-policy/:dispositionClass — set the auto-commit policy for one disposition class. */
+  set(
+    milestoneId: string,
+    dispositionClass: string,
+    armed: boolean,
+  ): Promise<{
+    milestoneId: string;
+    dispositionClass: string;
+    armed: boolean;
+  }> {
+    return apiRequest<{
+      milestoneId: string;
+      dispositionClass: string;
+      armed: boolean;
+    }>(
+      `/api/milestones/${encodeURIComponent(milestoneId)}/gate-verify-policy/${encodeURIComponent(dispositionClass)}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ armed }),
+      },
+    );
+  },
+};

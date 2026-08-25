@@ -5,9 +5,14 @@ import {
   waitFor,
   act,
 } from '@testing-library/react';
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { FlowArmToggle } from '../FlowArmToggle';
-import { flowArmApi, type FlowArmState } from '../../api/flowArm';
+import {
+  flowArmApi,
+  gateVerifyPolicyApi,
+  type FlowArmState,
+  type GateVerifyPolicyState,
+} from '../../api/flowArm';
 import { FLOW_IDS } from '@claude-orchestrator/backend/src/orchestration/flowArm';
 import type { FlowRejectionRateResult } from '../../api/gate';
 
@@ -28,6 +33,18 @@ afterEach(() => {
   vi.restoreAllMocks();
   getFlowRejectionRateMock.mockReset();
 });
+
+function makePolicyState(
+  overrides: Partial<GateVerifyPolicyState> = {},
+): GateVerifyPolicyState {
+  return {
+    pass: { armed: true },
+    'not-yet-triggerable': { armed: false },
+    'needs-setup': { armed: false },
+    fail: { armed: false },
+    ...overrides,
+  };
+}
 
 function makeState(overrides: Partial<FlowArmState> = {}): FlowArmState {
   return {
@@ -75,6 +92,10 @@ function makeTrustRate(
 }
 
 describe('FlowArmToggle', () => {
+  beforeEach(() => {
+    vi.spyOn(gateVerifyPolicyApi, 'get').mockResolvedValue({});
+  });
+
   it('renders exactly one row per FLOW_IDS entry', async () => {
     vi.spyOn(flowArmApi, 'get').mockResolvedValue(makeState());
 
@@ -433,5 +454,140 @@ describe('FlowArmToggle', () => {
     const groomButton = screen.getByTestId('flow-arm-switch-groom');
     expect(groomButton.textContent).toContain('Disarmed');
     expect(groomButton.getAttribute('aria-checked')).toBe('false');
+  });
+
+  describe('gate-verify auto-commit policy', () => {
+    it('renders one toggle row per disposition-class key in the GET response, with no hardcoded class list', async () => {
+      vi.spyOn(flowArmApi, 'get').mockResolvedValue(makeState());
+      vi.spyOn(gateVerifyPolicyApi, 'get').mockResolvedValue(
+        makePolicyState({
+          'a-future-class-not-in-any-hardcoded-list': { armed: true },
+        }),
+      );
+
+      render(<FlowArmToggle milestoneId="m1" />);
+
+      await waitFor(() => {
+        expect(
+          screen.getByTestId(
+            'gate-verify-policy-row-a-future-class-not-in-any-hardcoded-list',
+          ),
+        ).toBeTruthy();
+      });
+      for (const cls of [
+        'pass',
+        'not-yet-triggerable',
+        'needs-setup',
+        'fail',
+        'a-future-class-not-in-any-hardcoded-list',
+      ]) {
+        expect(
+          screen.getByTestId(`gate-verify-policy-row-${cls}`),
+        ).toBeTruthy();
+      }
+      expect(screen.getAllByTestId(/^gate-verify-policy-row-/)).toHaveLength(5);
+
+      expect(
+        screen
+          .getByTestId('gate-verify-policy-switch-pass')
+          .getAttribute('aria-checked'),
+      ).toBe('true');
+      expect(
+        screen
+          .getByTestId('gate-verify-policy-switch-fail')
+          .getAttribute('aria-checked'),
+      ).toBe('false');
+    });
+
+    it('renders inside FlowArmToggle below the per-flow arm rows, in the same container', async () => {
+      vi.spyOn(flowArmApi, 'get').mockResolvedValue(makeState());
+      vi.spyOn(gateVerifyPolicyApi, 'get').mockResolvedValue(makePolicyState());
+
+      render(<FlowArmToggle milestoneId="m1" />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('gate-verify-policy-row-pass')).toBeTruthy();
+      });
+
+      const container = screen.getByTestId('flow-arm-toggle');
+      const flowRow = screen.getByTestId('flow-arm-row-groom');
+      const policyRow = screen.getByTestId('gate-verify-policy-row-pass');
+
+      expect(container.contains(flowRow)).toBe(true);
+      expect(container.contains(policyRow)).toBe(true);
+      const position = flowRow.compareDocumentPosition(policyRow);
+      // flowRow precedes policyRow in document order.
+       
+      expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it('toggling a disposition class issues the PUT route with { armed } and renders the returned state', async () => {
+      vi.spyOn(flowArmApi, 'get').mockResolvedValue(makeState());
+      vi.spyOn(gateVerifyPolicyApi, 'get').mockResolvedValue(makePolicyState());
+      const setSpy = vi.spyOn(gateVerifyPolicyApi, 'set').mockResolvedValue({
+        milestoneId: 'm1',
+        dispositionClass: 'fail',
+        armed: true,
+      });
+
+      render(<FlowArmToggle milestoneId="m1" />);
+
+      await waitFor(() =>
+        expect(
+          screen
+            .getByTestId('gate-verify-policy-switch-fail')
+            .getAttribute('aria-checked'),
+        ).toBe('false'),
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('gate-verify-policy-switch-fail'));
+      });
+
+      await waitFor(() =>
+        expect(setSpy).toHaveBeenCalledWith('m1', 'fail', true),
+      );
+
+      await waitFor(() =>
+        expect(
+          screen
+            .getByTestId('gate-verify-policy-switch-fail')
+            .getAttribute('aria-checked'),
+        ).toBe('true'),
+      );
+    });
+
+    it('surfaces an error from the policy PUT route instead of swallowing it', async () => {
+      vi.spyOn(flowArmApi, 'get').mockResolvedValue(makeState());
+      vi.spyOn(gateVerifyPolicyApi, 'get').mockResolvedValue(makePolicyState());
+      vi.spyOn(gateVerifyPolicyApi, 'set').mockRejectedValue(
+        new Error('armed must be a boolean'),
+      );
+
+      render(<FlowArmToggle milestoneId="m1" />);
+
+      await waitFor(() =>
+        expect(
+          screen
+            .getByTestId('gate-verify-policy-switch-fail')
+            .getAttribute('aria-checked'),
+        ).toBe('false'),
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('gate-verify-policy-switch-fail'));
+      });
+
+      await waitFor(() => {
+        expect(
+          screen.getByTestId('gate-verify-policy-error').textContent,
+        ).toContain('armed must be a boolean');
+      });
+      expect(
+        screen
+          .getByTestId('gate-verify-policy-switch-fail')
+          .getAttribute('aria-checked'),
+      ).toBe('false');
+    });
   });
 });
