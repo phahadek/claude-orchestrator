@@ -517,7 +517,7 @@ describe('FlowArmToggle', () => {
       expect(container.contains(policyRow)).toBe(true);
       const position = flowRow.compareDocumentPosition(policyRow);
       // flowRow precedes policyRow in document order.
-       
+
       expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
