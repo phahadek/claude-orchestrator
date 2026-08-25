@@ -414,30 +414,33 @@ export class StuckSessionMonitor {
   }
 
   /**
-   * Terminate a session that has sat parked at stuck_session_alive_subprocess
-   * past the configured bound. Marks the row terminal first (endSession()
-   * refuses to escalate against a non-terminal row — it exists precisely to
-   * avoid killing a live/legitimately-idle session), then reuses
-   * SessionManager.endSession's graceful-close-then-verify-and-escalate
-   * teardown — the same path that emits session_teardown_escalated when the
-   * graceful close doesn't land in time — so this never bypasses that
-   * safety net with an immediate force-kill.
+   * Reclaim the OS process of a session that has sat parked at
+   * stuck_session_alive_subprocess past the configured bound — without
+   * terminating the session itself. Reclaiming a lingering subprocess and
+   * killing its session are different operations: the process is what
+   * starves AutoLauncher's memory admission gate, while the session row is
+   * exactly the state the system already knows how to recover (resumeSession,
+   * the --resume spawn path, the boot-orphan resume sweep). Marking the row
+   * terminal here would also defeat endSession()'s guard against escalating
+   * a non-terminal row — a guard that exists precisely to avoid killing a
+   * live/legitimately-idle session, which planning sessions parked at idle
+   * awaiting operator disposition legitimately are.
+   *
+   * Uses SessionManager.reclaimSessionProcess, which reuses the same
+   * graceful-close-then-verify-and-escalate teardown as endSession() (and
+   * still emits session_teardown_escalated when the graceful close doesn't
+   * land in time) but never writes a terminal DB status — the row stays
+   * idle for the existing resume machinery to reattach.
    */
   private async escalateStuckAliveSubprocessPark(
     row: StuckAliveSubprocessParkRow,
     parkAgeMs: number,
   ): Promise<void> {
     logger.warn(
-      `[StuckSessionMonitor] escalating stuck_session_alive_subprocess park for ${row.session_id.slice(0, 8)} — ` +
+      `[StuckSessionMonitor] reclaiming stuck_session_alive_subprocess park for ${row.session_id.slice(0, 8)} — ` +
         `parked ${Math.round(parkAgeMs / 1000)}s with subprocess still alive and no new events`,
     );
-    this.sessionManager.markSessionErrored(
-      row.session_id,
-      'killed',
-      'stuck_session_alive_subprocess_park_escalated',
-      `subprocess still alive ${Math.round(parkAgeMs / 1000)}s after park with no new events`,
-    );
-    this.sessionManager.endSession(row.session_id);
+    this.sessionManager.reclaimSessionProcess(row.session_id);
     recordEvent({
       event_type: 'stuck_session_alive_park_escalated',
       actor_type: 'system',
@@ -448,7 +451,7 @@ export class StuckSessionMonitor {
         session_id: row.session_id,
         session_type: row.session_type,
         park_age_ms: parkAgeMs,
-        outcome: 'teardown_initiated',
+        outcome: 'process_reclaimed',
       },
     });
   }

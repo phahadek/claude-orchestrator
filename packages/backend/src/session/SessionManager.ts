@@ -4738,6 +4738,36 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
+   * Reclaim a parked session's OS process without terminating the session.
+   * Unlike endSession(), this is not gated on the row already being
+   * terminal — it exists precisely for a session that must stay idle (see
+   * StuckSessionMonitor.escalateStuckAliveSubprocessPark, which reclaims a
+   * subprocess still alive long after its session parked, to relieve
+   * AutoLauncher's memory admission gate, without destroying a session
+   * that may have already finished its work). Frees the OS process via the
+   * same graceful-close-then-verify-and-escalate teardown as endSession()
+   * (emitting session_teardown_escalated on the same terms), but never
+   * touches DB status — the row is left exactly as it was for the existing
+   * resume machinery (sendOrResume/resumeSession) to reattach.
+   */
+  reclaimSessionProcess(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      Promise.resolve(session.reclaimProcess()).catch((err) => {
+        logger.error(
+          `[SessionManager] reclaimSessionProcess failed for ${sessionId.slice(0, 8)}: ${(err as Error).message}`,
+        );
+      });
+      return;
+    }
+    // No live in-memory handle for this backend process (cross-restart
+    // orphan, or a stale reference already reaped elsewhere) — nothing to
+    // escalate against here. Reap via cgroup only; the row's worktree must
+    // not be touched since it stays idle, not terminal.
+    killSessionCgroup(sessionId);
+  }
+
+  /**
    * Archive a session's row and reap any live subprocess so it doesn't keep
    * holding a concurrency slot under an archived (dashboard-invisible) row.
    * Shared by the archive route and any terminal-status writer so the two

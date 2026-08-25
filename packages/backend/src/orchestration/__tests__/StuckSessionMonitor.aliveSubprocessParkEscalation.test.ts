@@ -47,6 +47,7 @@ function makeSessionManager() {
     isAlive: vi.fn().mockReturnValue(true),
     markSessionErrored: vi.fn(),
     endSession: vi.fn(),
+    reclaimSessionProcess: vi.fn(),
   } as unknown as import('../../session/SessionManager').SessionManager;
 }
 
@@ -95,20 +96,16 @@ describe('StuckSessionMonitor — stuck_session_alive_subprocess park escalation
 
     await (monitor as any).scanForStuckAliveSubprocessParks();
 
-    expect(sessionManager.markSessionErrored).toHaveBeenCalledWith(
-      'sess-1',
-      'killed',
-      'stuck_session_alive_subprocess_park_escalated',
-      expect.any(String),
-    );
-    expect(sessionManager.endSession).toHaveBeenCalledWith('sess-1');
+    expect(sessionManager.markSessionErrored).not.toHaveBeenCalled();
+    expect(sessionManager.endSession).not.toHaveBeenCalled();
+    expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith('sess-1');
     expect(recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         event_type: 'stuck_session_alive_park_escalated',
         actor_id: 'sess-1',
         payload: expect.objectContaining({
           session_id: 'sess-1',
-          outcome: 'teardown_initiated',
+          outcome: 'process_reclaimed',
         }),
       }),
     );
@@ -128,6 +125,7 @@ describe('StuckSessionMonitor — stuck_session_alive_subprocess park escalation
 
     expect(sessionManager.markSessionErrored).not.toHaveBeenCalled();
     expect(sessionManager.endSession).not.toHaveBeenCalled();
+    expect(sessionManager.reclaimSessionProcess).not.toHaveBeenCalled();
   });
 
   it('does not escalate when a new event arrived after the park, even past the bound', async () => {
@@ -139,6 +137,7 @@ describe('StuckSessionMonitor — stuck_session_alive_subprocess park escalation
     await (monitor as any).scanForStuckAliveSubprocessParks();
 
     expect(sessionManager.markSessionErrored).not.toHaveBeenCalled();
+    expect(sessionManager.reclaimSessionProcess).not.toHaveBeenCalled();
   });
 
   it('does not escalate when the subprocess has already exited', async () => {
@@ -151,6 +150,7 @@ describe('StuckSessionMonitor — stuck_session_alive_subprocess park escalation
     await (monitor as any).scanForStuckAliveSubprocessParks();
 
     expect(sessionManager.markSessionErrored).not.toHaveBeenCalled();
+    expect(sessionManager.reclaimSessionProcess).not.toHaveBeenCalled();
   });
 
   it('is a no-op when the escalation bound is disabled (0)', async () => {
@@ -165,6 +165,7 @@ describe('StuckSessionMonitor — stuck_session_alive_subprocess park escalation
       await (monitor as any).scanForStuckAliveSubprocessParks();
 
       expect(sessionManager.markSessionErrored).not.toHaveBeenCalled();
+      expect(sessionManager.reclaimSessionProcess).not.toHaveBeenCalled();
       expect(getStuckAliveSubprocessParkRows).not.toHaveBeenCalled();
     } finally {
       (runtimeSettings as any).session_alive_park_escalation_seconds = original;
@@ -181,11 +182,9 @@ describe('StuckSessionMonitor — stuck_session_alive_subprocess park escalation
 
       await (monitor as any).scanForStuckAliveSubprocessParks();
 
-      expect(sessionManager.markSessionErrored).toHaveBeenCalledWith(
+      expect(sessionManager.markSessionErrored).not.toHaveBeenCalled();
+      expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith(
         'sess-1',
-        'killed',
-        'stuck_session_alive_subprocess_park_escalated',
-        expect.any(String),
       );
     },
   );

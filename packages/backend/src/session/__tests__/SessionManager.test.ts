@@ -15,6 +15,7 @@ type MockSession = EventEmitter & {
   sendMessage: ReturnType<typeof vi.fn>;
   kill: ReturnType<typeof vi.fn>;
   endSession: ReturnType<typeof vi.fn>;
+  reclaimProcess: ReturnType<typeof vi.fn>;
   gracefulPause: ReturnType<typeof vi.fn>;
   setPendingOverflowText: ReturnType<typeof vi.fn>;
   lockFileForNextInjection: ReturnType<typeof vi.fn>;
@@ -32,6 +33,13 @@ function makeMockSession(): MockSession {
   ee.sendMessage = vi.fn().mockReturnValue(true);
   ee.kill = vi.fn().mockResolvedValue(undefined);
   ee.endSession = vi.fn();
+  // Mirrors AgentSession.reclaimProcess's real contract: hasEnded flips
+  // unconditionally so a later sendOrResume's live-session fast path is
+  // skipped in favor of a fresh --resume respawn.
+  ee.reclaimProcess = vi.fn().mockImplementation(() => {
+    ee.hasEnded = true;
+    return Promise.resolve();
+  });
   ee.gracefulPause = vi.fn().mockResolvedValue(undefined);
   ee.setPendingOverflowText = vi.fn();
   ee.lockFileForNextInjection = vi.fn();
@@ -2826,6 +2834,85 @@ describe('endSession — refuses to escalate against a non-terminal (idle) sessi
       expect(session.endSession).toHaveBeenCalledTimes(1);
     },
   );
+});
+
+// ── reclaimSessionProcess: process-only reclamation, no session-kill ─────────
+
+describe('reclaimSessionProcess — reclaims the OS process without terminating the session', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    // Fast-path worktree reuse for the post-reclaim respawn test below —
+    // mirrors 'sendOrResume — surviving worktree reuse (idle resume fast path)'.
+    vi.mocked(fsModule.existsSync).mockImplementation(() => true);
+    vi.mocked((fsModule as any).default.existsSync).mockImplementation(
+      () => true,
+    );
+  });
+
+  it('calls session.reclaimProcess() against a live, idle (non-terminal) row — unlike endSession(), no terminal-status guard applies', async () => {
+    const session = await registerLiveSession(sm);
+    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'idle' });
+
+    sm.reclaimSessionProcess(SESSION_ID);
+
+    expect(session.reclaimProcess).toHaveBeenCalledTimes(1);
+    expect(session.endSession).not.toHaveBeenCalled();
+  });
+
+  it('never writes a session status or session_errored audit row', async () => {
+    const session = await registerLiveSession(sm);
+    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'idle' });
+    // registerLiveSession's own resume drives status/audit writes of its
+    // own — clear those before isolating reclaimSessionProcess's effects.
+    vi.mocked(updateSessionStatus).mockClear();
+    vi.mocked(recordEvent).mockClear();
+
+    sm.reclaimSessionProcess(SESSION_ID);
+
+    expect(session.reclaimProcess).toHaveBeenCalledTimes(1);
+    expect(updateSessionStatus).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'session_errored' }),
+    );
+  });
+
+  it('falls back to killSessionCgroup only when no in-memory handle exists (no worktree teardown)', () => {
+    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'idle' });
+
+    sm.reclaimSessionProcess(SESSION_ID);
+
+    expect(killSessionCgroup).toHaveBeenCalledWith(SESSION_ID);
+    expect(updateSessionStatus).not.toHaveBeenCalled();
+  });
+
+  it('a reclaimed session (hasEnded set) is routed to the --resume respawn path, never the live direct-send path, on the next sendOrResume', async () => {
+    const session = await registerLiveSession(sm);
+    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'idle' });
+    // registerLiveSession's own boot delivery already called
+    // session.sendMessage once — clear that call history so the assertion
+    // below isolates what happens *after* reclaim.
+    session.sendMessage.mockClear();
+
+    sm.reclaimSessionProcess(SESSION_ID);
+    expect(session.hasEnded).toBe(true);
+
+    vi.mocked(getSession).mockReturnValue(makeDeadRow()); // idle — resumable
+    // sendOrResume's very first check is `liveSession && !liveSession.hasEnded`
+    // (SessionManager.ts) — with hasEnded now true, the live direct-send
+    // branch (this.send(), which reads session.sendMessage off the stale
+    // map entry) is structurally unreachable, and execution instead falls
+    // through into the --resume respawn path documented right above that
+    // check. Swallow any rejection from the respawn attempt itself; how far
+    // it gets isn't what this test is verifying.
+    sm.sendOrResume(SESSION_ID, 'follow-up after reclaim').catch(() => {});
+
+    expect(session.sendMessage).not.toHaveBeenCalled();
+  });
 });
 
 describe('archiveAndEndSession — honours its "reap any live subprocess" docstring', () => {
