@@ -50,6 +50,9 @@ import {
   getStagedIntent,
   expireStagedIntentsForSession,
   sweepStagedIntentsForTerminalSessions,
+  sessionHasNeverStagedAnyIntent,
+  reapStagedIntentsForNeverStagedSession,
+  findActiveStagedIntentForTask,
   hasUndispositionedStagedIntentsForSession,
 } from '../db/queries';
 import { queryAuditLogByProject } from '../audit/AuditLog';
@@ -442,36 +445,73 @@ describe('terminal_completion_reason', () => {
   });
 });
 
-// ── Terminal-path staged-intent reaping regression ───────────────────────────
+// ── Terminal-path staged-intent reaping — session death is not a disposition ─
 //
-// A genuine session death must still reap uncommitted staged intents —
-// expireStagedIntentsForSession exists to prevent a parked proposal from
-// sitting on the decision surface forever once its owning session can never
-// resolve it. This is the DB-level contract that SessionManager.markSessionErrored
-// relies on for every real terminal path (only the grant-respawn kill, which
-// is not a real death, suppresses it — see markSessionErrored.test.ts).
+// A session's termination must NOT void the staged intents it already
+// produced: a staged (or already operator-approved) intent from a session
+// that emitted a clean result is a finished artifact awaiting operator
+// disposition, and the session's own death does not invalidate it. See "A
+// killed session must not void the findings it already staged".
+// expireStagedIntentsForSession remains a raw building block (used directly
+// by manual/ops disposition paths), but SessionManager.markSessionErrored /
+// abortSession now only ever call it through
+// reapStagedIntentsForNeverStagedSession, which is a no-op for any session
+// that staged anything at all — see the DB-level tests in
+// db/__tests__/stagedIntent.queries.test.ts for that function's own coverage.
 
-describe('expireStagedIntentsForSession / sweepStagedIntentsForTerminalSessions — terminal-path reaping regression', () => {
-  it("expireStagedIntentsForSession supersedes a session's staged and approved intents", () => {
-    const staged = stageIntent('sess-dead', { state: 'staged' });
+describe('reapStagedIntentsForNeverStagedSession / sweepStagedIntentsForTerminalSessions — killed sessions keep their findings', () => {
+  it("does not reap a session's staged and approved intents just because the session is now killed", () => {
+    const staged = stageIntent('sess-dead', {
+      state: 'staged',
+      kind: 'task.create',
+      task_id: 't-1',
+    });
     const approved = stageIntent('sess-dead', { state: 'approved' });
-    const otherSession = stageIntent('sess-alive', { state: 'staged' });
 
-    const changed = expireStagedIntentsForSession(
+    const reaped = reapStagedIntentsForNeverStagedSession(
       'sess-dead',
-      'session_killed',
+      'session_killed_no_artifact',
       Date.now(),
     );
 
-    expect(changed).toBe(2);
-    expect(getStagedIntent(staged)?.state).toBe('superseded');
-    expect(getStagedIntent(staged)?.disposition_reason).toBe('session_killed');
-    expect(getStagedIntent(approved)?.state).toBe('superseded');
-    // A different session's staged intent is untouched.
-    expect(getStagedIntent(otherSession)?.state).toBe('staged');
+    expect(reaped).toBe(0);
+    expect(getStagedIntent(staged)?.state).toBe('staged');
+    expect(getStagedIntent(staged)?.disposition_reason).toBeNull();
+    expect(getStagedIntent(approved)?.state).toBe('approved');
   });
 
-  it('sweepStagedIntentsForTerminalSessions (the periodic backstop) still reaps intents whose owning session already sits terminal in the DB', () => {
+  it('the surviving intent stays visible to the active-intent read (findActiveStagedIntentForTask) after the session is killed', () => {
+    stageIntent('sess-dead', {
+      state: 'staged',
+      kind: 'task.create',
+      task_id: 't-1',
+      project_id: 'test-proj',
+    });
+
+    reapStagedIntentsForNeverStagedSession(
+      'sess-dead',
+      'session_killed_no_artifact',
+      Date.now(),
+    );
+
+    expect(
+      findActiveStagedIntentForTask('test-proj', 'task.create', 't-1'),
+    ).toBeDefined();
+  });
+
+  it('the narrowed reap keys on sessionHasNeverStagedAnyIntent — a session with zero staged_intent rows of its own', () => {
+    expect(sessionHasNeverStagedAnyIntent('sess-never-staged')).toBe(true);
+
+    const reaped = reapStagedIntentsForNeverStagedSession(
+      'sess-never-staged',
+      'session_killed_no_artifact',
+      Date.now(),
+    );
+
+    expect(reaped).toBe(0);
+  });
+
+  it('sweepStagedIntentsForTerminalSessions (the periodic backstop) does not reap intents merely because their owning session sits terminal in the DB', () => {
     insertSession('sess-terminal-backstop', 'killed');
     const staged = stageIntent('sess-terminal-backstop');
 
@@ -480,18 +520,14 @@ describe('expireStagedIntentsForSession / sweepStagedIntentsForTerminalSessions 
       Date.now(),
     );
 
-    const forSession = swept.find(
-      (s) => s.sessionId === 'sess-terminal-backstop',
-    );
-    expect(forSession?.expired.length).toBeGreaterThanOrEqual(1);
-    expect(getStagedIntent(staged)?.state).toBe('superseded');
+    expect(swept).toEqual([]);
+    expect(getStagedIntent(staged)?.state).toBe('staged');
   });
 
-  it('expiring the notification path does not resurrect the expired intent — state stays superseded', () => {
+  it('expireStagedIntentsForSession itself is unchanged — a direct/manual call still supersedes and does not resurrect on read', () => {
     const staged = stageIntent('sess-dead-2');
 
     expireStagedIntentsForSession('sess-dead-2', 'session_killed', Date.now());
-    // Reading the row back (as the notification path does) must not mutate it.
     expect(getStagedIntent(staged)?.state).toBe('superseded');
     expect(getStagedIntent(staged)?.disposition_reason).toBe('session_killed');
   });

@@ -12064,12 +12064,19 @@ export function transitionStagedIntent(
 let _stmtExpireStagedIntentsForSession: Database.Statement | null = null;
 
 /**
- * Reap a session's uncommitted staged intents when the session terminates
- * (see SessionManager's terminal-status hook): bulk-transitions its
- * `staged`/`approved` rows to `superseded` with a disposition reason,
- * preserving the audit trail. Committed, rejected, already-superseded, and
- * in-flight-verification (`pending_verification`/`needs_revision`) rows are
- * left untouched — the latter resolve through their own verify loop.
+ * Bulk-transitions a session's `staged`/`approved` staged_intent rows to
+ * `superseded` with a disposition reason, preserving the audit trail.
+ * Committed, rejected, already-superseded, and in-flight-verification
+ * (`pending_verification`/`needs_revision`) rows are left untouched — the
+ * latter resolve through their own verify loop.
+ *
+ * This is a raw building block, not itself a policy: a session's staged
+ * intents are a finished artifact awaiting operator disposition, and the
+ * session's own termination does not invalidate them (see "A killed session
+ * must not void the findings it already staged"). Callers must not invoke
+ * this merely because a session reached a terminal status — see
+ * reapStagedIntentsForNeverStagedSession for the one narrow, content-based
+ * condition under which auto-reaping on session termination is still safe.
  * Returns the number of rows reaped.
  */
 export function expireStagedIntentsForSession(
@@ -12094,88 +12101,78 @@ export function expireStagedIntentsForSession(
   return result.changes;
 }
 
-let _stmtSelectSweepableStagedIntents: Database.Statement | null = null;
-let _stmtSupersedeStagedIntentById: Database.Statement | null = null;
+let _stmtSessionHasAnyStagedIntent: Database.Statement | null = null;
 
 /**
- * Backstop sweep for expireStagedIntentsForSession: reaps `staged`/`approved`
- * intents whose owning session already sits at a terminal DB status
- * (done/error/killed) but never went through the terminal-transition hook —
- * e.g. a process crash, or a write path that predates this reaper. Safe to
- * run repeatedly (idempotent: nothing left to reap after the first pass).
- * Returns the reaped rows grouped by session, so the caller can tell each
- * swept session exactly what it lost (see SessionManager's
- * reapStagedIntentsBackstopSweep, which reuses markSessionErrored's expiry
- * notice with these rows).
+ * True if this session has ever staged a staged_intent row, in ANY
+ * lifecycle state (including committed/rejected/superseded history) — not
+ * just staged/approved. This is the discriminator for
+ * reapStagedIntentsForNeverStagedSession below: a session that staged
+ * something, however that something was later dispositioned, produced a
+ * real artifact and its death must never be the reason that artifact (or a
+ * still-pending sibling) disappears.
  */
-export function sweepStagedIntentsForTerminalSessions(
+export function sessionHasNeverStagedAnyIntent(sessionId: string): boolean {
+  _stmtSessionHasAnyStagedIntent ??= db.prepare<{ session_id: string }>(
+    `SELECT 1 FROM staged_intent WHERE session_id = @session_id LIMIT 1`,
+  );
+  return (
+    _stmtSessionHasAnyStagedIntent.get({ session_id: sessionId }) ===
+    undefined
+  );
+}
+
+/**
+ * Narrowed, content-based replacement for the removed status-keyed
+ * auto-reap ("session reached done/error/killed" -> supersede its
+ * staged/approved intents). Session liveness is not a disposition: a
+ * staged (or already operator-approved) intent from a session that emitted
+ * a clean result must stay on the decision surface after that session
+ * ends, so its findings can still be dispositioned by an operator — see "A
+ * killed session must not void the findings it already staged".
+ *
+ * The one condition still safe to auto-reap on is a session that never
+ * staged anything of its own (sessionHasNeverStagedAnyIntent) — such a
+ * session has no staged/approved row for expireStagedIntentsForSession to
+ * touch, so this call is an inert no-op safeguard (e.g. for a respawn that
+ * fails before the session gets a chance to stage anything), not a
+ * status-keyed branch across call sites. Returns the number of rows
+ * reaped — always 0 for a session with any staged_intent history.
+ */
+export function reapStagedIntentsForNeverStagedSession(
+  sessionId: string,
   reason: string,
   now: number,
+): number {
+  if (!sessionHasNeverStagedAnyIntent(sessionId)) return 0;
+  return expireStagedIntentsForSession(sessionId, reason, now);
+}
+
+/**
+ * Backstop for the terminal-transition hook. Previously reaped every
+ * `staged`/`approved` intent whose owning session sat at a terminal DB
+ * status (done/error/killed), keyed on status alone — the same defect
+ * described in "A killed session must not void the findings it already
+ * staged": a session's termination is not a disposition of the artifacts it
+ * already staged.
+ *
+ * The only condition safe to auto-reap on is
+ * reapStagedIntentsForNeverStagedSession's — a session with zero
+ * staged_intent rows of its own. By construction that session has no
+ * staged/approved row for a sweep like this to find, so this backstop is
+ * now permanently a no-op. It is kept (rather than deleted) as the
+ * documented call site for SessionManager's reapStagedIntentsBackstopSweep,
+ * and as the home for any future backstop keyed on a genuine content-based
+ * invalidation instead of status. Returns [] always.
+ */
+export function sweepStagedIntentsForTerminalSessions(
+  _reason: string,
+  _now: number,
 ): Array<{
   sessionId: string;
   expired: Array<Pick<StagedIntentRow, 'id' | 'kind' | 'group_id'>>;
 }> {
-  _stmtSelectSweepableStagedIntents ??= db.prepare(`
-    SELECT id, kind, group_id, session_id FROM staged_intent
-    WHERE state IN ('staged', 'approved')
-      AND session_id IN (
-        SELECT session_id FROM sessions WHERE status IN ('done', 'error', 'killed')
-      )
-  `);
-  const rows = _stmtSelectSweepableStagedIntents.all() as Array<{
-    id: string;
-    kind: string;
-    group_id: string | null;
-    session_id: string;
-  }>;
-  if (rows.length === 0) return [];
-
-  // Re-checks the same state/session-terminal predicate as the SELECT above
-  // at write time, so a row that changed state (or whose session left the
-  // terminal set) between the SELECT and this UPDATE — e.g. a concurrent
-  // disposition, or an overlapping sweep invocation — is left untouched
-  // rather than blindly forced to 'superseded'. This preserves the
-  // check-and-set atomicity of the single-statement UPDATE this replaced.
-  _stmtSupersedeStagedIntentById ??= db.prepare<{
-    id: string;
-    reason: string;
-    now: number;
-  }>(`
-    UPDATE staged_intent
-    SET state = 'superseded', disposition_reason = @reason, updated_at = @now
-    WHERE id = @id
-      AND state IN ('staged', 'approved')
-      AND session_id IN (
-        SELECT session_id FROM sessions WHERE status IN ('done', 'error', 'killed')
-      )
-  `);
-  const stmt = _stmtSupersedeStagedIntentById;
-  const actuallySuperseded = db.transaction((items: typeof rows) => {
-    const reaped: typeof rows = [];
-    for (const item of items) {
-      const result = stmt.run({ id: item.id, reason, now });
-      if (result.changes > 0) reaped.push(item);
-    }
-    return reaped;
-  })(rows);
-
-  const bySession = new Map<
-    string,
-    Array<Pick<StagedIntentRow, 'id' | 'kind' | 'group_id'>>
-  >();
-  for (const row of actuallySuperseded) {
-    const existing = bySession.get(row.session_id);
-    const entry = { id: row.id, kind: row.kind, group_id: row.group_id };
-    if (existing) {
-      existing.push(entry);
-    } else {
-      bySession.set(row.session_id, [entry]);
-    }
-  }
-  return Array.from(bySession.entries()).map(([sessionId, expired]) => ({
-    sessionId,
-    expired,
-  }));
+  return [];
 }
 
 /**
