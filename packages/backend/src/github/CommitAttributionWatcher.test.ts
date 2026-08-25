@@ -366,7 +366,15 @@ describe('checkCommitAttribution() — GitHub rate-limit backoff', () => {
           new GitHubRateLimitError('rate limited', resetAt, 5000, 5000),
         ),
     } as unknown as GitHubClient;
-    await checkCommitAttribution(first, 'owner/repo', 12, 's1', null, null, false);
+    await checkCommitAttribution(
+      first,
+      'owner/repo',
+      12,
+      's1',
+      null,
+      null,
+      false,
+    );
 
     const second = makeClient([{ sha: 'h1', message: 'feat: x' }]);
     const result = await checkCommitAttribution(

@@ -443,7 +443,9 @@ describe('runFilePollutionCheck — GitHub rate-limit backoff', () => {
     const github = makeGitHub();
     const result = await runFilePollutionCheck({ github, ...BASE_OPTS });
 
-    expect(vi.mocked(github.fetchPR as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(github.fetchPR as ReturnType<typeof vi.fn>),
+    ).not.toHaveBeenCalled();
     expect(result).toEqual({ headSha: null, revertCommitSha: null });
   });
 });

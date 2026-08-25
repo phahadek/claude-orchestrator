@@ -508,8 +508,11 @@ describe('PRMergeWatcher.poll() — listOpenPRStates rate-limit handling', () =>
     vi.mocked(getAllOpenPRs).mockReturnValue([pr1, pr2]);
     const github = makeMockGitHub();
     const resetAt = new Date(Date.now() + 60_000);
-    (github as unknown as { listOpenPRStates: ReturnType<typeof vi.fn> }).listOpenPRStates =
-      vi.fn().mockRejectedValue(
+    (
+      github as unknown as { listOpenPRStates: ReturnType<typeof vi.fn> }
+    ).listOpenPRStates = vi
+      .fn()
+      .mockRejectedValue(
         new GitHubRateLimitError('rate limited', resetAt, 5000, 5000),
       );
 
@@ -529,8 +532,9 @@ describe('PRMergeWatcher.poll() — listOpenPRStates rate-limit handling', () =>
     const pr2 = makePRRow({ pr_number: 43 });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr1, pr2]);
     const github = makeMockGitHub();
-    (github as unknown as { listOpenPRStates: ReturnType<typeof vi.fn> }).listOpenPRStates =
-      vi.fn().mockRejectedValue(new Error('ECONNRESET'));
+    (
+      github as unknown as { listOpenPRStates: ReturnType<typeof vi.fn> }
+    ).listOpenPRStates = vi.fn().mockRejectedValue(new Error('ECONNRESET'));
 
     const watcher = new PRMergeWatcher(
       github,
@@ -550,8 +554,9 @@ describe('PRMergeWatcher.poll() — listOpenPRStates rate-limit handling', () =>
     const pr3 = makePRRow({ pr_number: 44 });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr1, pr2, pr3]);
     const github = makeMockGitHub();
-    (github as unknown as { listOpenPRStates: ReturnType<typeof vi.fn> }).listOpenPRStates =
-      vi.fn().mockRejectedValue(new Error('ECONNRESET'));
+    (
+      github as unknown as { listOpenPRStates: ReturnType<typeof vi.fn> }
+    ).listOpenPRStates = vi.fn().mockRejectedValue(new Error('ECONNRESET'));
     const resetAt = new Date(Date.now() + 60_000);
     vi.mocked(github.getPRState).mockRejectedValueOnce(
       new GitHubRateLimitError('rate limited', resetAt, 5000, 5000),
@@ -5694,8 +5699,9 @@ describe('PRMergeWatcher.sweepStuckDraftApprovedPRs()', () => {
     const stuckPR = makePRRow({ pr_number: 55, draft: 1 });
     vi.mocked(getApprovedDraftPRs).mockReturnValue([stuckPR]);
     const github = makeMockGitHub();
-    (github as unknown as { markPRReady: ReturnType<typeof vi.fn> }).markPRReady =
-      vi.fn().mockResolvedValue(undefined);
+    (
+      github as unknown as { markPRReady: ReturnType<typeof vi.fn> }
+    ).markPRReady = vi.fn().mockResolvedValue(undefined);
 
     const watcher = new PRMergeWatcher(
       github,
@@ -5722,8 +5728,11 @@ describe('PRMergeWatcher.sweepStuckDraftApprovedPRs()', () => {
     vi.mocked(getApprovedDraftPRs).mockReturnValue([stuckPR]);
     const github = makeMockGitHub();
     const resetAt = new Date(Date.now() + 60_000);
-    (github as unknown as { markPRReady: ReturnType<typeof vi.fn> }).markPRReady =
-      vi.fn().mockRejectedValue(
+    (
+      github as unknown as { markPRReady: ReturnType<typeof vi.fn> }
+    ).markPRReady = vi
+      .fn()
+      .mockRejectedValue(
         new GitHubRateLimitError('rate limited', resetAt, 5000, 5000),
       );
 
