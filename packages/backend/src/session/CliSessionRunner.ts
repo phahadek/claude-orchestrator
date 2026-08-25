@@ -286,6 +286,14 @@ export class CliSessionRunner implements ISessionRunner {
     // second kill mechanism.
     let resultEventSeen = false;
     let resultGraceTimer: NodeJS.Timeout | null = null;
+    // Set only when THIS runner's own post-result grace timer fires and
+    // force-kills the process — never by endSession()'s stdin-close
+    // escalation or an external kill() (operator abort, StuckSessionMonitor
+    // hard-stop). The child's own exit code (typically 143, since the CLI
+    // handles SIGTERM and exits non-zero) is meaningless in that specific
+    // case: the turn was already done, so run() must report it as null to
+    // reach AgentSession's clean-exit gate instead of the retry ladder.
+    let killedByResultGrace = false;
 
     rl.on('line', (line) => {
       if (!line.trim()) return;
@@ -310,16 +318,18 @@ export class CliSessionRunner implements ISessionRunner {
             this.sessionId,
             `did not exit within ${RESULT_EVENT_EXIT_GRACE_MS}ms of emitting terminal result event; force-killing`,
           );
+          killedByResultGrace = true;
           void this.kill();
         }, RESULT_EVENT_EXIT_GRACE_MS);
       }
     });
 
     // Wait for the subprocess to exit.
-    const exitCode = await new Promise<number | null>((resolve) => {
+    const rawExitCode = await new Promise<number | null>((resolve) => {
       this.proc!.once('exit', (code) => resolve(code));
     });
     if (resultGraceTimer) clearTimeout(resultGraceTimer);
+    const exitCode = killedByResultGrace ? null : rawExitCode;
 
     // Drain remaining buffered lines (5s guard).
     await Promise.race([
