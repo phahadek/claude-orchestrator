@@ -8,6 +8,7 @@ vi.mock('../db/db.js', async () => {
 import { db } from '../db/db.js';
 import {
   getApprovedOpenPRs,
+  getConflictNudgeCandidates,
   getPausedPrReasonForTask,
   getStaleAutoMergeFailedPRs,
   resetReviewIteration,
@@ -28,26 +29,30 @@ function insertPR(opts: {
   state?: string;
   review_result?: string | null;
   pause_reason?: string | null;
+  session_id?: string | null;
+  head_sha?: string | null;
 }): void {
   db.prepare(
     `
     INSERT INTO pull_requests
       (pr_number, pr_url, task_id, session_id, repo, state,
-       review_result, created_at, updated_at, synced_at, pause_reason)
+       review_result, created_at, updated_at, synced_at, pause_reason, head_sha)
     VALUES
-      (@pr_number, @pr_url, @task_id, NULL, 'owner/repo', @state,
-       @review_result, @created_at, @updated_at, @synced_at, @pause_reason)
+      (@pr_number, @pr_url, @task_id, @session_id, 'owner/repo', @state,
+       @review_result, @created_at, @updated_at, @synced_at, @pause_reason, @head_sha)
   `,
   ).run({
     pr_number: opts.pr_number,
     pr_url: `https://github.com/owner/repo/pull/${opts.pr_number}`,
     task_id: opts.task_id ?? null,
+    session_id: opts.session_id ?? null,
     state: opts.state ?? 'open',
     review_result: opts.review_result ?? null,
     created_at: NOW,
     updated_at: NOW,
     synced_at: NOW,
     pause_reason: opts.pause_reason ?? null,
+    head_sha: opts.head_sha ?? null,
   });
 }
 
@@ -427,6 +432,151 @@ describe('getStaleAutoMergeFailedPRs() — per-entry set_at, not the shared colu
 
     const stale = getStaleAutoMergeFailedPRs(5 * 60_000);
     expect(stale.map((r) => r.pr_number)).toContain(81);
+  });
+});
+
+describe('PAUSE_REASON_HAS_AUTO_MERGE_FAILED_SQL — guards every json_* call across live legacy shapes', () => {
+  const objectShape = JSON.stringify({
+    reason: 'review_failed',
+    source: 'review',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  });
+  const objectShapeMatching = JSON.stringify({
+    reason: 'auto_merge_failed',
+    source: 'merge',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  });
+  const arrayShapeMatching = JSON.stringify([
+    {
+      reason: 'auto_merge_failed',
+      source: 'merge',
+      severity: 'needs_attention',
+      retry_strategy: 'manual_action',
+      blocks_merge: true,
+    },
+  ]);
+  const arrayShapeNonMatching = JSON.stringify([
+    {
+      reason: 'ci_failing',
+      source: 'ci',
+      severity: 'needs_attention',
+      retry_strategy: 'automatic',
+      blocks_merge: false,
+    },
+  ]);
+
+  function seedMixedPopulation(): void {
+    insertPR({
+      pr_number: 200,
+      pause_reason: 'auto_merge_failed',
+      session_id: 's-200',
+      head_sha: 'sha-200',
+    });
+    insertPR({
+      pr_number: 201,
+      pause_reason: objectShape,
+      session_id: 's-201',
+      head_sha: 'sha-201',
+    });
+    insertPR({
+      pr_number: 202,
+      pause_reason: objectShapeMatching,
+      session_id: 's-202',
+      head_sha: 'sha-202',
+    });
+    insertPR({
+      pr_number: 203,
+      pause_reason: arrayShapeMatching,
+      session_id: 's-203',
+      head_sha: 'sha-203',
+    });
+    insertPR({
+      pr_number: 204,
+      pause_reason: arrayShapeNonMatching,
+      session_id: 's-204',
+      head_sha: 'sha-204',
+    });
+  }
+
+  it('does not throw on a bare legacy string pause_reason', () => {
+    insertPR({
+      pr_number: 210,
+      pause_reason: 'auto_merge_failed',
+      session_id: 's-210',
+      head_sha: 'sha-210',
+    });
+    expect(() => getStaleAutoMergeFailedPRs(0)).not.toThrow();
+    expect(() => getConflictNudgeCandidates()).not.toThrow();
+  });
+
+  it('does not throw on a legacy single-struct object pause_reason', () => {
+    insertPR({
+      pr_number: 211,
+      pause_reason: objectShape,
+      session_id: 's-211',
+      head_sha: 'sha-211',
+    });
+    expect(() => getStaleAutoMergeFailedPRs(0)).not.toThrow();
+    expect(() => getConflictNudgeCandidates()).not.toThrow();
+  });
+
+  it('matches a concurrent-set array containing an auto_merge_failed entry', () => {
+    insertPR({
+      pr_number: 212,
+      pause_reason: arrayShapeMatching,
+      session_id: 's-212',
+      head_sha: 'sha-212',
+    });
+    db.prepare(
+      'UPDATE pull_requests SET pause_reason_set_at = ? WHERE pr_number = ?',
+    ).run(Date.now() - 10 * 60_000, 212);
+    const stale = getStaleAutoMergeFailedPRs(0);
+    expect(stale.map((r) => r.pr_number)).toContain(212);
+  });
+
+  it('still matches a bare pause_reason = "auto_merge_failed" string', () => {
+    insertPR({
+      pr_number: 213,
+      pause_reason: 'auto_merge_failed',
+      session_id: 's-213',
+      head_sha: 'sha-213',
+    });
+    db.prepare(
+      'UPDATE pull_requests SET pause_reason_set_at = ? WHERE pr_number = ?',
+    ).run(Date.now() - 10 * 60_000, 213);
+    const stale = getStaleAutoMergeFailedPRs(0);
+    expect(stale.map((r) => r.pr_number)).toContain(213);
+  });
+
+  it('does not match an array whose entries are all non-auto_merge_failed', () => {
+    insertPR({
+      pr_number: 214,
+      pause_reason: arrayShapeNonMatching,
+      session_id: 's-214',
+      head_sha: 'sha-214',
+    });
+    db.prepare(
+      'UPDATE pull_requests SET pause_reason_set_at = ? WHERE pr_number = ?',
+    ).run(Date.now() - 10 * 60_000, 214);
+    const stale = getStaleAutoMergeFailedPRs(0);
+    expect(stale.map((r) => r.pr_number)).not.toContain(214);
+  });
+
+  it('exercises the predicate across a mixed population of all four shapes without throwing, matching only the auto_merge_failed rows', () => {
+    seedMixedPopulation();
+    db.prepare(
+      'UPDATE pull_requests SET pause_reason_set_at = ? WHERE pr_number IN (200, 201, 202, 203, 204)',
+    ).run(Date.now() - 10 * 60_000);
+
+    let stale: Array<{ pr_number: number; repo: string }> = [];
+    expect(() => {
+      stale = getStaleAutoMergeFailedPRs(0);
+    }).not.toThrow();
+    expect(stale.map((r) => r.pr_number).sort()).toEqual([200, 202, 203]);
+
+    expect(() => getConflictNudgeCandidates()).not.toThrow();
   });
 });
 
