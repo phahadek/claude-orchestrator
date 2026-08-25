@@ -20,7 +20,7 @@ import {
   setPauseReason,
   getDepthReviewVerdict,
 } from '../db/queries';
-import { parsePauseReason } from '../db/pauseReason';
+import { parsePauseReason, parsePauseReasonSet } from '../db/pauseReason';
 import { recordEvent } from '../audit/AuditLog';
 import { GitHubApiError } from '../github/types';
 import type { MergeabilityCategory } from '../github/types';
@@ -154,7 +154,9 @@ export function createPrsRouter(
                 summary: depthVerdictRow.summary,
                 headSha: depthVerdictRow.head_sha,
                 recordedAt: depthVerdictRow.recorded_at,
-                escalated: pr.pause_reason === 'depth_review_escalation',
+                escalated: parsePauseReasonSet(pr.pause_reason).some(
+                  (entry) => entry.reason === 'depth_review_escalation',
+                ),
                 // Lets the frontend match this verdict back to the
                 // depth_review session it belongs to, to render
                 // escalated/routed status inside that session's own detail
@@ -291,7 +293,9 @@ export function createPrsRouter(
               // session's feedback queue and the hold is cleared, so the
               // same pause_reason check distinguishes the two dispositions
               // without re-deriving findings from it.
-              escalated: pr.pause_reason === 'depth_review_escalation',
+              escalated: parsePauseReasonSet(pr.pause_reason).some(
+                (entry) => entry.reason === 'depth_review_escalation',
+              ),
               // Lets the frontend match this verdict back to the depth_review
               // session it belongs to, to render escalated/routed status
               // inside that session's own detail view.
