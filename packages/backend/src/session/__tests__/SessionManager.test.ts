@@ -2846,6 +2846,12 @@ describe('reclaimSessionProcess — reclaims the OS process without terminating 
     vi.clearAllMocks();
     sm = new SessionManager();
     vi.mocked(getProjectById).mockReturnValue(makeProject());
+    // Fast-path worktree reuse for the post-reclaim respawn test below —
+    // mirrors 'sendOrResume — surviving worktree reuse (idle resume fast path)'.
+    vi.mocked(fsModule.existsSync).mockImplementation(() => true);
+    vi.mocked((fsModule as any).default.existsSync).mockImplementation(
+      () => true,
+    );
   });
 
   it('calls session.reclaimProcess() against a live, idle (non-terminal) row — unlike endSession(), no terminal-status guard applies', async () => {
@@ -2861,6 +2867,10 @@ describe('reclaimSessionProcess — reclaims the OS process without terminating 
   it('never writes a session status or session_errored audit row', async () => {
     const session = await registerLiveSession(sm);
     vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'idle' });
+    // registerLiveSession's own resume drives status/audit writes of its
+    // own — clear those before isolating reclaimSessionProcess's effects.
+    vi.mocked(updateSessionStatus).mockClear();
+    vi.mocked(recordEvent).mockClear();
 
     sm.reclaimSessionProcess(SESSION_ID);
 
