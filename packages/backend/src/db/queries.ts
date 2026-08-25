@@ -105,6 +105,7 @@ import type {
   CompletingSignalLedgerRow,
   NewCompletingSignalLedgerRow,
   FlowArmRow,
+  GateVerifyAutoCommitPolicyRow,
   ConvergenceSnapshotRow,
   NewConvergenceSnapshotRow,
   FlowHealthRegressionSnapshotRow,
@@ -11971,6 +11972,68 @@ export function findActiveGateVerifyMirrorForItem(
   }) as StagedIntentRow | undefined;
 }
 
+let _stmtHasLiveGateVerifyIntentForItem: Database.Statement | undefined;
+
+/**
+ * True when ANY live (staged/approved) `gate.verify` intent exists for this
+ * gate item — a verdict or a mirror of either origin. Widens
+ * findActiveGateVerifyMirrorForItem's same-origin-only dedup: the mirror
+ * reconciler must skip staging a mirror not just when a same-origin mirror
+ * is already live, but whenever any live gate.verify intent already covers
+ * the item (e.g. a genuine verifier report awaiting operator disposition),
+ * since that already surfaces the item on the decision surface and a mirror
+ * would just be a redundant second card for the same item.
+ */
+export function hasLiveGateVerifyIntentForItem(gateItemId: string): boolean {
+  _stmtHasLiveGateVerifyIntentForItem ??= db.prepare<{
+    gate_item_id: string;
+  }>(
+    `SELECT 1 FROM staged_intent
+     WHERE kind = 'gate.verify' AND state IN ('staged', 'approved')
+       AND json_extract(payload, '$.gateItemId') = @gate_item_id
+     LIMIT 1`,
+  );
+  return (
+    _stmtHasLiveGateVerifyIntentForItem.get({
+      gate_item_id: gateItemId,
+    }) !== undefined
+  );
+}
+
+let _stmtListLiveGateVerifyIntentsForMilestoneAndDisposition:
+  | Database.Statement
+  | undefined;
+
+/**
+ * Every live (staged/approved), non-mirror `gate.verify` intent for a
+ * milestone whose verdict matches the given disposition class — the
+ * auto-commit policy's backlog sweep, run when a policy is armed/updated so
+ * an already-staged backlog is committed immediately rather than only
+ * intents staged afterward. Excludes mirrors (payload.origin set) and
+ * reclassify proposals (payload.reclassify set) — neither is eligible for
+ * policy-driven auto-commit.
+ */
+export function listLiveGateVerifyIntentsForMilestoneAndDisposition(
+  milestoneId: string,
+  dispositionClass: string,
+): StagedIntentRow[] {
+  _stmtListLiveGateVerifyIntentsForMilestoneAndDisposition ??= db.prepare<{
+    milestone_id: string;
+    disposition_class: string;
+  }>(
+    `SELECT * FROM staged_intent
+     WHERE kind = 'gate.verify' AND state IN ('staged', 'approved')
+       AND milestone = @milestone_id
+       AND json_extract(payload, '$.origin') IS NULL
+       AND json_extract(payload, '$.reclassify') IS NULL
+       AND json_extract(payload, '$.disposition') = @disposition_class`,
+  );
+  return _stmtListLiveGateVerifyIntentsForMilestoneAndDisposition.all({
+    milestone_id: milestoneId,
+    disposition_class: dispositionClass,
+  }) as StagedIntentRow[];
+}
+
 const _stmtListActiveGateVerifyMirrorsByOrigin = new Map<
   string,
   Database.Statement
@@ -13273,6 +13336,81 @@ export function upsertArm(
   _stmtUpsertFlowArm.run({
     milestone_id: milestoneId,
     flow,
+    armed: armed ? 1 : 0,
+    updated_at: updatedAt,
+  });
+  return { previous };
+}
+
+// ─── gate_verify_auto_commit_policy ────────────────────────────────────────
+
+let _stmtGetGateVerifyAutoCommitPolicy: Database.Statement | undefined;
+let _stmtUpsertGateVerifyAutoCommitPolicy: Database.Statement | undefined;
+let _stmtListGateVerifyAutoCommitPolicy: Database.Statement | undefined;
+
+/** Every disposition class this milestone has an armed/disarmed row for — absent classes are implicitly disarmed. */
+export function listGateVerifyAutoCommitPolicy(
+  milestoneId: string,
+): GateVerifyAutoCommitPolicyRow[] {
+  _stmtListGateVerifyAutoCommitPolicy ??= db.prepare<{
+    milestone_id: string;
+  }>(
+    `SELECT * FROM gate_verify_auto_commit_policy WHERE milestone_id = @milestone_id`,
+  );
+  return _stmtListGateVerifyAutoCommitPolicy.all({
+    milestone_id: milestoneId,
+  }) as GateVerifyAutoCommitPolicyRow[];
+}
+
+/**
+ * Effective auto-commit policy for (milestoneId, dispositionClass) — false
+ * (never auto-commit) when no row exists, mirroring flow_arm's
+ * absent-row-means-default shape. dispositionClass is one of the four
+ * verifier-report dispositions (pass/fail/needs-setup/not-yet-triggerable);
+ * `deferred` never reaches here since it is mirror-only and mirrors are
+ * excluded from auto-commit eligibility upstream.
+ */
+export function getGateVerifyAutoCommitPolicy(
+  milestoneId: string,
+  dispositionClass: string,
+): boolean {
+  _stmtGetGateVerifyAutoCommitPolicy ??= db.prepare<{
+    milestone_id: string;
+    disposition_class: string;
+  }>(
+    `SELECT * FROM gate_verify_auto_commit_policy
+     WHERE milestone_id = @milestone_id AND disposition_class = @disposition_class`,
+  );
+  const row = _stmtGetGateVerifyAutoCommitPolicy.get({
+    milestone_id: milestoneId,
+    disposition_class: dispositionClass,
+  }) as GateVerifyAutoCommitPolicyRow | undefined;
+  return row ? row.armed === 1 : false;
+}
+
+/** Upsert the auto-commit policy for (milestoneId, dispositionClass). Returns the previous effective value, for audit. */
+export function upsertGateVerifyAutoCommitPolicy(
+  milestoneId: string,
+  dispositionClass: string,
+  armed: boolean,
+  updatedAt: number,
+): { previous: boolean } {
+  const previous = getGateVerifyAutoCommitPolicy(milestoneId, dispositionClass);
+  _stmtUpsertGateVerifyAutoCommitPolicy ??= db.prepare<{
+    milestone_id: string;
+    disposition_class: string;
+    armed: number;
+    updated_at: number;
+  }>(`
+    INSERT INTO gate_verify_auto_commit_policy (milestone_id, disposition_class, armed, updated_at)
+    VALUES (@milestone_id, @disposition_class, @armed, @updated_at)
+    ON CONFLICT (milestone_id, disposition_class) DO UPDATE SET
+      armed = excluded.armed,
+      updated_at = excluded.updated_at
+  `);
+  _stmtUpsertGateVerifyAutoCommitPolicy.run({
+    milestone_id: milestoneId,
+    disposition_class: dispositionClass,
     armed: armed ? 1 : 0,
     updated_at: updatedAt,
   });

@@ -249,6 +249,41 @@ describe('reconcileHumanObservationMirrors', () => {
     expect(row.disposition_reason).toMatch(/reclassified/);
   });
 
+  it('suppresses staging a mirror when any live gate.verify intent already exists for the item, regardless of origin', async () => {
+    const item = await makeRunnableItem();
+    // A genuine verifier-originated report — no `origin` field — staged
+    // directly (bypassing the mirror sink), simulating a session's own
+    // gate.verify disposition landing before the reconciler's next mirror
+    // pass.
+    stageIntent(
+      'gate.verify',
+      { gateItemId: item.id, disposition: 'pass' },
+      'proj-mirror',
+      null,
+      null,
+      `Gate item ${item.id}: reported pass`,
+      null,
+      null,
+      item.milestone,
+      null,
+    );
+
+    const result = reconcileHumanObservationMirrors();
+
+    expect(result.staged).toEqual([]);
+    expect(liveMirrorRows('mirror')).toHaveLength(0);
+  });
+
+  it('still suppresses on a same-origin live mirror (unchanged behavior)', async () => {
+    await makeRunnableItem();
+    reconcileHumanObservationMirrors();
+    expect(liveMirrorRows('mirror')).toHaveLength(1);
+
+    const result = reconcileHumanObservationMirrors();
+    expect(result.staged).toEqual([]);
+    expect(liveMirrorRows('mirror')).toHaveLength(1);
+  });
+
   it('does not restage a mirror for an item that was just retired in the same tick sequence unless it becomes runnable again', async () => {
     const item = await makeRunnableItem();
     reconcileHumanObservationMirrors();

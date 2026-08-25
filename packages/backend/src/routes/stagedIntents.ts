@@ -99,6 +99,8 @@ import {
   type CachedBoardTaskEntry,
   markSessionDone,
   setSessionTerminalCompletionReason,
+  getGateVerifyAutoCommitPolicy,
+  listLiveGateVerifyIntentsForMilestoneAndDisposition,
 } from '../db/queries';
 import type { OpsReconciliationAssertion } from '../db/types';
 import { DependencyResolver } from '../notion/DependencyResolver';
@@ -1644,6 +1646,17 @@ function computeGroupKind(
  * at router construction (startup), read on every subsequent request.
  */
 let stagedIntentSessionManager: SessionManager | undefined;
+
+/**
+ * The PlanningOrchestrator instance wired in by createStagedIntentsRouter —
+ * mirrors stagedIntentSessionManager's module-level storage. Used by
+ * sweepGateVerifyAutoCommitBacklog (invoked from routes/milestones.ts, which
+ * has no PlanningOrchestrator/SessionManager of its own) so the auto-commit
+ * backlog sweep can release each committed row's originating session exactly
+ * like a manual commit does, without threading either instance through
+ * milestones.ts's router construction.
+ */
+let stagedIntentPlanningOrchestrator: PlanningOrchestrator | undefined;
 
 /**
  * Request-scoped memoization for the three per-row lookups rowToApi
@@ -4172,8 +4185,10 @@ export function stageIntent(
       created_at: now,
       updated_at: now,
     };
-    const superseded = rowToApi(supersedeStagedIntent(existing.id, newRow));
+    const supersededRow = supersedeStagedIntent(existing.id, newRow);
+    const superseded = rowToApi(supersededRow);
     broadcastIntentChange(superseded);
+    attemptGateVerifyAutoCommitOnStage(supersededRow);
     return superseded;
   }
 
@@ -4206,7 +4221,32 @@ export function stageIntent(
   insertStagedIntent(row);
   const staged = rowToApi(row);
   broadcastIntentChange(staged);
+  attemptGateVerifyAutoCommitOnStage(row);
   return staged;
+}
+
+/**
+ * Fire-and-forget auto-commit attempt for a just-(re)staged `gate.verify`
+ * row, using the module-level SessionManager/PlanningOrchestrator instances
+ * createStagedIntentsRouter wires in. Never awaited by stageIntent — stays
+ * synchronous for every caller (notably AgentSession.recordGateVerifyDisposition,
+ * which stages mid-turn and returns the row synchronously to the MCP tool
+ * caller). If the staging session's turn is still in flight,
+ * autoCommitGateVerifyIntent's SessionIncompleteError catch defers to the
+ * sessionManager 'message' listener's turn-boundary retry instead of
+ * failing here.
+ */
+function attemptGateVerifyAutoCommitOnStage(row: StagedIntentRow): void {
+  if (row.kind !== 'gate.verify') return;
+  void autoCommitGateVerifyIntent(
+    row,
+    stagedIntentSessionManager,
+    stagedIntentPlanningOrchestrator,
+  ).catch((err) => {
+    logger.error(
+      `[stagedIntents] gate.verify auto-commit failed for ${row.id}: ${err instanceof Error ? err.message : err}`,
+    );
+  });
 }
 
 /** The state at which an ops_journal entry becomes an operator-reviewable
@@ -5252,6 +5292,200 @@ async function applyIntent(
     default:
       throw new Error(`[stagedIntents] unknown intent kind "${intent.kind}"`);
   }
+}
+
+/**
+ * The four verifier-report disposition classes an auto-commit policy can be
+ * armed for — the same set GateVerifyDisposition.disposition allows
+ * (AgentSession.ts). `deferred` is deliberately excluded: it is only ever an
+ * operator-supplied mirror disposition, and mirrors are never auto-commit
+ * eligible (see isGateVerifyAutoCommitEligible below).
+ */
+export const GATE_VERIFY_AUTO_COMMIT_DISPOSITION_CLASSES = [
+  'pass',
+  'fail',
+  'needs-setup',
+  'not-yet-triggerable',
+] as const;
+
+export type GateVerifyAutoCommitDispositionClass =
+  (typeof GATE_VERIFY_AUTO_COMMIT_DISPOSITION_CLASSES)[number];
+
+export function isGateVerifyAutoCommitDispositionClass(
+  value: string,
+): value is GateVerifyAutoCommitDispositionClass {
+  return (
+    GATE_VERIFY_AUTO_COMMIT_DISPOSITION_CLASSES as readonly string[]
+  ).includes(value);
+}
+
+/**
+ * True when this staged/approved `gate.verify` row is eligible for
+ * policy-driven auto-commit: a genuine verifier report (never a mirror —
+ * `payload.origin` set means a Human-Observation/consent mirror, which
+ * carries no pre-set disposition until an operator supplies one at apply
+ * time), carrying no `reclassify` proposal (a structural self-correction
+ * that always requires operator review, regardless of disposition class —
+ * decision 3's exclusion), attributed to a milestone, whose disposition
+ * matches an armed policy for that milestone.
+ */
+function isGateVerifyAutoCommitEligible(row: StagedIntentRow): boolean {
+  if (row.kind !== 'gate.verify') return false;
+  if (row.state !== 'staged' && row.state !== 'approved') return false;
+  if (!row.milestone) return false;
+  let payload: GateVerifyIntentPayload;
+  try {
+    payload = JSON.parse(row.payload) as GateVerifyIntentPayload;
+  } catch {
+    return false;
+  }
+  if (payload.origin) return false;
+  if (payload.reclassify) return false;
+  if (
+    !payload.disposition ||
+    !isGateVerifyAutoCommitDispositionClass(payload.disposition)
+  ) {
+    return false;
+  }
+  return getGateVerifyAutoCommitPolicy(row.milestone, payload.disposition);
+}
+
+/**
+ * Commits an eligible `gate.verify` row through the exact same write path an
+ * operator's manual apply/commit uses (applyIntent -> routeVerificationResult
+ * -> appendGateItemEvent), never a bespoke write. Tags the row
+ * `annotation: {autoCommitted: true}` (mirroring the `{autoApproved: true}`/
+ * `auto_committed` provenance vocabulary already established for
+ * autoApproveAccretionRow / maybeAutoResolveCodeNoOp) and, critically, calls
+ * planningOrchestrator.handleDisposition with `disposition: 'approve'` —
+ * the same call the operator apply route makes — so the originating parked
+ * verify session is released (markTerminal) exactly as it would be for a
+ * manual commit, freeing its `max_concurrent_verify_sessions` slot. Silently
+ * no-ops (returns false) if the row raced out of eligibility (superseded,
+ * already disposed) or its owning session's turn is still in flight
+ * (SessionIncompleteError) — the latter is retried at the session's next
+ * park via the sessionManager 'message' listener wired in
+ * createStagedIntentsRouter below.
+ */
+const gateVerifyAutoCommitInFlight = new Map<string, Promise<boolean>>();
+
+export async function autoCommitGateVerifyIntent(
+  row: StagedIntentRow,
+  sessionManager: SessionManager | undefined,
+  planningOrchestrator: PlanningOrchestrator | undefined,
+): Promise<boolean> {
+  const fresh = getStagedIntentRow(row.id);
+  if (!fresh || !isGateVerifyAutoCommitEligible(fresh)) return false;
+  // The staging-time attempt (stageIntent) and the turn-boundary retry (the
+  // sessionManager 'message' listener) can both reach here for the same row
+  // in close succession — this synchronous check-and-set (no await between
+  // the eligibility re-check above and here) makes only one of them actually
+  // apply/commit. A racing caller awaits the SAME in-flight promise rather
+  // than getting a stale `false` back while the first caller's commit is
+  // still running, so routeVerificationResult's gate_item_event write and
+  // the session-release call each happen exactly once, and every caller
+  // still observes the real outcome.
+  const existing = gateVerifyAutoCommitInFlight.get(fresh.id);
+  if (existing) return existing;
+  const promise = commitGateVerifyAutoCommit(
+    fresh,
+    sessionManager,
+    planningOrchestrator,
+  ).finally(() => {
+    gateVerifyAutoCommitInFlight.delete(fresh.id);
+  });
+  gateVerifyAutoCommitInFlight.set(fresh.id, promise);
+  return promise;
+}
+
+async function commitGateVerifyAutoCommit(
+  fresh: StagedIntentRow,
+  sessionManager: SessionManager | undefined,
+  planningOrchestrator: PlanningOrchestrator | undefined,
+): Promise<boolean> {
+  const apiIntent = rowToApi(fresh);
+  try {
+    await applyIntent(apiIntent, undefined, 'human', undefined, sessionManager);
+  } catch (err) {
+    if (err instanceof SessionIncompleteError) return false;
+    logger.error(
+      `[stagedIntents] gate.verify auto-commit failed for ${fresh.id}: ${err instanceof Error ? err.message : err}`,
+    );
+    return false;
+  }
+
+  const committed = transitionStagedIntent(fresh.id, 'committed', {
+    annotation: JSON.stringify({ autoCommitted: true }),
+  });
+  broadcastIntentChange(rowToApi(committed));
+
+  recordEvent({
+    event_type: 'staged_intent_disposition',
+    actor_type: 'system',
+    actor_id: null,
+    project_id: committed.project_id,
+    task_id: committed.task_id,
+    payload: { intentId: committed.id, disposition: 'auto_committed' },
+  });
+
+  await planningOrchestrator?.handleDisposition({
+    intent: committed,
+    disposition: 'approve',
+  });
+
+  return true;
+}
+
+/**
+ * Sweeps every live gate.verify row for (milestoneId, dispositionClass) and
+ * auto-commits each that is still eligible — run when an operator arms or
+ * updates the policy for a class, so an already-staged backlog is relieved
+ * immediately rather than only intents staged afterward (decision 3's
+ * "sweep the backlog on arm/update" requirement). Sequential, not
+ * parallel — each commit resumes/releases a live session, and doing that
+ * concurrently across a large backlog would contend for the same
+ * planning-concurrency bookkeeping for no benefit (this is an infrequent,
+ * operator-triggered action, not a hot path).
+ */
+async function sweepGateVerifyAutoCommitBacklog(
+  milestoneId: string,
+  dispositionClass: GateVerifyAutoCommitDispositionClass,
+  sessionManager: SessionManager | undefined,
+  planningOrchestrator: PlanningOrchestrator | undefined,
+): Promise<{ committedIds: string[] }> {
+  const candidates = listLiveGateVerifyIntentsForMilestoneAndDisposition(
+    milestoneId,
+    dispositionClass,
+  );
+  const committedIds: string[] = [];
+  for (const row of candidates) {
+    const committed = await autoCommitGateVerifyIntent(
+      row,
+      sessionManager,
+      planningOrchestrator,
+    );
+    if (committed) committedIds.push(row.id);
+  }
+  return { committedIds };
+}
+
+/**
+ * milestones.ts's PUT /api/milestones/:milestoneId/auto-commit-policy/:class
+ * route has no PlanningOrchestrator/SessionManager of its own to pass —
+ * routes it through the module-level instances createStagedIntentsRouter
+ * wires in, the same instances the sessionManager 'message' listener below
+ * uses for the staging-time auto-commit attempt.
+ */
+export async function sweepGateVerifyAutoCommitBacklogForMilestone(
+  milestoneId: string,
+  dispositionClass: GateVerifyAutoCommitDispositionClass,
+): Promise<{ committedIds: string[] }> {
+  return sweepGateVerifyAutoCommitBacklog(
+    milestoneId,
+    dispositionClass,
+    stagedIntentSessionManager,
+    stagedIntentPlanningOrchestrator,
+  );
 }
 
 /**
@@ -8230,6 +8464,7 @@ export function createStagedIntentsRouter(
 ): Router {
   const router = Router();
   stagedIntentSessionManager = sessionManager;
+  stagedIntentPlanningOrchestrator = planningOrchestrator;
 
   // A session's turn ending flips its already-staged intents' sessionComplete
   // from false to true (see isSessionComplete), but no staged_intent row
@@ -8247,6 +8482,32 @@ export function createStagedIntentsRouter(
       (['staged', 'approved'] as StagedIntentState[]).includes(row.state),
     );
     for (const row of active) broadcastIntentById(row.id);
+  });
+
+  // The same turn-boundary signal is the retry point for a gate.verify
+  // auto-commit attempt deferred because the staging session's turn was
+  // still in flight (see autoCommitGateVerifyIntent's SessionIncompleteError
+  // catch) — by the time this 'result' event fires the turn has ended, so
+  // the retry here is the first point at which applyIntent's
+  // assertOwningSessionComplete guard can pass.
+  sessionManager?.on?.('message', (msg: ServerMessage) => {
+    if (msg.type !== 'session_event' || msg.eventType !== 'result') return;
+    const gateVerifyRows = listStagedIntentsBySession(msg.sessionId).filter(
+      (row) =>
+        row.kind === 'gate.verify' &&
+        (row.state === 'staged' || row.state === 'approved'),
+    );
+    for (const row of gateVerifyRows) {
+      void autoCommitGateVerifyIntent(
+        row,
+        sessionManager,
+        planningOrchestrator,
+      ).catch((err) => {
+        logger.error(
+          `[stagedIntents] gate.verify auto-commit retry failed for ${row.id}: ${err instanceof Error ? err.message : err}`,
+        );
+      });
+    }
   });
 
   // ── GET /api/staged-intents ─────────────────────────────────────────────

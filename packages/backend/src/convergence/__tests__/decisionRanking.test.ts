@@ -160,6 +160,40 @@ describe('hasNeedsAttentionBoost', () => {
   it('does not boost a plain unblocked, unflagged, unannotated row', () => {
     expect(hasNeedsAttentionBoost(row())).toBe(false);
   });
+
+  it('boosts a gate.verify row with a fail disposition', () => {
+    const r = row({
+      kind: 'gate.verify',
+      payload: JSON.stringify({ gateItemId: 'gi-1', disposition: 'fail' }),
+    });
+    expect(hasNeedsAttentionBoost(r)).toBe(true);
+  });
+
+  it('boosts a gate.verify mirror row (origin: mirror)', () => {
+    const r = row({
+      kind: 'gate.verify',
+      payload: JSON.stringify({ gateItemId: 'gi-1', origin: 'mirror' }),
+    });
+    expect(hasNeedsAttentionBoost(r)).toBe(true);
+  });
+
+  it('boosts a gate.verify consent-mirror row (origin: consent)', () => {
+    const r = row({
+      kind: 'gate.verify',
+      payload: JSON.stringify({ gateItemId: 'gi-1', origin: 'consent' }),
+    });
+    expect(hasNeedsAttentionBoost(r)).toBe(true);
+  });
+
+  it('does not boost a gate.verify pass/needs-setup/not-yet-triggerable payload', () => {
+    for (const disposition of ['pass', 'needs-setup', 'not-yet-triggerable']) {
+      const r = row({
+        kind: 'gate.verify',
+        payload: JSON.stringify({ gateItemId: 'gi-1', disposition }),
+      });
+      expect(hasNeedsAttentionBoost(r)).toBe(false);
+    }
+  });
 });
 
 describe('buildBlockingTaskIdSet', () => {
@@ -278,6 +312,51 @@ describe('rankDecisions', () => {
     // newest-first tie-break rather than merely preserving input order.
     const ranked = rankDecisions([oldest, middle, newest], null);
     expect(ranked.map((r) => r.id)).toEqual([newest.id, middle.id, oldest.id]);
+  });
+
+  it('a gate.verify fail row and a mirror-origin row sort above same-tier pass/needs-setup rows', () => {
+    const pass = row({
+      task_id: null,
+      kind: 'gate.verify',
+      payload: JSON.stringify({ gateItemId: 'gi-pass', disposition: 'pass' }),
+      created_at: 1,
+    });
+    const needsSetup = row({
+      task_id: null,
+      kind: 'gate.verify',
+      payload: JSON.stringify({
+        gateItemId: 'gi-needs-setup',
+        disposition: 'needs-setup',
+      }),
+      created_at: 2,
+    });
+    const fail = row({
+      task_id: null,
+      kind: 'gate.verify',
+      payload: JSON.stringify({ gateItemId: 'gi-fail', disposition: 'fail' }),
+      created_at: 3,
+    });
+    const mirror = row({
+      task_id: null,
+      kind: 'gate.verify',
+      payload: JSON.stringify({ gateItemId: 'gi-mirror', origin: 'mirror' }),
+      created_at: 4,
+    });
+    const ranked = rankDecisions([pass, needsSetup, fail, mirror], null);
+    const rankedIds = ranked.map((r) => r.id);
+    // Both boosted rows sort above both unboosted rows, all same
+    // blocking/kind tier (advisory_only, unblocked) — tie-broken newest
+    // first within each bucket.
+    expect(rankedIds.indexOf(mirror.id)).toBeLessThan(
+      rankedIds.indexOf(pass.id),
+    );
+    expect(rankedIds.indexOf(mirror.id)).toBeLessThan(
+      rankedIds.indexOf(needsSetup.id),
+    );
+    expect(rankedIds.indexOf(fail.id)).toBeLessThan(rankedIds.indexOf(pass.id));
+    expect(rankedIds.indexOf(fail.id)).toBeLessThan(
+      rankedIds.indexOf(needsSetup.id),
+    );
   });
 
   it('a higher rank key still outranks a newer intent with a lower one', () => {

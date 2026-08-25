@@ -107,9 +107,14 @@ function isBlockingMember(
  * A blocking annotation (last apply attempt hard-blocked), a flagged/errored/
  * usage_limited Tier-3 semantic advisory (flagged means a real verdict raised
  * a concern; errored/usage_limited mean the classifier couldn't produce a
- * verdict at all — both need operator eyes), or an unanswered decision.pickOne
- * question — signals that the operator's attention is specifically needed on
- * this item, beyond its ordinary kind/blocking-membership standing.
+ * verdict at all — both need operator eyes), an unanswered decision.pickOne
+ * question, or a gate.verify row reporting a `fail` disposition or carrying
+ * an `origin` (a Human-Observation/consent mirror, either of which needs an
+ * operator-supplied disposition no verifier can produce) — signals that the
+ * operator's attention is specifically needed on this item, beyond its
+ * ordinary kind/blocking-membership standing. A `pass`/`needs-setup`/
+ * `not-yet-triggerable` verdict payload carries neither signal and is
+ * unaffected, sorting by recency within its existing `advisory_only` tier.
  */
 export function hasNeedsAttentionBoost(row: StagedIntentRow): boolean {
   if (row.annotation) {
@@ -135,6 +140,18 @@ export function hasNeedsAttentionBoost(row: StagedIntentRow): boolean {
     }
   }
   if (row.kind === 'decision.pickOne' && !row.answer) return true;
+  if (row.kind === 'gate.verify') {
+    try {
+      const payload = JSON.parse(row.payload) as {
+        disposition?: string;
+        origin?: string;
+      };
+      if (payload?.disposition === 'fail') return true;
+      if (payload?.origin) return true;
+    } catch {
+      /* malformed payload — not a boost signal */
+    }
+  }
   return false;
 }
 

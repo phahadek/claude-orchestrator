@@ -56,6 +56,12 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
     audience: 'operator',
     reason: 'gate-verify flow arm/disarm control',
   },
+  'PUT /api/milestones/:milestoneId/auto-commit-policy/:class': {
+    audience: 'known-gap',
+    reason: 'no frontend arm/disarm control exists yet for this policy',
+    fixTask:
+      'gate-verify auto-commit policy arm/disarm UI (frontend sibling task)',
+  },
   'POST /api/milestones/:project/flaky-investigation': {
     audience: 'known-gap',
     reason: 'operator-driven grouped flaky Investigation filing control',

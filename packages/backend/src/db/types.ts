@@ -257,6 +257,15 @@ export interface FlowArmRow {
   updated_at: number;
 }
 
+// ─── gate_verify_auto_commit_policy ────────────────────────────────────────
+
+export interface GateVerifyAutoCommitPolicyRow {
+  milestone_id: string;
+  disposition_class: string;
+  armed: number;
+  updated_at: number;
+}
+
 // ─── local_branches ────────────────────────────────────────────────────────
 
 type LocalBranchStatus = 'open' | 'merged' | 'abandoned';
