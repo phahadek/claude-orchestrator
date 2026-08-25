@@ -342,7 +342,9 @@ function realisticDeployRunRows(): Array<Record<string, unknown>> {
 function sqliteIndexExists(db: Database.Database, name: string): boolean {
   return (
     db
-      .prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?`)
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?`,
+      )
       .get(name) !== undefined
   );
 }
@@ -437,7 +439,7 @@ describe('populated-database migration fixture — deploy_run.kind', () => {
 // no-op against a pre-existing table, so any index in the baseline block
 // that depends on a not-yet-added column throws on every non-fresh database.
 describe('schema.ts static guard — no baseline index references a later-ALTER-only column', () => {
-  it('every column referenced by a baseline CREATE INDEX exists in that table\'s baseline CREATE TABLE definition', () => {
+  it("every column referenced by a baseline CREATE INDEX exists in that table's baseline CREATE TABLE definition", () => {
     const schemaSource = fs.readFileSync(
       path.join(__dirname, '../db/schema.ts'),
       'utf8',
@@ -450,7 +452,9 @@ describe('schema.ts static guard — no baseline index references a later-ALTER-
       /target\.exec\(`([\s\S]*?)\n\s*`\);/,
     );
     if (!baselineMatch) {
-      throw new Error('Could not locate the baseline target.exec block in schema.ts');
+      throw new Error(
+        'Could not locate the baseline target.exec block in schema.ts',
+      );
     }
     const baseline = baselineMatch[1];
 
@@ -495,9 +499,11 @@ describe('schema.ts static guard — no baseline index references a later-ALTER-
         // to isolate the bare column name.
         const col = rawCol.trim().split(/\s+/)[0];
         if (!col) continue;
-        expect({ table: tableName, column: col, exists: columns.has(col) }).toEqual(
-          { table: tableName, column: col, exists: true },
-        );
+        expect({
+          table: tableName,
+          column: col,
+          exists: columns.has(col),
+        }).toEqual({ table: tableName, column: col, exists: true });
       }
     }
 
