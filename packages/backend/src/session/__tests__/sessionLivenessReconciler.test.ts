@@ -100,7 +100,7 @@ describe('reconcileSessionLiveness', () => {
     });
   });
 
-  it('reconciles an idle session with no live OS process to a terminal status', () => {
+  it('leaves an idle session with no live OS process at idle, past the grace floor, with no terminal_completion_reason', () => {
     seedSession({ sessionId: 'ghost-idle', status: 'idle' });
 
     const result = reconcileSessionLiveness({
@@ -109,11 +109,53 @@ describe('reconcileSessionLiveness', () => {
       nowFn: () => NOW,
     });
 
-    expect(result.reconciled).toEqual(['ghost-idle']);
+    expect(result.reconciled).toEqual([]);
     const row = db
-      .prepare('SELECT status FROM sessions WHERE session_id = ?')
-      .get('ghost-idle') as { status: string };
-    expect(row.status).toBe('killed');
+      .prepare(
+        'SELECT status, terminal_completion_reason FROM sessions WHERE session_id = ?',
+      )
+      .get('ghost-idle') as {
+      status: string;
+      terminal_completion_reason: string | null;
+    };
+    expect(row.status).toBe('idle');
+    expect(row.terminal_completion_reason).toBeNull();
+  });
+
+  it('records a non-terminal observability event (session_id + elapsed idle time) for a dead-process idle row, instead of terminalizing it', () => {
+    seedSession({ sessionId: 'idle-observed', status: 'idle' });
+
+    reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    });
+
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'session_liveness_idle_process_absent',
+        payload: expect.objectContaining({
+          session_id: 'idle-observed',
+          idle_elapsed_ms: expect.any(Number),
+        }),
+      }),
+    );
+  });
+
+  it('does not record the planning liveness-reconciled audit event when only idle rows were observed (nothing terminalized)', () => {
+    seedSession({ sessionId: 'only-idle', status: 'idle' });
+
+    reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    });
+
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'planning_sessions_liveness_reconciled',
+      }),
+    );
   });
 
   it('leaves a session alone whose process exists, even when its last event is hours old', () => {
@@ -139,7 +181,7 @@ describe('reconcileSessionLiveness', () => {
   });
 
   it('does not gate on a stale in-memory map entry (isAlive) — process non-existence alone drives reconciliation', () => {
-    seedSession({ sessionId: 'stale-map-entry', status: 'idle' });
+    seedSession({ sessionId: 'stale-map-entry', status: 'running' });
     // Simulate SessionManager.sessions still holding a (stale) entry for
     // this session, unrelated to any isAlive() lookup the reconciler might
     // have been tempted to consult — it must reconcile anyway, since the
@@ -172,7 +214,7 @@ describe('reconcileSessionLiveness', () => {
 
   it('records an audit event naming the reconciled sessions and the reason', () => {
     seedSession({ sessionId: 'ghost-1', status: 'running' });
-    seedSession({ sessionId: 'ghost-2', status: 'idle' });
+    seedSession({ sessionId: 'ghost-2', status: 'running' });
 
     reconcileSessionLiveness({
       bootTimeMs: BOOT_LONG_AGO,

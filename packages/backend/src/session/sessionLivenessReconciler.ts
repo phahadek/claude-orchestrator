@@ -91,16 +91,24 @@ export interface SessionLivenessReconcileResult {
 }
 
 /**
- * DB → OS reconciliation sweep: a non-terminal planning session row (running
- * or idle) whose OS subprocess does not exist is reconciled to a terminal
- * status ('killed'). The mirror-image counterpart to
+ * DB → OS reconciliation sweep: a 'running' planning session row whose OS
+ * subprocess does not exist is reconciled to a terminal status ('killed') —
+ * process absence contradicts a row claiming a live turn, which is the only
+ * case this sweep has authority to terminalize. An 'idle' (or otherwise
+ * non-'running') row with no live process is left exactly as it is: a
+ * parked print-mode session with no subprocess between turns is the normal
+ * steady state, not evidence of death, so process absence alone never
+ * authorizes a terminal write for it (see procedures.md's ban on treating
+ * elapsed time/status as evidence of abandonment). Such a row is instead
+ * merely observed via a non-terminal audit event, leaving any abandonment
+ * judgment to OrphanedTaskSweeper's higher-bar nudge-then-surface-to-operator
+ * path. This sweep is otherwise the mirror-image counterpart to
  * SessionManager.reconcileSessionsMap (memory → DB, drops a stale in-memory
- * entry when the DB row is already terminal): this sweep goes the other
- * direction and writes the terminal status itself, so it is the only one of
- * the two with authority to do that. It also drops the in-memory entry
- * directly, so the two sweeps can never leave a session stranded in the gap
- * where each defers to the other's axis (a stale in-memory entry paired with
- * a non-terminal DB row).
+ * entry when the DB row is already terminal): for the 'running' case it goes
+ * the other direction and writes the terminal status itself, so it is the
+ * only one of the two with authority to do that, and it drops the in-memory
+ * entry directly so the two sweeps can never leave a session stranded in the
+ * gap where each defers to the other's axis.
  *
  * Never gated on SessionManager.isAlive() / the in-memory `this.sessions`
  * map — that in-memory state is exactly what can be stale here.
@@ -203,6 +211,25 @@ function runLivenessSweep(
       logger.info(
         `[sessionLivenessReconciler] session ${row.session_id.slice(0, 8)} had no live OS process but its staged work had already settled — reconciled to done rather than killed`,
       );
+      continue;
+    }
+
+    if (row.status !== 'running') {
+      // Process absence is the expected steady state for a parked idle row
+      // (and any other non-'running' status) — not a contradiction, so it
+      // authorizes no terminal write. Leave the row exactly as it is and
+      // record the observation for visibility; OrphanedTaskSweeper's
+      // nudge-then-surface-to-operator path is the correct owner of any
+      // abandonment judgment from here.
+      recordEvent({
+        event_type: 'session_liveness_idle_process_absent',
+        actor_type: 'system',
+        payload: {
+          session_id: row.session_id,
+          status: row.status,
+          idle_elapsed_ms: now - lastActivity,
+        },
+      });
       continue;
     }
 
