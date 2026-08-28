@@ -4010,7 +4010,8 @@ export function clearPauseReasonEntry(
   const nextSet = parsePauseReasonSet(before?.pause_reason ?? null).filter(
     (entry) => entry.reason !== reason,
   );
-  const serialized = nextSet.length > 0 ? serializePauseReasonSet(nextSet) : null;
+  const serialized =
+    nextSet.length > 0 ? serializePauseReasonSet(nextSet) : null;
   db.prepare<{
     pr_number: number;
     repo: string;
@@ -4027,7 +4028,8 @@ export function clearPauseReasonEntry(
     pr_number: prNumber,
     repo,
     pause_reason: serialized,
-    pause_reason_set_at: serialized !== null ? (before?.pause_reason_set_at ?? null) : null,
+    pause_reason_set_at:
+      serialized !== null ? (before?.pause_reason_set_at ?? null) : null,
   });
   if (before && before.pause_reason !== serialized) {
     recordEvent({
