@@ -804,6 +804,21 @@ describe('enqueueFeedback — usage admission gate', () => {
 
     expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith(['item-1']);
   });
+
+  it('once the deferral clears, every pending row accumulated while withheld is delivered together', async () => {
+    vi.mocked(listUndeliveredInboxItems).mockReturnValue([
+      { id: 'item-1', source: 'system:nudge', payload: 'first pending' },
+      { id: 'item-2', source: 'ai-reviewer', payload: 'second pending' },
+    ] as any);
+
+    vi.spyOn(sm, 'sendOrResume').mockResolvedValueOnce(SESSION_ID);
+    await sm.enqueueFeedback(SESSION_ID, 'ai-reviewer', 'second pending');
+
+    expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith([
+      'item-1',
+      'item-2',
+    ]);
+  });
 });
 
 // ── sendOrResume — live session fast path ────────────────────────────────────

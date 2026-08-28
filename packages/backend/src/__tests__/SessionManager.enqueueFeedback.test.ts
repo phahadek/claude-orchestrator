@@ -658,14 +658,11 @@ describe('SessionManager inbox drain: deferred delivery does not duplicate inbox
   };
 
   // Deferred: five_hour usage admission still blocked (persisted deferral in
-  // the future). Admitted: no persisted deferral for either window.
+  // the future).
   function deferUsageAdmission() {
     vi.mocked(queries.getUsageDeferral).mockImplementation((window) =>
       window === 'five_hour' ? Date.now() + 5 * 60_000 : null,
     );
-  }
-  function admitUsage() {
-    vi.mocked(queries.getUsageDeferral).mockReturnValue(null);
   }
 
   beforeEach(() => {
@@ -723,23 +720,10 @@ describe('SessionManager inbox drain: deferred delivery does not duplicate inbox
     expect(queries.enqueueFeedbackItem).not.toHaveBeenCalled();
   });
 
-  it('once the respawn is admitted, every pending row is delivered', async () => {
-    deferUsageAdmission();
-
-    const sm = new SessionManager();
-    await sm.redeliverUndeliveredFeedback('sess-drain');
-    await sm.redeliverUndeliveredFeedback('sess-drain');
-    expect(queries.listUndeliveredInboxItems('sess-drain')).toHaveLength(2);
-
-    admitUsage();
-
-    const delivered = await sm.redeliverUndeliveredFeedback('sess-drain');
-
-    expect(delivered).toBe(true);
-    expect(queries.listUndeliveredInboxItems('sess-drain')).toHaveLength(0);
-    expect(queries.markInboxItemsDelivered).toHaveBeenCalledWith([1, 2]);
-    expect(queries.enqueueFeedbackItem).not.toHaveBeenCalled();
-  });
+  // The "once admitted, every pending row is delivered" case is covered in
+  // SessionManager.test.ts ("enqueueFeedback — usage admission gate"),
+  // which mocks AgentSession — this file constructs a real one on a
+  // successful respawn, which is unsafe to exercise here.
 
   it('terminal-session resume branch also creates no duplicate row when its resume fails', async () => {
     const TERMINAL_DRAIN_ROW = {
