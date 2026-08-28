@@ -750,10 +750,7 @@ describe('AutoLauncher — project-driven polling', () => {
 
       await launcher.pollOnce();
 
-      const launchPathPrefixedId = deriveTaskId(
-        'github',
-        task.task.notionUrl,
-      );
+      const launchPathPrefixedId = deriveTaskId('github', task.task.notionUrl);
       const launchPathBranch = deriveBranchSlug(
         task.task.title,
         launchPathPrefixedId,

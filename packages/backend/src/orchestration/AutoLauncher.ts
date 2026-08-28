@@ -907,8 +907,14 @@ export class AutoLauncher {
     // branch in place. Re-deriving the same deterministic branch name and
     // attempting `git worktree add -b` on it would fail (or worse, orphan
     // the prior session's commits), so skip before any worktree is touched.
-    const prefixedTaskId = deriveTaskId(project.taskSource ?? 'notion', taskUrl);
-    const derivedBranch = deriveBranchSlug(task.title || taskUrl, prefixedTaskId);
+    const prefixedTaskId = deriveTaskId(
+      project.taskSource ?? 'notion',
+      taskUrl,
+    );
+    const derivedBranch = deriveBranchSlug(
+      task.title || taskUrl,
+      prefixedTaskId,
+    );
     if (branchExistsLocally(derivedBranch, project.projectDir)) {
       const worktreePath =
         findWorktreePathForBranch(derivedBranch, project.projectDir) ?? null;
