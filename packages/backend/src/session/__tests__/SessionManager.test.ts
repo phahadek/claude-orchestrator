@@ -662,6 +662,14 @@ describe('enqueueFeedback — terminal session behavior', () => {
     ] as any);
   });
 
+  afterEach(() => {
+    // vi.clearAllMocks() in the next describe's beforeEach clears call
+    // history but not this mockReturnValue — without resetting it here it
+    // leaks into every later describe in this file and silently swaps in
+    // this stale pending item for whatever message that test actually sent.
+    vi.mocked(listUndeliveredInboxItems).mockReturnValue([]);
+  });
+
   it.each(['done', 'error', 'killed'])(
     'defaults to attempting a resume on a terminal (%s) session (no opts passed — existing callers unaffected)',
     async (terminalStatus) => {
@@ -769,6 +777,12 @@ describe('enqueueFeedback — usage admission gate', () => {
     vi.mocked(listUndeliveredInboxItems).mockReturnValue([
       { id: 'item-1', source: 'system:nudge', payload: 'nudge text' },
     ] as any);
+  });
+
+  afterEach(() => {
+    // See the identical reset in "enqueueFeedback — terminal session
+    // behavior" above — without it this leaks into every later describe.
+    vi.mocked(listUndeliveredInboxItems).mockReturnValue([]);
   });
 
   it('a nudge withheld by a usage deferral (sendOrResume returns null) is not marked delivered', async () => {
@@ -1015,9 +1029,9 @@ describe('respawnSession shared helper — wires all three events', () => {
   });
 });
 
-// ── respawnSession — memory-admission gate ────────────────────────────────────
+// ── respawnSession — memory admission does not gate resume ────────────────────
 
-describe('respawnSession — memory-admission gate', () => {
+describe('respawnSession — memory admission does not gate resume', () => {
   let sm: SessionManager;
 
   beforeEach(() => {
@@ -1027,47 +1041,15 @@ describe('respawnSession — memory-admission gate', () => {
     vi.mocked(getSession).mockReturnValue(makeDeadRow());
     vi.mocked(getProjectById).mockReturnValue(makeProject());
     vi.mocked(hasMemoryHeadroom).mockReturnValue({
-      allowed: true,
-      freeMemMB: 8192,
-      minHostFreeMemoryMB: 4096,
-      perSessionReserveMB: 3072,
-      projectedFreeMB: 5120,
-    });
-  });
-
-  afterEach(() => {
-    // The sweep test below installs a stateful mockImplementation (not just
-    // a mockReturnValue) — vi.clearAllMocks() in the next test's beforeEach
-    // clears call history but does NOT remove a mockImplementation, so
-    // without this reset it would leak into every subsequent describe block
-    // in this file and silently block every later respawnSession call.
-    vi.mocked(hasMemoryHeadroom).mockReturnValue({
-      allowed: true,
-      freeMemMB: 8192,
-      minHostFreeMemoryMB: 4096,
-      perSessionReserveMB: 3072,
-      projectedFreeMB: 5120,
-    });
-  });
-
-  it('refuses to spawn and leaves the row untouched when no memory headroom is reported', async () => {
-    vi.mocked(hasMemoryHeadroom).mockReturnValue({
       allowed: false,
-      freeMemMB: 1000,
+      freeMemMB: 500,
       minHostFreeMemoryMB: 4096,
       perSessionReserveMB: 3072,
-      projectedFreeMB: -2072,
+      projectedFreeMB: -2572,
     });
-
-    const result = await sm.sendOrResume(SESSION_ID, 'hello');
-
-    expect(result).toBeNull();
-    expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
-    // Deferred, not a failure — the row must not be touched or terminalized.
-    expect(vi.mocked(updateSessionStatus)).not.toHaveBeenCalled();
   });
 
-  it('spawns normally once memory headroom is available (existing behavior unaffected)', async () => {
+  it('spawns normally even when the (unconsulted) memory-admission check would deny it — resuming an existing session is not new work', async () => {
     const p = sm.sendOrResume(SESSION_ID, 'hello');
     await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
     capturedSessions[0].emit('message', {
@@ -1079,61 +1061,8 @@ describe('respawnSession — memory-admission gate', () => {
     await p;
 
     expect(vi.mocked(AgentSession)).toHaveBeenCalledOnce();
-  });
-
-  it('capacity-gates respawns across a sweep of N stale/dead sessions instead of spawning unboundedly', async () => {
-    // Mirrors AutoMerger.conflictNudgeSweep(): an unLIMITed candidate list of
-    // dead sessions, each poked (respawned) sequentially via sendOrResume —
-    // relaunchFixerForPR's dead-session recovery path routes through the
-    // same respawnSession chokepoint this gate protects.
-    const staleSessionIds = ['stale-1', 'stale-2', 'stale-3', 'stale-4'];
-    // Headroom available for the first two, exhausted from the third onward —
-    // simulates memory pressure building up mid-sweep as prior respawns land.
-    let admittedCount = 0;
-    vi.mocked(hasMemoryHeadroom).mockImplementation(() => {
-      const allowed = admittedCount < 2;
-      if (allowed) admittedCount++;
-      return {
-        allowed,
-        freeMemMB: allowed ? 8192 : 1000,
-        minHostFreeMemoryMB: 4096,
-        perSessionReserveMB: 3072,
-        projectedFreeMB: allowed ? 5120 : -2072,
-      };
-    });
-
-    const results: (string | null)[] = [];
-    for (const staleId of staleSessionIds) {
-      vi.mocked(getSession).mockReturnValue(makeDeadRow(staleId));
-      const sessionsBefore = capturedSessions.length;
-      const p = sm.sendOrResume(staleId, 'rebase please');
-      if (capturedSessions.length === sessionsBefore) {
-        // Spawn is async — give it a tick to register before checking
-        // whether this attempt was admitted. A deferred (not-admitted)
-        // attempt never spawns, so this intentionally times out for those.
-        await vi
-          .waitFor(
-            () =>
-              expect(capturedSessions.length).toBeGreaterThan(sessionsBefore),
-            { timeout: 50, interval: 10 },
-          )
-          .catch(() => {});
-      }
-      if (capturedSessions.length > sessionsBefore) {
-        capturedSessions[capturedSessions.length - 1].emit('message', {
-          type: 'session_event',
-          sessionId: staleId,
-          eventType: 'system',
-          content: 'boot',
-        });
-      }
-      results.push(await p);
-    }
-
-    // Exactly the first two (headroom available) were admitted; the rest
-    // were deferred rather than spawned unboundedly.
-    expect(results.filter((r) => r !== null)).toHaveLength(2);
-    expect(vi.mocked(AgentSession)).toHaveBeenCalledTimes(2);
+    // Never consulted at all — the resume transition doesn't call it.
+    expect(vi.mocked(hasMemoryHeadroom)).not.toHaveBeenCalled();
   });
 });
 

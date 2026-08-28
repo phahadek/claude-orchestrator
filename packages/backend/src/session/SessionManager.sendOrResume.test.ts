@@ -118,6 +118,7 @@ vi.mock('../logger.js', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
+import os from 'os';
 import { SessionManager } from './SessionManager';
 import { getSession } from '../db/queries';
 
@@ -203,5 +204,40 @@ describe('SessionManager.sendOrResume — null sentinel on non-resumable session
     // live-delivery branch (fakeSendMessage) was never reached.
     expect(fakeSendMessage).not.toHaveBeenCalled();
     expect(result).toBe('ended-session-id');
+  });
+
+  it('resumes an idle session even when host free memory is far below the configured admission threshold — the resume path never consults memory admission', async () => {
+    // Real os.freemem() (not mocked at module level in this suite) is spied
+    // down to a value that would fail hasMemoryHeadroom()'s default
+    // 4096+3072 MB floor by a wide margin. SessionManager no longer imports
+    // hasMemoryHeadroom at all, so this must have zero effect on the resume.
+    const freememSpy = vi
+      .spyOn(os, 'freemem')
+      .mockReturnValue(200 * 1024 * 1024); // 200 MB free
+    try {
+      const fakeSendMessage = vi.fn();
+      vi.mocked(getSession).mockReturnValue({
+        status: 'idle',
+        project_id: 'missing-project',
+      } as any);
+
+      const smInstance = new SessionManager();
+      (smInstance as any).sessions.set('low-memory-session-id', {
+        sendMessage: fakeSendMessage,
+        hasEnded: true,
+      });
+
+      const result = await smInstance.sendOrResume(
+        'low-memory-session-id',
+        'hello',
+      );
+
+      // getProjectById is mocked to return null, so the respawn path
+      // returns early with the sessionId — the point is that it is not
+      // null, i.e. no memory-admission deferral ever fired.
+      expect(result).toBe('low-memory-session-id');
+    } finally {
+      freememSpy.mockRestore();
+    }
   });
 });

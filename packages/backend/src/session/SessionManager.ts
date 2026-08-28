@@ -145,7 +145,6 @@ import {
   type OrphanProcessReconcileResult,
 } from './sessionLivenessReconciler';
 import { isUsageAdmitted } from '../orchestration/usageAdmission';
-import { hasMemoryHeadroom } from '../orchestration/memoryAdmission';
 import { CrashBudget } from '../orchestration/crashBudget';
 import { tryDependencyCachePool } from '../orchestration/dependencyCachePool';
 import {
@@ -1218,23 +1217,16 @@ export class SessionManager extends EventEmitter {
   /**
    * Set by respawnSession immediately before it returns null, so a
    * synchronous caller (no await in between) can report the actual
-   * admission gate that declined — usage vs. memory — instead of a
-   * one-size-fits-all message. Cleared on every respawnSession call so a
-   * stale value from a prior call can never leak into an unrelated
-   * decision. Safe under concurrent sendOrResume calls because nothing
-   * awaits between the respawnSession() call and the read of this field.
+   * admission gate that declined instead of a one-size-fits-all message.
+   * Cleared on every respawnSession call so a stale value from a prior call
+   * can never leak into an unrelated decision. Safe under concurrent
+   * sendOrResume calls because nothing awaits between the respawnSession()
+   * call and the read of this field.
    */
-  private lastRespawnDeferral:
-    | { reason: 'usage_limit_deferred'; detail: string }
-    | {
-        reason: 'memory_admission_deferred';
-        detail: string;
-        freeMemMB: number;
-        minHostFreeMemoryMB: number;
-        perSessionReserveMB: number;
-        projectedFreeMB: number;
-      }
-    | null = null;
+  private lastRespawnDeferral: {
+    reason: 'usage_limit_deferred';
+    detail: string;
+  } | null = null;
 
   /**
    * Late-bound hook to PlanningOrchestrator.tryTerminalizeIfComplete — unset
@@ -2879,16 +2871,18 @@ export class SessionManager extends EventEmitter {
    * session — resumeSession (boot recovery), sendOrResume (verdict/feedback
    * routing to a dead session), and respawnForCapabilityGrant.
    *
-   * The usage-admission and memory-admission checks are applied here rather
-   * than in each caller so that every current and future respawn path is
-   * covered without having to remember to wire the check in individually —
-   * see isUsageAdmitted's callers elsewhere (AutoLauncher,
-   * DispatchTriggerEvaluator) for the launch-side half of the usage gate,
-   * and AutoLauncher.hasCapacity() for the launch-side half of the memory
-   * gate. A deferral is not a failure: nothing is spawned and the session
-   * row is left exactly as-is (whatever status it already had) so a later
-   * pass (poller recovery, operator retry, resumeOrphanSessions on next
-   * boot) can respawn once the deferral expires.
+   * The usage-admission check is applied here rather than in each caller so
+   * that every current and future respawn path is covered without having to
+   * remember to wire the check in individually — see isUsageAdmitted's
+   * callers elsewhere (AutoLauncher, DispatchTriggerEvaluator) for the
+   * launch-side half of the usage gate. Memory admission is deliberately
+   * NOT applied here: it bounds the creation of new work
+   * (AutoLauncher.hasCapacity()), not resuming a session that already
+   * exists — see memoryAdmission.ts's doc comment. A deferral is not a
+   * failure: nothing is spawned and the session row is left exactly as-is
+   * (whatever status it already had) so a later pass (poller recovery,
+   * operator retry, resumeOrphanSessions on next boot) can respawn once the
+   * deferral expires.
    * Returns null when deferred; callers must not touch the DB row or kill the
    * session in that case.
    *
@@ -2926,48 +2920,13 @@ export class SessionManager extends EventEmitter {
       return null;
     }
 
-    // Memory-admission gate: the same check AutoLauncher.hasCapacity()
-    // applies to fresh dispatch, applied here so every respawn path
-    // (resumeSession boot recovery, sendOrResume live poke,
-    // relaunchFixerForPR's dead-session recovery, respawnForCapabilityGrant)
-    // is covered without having to remember to wire the check into each
-    // caller individually — closes the unbounded-spawn path a sweep like
-    // AutoMerger.conflictNudgeSweep() would otherwise have over an
-    // unLIMITed candidate list. Deferral leaves the row untouched, same as
-    // the usage-admission gate above.
-    const memoryHeadroom = hasMemoryHeadroom();
-    if (!memoryHeadroom.allowed) {
-      logger.warn(
-        `[SessionManager] respawnSession: deferring ${row.session_id.slice(0, 8)} — no memory headroom ` +
-          `(freeMemMB=${memoryHeadroom.freeMemMB.toFixed(1)}, minHostFreeMemoryMB=${memoryHeadroom.minHostFreeMemoryMB}, ` +
-          `perSessionReserveMB=${memoryHeadroom.perSessionReserveMB}, projectedFreeMB=${memoryHeadroom.projectedFreeMB.toFixed(1)})`,
-      );
-      recordEvent({
-        event_type: 'memory_admission_deferred',
-        actor_type: 'system',
-        actor_id: row.session_id,
-        project_id: row.project_id ?? null,
-        task_id: row.task_id ?? null,
-        payload: {
-          freeMemMB: memoryHeadroom.freeMemMB,
-          minHostFreeMemoryMB: memoryHeadroom.minHostFreeMemoryMB,
-          perSessionReserveMB: memoryHeadroom.perSessionReserveMB,
-          projectedFreeMB: memoryHeadroom.projectedFreeMB,
-        },
-      });
-      this.lastRespawnDeferral = {
-        reason: 'memory_admission_deferred',
-        detail:
-          `No host memory headroom for respawn (freeMemMB=${memoryHeadroom.freeMemMB.toFixed(1)}, ` +
-          `minHostFreeMemoryMB=${memoryHeadroom.minHostFreeMemoryMB}, perSessionReserveMB=${memoryHeadroom.perSessionReserveMB}, ` +
-          `projectedFreeMB=${memoryHeadroom.projectedFreeMB.toFixed(1)}) — deferring resume.`,
-        freeMemMB: memoryHeadroom.freeMemMB,
-        minHostFreeMemoryMB: memoryHeadroom.minHostFreeMemoryMB,
-        perSessionReserveMB: memoryHeadroom.perSessionReserveMB,
-        projectedFreeMB: memoryHeadroom.projectedFreeMB,
-      };
-      return null;
-    }
+    // Memory admission bounds the creation of new work (AutoLauncher's fresh
+    // dispatch decision) — it does not gate resuming a session that already
+    // exists. That work (worktree, branch, conversation) is already on disk
+    // and already paid for; refusing the transition only strands it. Any
+    // sweep capable of triggering many resumes in one pass (e.g.
+    // AutoMerger.conflictNudgeSweep()) must bound its own fan-out instead of
+    // relying on this shared transition to do it.
 
     const session = new AgentSession(
       row.session_id,
@@ -5230,9 +5189,9 @@ export class SessionManager extends EventEmitter {
    * Shared handling for a respawnSession() call made from _doSendOrResume's
    * live-poke path.
    *
-   * On deferral (session === null), reports the actual gate that declined —
-   * usage vs. memory admission, via lastRespawnDeferral — instead of the
-   * single hardcoded reason this used to emit regardless of cause. The
+   * On deferral (session === null), reports the actual gate that declined,
+   * via lastRespawnDeferral — instead of the single hardcoded reason this
+   * used to emit regardless of cause. The
    * operator's text was already persisted to the inbox by the caller before
    * the respawn attempt, so a deferral here never loses it — it stays
    * undelivered until a later respawn succeeds.

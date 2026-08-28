@@ -58,6 +58,16 @@ const MIN_POLL_INTERVAL_MS = 5_000;
 const PR_MERGE_SWEEP_INTERVAL_MS = 30_000;
 const LOCAL_BRANCH_SWEEP_INTERVAL_MS = 15_000;
 const CONFLICT_NUDGE_SWEEP_INTERVAL_MS = 120_000;
+/**
+ * Cap on candidates processed per conflictNudgeSweep() pass. respawnSession
+ * (SessionManager.ts) no longer applies memory admission to resumes, so this
+ * sweep's own fan-out over relaunchFixerForPR/sendOrResume must be bounded
+ * here instead — an unLIMITed candidate list would otherwise be able to
+ * trigger a resume per row in a single pass. Candidates beyond the cap are
+ * simply picked up on the next scheduled pass (CONFLICT_NUDGE_SWEEP_INTERVAL_MS
+ * later), so nothing is dropped, only deferred.
+ */
+const CONFLICT_NUDGE_SWEEP_BATCH_LIMIT = 20;
 
 /**
  * Drives the post-approval auto-merge flow. After review reaches an approved
@@ -149,13 +159,23 @@ export class AutoMerger {
    *
    * Guards: session must be idle; GitHub mergeability is re-checked so PRs
    * whose conflict resolved while the backend was down are not re-nudged.
-   * SHA dedup in sendConflictNudge prevents double-nudging.
+   * SHA dedup in sendConflictNudge prevents double-nudging. Processes at
+   * most CONFLICT_NUDGE_SWEEP_BATCH_LIMIT candidates per pass — this is the
+   * one sweep with unbounded fan-out over respawnSession (via
+   * relaunchFixerForPR/sendOrResume), so it carries its own cap rather than
+   * relying on memory admission at the resume transition.
    */
   async conflictNudgeSweep(): Promise<void> {
     if (!this.sessions) return;
     if (isGitHubRateLimitActive(this.broadcast)) return;
-    const candidates = getConflictNudgeCandidates();
-    if (candidates.length === 0) return;
+    const allCandidates = getConflictNudgeCandidates();
+    if (allCandidates.length === 0) return;
+    const candidates = allCandidates.slice(0, CONFLICT_NUDGE_SWEEP_BATCH_LIMIT);
+    if (allCandidates.length > candidates.length) {
+      logger.info(
+        `[AutoMerger] conflictNudgeSweep: ${allCandidates.length} candidate(s) found, processing ${candidates.length} this pass (batch cap) — remainder picked up next pass`,
+      );
+    }
 
     logger.info(
       `[AutoMerger] conflictNudgeSweep: checking ${candidates.length} candidate(s)`,

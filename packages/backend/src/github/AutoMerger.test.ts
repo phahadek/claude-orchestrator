@@ -2428,6 +2428,74 @@ describe('AutoMerger.conflictNudgeSweep()', () => {
     );
   });
 
+  it('bounds fan-out to its own batch cap when the candidate list is oversized, instead of relying on memory admission at the resume transition', async () => {
+    const sessions = makeMockSessions();
+    const CANDIDATE_COUNT = 50;
+    const candidates = Array.from({ length: CANDIDATE_COUNT }, (_, i) => ({
+      pr_number: i + 1,
+      repo: 'owner/repo',
+    }));
+    vi.mocked(getConflictNudgeCandidates).mockReturnValue(candidates);
+    vi.mocked(getPRByNumber).mockImplementation((prNumber: number) =>
+      makePRRow({
+        pr_number: prNumber,
+        session_id: `coding-session-${prNumber}`,
+        head_sha: `sha-${prNumber}`,
+        conflict_nudge_sha: null,
+        pause_reason: null,
+        merge_state: 'dirty',
+      }),
+    );
+    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'idle' }));
+    const github = makeMockGitHub([]);
+    // headSha matches each candidate's own head_sha (not a constant) so the
+    // sweep's "sync head_sha from GitHub" branch never diverges from the DB
+    // row here — that branch calls the real (unmocked) setHeadSha query.
+    vi.mocked(github.categorizeMergeability).mockImplementation(
+      async (prNumber: number) => ({
+        category: 'conflict',
+        mergeState: 'dirty',
+        rawMergeableState: 'dirty',
+        failingChecks: [],
+        headSha: `sha-${prNumber}`,
+      }),
+    );
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(
+      github,
+      watcher,
+      () => {},
+      sessions as unknown as import('../session/SessionManager').SessionManager,
+    );
+
+    await merger.conflictNudgeSweep();
+
+    // Only the batch cap's worth of candidates should have triggered a
+    // resume (sendOrResume, via sendConflictNudge) this pass — the rest are
+    // left for the next scheduled pass rather than all fanning out at once.
+    // Asserted by presence/absence at the cap boundary (not a raw call
+    // count) since this suite's runner can re-execute a test body, which
+    // would otherwise double-count calls on a shared mock without
+    // reflecting a real behavior change.
+    const BATCH_CAP = 20;
+    expect(sessions.sendOrResume).toHaveBeenCalledWith(
+      `coding-session-1`,
+      expect.any(String),
+    );
+    expect(sessions.sendOrResume).toHaveBeenCalledWith(
+      `coding-session-${BATCH_CAP}`,
+      expect.any(String),
+    );
+    expect(sessions.sendOrResume).not.toHaveBeenCalledWith(
+      `coding-session-${BATCH_CAP + 1}`,
+      expect.any(String),
+    );
+    expect(sessions.sendOrResume).not.toHaveBeenCalledWith(
+      `coding-session-${CANDIDATE_COUNT}`,
+      expect.any(String),
+    );
+  });
+
   it('nudges idle session for conflict-state PR with no pause row', async () => {
     const sessions = makeMockSessions();
     vi.mocked(getConflictNudgeCandidates).mockReturnValue([
