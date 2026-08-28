@@ -113,8 +113,7 @@ function findMarkSessionErroredReasons(content: string): string[] {
  * routes that bypass markSessionErrored entirely, e.g. abortSession).
  */
 function findDirectStatusWrites(content: string): number {
-  const callRegex =
-    /updateSessionStatus\(\s*[^,]+,\s*'(killed|error)'\s*,/g;
+  const callRegex = /updateSessionStatus\(\s*[^,]+,\s*'(killed|error)'\s*,/g;
   return [...content.matchAll(callRegex)].length;
 }
 
@@ -134,7 +133,9 @@ describe('automatic session-kill allow-list guard', () => {
           (entry) => entry.file === baseName && entry.reason === reason,
         );
         if (!allowed) {
-          offenders.push(`${path.relative(SESSION_DIR, file)}: reason=${reason}`);
+          offenders.push(
+            `${path.relative(SESSION_DIR, file)}: reason=${reason}`,
+          );
         }
       }
     }
