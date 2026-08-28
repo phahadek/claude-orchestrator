@@ -1236,6 +1236,27 @@ export class SessionManager extends EventEmitter {
   private resumesInFlight = new Map<string, Promise<string | null>>();
 
   /**
+   * Set by respawnSession immediately before it returns null, so a
+   * synchronous caller (no await in between) can report the actual
+   * admission gate that declined — usage vs. memory — instead of a
+   * one-size-fits-all message. Cleared on every respawnSession call so a
+   * stale value from a prior call can never leak into an unrelated
+   * decision. Safe under concurrent sendOrResume calls because nothing
+   * awaits between the respawnSession() call and the read of this field.
+   */
+  private lastRespawnDeferral:
+    | { reason: 'usage_limit_deferred'; detail: string }
+    | {
+        reason: 'memory_admission_deferred';
+        detail: string;
+        freeMemMB: number;
+        minHostFreeMemoryMB: number;
+        perSessionReserveMB: number;
+        projectedFreeMB: number;
+      }
+    | null = null;
+
+  /**
    * Late-bound hook to PlanningOrchestrator.tryTerminalizeIfComplete — unset
    * until server.ts wires it via setPlanningTerminalChecker, since
    * PlanningOrchestrator's constructor takes this SessionManager instance
@@ -2899,6 +2920,7 @@ export class SessionManager extends EventEmitter {
     systemPromptFilePath?: string,
     opts: { allowReopenTerminal?: boolean } = {},
   ): AgentSession | null {
+    this.lastRespawnDeferral = null;
     const usageAdmission = isUsageAdmitted();
     if (!usageAdmission.allowed) {
       logger.warn(
@@ -2911,6 +2933,10 @@ export class SessionManager extends EventEmitter {
           usageAdmission.window ?? 'unknown',
         );
       }
+      this.lastRespawnDeferral = {
+        reason: 'usage_limit_deferred',
+        detail: 'Plan usage window exhausted — deferring resume.',
+      };
       return null;
     }
 
@@ -2943,6 +2969,17 @@ export class SessionManager extends EventEmitter {
           projectedFreeMB: memoryHeadroom.projectedFreeMB,
         },
       });
+      this.lastRespawnDeferral = {
+        reason: 'memory_admission_deferred',
+        detail:
+          `No host memory headroom for respawn (freeMemMB=${memoryHeadroom.freeMemMB.toFixed(1)}, ` +
+          `minHostFreeMemoryMB=${memoryHeadroom.minHostFreeMemoryMB}, perSessionReserveMB=${memoryHeadroom.perSessionReserveMB}, ` +
+          `projectedFreeMB=${memoryHeadroom.projectedFreeMB.toFixed(1)}) — deferring resume.`,
+        freeMemMB: memoryHeadroom.freeMemMB,
+        minHostFreeMemoryMB: memoryHeadroom.minHostFreeMemoryMB,
+        perSessionReserveMB: memoryHeadroom.perSessionReserveMB,
+        projectedFreeMB: memoryHeadroom.projectedFreeMB,
+      };
       return null;
     }
 
@@ -5208,6 +5245,50 @@ export class SessionManager extends EventEmitter {
     }
   }
 
+  /**
+   * Shared handling for a respawnSession() call made from _doSendOrResume's
+   * live-poke path.
+   *
+   * On deferral (session === null), reports the actual gate that declined —
+   * usage vs. memory admission, via lastRespawnDeferral — instead of the
+   * single hardcoded reason this used to emit regardless of cause. The
+   * operator's text was already persisted to the inbox by the caller before
+   * the respawn attempt, so a deferral here never loses it — it stays
+   * undelivered until a later respawn succeeds.
+   *
+   * On success, folds in any other still-undelivered inbox items for this
+   * session (e.g. text from an earlier deferred poke) so a later successful
+   * respawn delivers everything queued exactly once, rather than only the
+   * latest text while older deferred pokes sit forgotten in the inbox.
+   */
+  private resolveRespawnDelivery(
+    sessionId: string,
+    text: string,
+    session: AgentSession | null,
+  ): string | null {
+    if (!session) {
+      const deferral = this.lastRespawnDeferral;
+      this.emit('message', {
+        type: 'session_action_failed',
+        sessionId,
+        action: 'send_message',
+        reason: deferral?.reason ?? 'usage_limit_deferred',
+        detail:
+          deferral?.detail ??
+          'Plan usage window exhausted — deferring resume.',
+      } satisfies ServerMessage);
+      return null;
+    }
+    const pendingItems = listUndeliveredInboxItems(sessionId);
+    const combinedText = pendingItems.length
+      ? pendingItems.map((item) => item.payload).join('\n\n')
+      : text;
+    if (pendingItems.length) {
+      markInboxItemsDelivered(pendingItems.map((item) => item.id));
+    }
+    return combinedText;
+  }
+
   private async _doSendOrResume(
     sessionId: string,
     text: string,
@@ -5219,6 +5300,13 @@ export class SessionManager extends EventEmitter {
       logger.error(
         `[SessionManager] sendOrResume: session ${sessionId} not found in DB`,
       );
+      this.emit('message', {
+        type: 'session_action_failed',
+        sessionId,
+        action: 'send_message',
+        reason: 'session_not_found',
+        detail: `Session ${sessionId} not found.`,
+      } satisfies ServerMessage);
       return null;
     }
 
@@ -5346,6 +5434,10 @@ export class SessionManager extends EventEmitter {
           markSessionSuperseded(s.session_id, Date.now(), 'resume_superseded');
         }
       }
+      // Persist before attempting the respawn so a memory/usage-admission
+      // deferral (or any other failure below) never loses the operator's
+      // text — see resolveRespawnDelivery.
+      enqueueFeedbackItem(sessionId, 'operator:message', text);
       const session = this.respawnSession(
         row,
         recordedPath,
@@ -5355,18 +5447,8 @@ export class SessionManager extends EventEmitter {
         fastPathSystemPromptPath,
         { allowReopenTerminal: opts.allowTerminal },
       );
-      if (!session) {
-        // Deferred — nothing spawned, session row untouched. Signal to the
-        // caller/UI that this was a deliberate defer, not a hard failure.
-        this.emit('message', {
-          type: 'session_action_failed',
-          sessionId,
-          action: 'send_message',
-          reason: 'usage_limit_deferred',
-          detail: 'Plan usage window exhausted — deferring resume.',
-        } satisfies ServerMessage);
-        return null;
-      }
+      const combinedText = this.resolveRespawnDelivery(sessionId, text, session);
+      if (!session || combinedText === null) return null;
       resetSessionPokeRetryCount(sessionId);
 
       // Proactive ceiling-escalation: if the session's persisted context occupancy
@@ -5377,7 +5459,7 @@ export class SessionManager extends EventEmitter {
         const largeModel = runtimeSettings.large_task_model!;
         session.setProactiveEscalation(
           largeModel,
-          buildProactiveEscalationNudge(text),
+          buildProactiveEscalationNudge(combinedText),
         );
         logger.info(
           `[SessionManager] sendOrResume: proactive ceiling-escalation for session ${sessionId.slice(0, 8)} ` +
@@ -5390,7 +5472,7 @@ export class SessionManager extends EventEmitter {
 
       const firstEvent = new Promise<void>((resolve) => {
         session.once('message', () => {
-          this.send(sessionId, text);
+          this.send(sessionId, combinedText);
           resolve();
         });
       });
@@ -5632,6 +5714,11 @@ export class SessionManager extends EventEmitter {
       }
     }
 
+    // Persist before attempting the respawn so a memory/usage-admission
+    // deferral (or any other failure below) never loses the operator's
+    // text — see resolveRespawnDelivery.
+    enqueueFeedbackItem(sessionId, 'operator:message', text);
+
     // Shared helper: creates session with original ID, registers in map,
     // updates DB row to 'running', emits session_status.
     const session = this.respawnSession(
@@ -5643,24 +5730,14 @@ export class SessionManager extends EventEmitter {
       slowPathSystemPromptPath,
       { allowReopenTerminal: opts.allowTerminal },
     );
-    if (!session) {
-      // Deferred — nothing spawned, session row untouched. Signal to the
-      // caller/UI that this was a deliberate defer, not a hard failure.
-      this.emit('message', {
-        type: 'session_action_failed',
-        sessionId,
-        action: 'send_message',
-        reason: 'usage_limit_deferred',
-        detail: 'Plan usage window exhausted — deferring resume.',
-      } satisfies ServerMessage);
-      return null;
-    }
+    const combinedText = this.resolveRespawnDelivery(sessionId, text, session);
+    if (!session || combinedText === null) return null;
     resetSessionPokeRetryCount(sessionId);
 
     // Register the pending text on the session so that if the resumed context
     // overflows, the escalated spawn re-delivers the original message rather
     // than dropping it. The session consumes this field in tryEscalateForOverflow().
-    session.setPendingOverflowText(text);
+    session.setPendingOverflowText(combinedText);
 
     // Proactive ceiling-escalation: if the session's persisted context occupancy
     // is at/over the HWM, spawn directly on large_task_model and deliver the
@@ -5670,7 +5747,7 @@ export class SessionManager extends EventEmitter {
       const largeModel = runtimeSettings.large_task_model!;
       session.setProactiveEscalation(
         largeModel,
-        buildProactiveEscalationNudge(text),
+        buildProactiveEscalationNudge(combinedText),
       );
       logger.info(
         `[SessionManager] sendOrResume: proactive ceiling-escalation for session ${sessionId.slice(0, 8)} ` +
@@ -5688,7 +5765,7 @@ export class SessionManager extends EventEmitter {
     // avoid a race where the first message arrives before the listener is set.
     const firstEvent = new Promise<void>((resolve) => {
       session.once('message', () => {
-        this.send(sessionId, text);
+        this.send(sessionId, combinedText);
         resolve();
       });
     });
