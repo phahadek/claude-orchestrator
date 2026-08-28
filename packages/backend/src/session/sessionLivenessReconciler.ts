@@ -2,8 +2,7 @@ import {
   listLivePlanningSessionRows,
   listLiveSessionRows,
   getSessionLastActivityMs,
-  updateSessionStatus,
-  setSessionTerminalCompletionReason,
+  archiveSession,
   getSession,
   hasUndispositionedStagedIntentsForSession,
   TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED,
@@ -91,24 +90,33 @@ export interface SessionLivenessReconcileResult {
 }
 
 /**
- * DB → OS reconciliation sweep: a 'running' planning session row whose OS
- * subprocess does not exist is reconciled to a terminal status ('killed') —
- * process absence contradicts a row claiming a live turn, which is the only
- * case this sweep has authority to terminalize. An 'idle' (or otherwise
- * non-'running') row with no live process is left exactly as it is: a
- * parked print-mode session with no subprocess between turns is the normal
- * steady state, not evidence of death, so process absence alone never
- * authorizes a terminal write for it (see procedures.md's ban on treating
- * elapsed time/status as evidence of abandonment). Such a row is instead
- * merely observed via a non-terminal audit event, leaving any abandonment
- * judgment to OrphanedTaskSweeper's higher-bar nudge-then-surface-to-operator
- * path. This sweep is otherwise the mirror-image counterpart to
+ * DB → OS reconciliation sweep: a non-terminal planning session row (running
+ * or idle) whose OS subprocess does not exist is never terminalized by this
+ * sweep — process absence is the machine-side inference the operator ruling
+ * bans as grounds for a terminal write (see procedures.md's ban on treating
+ * elapsed time/status/process-absence as evidence of abandonment; for a
+ * print-mode session, process absence between turns is the definition of
+ * idle, so it carries no information about whether the session is actually
+ * done or abandoned). Terminalizing a session is an operator action only.
+ *
+ * Instead, a dead-process row (past the grace floor, with no undispositioned
+ * staged work) is drained from the *live population* non-terminally: it is
+ * archived (see db/queries.ts's archiveSession) without touching its status,
+ * which removes it from every live/non-terminal predicate
+ * (hasNonTerminalPlanningSessionForTask, hasActiveSessionForTask,
+ * countLivePlanningSessions, listLive*SessionRows) so its task can be
+ * re-dispatched and dispatch capacity is not pinned by a parked row. Any
+ * abandonment judgment past that point belongs to OrphanedTaskSweeper's
+ * nudge-then-surface-to-operator path, which now sees the task as having no
+ * non-terminal session and can act on it normally.
+ *
+ * This sweep is otherwise the mirror-image counterpart to
  * SessionManager.reconcileSessionsMap (memory → DB, drops a stale in-memory
- * entry when the DB row is already terminal): for the 'running' case it goes
- * the other direction and writes the terminal status itself, so it is the
- * only one of the two with authority to do that, and it drops the in-memory
- * entry directly so the two sweeps can never leave a session stranded in the
- * gap where each defers to the other's axis.
+ * entry when the DB row is already terminal): for a dead-process row it goes
+ * the other direction and drops the row from the live population itself, so
+ * it is the only one of the two with authority to do that, and it drops the
+ * in-memory entry directly so the two sweeps can never leave a session
+ * stranded in the gap where each defers to the other's axis.
  *
  * Never gated on SessionManager.isAlive() / the in-memory `this.sessions`
  * map — that in-memory state is exactly what can be stale here.
@@ -217,10 +225,10 @@ function runLivenessSweep(
     if (row.status !== 'running') {
       // Process absence is the expected steady state for a parked idle row
       // (and any other non-'running' status) — not a contradiction, so it
-      // authorizes no terminal write. Leave the row exactly as it is and
-      // record the observation for visibility; OrphanedTaskSweeper's
-      // nudge-then-surface-to-operator path is the correct owner of any
-      // abandonment judgment from here.
+      // authorizes no live-population drain either. Leave the row exactly
+      // as it is and record the observation for visibility;
+      // OrphanedTaskSweeper's nudge-then-surface-to-operator path is the
+      // correct owner of any abandonment judgment from here.
       recordEvent({
         event_type: 'session_liveness_idle_process_absent',
         actor_type: 'system',
@@ -233,11 +241,18 @@ function runLivenessSweep(
       continue;
     }
 
-    updateSessionStatus(row.session_id, 'killed', now);
-    setSessionTerminalCompletionReason(
-      row.session_id,
-      'liveness_reconciler_process_not_found',
-    );
+    // Process absence contradicts a row claiming a live turn, but per the
+    // operator ruling that contradiction is never grounds for a machine
+    // terminal write (status stays exactly as it was — still 'running').
+    // Instead the row is archived: dropped from the live population
+    // (countLivePlanningSessions, hasNonTerminalPlanningSessionForTask,
+    // hasActiveSessionForTask, listLive*SessionRows all filter on
+    // archived = 0) so its task can be re-dispatched and it stops holding a
+    // dispatch-capacity slot, without ever asserting the session concluded.
+    // An operator can always unarchive it, or the task can simply be
+    // relaunched — see the governing decision's "a session whose OS process
+    // is gone can always be relaunched".
+    archiveSession(row.session_id);
     evictSessionMapEntry(row.session_id);
     revokeStageCredential(
       row.session_id,
@@ -249,7 +264,7 @@ function runLivenessSweep(
     );
     reconciled.push(row.session_id);
     logger.warn(
-      `[sessionLivenessReconciler] session ${row.session_id.slice(0, 8)} (status=${row.status}) has no live OS process — reconciled to killed`,
+      `[sessionLivenessReconciler] session ${row.session_id.slice(0, 8)} (status=${row.status}) has no live OS process — archived out of the live population (status left untouched)`,
     );
   }
 

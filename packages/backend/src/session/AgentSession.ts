@@ -42,6 +42,8 @@ import {
   setTaskPauseReason,
   setHumanMergeOnly,
   getLatestTestRequestRun,
+  setSessionLastErrorDetail,
+  archiveSession,
 } from '../db/queries';
 import { groomSessionConcludedWithDecision } from '../orchestration/planningDecisionKinds';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
@@ -997,24 +999,13 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         }
         sessionLog(
           this.sessionId,
-          `escalation deadlock: all ${MAX_ESCALATION_RETRIES + 1} attempts exhausted — marking session as error`,
+          `escalation deadlock: all ${MAX_ESCALATION_RETRIES + 1} attempts exhausted — surfacing to operator`,
         );
         if (!this.hasEnded) {
-          this.sessionManager?.markSessionErrored?.(
-            this.sessionId,
-            'error',
+          this.surfaceUnresolvedToOperator(
             'escalation_deadlock',
             `context overflow: all ${MAX_ESCALATION_RETRIES + 1} escalation attempts exhausted`,
           );
-          if (!this.hasEnded) {
-            updateSessionStatus(this.sessionId, 'error', Date.now());
-            this.broadcast({
-              type: 'session_ended',
-              sessionId: this.sessionId,
-              status: 'error',
-              ...(this.taskId && { taskId: this.taskId }),
-            });
-          }
         }
         return;
       }
@@ -1117,10 +1108,25 @@ The full task spec and all rules are in your system prompt. Begin implementing d
           sessionId: this.sessionId,
           status: 'running',
         });
+      } else if (exitCode === null) {
+        // A null exit code is only ever reached via a kill() call that did
+        // not land on a successful-result boundary (see the comment above
+        // wasLastEventSuccessfulResult()) — this runner's own post-result
+        // grace kill, the escalation watchdog, or an external hard-stop.
+        // Per the operator ruling, process/kill absence of an exit code is
+        // still a machine-side inference, not evidence the session is
+        // actually done or abandoned — it must never be graded to a
+        // terminal status here. Surface it to the operator instead.
+        if (!this.hasEnded) {
+          this.surfaceUnresolvedToOperator(
+            'runner_killed_unexpected',
+            this.buildExitDetail(exitCode),
+          );
+        }
+        return;
       } else {
-        const status = exitCode === null ? 'killed' : 'error';
-        const reason =
-          exitCode === null ? 'runner_killed_unexpected' : 'runner_non_zero';
+        const status = 'error';
+        const reason = 'runner_non_zero';
         if (!this.hasEnded) {
           this.sessionManager?.markSessionErrored?.(
             this.sessionId,
@@ -1142,6 +1148,56 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         return;
       }
     }
+  }
+
+  /**
+   * Surfaces a session AgentSession itself cannot resolve (an unexplained
+   * null exit code, an exhausted context-overflow escalation ladder) to the
+   * operator, without ever writing a terminal (killed/error) status —
+   * terminalizing a session is an operator action only (see the governing
+   * ruling in procedures.md this method exists to satisfy). Drains the
+   * session out of the live population non-terminally (archiveSession —
+   * excluded from countLivePlanningSessions, hasNonTerminalPlanningSessionForTask,
+   * hasActiveSessionForTask, etc., without asserting the session concluded)
+   * and records a pause reason + audit event so it is visible in Needs
+   * Attention. The task, if any, keeps whatever status it already has —
+   * OrphanedTaskSweeper now sees no non-terminal session for it and can act
+   * normally.
+   */
+  private surfaceUnresolvedToOperator(reason: string, detail?: string): void {
+    this.hasEnded = true;
+    try {
+      archiveSession(this.sessionId);
+    } catch {
+      // Best-effort — DB may be unavailable or mocked without this function.
+    }
+    try {
+      setSessionPauseReason(this.sessionId, reason);
+    } catch {
+      // Best-effort — DB may be unavailable or mocked without this function.
+    }
+    if (detail) {
+      try {
+        setSessionLastErrorDetail(this.sessionId, detail);
+      } catch {
+        // Best-effort — DB may be unavailable or mocked without this function.
+      }
+    }
+    recordEvent({
+      event_type: 'session_surfaced_to_operator',
+      actor_type: 'system',
+      actor_id: this.sessionId,
+      project_id: null,
+      task_id: this.taskId ?? null,
+      payload: { sessionId: this.sessionId, reason, detail },
+    });
+    this.broadcast({
+      type: 'session_action_failed',
+      sessionId: this.sessionId,
+      action: 'run',
+      reason,
+      detail: detail ?? '',
+    });
   }
 
   /**

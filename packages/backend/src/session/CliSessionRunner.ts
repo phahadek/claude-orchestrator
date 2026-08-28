@@ -284,6 +284,14 @@ export class CliSessionRunner implements ISessionRunner {
     // otherwise hang the exit-wait promise below indefinitely. Force-kills
     // via the existing SIGTERM->SIGKILL escalation in kill() rather than a
     // second kill mechanism.
+    //
+    // The result event only means the top-level turn concluded — it says
+    // nothing about a still-running background subagent, which keeps
+    // emitting its own stdout lines after that point. Measured: 21 of 65
+    // grace kills were killing a live background subagent mid-flight. So
+    // the timer is reset on every line seen after the result event, rather
+    // than firing at a fixed point relative to the result event itself —
+    // it only ever fires after RESULT_EVENT_EXIT_GRACE_MS of true silence.
     let resultEventSeen = false;
     let resultGraceTimer: NodeJS.Timeout | null = null;
     // Set only when THIS runner's own post-result grace timer fires and
@@ -294,6 +302,18 @@ export class CliSessionRunner implements ISessionRunner {
     // case: the turn was already done, so run() must report it as null to
     // reach AgentSession's clean-exit gate instead of the retry ladder.
     let killedByResultGrace = false;
+
+    const armResultGraceTimer = () => {
+      if (resultGraceTimer) clearTimeout(resultGraceTimer);
+      resultGraceTimer = setTimeout(() => {
+        log(
+          this.sessionId,
+          `emitted no further events for ${RESULT_EVENT_EXIT_GRACE_MS}ms after terminal result event and did not exit on its own; force-killing`,
+        );
+        killedByResultGrace = true;
+        void this.kill();
+      }, RESULT_EVENT_EXIT_GRACE_MS);
+    };
 
     rl.on('line', (line) => {
       if (!line.trim()) return;
@@ -313,14 +333,12 @@ export class CliSessionRunner implements ISessionRunner {
       }
       if (!resultEventSeen && event.type === 'result') {
         resultEventSeen = true;
-        resultGraceTimer = setTimeout(() => {
-          log(
-            this.sessionId,
-            `did not exit within ${RESULT_EVENT_EXIT_GRACE_MS}ms of emitting terminal result event; force-killing`,
-          );
-          killedByResultGrace = true;
-          void this.kill();
-        }, RESULT_EVENT_EXIT_GRACE_MS);
+        armResultGraceTimer();
+      } else if (resultEventSeen) {
+        // Still-emitting activity after the result event (e.g. a background
+        // subagent's own tool_use/tool_result lines) — the process is not
+        // idle, so push the deadline out instead of killing on schedule.
+        armResultGraceTimer();
       }
     });
 

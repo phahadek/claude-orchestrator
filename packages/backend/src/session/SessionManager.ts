@@ -4698,36 +4698,32 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
-   * Terminate a session whose stage or route credential was presented after
+   * Reclaim a session whose stage or route credential was presented after
    * being revoked — see setRevokedStageCredentialHandler/
    * setRevokedRouteCredentialHandler wiring in the constructor above. A
    * session cannot request or refresh a new credential once its own is
-   * revoked, so if its process is still calling in with the old one, the
-   * only honest outcome is termination: leaving it running only buys it an
-   * infinite retry/backoff loop against a server that will never accept it
-   * again (the failure this task exists to close — see
-   * sessionLivenessReconciler.ts's doc comment on the false-positive
-   * incident this guards against).
+   * revoked, so if its process is still calling in with the old one,
+   * leaving it running only buys it an infinite retry/backoff loop against
+   * a server that will never accept it again. Per the operator ruling,
+   * that is grounds to reclaim its OS process and drain it from the live
+   * population — never grounds for this machine path to write a terminal
+   * status itself; terminalizing a session is an operator action only.
    *
-   * Safe to call for a row that's already terminal (idempotent — most calls
-   * land here because the row went 'killed' moments earlier via the
-   * liveness reconciler, and this only catches the process not actually
-   * having exited yet).
+   * Safe to call for a row that's already terminal or already archived
+   * (idempotent — a credential can be revoked well after its session
+   * concluded some other way).
    */
   private terminateSessionForRevokedCredential(
     sessionId: string,
     surface: 'mcp' | 'route',
   ): void {
     const row = getSession(sessionId);
-    const now = Date.now();
     const reason = `credential_revoked_${surface}`;
-    if (!row || !TERMINAL_STATUSES.has(row.status)) {
-      updateSessionStatus(sessionId, 'killed', now);
-    }
-    setSessionTerminalCompletionReason(sessionId, reason);
+    archiveSession(sessionId);
+    setSessionPauseReason(sessionId, reason);
 
     recordEvent({
-      event_type: 'session_terminated_revoked_credential',
+      event_type: 'session_surfaced_to_operator',
       actor_type: 'system',
       actor_id: sessionId,
       project_id: row?.project_id ?? null,
@@ -4737,16 +4733,15 @@ export class SessionManager extends EventEmitter {
 
     const liveSession = this.sessions.get(sessionId);
     if (liveSession) {
-      liveSession.hasEnded = true;
-      liveSession.kill().catch((err) => {
+      Promise.resolve(liveSession.reclaimProcess()).catch((err) => {
         logger.error(
-          `[SessionManager] terminateSessionForRevokedCredential kill error for ${sessionId.slice(0, 8)}: ${err}`,
+          `[SessionManager] terminateSessionForRevokedCredential reclaim error for ${sessionId.slice(0, 8)}: ${err}`,
         );
       });
     }
     this.evictSession(sessionId);
     logger.warn(
-      `[SessionManager] session ${sessionId.slice(0, 8)} presented a revoked ${surface} credential — terminated`,
+      `[SessionManager] session ${sessionId.slice(0, 8)} presented a revoked ${surface} credential — reclaimed and surfaced to operator`,
     );
   }
 

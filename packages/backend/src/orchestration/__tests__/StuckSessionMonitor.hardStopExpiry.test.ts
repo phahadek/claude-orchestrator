@@ -12,6 +12,8 @@ vi.mock('../../db/queries.js', () => ({
   getPRBySessionId: vi.fn().mockReturnValue(null),
   setPauseReason: vi.fn(),
   setTaskPauseReason: vi.fn(),
+  setSessionPauseReason: vi.fn(),
+  archiveSession: vi.fn(),
   insertPauseInterval: vi.fn(),
   closePauseInterval: vi.fn(),
   upsertStuckSessionTimer: vi.fn(),
@@ -32,7 +34,7 @@ vi.mock('../../session/processLiveness', () => ({
   isSessionProcessAlive: vi.fn().mockReturnValue(false),
 }));
 
-import { getSession } from '../../db/queries.js';
+import { getSession, archiveSession } from '../../db/queries.js';
 import { isSessionProcessAlive } from '../../session/processLiveness';
 import { StuckSessionMonitor } from '../StuckSessionMonitor.js';
 
@@ -43,6 +45,7 @@ function makeSessionManager() {
     on: vi.fn(),
     send: vi.fn().mockReturnValue(true),
     kill: vi.fn().mockResolvedValue(undefined),
+    reclaimSessionProcess: vi.fn(),
   } as unknown as import('../../session/SessionManager').SessionManager;
 }
 
@@ -95,13 +98,17 @@ describe('StuckSessionMonitor hard-stop window expiry', () => {
     vi.mocked(isSessionProcessAlive).mockReturnValue(false);
   });
 
-  it('force-kills a session that went completely silent — no in-flight tool_use', () => {
+  it('surfaces to the operator (reclaim + archive, never kill) a session that went completely silent — no in-flight tool_use', () => {
     const { monitor, broadcast, sessionManager } = makeMonitor();
     seedTimerState(monitor, 'sess-silent', 0);
 
     callExpiry(monitor, 'sess-silent');
 
-    expect(sessionManager.kill).toHaveBeenCalledWith('sess-silent');
+    expect(sessionManager.kill).not.toHaveBeenCalled();
+    expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith(
+      'sess-silent',
+    );
+    expect(archiveSession).toHaveBeenCalledWith('sess-silent');
     expect(broadcast).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'stuck_session_killed',
@@ -110,7 +117,7 @@ describe('StuckSessionMonitor hard-stop window expiry', () => {
     );
   });
 
-  it('disarms without killing when a tool_use is in flight and the process is alive', () => {
+  it('disarms without escalating when a tool_use is in flight and the process is alive', () => {
     vi.mocked(isSessionProcessAlive).mockReturnValue(true);
     const { monitor, broadcast, sessionManager } = makeMonitor();
     seedTimerState(monitor, 'sess-busy', 1);
@@ -118,6 +125,8 @@ describe('StuckSessionMonitor hard-stop window expiry', () => {
     callExpiry(monitor, 'sess-busy');
 
     expect(sessionManager.kill).not.toHaveBeenCalled();
+    expect(sessionManager.reclaimSessionProcess).not.toHaveBeenCalled();
+    expect(archiveSession).not.toHaveBeenCalled();
     expect(broadcast).not.toHaveBeenCalledWith(
       expect.objectContaining({ type: 'stuck_session_killed' }),
     );
@@ -129,14 +138,18 @@ describe('StuckSessionMonitor hard-stop window expiry', () => {
     expect(state?.hardStopArmed).toBe(false);
   });
 
-  it('kills a session with a pendingToolUseCount but whose OS process has actually exited', () => {
+  it('surfaces a session with a pendingToolUseCount but whose OS process has actually exited', () => {
     vi.mocked(isSessionProcessAlive).mockReturnValue(false);
     const { monitor, sessionManager } = makeMonitor();
     seedTimerState(monitor, 'sess-crashed', 1);
 
     callExpiry(monitor, 'sess-crashed');
 
-    expect(sessionManager.kill).toHaveBeenCalledWith('sess-crashed');
+    expect(sessionManager.kill).not.toHaveBeenCalled();
+    expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith(
+      'sess-crashed',
+    );
+    expect(archiveSession).toHaveBeenCalledWith('sess-crashed');
   });
 
   it('is a no-op if the timer state was already cleared', () => {
@@ -144,9 +157,10 @@ describe('StuckSessionMonitor hard-stop window expiry', () => {
 
     expect(() => callExpiry(monitor, 'sess-unknown')).not.toThrow();
     expect(sessionManager.kill).not.toHaveBeenCalled();
+    expect(sessionManager.reclaimSessionProcess).not.toHaveBeenCalled();
   });
 
-  it('does not kill an already-terminal session, and clears its timer instead', () => {
+  it('does not escalate an already-terminal session, and clears its timer instead', () => {
     vi.mocked(getSession).mockReturnValue({
       session_id: 'sess-done',
       status: 'done',
@@ -157,6 +171,7 @@ describe('StuckSessionMonitor hard-stop window expiry', () => {
     callExpiry(monitor, 'sess-done');
 
     expect(sessionManager.kill).not.toHaveBeenCalled();
+    expect(sessionManager.reclaimSessionProcess).not.toHaveBeenCalled();
     expect(monitor.isTracking('sess-done')).toBe(false);
   });
 });

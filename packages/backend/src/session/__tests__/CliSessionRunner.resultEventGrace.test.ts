@@ -208,6 +208,42 @@ describe('CliSessionRunner.run — post-result grace timeout', () => {
     expect(exitCode).toBe(0);
   });
 
+  it('does not force-kill while the process keeps emitting events after the result event — e.g. a live background subagent', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    const events: Record<string, unknown>[] = [];
+    const runPromise = runner.run('hello', undefined, defaultOptions, (event) =>
+      events.push(event),
+    );
+    await Promise.resolve();
+    expect(lastProc).not.toBeNull();
+
+    lastProc!.stdout.push(
+      JSON.stringify({ type: 'result', is_error: false }) + '\n',
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // A background subagent keeps emitting lines well past what would have
+    // been the fixed grace deadline — each line must push the deadline out
+    // instead of letting the original timer fire on schedule.
+    for (let i = 0; i < 3; i++) {
+      await vi.advanceTimersByTimeAsync(RESULT_EVENT_EXIT_GRACE_MS - 1000);
+      lastProc!.stdout.push(
+        JSON.stringify({ type: 'assistant', message: { i } }) + '\n',
+      );
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(killSpy).not.toHaveBeenCalled();
+
+    // Once the subagent finally goes quiet, the grace timer fires as usual.
+    await vi.advanceTimersByTimeAsync(RESULT_EVENT_EXIT_GRACE_MS);
+    expect(killSpy).toHaveBeenCalledWith(-4242, 'SIGTERM');
+
+    lastProc!.stdout.push(null);
+    lastProc!.emit('exit', null);
+    const exitCode = await runPromise;
+    expect(exitCode).toBeNull();
+  });
+
   it('clears the grace timer and does not kill when the process exits on its own after result', async () => {
     const runner = new CliSessionRunner(SESSION_ID);
     const runPromise = runner.run('hello', undefined, defaultOptions, () => {});

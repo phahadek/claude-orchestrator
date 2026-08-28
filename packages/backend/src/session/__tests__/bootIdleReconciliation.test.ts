@@ -7,6 +7,9 @@ vi.mock('../../db/queries', () => ({
   markSessionDone: vi.fn(),
   updateSessionStatus: vi.fn(),
   recordPrAnchoredCompletingSignal: vi.fn(),
+  setSessionLastErrorDetail: vi.fn(),
+  setSessionPauseReason: vi.fn(),
+  archiveSession: vi.fn(),
 }));
 
 vi.mock('../../logger', () => ({
@@ -18,6 +21,8 @@ import {
   getIdleSessionsWithResolvedPRs,
   markSessionDone,
   updateSessionStatus,
+  setSessionPauseReason,
+  archiveSession,
 } from '../../db/queries';
 import { runBootIdleReconciliation } from '../bootIdleReconciliation';
 import type {
@@ -61,27 +66,29 @@ describe('runBootIdleReconciliation — Pass 0 (dead-at-boot)', () => {
   it('does nothing when there are no starting/running sessions at boot', () => {
     vi.mocked(getDeadSessionsAtBoot).mockReturnValue([]);
     runBootIdleReconciliation();
-    expect(updateSessionStatus).not.toHaveBeenCalled();
+    expect(archiveSession).not.toHaveBeenCalled();
   });
 
-  it('errors a dead session that is not live in SessionManager.sessions', () => {
+  it('archives and surfaces a dead session that is not live in SessionManager.sessions, without writing a terminal status', () => {
     vi.mocked(getDeadSessionsAtBoot).mockReturnValue([
       makeDeadRow({ session_id: 'dead-1', status: 'starting' }),
     ]);
     runBootIdleReconciliation(() => false);
-    expect(updateSessionStatus).toHaveBeenCalledWith(
+    expect(archiveSession).toHaveBeenCalledWith('dead-1');
+    expect(setSessionPauseReason).toHaveBeenCalledWith(
       'dead-1',
-      'error',
-      expect.any(Number),
+      'orphaned_at_boot',
     );
+    expect(updateSessionStatus).not.toHaveBeenCalled();
   });
 
-  it('never transitions a session that is live in SessionManager.sessions to error', () => {
+  it('never touches a session that is live in SessionManager.sessions', () => {
     vi.mocked(getDeadSessionsAtBoot).mockReturnValue([
       makeDeadRow({ session_id: 'resumed-session', status: 'running' }),
     ]);
     // Simulates a session resumeOrphanSessions() just respawned — live in memory.
     runBootIdleReconciliation((sessionId) => sessionId === 'resumed-session');
+    expect(archiveSession).not.toHaveBeenCalled();
     expect(updateSessionStatus).not.toHaveBeenCalled();
   });
 
@@ -90,25 +97,17 @@ describe('runBootIdleReconciliation — Pass 0 (dead-at-boot)', () => {
       makeDeadRow({ session_id: 'dead-2', status: 'starting' }),
     ]);
     runBootIdleReconciliation();
-    expect(updateSessionStatus).toHaveBeenCalledWith(
-      'dead-2',
-      'error',
-      expect.any(Number),
-    );
+    expect(archiveSession).toHaveBeenCalledWith('dead-2');
   });
 
-  it('errors only the not-live rows out of a mixed batch', () => {
+  it('archives only the not-live rows out of a mixed batch', () => {
     vi.mocked(getDeadSessionsAtBoot).mockReturnValue([
       makeDeadRow({ session_id: 'live-1', status: 'running' }),
       makeDeadRow({ session_id: 'dead-3', status: 'starting' }),
     ]);
     runBootIdleReconciliation((sessionId) => sessionId === 'live-1');
-    expect(updateSessionStatus).toHaveBeenCalledTimes(1);
-    expect(updateSessionStatus).toHaveBeenCalledWith(
-      'dead-3',
-      'error',
-      expect.any(Number),
-    );
+    expect(archiveSession).toHaveBeenCalledTimes(1);
+    expect(archiveSession).toHaveBeenCalledWith('dead-3');
   });
 });
 
