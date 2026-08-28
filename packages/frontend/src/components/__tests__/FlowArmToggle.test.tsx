@@ -170,23 +170,16 @@ describe('FlowArmToggle', () => {
       fireEvent.click(screen.getByTestId('flow-arm-switch-design'));
     });
 
-    // Longer timeout than waitFor's 1000ms default: under a loaded CI runner
-    // (full suite, many jsdom test files in parallel) the setState → re-render
-    // microtask chain triggered by the mocked PUT resolving has occasionally
-    // taken longer than that, flaking this otherwise-deterministic assertion.
-    await waitFor(
-      () => expect(setSpy).toHaveBeenCalledWith('m1', 'design', true),
-      { timeout: 5000 },
+    await waitFor(() =>
+      expect(setSpy).toHaveBeenCalledWith('m1', 'design', true),
     );
 
-    await waitFor(
-      () =>
-        expect(
-          screen
-            .getByTestId('flow-arm-switch-design')
-            .getAttribute('aria-checked'),
-        ).toBe('true'),
-      { timeout: 5000 },
+    await waitFor(() =>
+      expect(
+        screen
+          .getByTestId('flow-arm-switch-design')
+          .getAttribute('aria-checked'),
+      ).toBe('true'),
     );
   });
 
