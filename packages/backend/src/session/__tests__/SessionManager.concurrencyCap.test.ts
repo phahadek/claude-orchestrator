@@ -48,6 +48,18 @@ vi.mock('fs', async () => {
   };
 });
 
+// resolveAvailableBranchSlug probes git for a free branch name — the generic
+// execSync mock above reports every branch as "exists", which would send the
+// real implementation into its uniquification loop. Keep everything else
+// (deriveBranchSlug, etc.) real; only stub the probe-driven resolver.
+vi.mock('../branchModel', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../branchModel')>();
+  return {
+    ...actual,
+    resolveAvailableBranchSlug: vi.fn((base: string) => base),
+  };
+});
+
 const mockRuntimeSettings = vi.hoisted(() => ({
   session_mode: 'cli' as string,
   max_concurrent_code_sessions: 4,

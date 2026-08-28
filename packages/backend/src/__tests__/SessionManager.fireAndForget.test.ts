@@ -61,6 +61,19 @@ vi.mock('../config', () => ({
   normalizePath: (p: string) => p,
 }));
 
+// resolveAvailableBranchSlug probes git for a free branch name — the generic
+// execSync mock above reports every branch as "exists", which would send the
+// real implementation into its uniquification loop. Keep everything else
+// (deriveBranchSlug, etc.) real; only stub the probe-driven resolver.
+vi.mock('../session/branchModel', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../session/branchModel')>();
+  return {
+    ...actual,
+    resolveAvailableBranchSlug: vi.fn((base: string) => base),
+  };
+});
+
 vi.mock('../db/queries', () =>
   mockDbQueries({
     getGrantedCapabilities: vi.fn(() => []),
@@ -452,6 +465,7 @@ describe('SessionManager.cleanupPartialWorktree() idempotency', () => {
       project_id: 'test-proj',
       worktree_path: '/tmp/test/.claude/worktrees/session-stale',
       task_name: 'Test Task',
+      feature_branch: 'feature/test-task',
     } as never);
     vi.mocked(fs.existsSync).mockReturnValue(false);
 
@@ -474,6 +488,7 @@ describe('SessionManager.cleanupPartialWorktree() idempotency', () => {
       project_id: 'test-proj',
       worktree_path: '/tmp/test/.claude/worktrees/session-full',
       task_name: 'Test Task',
+      feature_branch: 'feature/test-task',
     } as never);
     // SessionManager uses the default `fs` export; set both so existsSync is true.
     vi.mocked(fs.existsSync).mockReturnValue(true);

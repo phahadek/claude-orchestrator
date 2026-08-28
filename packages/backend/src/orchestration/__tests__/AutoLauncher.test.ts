@@ -580,20 +580,20 @@ describe('AutoLauncher — project-driven polling', () => {
       return { launcher, sessionManager, proj };
     }
 
-    it('returns false without creating a session when the derived branch already exists locally', async () => {
+    it('proceeds with the launch when the derived branch already exists locally — SessionManager uniquifies onto a fresh branch', async () => {
       vi.mocked(probeBranchLocally).mockReturnValue('exists');
       const { launcher, sessionManager } =
         setupBranchGuardTest('task-branch-exists');
 
       await launcher.pollOnce();
 
-      expect(sessionManager.start).not.toHaveBeenCalled();
+      expect(sessionManager.start).toHaveBeenCalledOnce();
     });
 
-    it('fires for an owning session that was archived while running (status=running, archived=1)', async () => {
-      // The guard is branch-existence based, not session-row based — it fires
-      // regardless of the archived owning session's prior status, since the
-      // branch/worktree survive archival either way.
+    it('proceeds for a task whose owning session was archived while running (status=running, archived=1) — the stale branch is left untouched, not skipped', async () => {
+      // The guard used to be branch-existence based and skip outright; it now
+      // lets the launch through so SessionManager can uniquify a fresh branch
+      // alongside the archived session's stranded one.
       vi.mocked(probeBranchLocally).mockReturnValue('exists');
       const { launcher, sessionManager } = setupBranchGuardTest(
         'task-archived-running',
@@ -601,17 +601,17 @@ describe('AutoLauncher — project-driven polling', () => {
 
       await launcher.pollOnce();
 
-      expect(sessionManager.start).not.toHaveBeenCalled();
+      expect(sessionManager.start).toHaveBeenCalledOnce();
     });
 
-    it('fires for an owning session that was archived while idle (status=idle, archived=1)', async () => {
+    it('proceeds for a task whose owning session was archived while idle (status=idle, archived=1)', async () => {
       vi.mocked(probeBranchLocally).mockReturnValue('exists');
       const { launcher, sessionManager } =
         setupBranchGuardTest('task-archived-idle');
 
       await launcher.pollOnce();
 
-      expect(sessionManager.start).not.toHaveBeenCalled();
+      expect(sessionManager.start).toHaveBeenCalledOnce();
     });
 
     it('proceeds normally when the derived branch does not exist locally', async () => {
@@ -797,11 +797,8 @@ describe('AutoLauncher — project-driven polling', () => {
       );
     });
 
-    it('records exactly one task_launch_skipped_branch_exists event with task_id, project_id, and branch, and creates no session', async () => {
+    it('never records task_launch_skipped_branch_exists once the branch already existing is recoverable via uniquification', async () => {
       vi.mocked(probeBranchLocally).mockReturnValue('exists');
-      vi.mocked(findWorktreePathForBranch).mockReturnValue(
-        '/fake/project/.claude/worktrees/old-session-id',
-      );
       const { launcher, sessionManager } = setupBranchGuardTest(
         'task-audit-check',
         { id: 'proj-audit' },
@@ -809,22 +806,13 @@ describe('AutoLauncher — project-driven polling', () => {
 
       await launcher.pollOnce();
 
-      expect(sessionManager.start).not.toHaveBeenCalled();
+      expect(sessionManager.start).toHaveBeenCalledOnce();
       const branchSkipCalls = vi
         .mocked(recordEvent)
         .mock.calls.filter(
           ([evt]) => evt.event_type === 'task_launch_skipped_branch_exists',
         );
-      expect(branchSkipCalls).toHaveLength(1);
-      expect(branchSkipCalls[0][0]).toMatchObject({
-        event_type: 'task_launch_skipped_branch_exists',
-        task_id: 'task-audit-check',
-        project_id: 'proj-audit',
-        payload: expect.objectContaining({
-          branch: expect.any(String),
-          worktreePath: '/fake/project/.claude/worktrees/old-session-id',
-        }),
-      });
+      expect(branchSkipCalls).toHaveLength(0);
     });
 
     it('does not increment the consecutive-failure count that drives task_launch_escalated', async () => {
@@ -846,15 +834,15 @@ describe('AutoLauncher — project-driven polling', () => {
       expect(escalations).toHaveLength(0);
     });
 
-    it('never deletes a branch or removes a worktree — only reads branch/worktree state', async () => {
-      vi.mocked(probeBranchLocally).mockReturnValue('exists');
-      const { launcher } = setupBranchGuardTest('task-no-mutation');
+    it('still skips outright when the branch existence probe is inconclusive — that failure mode is unrelated to this guard', async () => {
+      vi.mocked(probeBranchLocally).mockReturnValue('unknown');
+      const { launcher, sessionManager } =
+        setupBranchGuardTest('task-no-mutation');
 
       await launcher.pollOnce();
 
-      // The guard's only allowed branchModel calls are the two read-only lookups.
       expect(probeBranchLocally).toHaveBeenCalled();
-      expect(findWorktreePathForBranch).toHaveBeenCalled();
+      expect(sessionManager.start).not.toHaveBeenCalled();
     });
   });
 

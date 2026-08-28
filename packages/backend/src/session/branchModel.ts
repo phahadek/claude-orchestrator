@@ -47,6 +47,44 @@ export function probeBranchLocally(
 }
 
 /**
+ * Cap on uniquification probes — purely a defensive backstop against an
+ * unbounded loop; a real collision chain this long has never been observed.
+ */
+const MAX_BRANCH_UNIQUIFY_ATTEMPTS = 1000;
+
+/**
+ * Resolves the first of `<base>`, `<base>-2`, `<base>-3`, ... not already
+ * present as a local ref in `projectDir`. Returns `base` unchanged when it
+ * has no collision — the common case, so nothing changes when there is no
+ * collision. A branch outlives its owning session by design (it holds
+ * committed work), so a dead session's branch must never block a later
+ * launch for the same task; this lets that launch proceed on a fresh branch
+ * alongside the stranded one instead of failing forever on
+ * `git worktree add -b`.
+ *
+ * `probeBranchLocally`'s 'unknown' result (an inconclusive git invocation)
+ * is treated the same as 'exists' — fail closed, never risk colliding with
+ * a ref we couldn't actually verify is absent.
+ */
+export function resolveAvailableBranchSlug(
+  base: string,
+  projectDir: string,
+): string {
+  if (probeBranchLocally(base, projectDir) === 'absent') {
+    return base;
+  }
+  for (let i = 2; i <= MAX_BRANCH_UNIQUIFY_ATTEMPTS; i++) {
+    const candidate = `${base}-${i}`;
+    if (probeBranchLocally(candidate, projectDir) === 'absent') {
+      return candidate;
+    }
+  }
+  throw new Error(
+    `[branchModel] resolveAvailableBranchSlug: exhausted ${MAX_BRANCH_UNIQUIFY_ATTEMPTS} uniquification attempts for base "${base}"`,
+  );
+}
+
+/**
  * Resolves the worktree path currently checked out to `branch`, if any, by
  * parsing `git worktree list --porcelain`. Returns null when the branch has
  * no registered worktree (e.g. it exists but is not checked out anywhere) or

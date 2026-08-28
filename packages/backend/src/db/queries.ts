@@ -153,6 +153,7 @@ let _stmtGetSession: Database.Statement | null = null;
 let _stmtGetAllSessionIds: Database.Statement | null = null;
 let _stmtDeleteSession: Database.Statement | null = null;
 let _stmtInsertSessionOrIgnore: Database.Statement | null = null;
+let _stmtSetSessionFeatureBranch: Database.Statement | null = null;
 
 /** Lazily-prepared `sessions` row lookup by id — shared across many functions below. */
 function getStmtGetSession(): Database.Statement {
@@ -310,6 +311,31 @@ export function updateSessionWorktreePath(
   _stmtUpdateSessionWorktreePath.run({
     session_id: sessionId,
     worktree_path: worktreePath,
+  });
+}
+
+/**
+ * Persists the branch actually created by `git worktree add -b` — see
+ * resolveAvailableBranchSlug in branchModel.ts, which may return a
+ * uniquified name (`<base>-2`, `<base>-3`, ...) when the deterministic
+ * deriveBranchSlug name already exists locally. lookupSessionByBranch below
+ * matches on this column before falling back to re-deriving.
+ */
+export function setSessionFeatureBranch(
+  sessionId: string,
+  featureBranch: string,
+): void {
+  _stmtSetSessionFeatureBranch ??= db.prepare<{
+    session_id: string;
+    feature_branch: string;
+  }>(`
+    UPDATE sessions
+    SET feature_branch = @feature_branch
+    WHERE session_id = @session_id
+  `);
+  _stmtSetSessionFeatureBranch.run({
+    session_id: sessionId,
+    feature_branch: featureBranch,
   });
 }
 
@@ -3674,17 +3700,28 @@ export function lookupSessionByBranch(
 ): SessionBranchMatch | null {
   const candidates = db
     .prepare(
-      `SELECT session_id, task_id, task_name FROM sessions
+      `SELECT session_id, task_id, task_name, feature_branch FROM sessions
        WHERE task_name IS NOT NULL`,
     )
     .all() as Array<{
     session_id: string;
     task_id: string | null;
     task_name: string;
+    feature_branch: string | null;
   }>;
 
   const rows: SessionBranchMatch[] = [];
   for (const c of candidates) {
+    if (c.feature_branch != null) {
+      // Match the branch actually created — never re-derive when we recorded
+      // it, since a uniquified name (`<base>-2`) would otherwise never match.
+      if (headBranch === c.feature_branch) {
+        rows.push({ session_id: c.session_id, task_id: c.task_id });
+      }
+      continue;
+    }
+    // Legacy row predating the feature_branch column — fall back to
+    // re-deriving both the current and pre-task-id-suffix names.
     const current = deriveBranchSlug(c.task_name, c.task_id);
     const legacy = deriveBranchSlug(c.task_name, null);
     if (headBranch === current || headBranch === legacy) {
