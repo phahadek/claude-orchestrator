@@ -339,6 +339,47 @@ describe('isResolveEligible', () => {
     expect(isResolveEligible(report.id)).toBe(true);
   });
 
+  it('is false when a session was killed before staging anything', () => {
+    const report = insertReport({
+      projectId: 'proj-1',
+      milestoneId: 'milestone-uuid-1',
+      title: 'A',
+      symptomText: 'a',
+      createdAt: '2026-08-13T00:00:00Z',
+    });
+    insertSession('sess-1', 'killed');
+    recordDispatch(report.id, 'sess-1', '2026-08-13T00:00:01Z');
+    expect(isResolveEligible(report.id)).toBe(false);
+  });
+
+  it('is false when a session crashed (error) before staging anything', () => {
+    const report = insertReport({
+      projectId: 'proj-1',
+      milestoneId: 'milestone-uuid-1',
+      title: 'A',
+      symptomText: 'a',
+      createdAt: '2026-08-13T00:00:00Z',
+    });
+    insertSession('sess-1', 'error');
+    recordDispatch(report.id, 'sess-1', '2026-08-13T00:00:01Z');
+    expect(isResolveEligible(report.id)).toBe(false);
+  });
+
+  it('resolves once a redispatch concludes cleanly, even though the first attempt was killed having staged nothing', () => {
+    const report = insertReport({
+      projectId: 'proj-1',
+      milestoneId: 'milestone-uuid-1',
+      title: 'A',
+      symptomText: 'a',
+      createdAt: '2026-08-13T00:00:00Z',
+    });
+    insertSession('sess-1', 'killed');
+    recordDispatch(report.id, 'sess-1', '2026-08-13T00:00:01Z');
+    insertSession('sess-2', 'done');
+    recordDispatch(report.id, 'sess-2', '2026-08-13T00:00:02Z');
+    expect(isResolveEligible(report.id)).toBe(true);
+  });
+
   it('is false when a tied staged_intent is still non-terminal', () => {
     const report = insertReport({
       projectId: 'proj-1',
