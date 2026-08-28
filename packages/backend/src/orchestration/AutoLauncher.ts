@@ -38,6 +38,11 @@ import {
   parseThresholdPercent,
 } from './usageAdmission';
 import type { BaseHealthCheckResult } from './baseHealthCheck';
+import {
+  branchExistsLocally,
+  findWorktreePathForBranch,
+  deriveBranchSlug,
+} from '../session/branchModel';
 
 const READY_STATUS = '🗂️ Ready';
 const DONE_STATUS = '✅ Done';
@@ -895,6 +900,32 @@ export class AutoLauncher {
       return false;
     }
     if (hasActiveSessionForTask(task.id)) return false;
+
+    // Guard on branch ownership, not session liveness — archiving a session
+    // releases it from the checks above but leaves its worktree and feature
+    // branch in place. Re-deriving the same deterministic branch name and
+    // attempting `git worktree add -b` on it would fail (or worse, orphan
+    // the prior session's commits), so skip before any worktree is touched.
+    const derivedBranch = deriveBranchSlug(task.title || taskUrl, task.id);
+    if (branchExistsLocally(derivedBranch, project.projectDir)) {
+      const worktreePath =
+        findWorktreePathForBranch(derivedBranch, project.projectDir) ?? null;
+      logger.info(
+        `[AutoLauncher] skip launch for task ${task.id} — branch ${derivedBranch} already exists locally`,
+      );
+      recordEvent({
+        event_type: 'task_launch_skipped_branch_exists',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: project.id,
+        task_id: task.id,
+        payload: {
+          branch: derivedBranch,
+          worktreePath,
+        },
+      });
+      return false;
+    }
 
     // Resolve the repo for this task launch.
     // Single-repo project: auto-resolve to the sole repo (preserves existing behavior).

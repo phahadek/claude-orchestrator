@@ -62,6 +62,7 @@ type EventType =
   | 'scheduled_audit_sweep_command_escalated'
   | 'scheduled_audit_sweep_finding_filed'
   | 'task_launch_escalated'
+  | 'task_launch_skipped_branch_exists'
   | 'task_unblocked'
   | 'pr_unparked'
   | 'repo_git_config_repaired'
