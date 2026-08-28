@@ -5274,8 +5274,7 @@ export class SessionManager extends EventEmitter {
         action: 'send_message',
         reason: deferral?.reason ?? 'usage_limit_deferred',
         detail:
-          deferral?.detail ??
-          'Plan usage window exhausted — deferring resume.',
+          deferral?.detail ?? 'Plan usage window exhausted — deferring resume.',
       } satisfies ServerMessage);
       return null;
     }
@@ -5447,7 +5446,11 @@ export class SessionManager extends EventEmitter {
         fastPathSystemPromptPath,
         { allowReopenTerminal: opts.allowTerminal },
       );
-      const combinedText = this.resolveRespawnDelivery(sessionId, text, session);
+      const combinedText = this.resolveRespawnDelivery(
+        sessionId,
+        text,
+        session,
+      );
       if (!session || combinedText === null) return null;
       resetSessionPokeRetryCount(sessionId);
 
