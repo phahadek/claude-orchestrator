@@ -5732,7 +5732,11 @@ export class SessionManager extends EventEmitter {
       slowPathSystemPromptPath,
       { allowReopenTerminal: opts.allowTerminal },
     );
-    const respawnDelivery = this.resolveRespawnDelivery(sessionId, text, session);
+    const respawnDelivery = this.resolveRespawnDelivery(
+      sessionId,
+      text,
+      session,
+    );
     if (!session || respawnDelivery === null) return null;
     resetSessionPokeRetryCount(sessionId);
     const { combinedText, itemIds } = respawnDelivery;

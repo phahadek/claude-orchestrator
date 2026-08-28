@@ -992,9 +992,7 @@ describe('sendOrResume() respawn-path delivery confirmation', () => {
   };
 
   beforeEach(() => {
-    vi.mocked(queries.getSession).mockReturnValue(
-      CONFIRM_SESSION_ROW as never,
-    );
+    vi.mocked(queries.getSession).mockReturnValue(CONFIRM_SESSION_ROW as never);
   });
 
   it('returns null, records inbox_delivery_unconfirmed, and leaves the item undelivered when send() fails after respawn', async () => {
@@ -1044,8 +1042,8 @@ describe('sendOrResume() respawn-path delivery confirmation', () => {
     expect(recordEvent).not.toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'inbox_delivery_unconfirmed' }),
     );
-    expect(
-      queries.listUndeliveredInboxItems(CONFIRM_SESSION_ID),
-    ).toHaveLength(0);
+    expect(queries.listUndeliveredInboxItems(CONFIRM_SESSION_ID)).toHaveLength(
+      0,
+    );
   });
 });
