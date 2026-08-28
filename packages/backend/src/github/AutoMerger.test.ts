@@ -2448,13 +2448,18 @@ describe('AutoMerger.conflictNudgeSweep()', () => {
     );
     vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'idle' }));
     const github = makeMockGitHub([]);
-    vi.mocked(github.categorizeMergeability).mockResolvedValue({
-      category: 'conflict',
-      mergeState: 'dirty',
-      rawMergeableState: 'dirty',
-      failingChecks: [],
-      headSha: 'sha-unused',
-    });
+    // headSha matches each candidate's own head_sha (not a constant) so the
+    // sweep's "sync head_sha from GitHub" branch never diverges from the DB
+    // row here — that branch calls the real (unmocked) setHeadSha query.
+    vi.mocked(github.categorizeMergeability).mockImplementation(
+      async (prNumber: number) => ({
+        category: 'conflict',
+        mergeState: 'dirty',
+        rawMergeableState: 'dirty',
+        failingChecks: [],
+        headSha: `sha-${prNumber}`,
+      }),
+    );
     const watcher = makeMockWatcher();
     const merger = new AutoMerger(
       github,
