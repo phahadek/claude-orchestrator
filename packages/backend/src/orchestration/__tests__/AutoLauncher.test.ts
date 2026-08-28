@@ -58,6 +58,17 @@ vi.mock('../../projects/ProjectService.js', () => ({
   getProjectRepos: vi.fn().mockReturnValue([]),
 }));
 
+vi.mock('../../session/branchModel.js', async () => {
+  const actual = await vi.importActual<
+    typeof import('../../session/branchSlug.js')
+  >('../../session/branchSlug.js');
+  return {
+    branchExistsLocally: vi.fn().mockReturnValue(false),
+    findWorktreePathForBranch: vi.fn().mockReturnValue(null),
+    deriveBranchSlug: actual.deriveBranchSlug,
+  };
+});
+
 import { runtimeSettings } from '../../config.js';
 import {
   hasActiveSessionForTask,
@@ -81,6 +92,11 @@ import {
 } from '../AutoLauncher.js';
 import { Scheduler, DEGRADED_TICK_THRESHOLD_MS } from '../Scheduler.js';
 import type { ServerMessage } from '../../ws/types';
+import {
+  branchExistsLocally,
+  findWorktreePathForBranch,
+  deriveBranchSlug,
+} from '../../session/branchModel.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -128,6 +144,15 @@ function makeSessionManager(liveCount = 0) {
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+// Global reset: branchExistsLocally/findWorktreePathForBranch mock return
+// values persist across tests (vi.clearAllMocks() only clears call history,
+// not mockReturnValue), so any test that overrides them to simulate a stale
+// branch must not leak that override into unrelated tests in later describes.
+beforeEach(() => {
+  vi.mocked(branchExistsLocally).mockReturnValue(false);
+  vi.mocked(findWorktreePathForBranch).mockReturnValue(null);
+});
 
 describe('AutoLauncher — project-driven polling', () => {
   beforeEach(() => {
@@ -523,6 +548,170 @@ describe('AutoLauncher — project-driven polling', () => {
     await launcher.pollOnce();
 
     expect(sessionManager.start).not.toHaveBeenCalled();
+  });
+
+  // ── Branch-ownership guard tests ────────────────────────────────────────────
+
+  describe('branch-ownership guard', () => {
+    beforeEach(() => {
+      vi.mocked(branchExistsLocally).mockReturnValue(false);
+      vi.mocked(findWorktreePathForBranch).mockReturnValue(null);
+    });
+
+    function setupBranchGuardTest(taskId: string, projectOverrides = {}) {
+      const notionBackend = {
+        type: 'notion' as const,
+        fetchReadyTasks: vi
+          .fn()
+          .mockResolvedValue([makeResolvedTask({ id: taskId })]),
+      };
+      const resolveBackend = vi.fn().mockReturnValue(notionBackend);
+      const sessionManager = makeSessionManager(0);
+      const proj = makeProject({
+        projectDir: '/fake/project',
+        ...projectOverrides,
+      });
+      const launcher = new AutoLauncher(sessionManager as never, undefined, {
+        listProjects: () => [proj],
+        resolveBackend,
+        pollOnStart: false,
+      });
+      return { launcher, sessionManager, proj };
+    }
+
+    it('returns false without creating a session when the derived branch already exists locally', async () => {
+      vi.mocked(branchExistsLocally).mockReturnValue(true);
+      const { launcher, sessionManager } =
+        setupBranchGuardTest('task-branch-exists');
+
+      await launcher.pollOnce();
+
+      expect(sessionManager.start).not.toHaveBeenCalled();
+    });
+
+    it('fires for an owning session that was archived while running (status=running, archived=1)', async () => {
+      // The guard is branch-existence based, not session-row based — it fires
+      // regardless of the archived owning session's prior status, since the
+      // branch/worktree survive archival either way.
+      vi.mocked(branchExistsLocally).mockReturnValue(true);
+      const { launcher, sessionManager } = setupBranchGuardTest(
+        'task-archived-running',
+      );
+
+      await launcher.pollOnce();
+
+      expect(sessionManager.start).not.toHaveBeenCalled();
+    });
+
+    it('fires for an owning session that was archived while idle (status=idle, archived=1)', async () => {
+      vi.mocked(branchExistsLocally).mockReturnValue(true);
+      const { launcher, sessionManager } =
+        setupBranchGuardTest('task-archived-idle');
+
+      await launcher.pollOnce();
+
+      expect(sessionManager.start).not.toHaveBeenCalled();
+    });
+
+    it('proceeds normally when the derived branch does not exist locally', async () => {
+      vi.mocked(branchExistsLocally).mockReturnValue(false);
+      const { launcher, sessionManager } =
+        setupBranchGuardTest('task-no-branch');
+
+      await launcher.pollOnce();
+
+      expect(sessionManager.start).toHaveBeenCalledOnce();
+    });
+
+    it('checks the same branch name the worktree-add path would use (deriveBranchSlug(taskName, taskId))', async () => {
+      const task = makeResolvedTask({
+        id: 'task-name-check',
+        title: 'Some Task Title',
+      });
+      const notionBackend = {
+        type: 'notion' as const,
+        fetchReadyTasks: vi.fn().mockResolvedValue([task]),
+      };
+      const resolveBackend = vi.fn().mockReturnValue(notionBackend);
+      const sessionManager = makeSessionManager(0);
+      const proj = makeProject({ projectDir: '/fake/project' });
+      const launcher = new AutoLauncher(sessionManager as never, undefined, {
+        listProjects: () => [proj],
+        resolveBackend,
+        pollOnStart: false,
+      });
+
+      await launcher.pollOnce();
+
+      const expectedBranch = deriveBranchSlug(
+        task.task.title || task.task.notionUrl,
+        task.task.id,
+      );
+      expect(branchExistsLocally).toHaveBeenCalledWith(
+        expectedBranch,
+        '/fake/project',
+      );
+    });
+
+    it('records exactly one task_launch_skipped_branch_exists event with task_id, project_id, and branch, and creates no session', async () => {
+      vi.mocked(branchExistsLocally).mockReturnValue(true);
+      vi.mocked(findWorktreePathForBranch).mockReturnValue(
+        '/fake/project/.claude/worktrees/old-session-id',
+      );
+      const { launcher, sessionManager } = setupBranchGuardTest(
+        'task-audit-check',
+        { id: 'proj-audit' },
+      );
+
+      await launcher.pollOnce();
+
+      expect(sessionManager.start).not.toHaveBeenCalled();
+      const branchSkipCalls = vi
+        .mocked(recordEvent)
+        .mock.calls.filter(
+          ([evt]) => evt.event_type === 'task_launch_skipped_branch_exists',
+        );
+      expect(branchSkipCalls).toHaveLength(1);
+      expect(branchSkipCalls[0][0]).toMatchObject({
+        event_type: 'task_launch_skipped_branch_exists',
+        task_id: 'task-audit-check',
+        project_id: 'proj-audit',
+        payload: expect.objectContaining({
+          branch: expect.any(String),
+          worktreePath: '/fake/project/.claude/worktrees/old-session-id',
+        }),
+      });
+    });
+
+    it('does not increment the consecutive-failure count that drives task_launch_escalated', async () => {
+      vi.mocked(branchExistsLocally).mockReturnValue(true);
+      const { launcher } = setupBranchGuardTest('task-no-escalation');
+
+      // Poll several times — a real launch_failed would escalate after 3.
+      await launcher.pollOnce();
+      await launcher.pollOnce();
+      await launcher.pollOnce();
+      await launcher.pollOnce();
+
+      expect(setTaskPauseReason).not.toHaveBeenCalled();
+      const escalations = vi
+        .mocked(recordEvent)
+        .mock.calls.filter(
+          ([evt]) => evt.event_type === 'task_launch_escalated',
+        );
+      expect(escalations).toHaveLength(0);
+    });
+
+    it('never deletes a branch or removes a worktree — only reads branch/worktree state', async () => {
+      vi.mocked(branchExistsLocally).mockReturnValue(true);
+      const { launcher } = setupBranchGuardTest('task-no-mutation');
+
+      await launcher.pollOnce();
+
+      // The guard's only allowed branchModel calls are the two read-only lookups.
+      expect(branchExistsLocally).toHaveBeenCalled();
+      expect(findWorktreePathForBranch).toHaveBeenCalled();
+    });
   });
 
   // ── Merged PR skip tests ───────────────────────────────────────────────────

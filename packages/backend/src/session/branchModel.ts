@@ -8,7 +8,10 @@ export type BranchMode = 'two_tier' | 'flat';
 export { slugify, deriveBranchSlug };
 
 /** True when `branch` exists as a local ref in `projectDir`. */
-function branchExistsLocally(branch: string, projectDir: string): boolean {
+export function branchExistsLocally(
+  branch: string,
+  projectDir: string,
+): boolean {
   try {
     execSync(`git rev-parse --verify refs/heads/${branch}`, {
       cwd: projectDir,
@@ -17,6 +20,35 @@ function branchExistsLocally(branch: string, projectDir: string): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Resolves the worktree path currently checked out to `branch`, if any, by
+ * parsing `git worktree list --porcelain`. Returns null when the branch has
+ * no registered worktree (e.g. it exists but is not checked out anywhere) or
+ * the list can't be read.
+ */
+export function findWorktreePathForBranch(
+  branch: string,
+  projectDir: string,
+): string | null {
+  try {
+    const out = execSync('git worktree list --porcelain', {
+      cwd: projectDir,
+      stdio: 'pipe',
+    }).toString();
+    let currentPath: string | null = null;
+    for (const line of out.split('\n')) {
+      if (line.startsWith('worktree ')) {
+        currentPath = line.slice('worktree '.length).trim();
+      } else if (line === `branch refs/heads/${branch}`) {
+        return currentPath;
+      }
+    }
+    return null;
+  } catch {
+    return null;
   }
 }
 
