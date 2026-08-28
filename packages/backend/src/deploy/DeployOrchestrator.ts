@@ -11,6 +11,10 @@ import {
   extractBindingRefs,
 } from './deployBindingsSchema';
 import { matchesPathDiff } from './pathDiffPredicate';
+import {
+  withCheckoutInstallLock,
+  sharesCheckoutNodeModules,
+} from '../orchestration/checkoutInstallLock';
 import type {
   DeployPlaybook,
   StepDescriptor,
@@ -36,6 +40,14 @@ import type { DeployRunRow, DeployRunKind } from '../db/types';
  * before the restart is issued) and on resume (never re-issued).
  */
 export const RESTART_STEP_ID = 'restart';
+
+/**
+ * Conventional step id for the step that runs `npm ci` against the project
+ * checkout — the only step serialized against concurrent test.request lane
+ * runs via checkoutInstallLock, since it's the one that wipes and
+ * reinstalls `node_modules` a worktree-less run resolves through.
+ */
+export const INSTALL_DEPS_STEP_ID = 'install-deps';
 
 /**
  * Conventional step id for the validation step that must confirm the
@@ -883,11 +895,17 @@ export class DeployOrchestrator {
   ): Promise<StepOutcome> {
     switch (step.kind) {
       case 'shell': {
-        const result = await this.runShell(step.command_or_prompt as string, {
-          runAs: step.run_as,
-          cwd: this.projectDir,
-          bindings,
-        });
+        const runIt = () =>
+          this.runShell(step.command_or_prompt as string, {
+            runAs: step.run_as,
+            cwd: this.projectDir,
+            bindings,
+          });
+        const result =
+          step.id === INSTALL_DEPS_STEP_ID &&
+          sharesCheckoutNodeModules(this.projectDir)
+            ? await withCheckoutInstallLock(this.projectDir, runIt)
+            : await runIt();
         return {
           ok: result.ok,
           detail: result.ok ? undefined : shellFailureDetail(step.id, result),
