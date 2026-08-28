@@ -5021,6 +5021,7 @@ export class SessionManager extends EventEmitter {
       try {
         resumed = await this.sendOrResume(sessionId, combined, {
           allowTerminal: true,
+          persistTextOnDefer: false,
         });
       } catch (err) {
         logger.warn(
@@ -5045,7 +5046,9 @@ export class SessionManager extends EventEmitter {
 
     let delivered: string | null;
     try {
-      delivered = await this.sendOrResume(sessionId, combined);
+      delivered = await this.sendOrResume(sessionId, combined, {
+        persistTextOnDefer: false,
+      });
     } catch (err) {
       logger.warn(
         `[SessionManager] ${logContext}: sendOrResume failed for ${sessionId.slice(0, 8)}: ${err}`,
@@ -5117,7 +5120,7 @@ export class SessionManager extends EventEmitter {
   async sendOrResume(
     sessionId: string,
     text: string,
-    opts: { allowTerminal?: boolean } = {},
+    opts: { allowTerminal?: boolean; persistTextOnDefer?: boolean } = {},
   ): Promise<string | null> {
     // Live session — deliver directly. hasEnded excludes a session whose
     // process has already exited (session_ended broadcast) but whose map
@@ -5231,7 +5234,7 @@ export class SessionManager extends EventEmitter {
   private async _doSendOrResume(
     sessionId: string,
     text: string,
-    opts: { allowTerminal?: boolean } = {},
+    opts: { allowTerminal?: boolean; persistTextOnDefer?: boolean } = {},
   ): Promise<string | null> {
     // Session not live — look up details from DB and re-launch with --resume
     const row = getSession(sessionId);
@@ -5373,10 +5376,15 @@ export class SessionManager extends EventEmitter {
           markSessionSuperseded(s.session_id, Date.now(), 'resume_superseded');
         }
       }
-      // Persist before attempting the respawn so a memory/usage-admission
-      // deferral (or any other failure below) never loses the operator's
-      // text — see resolveRespawnDelivery.
-      enqueueFeedbackItem(sessionId, 'operator:message', text);
+      // Persist before attempting the respawn so a usage-admission deferral
+      // (or any other failure below) never loses the operator's text — see
+      // resolveRespawnDelivery. Skipped when the caller's text is already
+      // durable as inbox rows (persistTextOnDefer: false, e.g.
+      // deliverUndeliveredInboxItems), since re-persisting it here would
+      // duplicate it on every deferred retry.
+      if (opts.persistTextOnDefer !== false) {
+        enqueueFeedbackItem(sessionId, 'operator:message', text);
+      }
       const session = this.respawnSession(
         row,
         recordedPath,
@@ -5657,10 +5665,15 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    // Persist before attempting the respawn so a memory/usage-admission
-    // deferral (or any other failure below) never loses the operator's
-    // text — see resolveRespawnDelivery.
-    enqueueFeedbackItem(sessionId, 'operator:message', text);
+    // Persist before attempting the respawn so a usage-admission deferral
+    // (or any other failure below) never loses the operator's text — see
+    // resolveRespawnDelivery. Skipped when the caller's text is already
+    // durable as inbox rows (persistTextOnDefer: false, e.g.
+    // deliverUndeliveredInboxItems), since re-persisting it here would
+    // duplicate it on every deferred retry.
+    if (opts.persistTextOnDefer !== false) {
+      enqueueFeedbackItem(sessionId, 'operator:message', text);
+    }
 
     // Shared helper: creates session with original ID, registers in map,
     // updates DB row to 'running', emits session_status.

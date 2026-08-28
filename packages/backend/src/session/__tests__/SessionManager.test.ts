@@ -686,7 +686,7 @@ describe('enqueueFeedback — terminal session behavior', () => {
       expect(sendOrResumeSpy).toHaveBeenCalledWith(
         SESSION_ID,
         expect.any(String),
-        { allowTerminal: true },
+        { allowTerminal: true, persistTextOnDefer: false },
       );
       expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith([
         'item-1',
@@ -739,6 +739,7 @@ describe('enqueueFeedback — terminal session behavior', () => {
     expect(sendOrResumeSpy).toHaveBeenCalledWith(
       SESSION_ID,
       expect.any(String),
+      { persistTextOnDefer: false },
     );
     expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith(['item-1']);
   });
@@ -802,6 +803,21 @@ describe('enqueueFeedback — usage admission gate', () => {
     await sm.enqueueFeedback(SESSION_ID, 'system:nudge', 'nudge text');
 
     expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith(['item-1']);
+  });
+
+  it('once the deferral clears, every pending row accumulated while withheld is delivered together', async () => {
+    vi.mocked(listUndeliveredInboxItems).mockReturnValue([
+      { id: 'item-1', source: 'system:nudge', payload: 'first pending' },
+      { id: 'item-2', source: 'ai-reviewer', payload: 'second pending' },
+    ] as any);
+
+    vi.spyOn(sm, 'sendOrResume').mockResolvedValueOnce(SESSION_ID);
+    await sm.enqueueFeedback(SESSION_ID, 'ai-reviewer', 'second pending');
+
+    expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith([
+      'item-1',
+      'item-2',
+    ]);
   });
 });
 
