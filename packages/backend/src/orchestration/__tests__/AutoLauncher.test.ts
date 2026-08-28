@@ -145,6 +145,15 @@ function makeSessionManager(liveCount = 0) {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+// Global reset: branchExistsLocally/findWorktreePathForBranch mock return
+// values persist across tests (vi.clearAllMocks() only clears call history,
+// not mockReturnValue), so any test that overrides them to simulate a stale
+// branch must not leak that override into unrelated tests in later describes.
+beforeEach(() => {
+  vi.mocked(branchExistsLocally).mockReturnValue(false);
+  vi.mocked(findWorktreePathForBranch).mockReturnValue(null);
+});
+
 describe('AutoLauncher — project-driven polling', () => {
   beforeEach(() => {
     vi.clearAllMocks();
