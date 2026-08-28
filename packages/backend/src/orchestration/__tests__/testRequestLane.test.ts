@@ -76,6 +76,10 @@ import {
   updateProject,
   getFailingTestIdsForRun,
 } from '../../db/queries';
+import {
+  withCheckoutInstallLock,
+  __checkoutInstallLockMapSizeForTest,
+} from '../checkoutInstallLock';
 
 beforeEach(() => {
   mockRunTestCommands.mockReset();
@@ -412,6 +416,233 @@ describe('runProjectTestRequest — coalescing', () => {
     expect(admission.unchangedReplay).toBe(true);
     expect(replay.unchangedReplay).toBe(true);
     expect(replay.passed).toBe(false);
+  });
+});
+
+describe('runProjectTestRequest — checkout install lock', () => {
+  it('a test run in flight causes a concurrently-requested install-deps to wait until the run settles', async () => {
+    insertProject({
+      id: 'proj-lock-a',
+      name: 'Lock A',
+      project_dir: '/tmp/checkout-lock-a',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    let resolveRun: (v: { passed: boolean; output: string }) => void;
+    mockRunTestCommands.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveRun = resolve;
+        }),
+    );
+
+    const runPromise = runProjectTestRequest(
+      baseSpec({ projectId: 'proj-lock-a', contentHash: 'lock-hash-a' }),
+    );
+    await vi.waitFor(() => expect(mockRunTestCommands).toHaveBeenCalled());
+
+    let installRan = false;
+    const installPromise = withCheckoutInstallLock(
+      '/tmp/checkout-lock-a',
+      async () => {
+        installRan = true;
+      },
+    );
+
+    // Give the install a chance to run prematurely before the test run settles.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(installRan).toBe(false);
+
+    resolveRun!({ passed: true, output: 'ok' });
+    await runPromise;
+    await installPromise;
+    expect(installRan).toBe(true);
+  });
+
+  it('an install-deps in flight causes a concurrently-requested test run to wait until the install completes', async () => {
+    insertProject({
+      id: 'proj-lock-b',
+      name: 'Lock B',
+      project_dir: '/tmp/checkout-lock-b',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    let releaseInstall: () => void;
+    const installPromise = withCheckoutInstallLock(
+      '/tmp/checkout-lock-b',
+      () =>
+        new Promise<void>((resolve) => {
+          releaseInstall = resolve;
+        }),
+    );
+
+    const runPromise = runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-lock-b',
+        contentHash: 'lock-hash-b',
+        worktreePath: '/tmp/checkout-lock-b',
+      }),
+    );
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(mockRunTestCommands).not.toHaveBeenCalled();
+
+    releaseInstall!();
+    await installPromise;
+    await runPromise;
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+  });
+
+  it('two runs against different project checkouts do not serialize against each other', async () => {
+    insertProject({
+      id: 'proj-lock-c1',
+      name: 'Lock C1',
+      project_dir: '/tmp/checkout-lock-c1',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    insertProject({
+      id: 'proj-lock-c2',
+      name: 'Lock C2',
+      project_dir: '/tmp/checkout-lock-c2',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+
+    let releaseInstall: () => void;
+    const installPromise = withCheckoutInstallLock(
+      '/tmp/checkout-lock-c1',
+      () =>
+        new Promise<void>((resolve) => {
+          releaseInstall = resolve;
+        }),
+    );
+
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+    const runPromise = runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-lock-c2',
+        contentHash: 'lock-hash-c2',
+        worktreePath: '/tmp/checkout-lock-c2',
+      }),
+    );
+
+    await runPromise;
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    releaseInstall!();
+    await installPromise;
+  });
+
+  it('a project whose worktrees provision their own dependencies does not acquire the lock', async () => {
+    insertProject({
+      id: 'proj-lock-bootstrap',
+      name: 'Lock Bootstrap',
+      project_dir: '/tmp/checkout-lock-bootstrap',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    mockLoadOrchestratorConfig.mockReturnValue({
+      test_report_glob: '',
+      bootstrap_script: './scripts/bootstrap.sh',
+    });
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    let releaseInstall: () => void;
+    const installPromise = withCheckoutInstallLock(
+      '/tmp/checkout-lock-bootstrap',
+      () =>
+        new Promise<void>((resolve) => {
+          releaseInstall = resolve;
+        }),
+    );
+
+    // The run must not wait on the held install lock, since this project's
+    // worktrees don't share the checkout's node_modules.
+    await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-lock-bootstrap',
+        contentHash: 'lock-hash-bootstrap',
+        worktreePath: '/tmp/checkout-lock-bootstrap',
+      }),
+    );
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    releaseInstall!();
+    await installPromise;
+  });
+
+  it('the lock is released when the guarded operation throws, and a later acquirer is not deadlocked', async () => {
+    await expect(
+      withCheckoutInstallLock('/tmp/checkout-lock-throw', async () => {
+        throw new Error('boom');
+      }),
+    ).rejects.toThrow('boom');
+
+    let secondRan = false;
+    await withCheckoutInstallLock('/tmp/checkout-lock-throw', async () => {
+      secondRan = true;
+    });
+    expect(secondRan).toBe(true);
+  });
+
+  it('the lock map entry self-cleans once the chain for a checkout is idle', async () => {
+    const before = __checkoutInstallLockMapSizeForTest();
+    await withCheckoutInstallLock('/tmp/checkout-lock-selfclean', async () => {
+      // no-op
+    });
+    expect(__checkoutInstallLockMapSizeForTest()).toBe(before);
+  });
+
+  it('two concurrently-requested test runs against the same project checkout do not serialize against each other', async () => {
+    insertProject({
+      id: 'proj-lock-readers',
+      name: 'Lock Readers',
+      project_dir: '/tmp/checkout-lock-readers',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+      test_request_max_concurrent: 2,
+    });
+    const resolvers: Array<(v: { passed: boolean; output: string }) => void> =
+      [];
+    mockRunTestCommands.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+
+    const p1 = runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-lock-readers',
+        contentHash: 'lock-readers-a',
+        worktreePath: '/tmp/checkout-lock-readers',
+      }),
+    );
+    const p2 = runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-lock-readers',
+        contentHash: 'lock-readers-b',
+        worktreePath: '/tmp/checkout-lock-readers',
+      }),
+    );
+
+    // Both runs must be admitted into runTestCommands concurrently — the
+    // checkout lock must not cut same-project run concurrency to 1.
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
+    );
+
+    resolvers.forEach((resolve) => resolve({ passed: true, output: 'ok' }));
+    await Promise.all([p1, p2]);
   });
 });
 

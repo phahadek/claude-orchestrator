@@ -40,6 +40,10 @@ import {
 } from '../session/test-runner';
 import { hasTestRequestAdmission } from './memoryAdmission';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
+import {
+  withCheckoutTestRunLock,
+  sharesCheckoutNodeModules,
+} from './checkoutInstallLock';
 import { typedGetSetting } from '../config/settings';
 import {
   insertTestRequestRun,
@@ -559,17 +563,29 @@ async function executeTestRequestRun(
     // still bounded independently — timeoutSec applies per loop iteration
     // inside runCommandWithTimeout — so this cannot push a run past its
     // configured timeout, only make a run with an early failure run longer.
-    const result = await runTestCommands(
-      spec.worktreePath,
-      spec.commands,
-      spec.timeoutSec,
-      (msg) => logger.info(`[testRequestLane] ${msg}`),
-      // runId keys the per-run cgroup leaf teardown is verified against
-      // (see sessionCgroup.ts's spawnIntoTestRunCgroup) — reusing this
-      // run's own durable id means a surviving process is traceable back
-      // to this exact test_request_runs row.
-      { maxRssMb: spec.maxRssMb, failFast: false, runId },
-    );
+    const runCommands = () =>
+      runTestCommands(
+        spec.worktreePath,
+        spec.commands,
+        spec.timeoutSec,
+        (msg) => logger.info(`[testRequestLane] ${msg}`),
+        // runId keys the per-run cgroup leaf teardown is verified against
+        // (see sessionCgroup.ts's spawnIntoTestRunCgroup) — reusing this
+        // run's own durable id means a surviving process is traceable back
+        // to this exact test_request_runs row.
+        { maxRssMb: spec.maxRssMb, failFast: false, runId },
+      );
+    // A worktree with no bootstrap_script has no node_modules of its own —
+    // it resolves modules through the project checkout's, the same tree a
+    // concurrent deploy's install-deps step (npm ci) rewrites wholesale.
+    // Serialize against that step; a project whose worktrees provision
+    // their own dependencies shares nothing with the checkout and must not
+    // pay this lock. See checkoutInstallLock.ts.
+    const checkoutDir = getProjectRowById(spec.projectId)?.project_dir;
+    const result =
+      checkoutDir && sharesCheckoutNodeModules(spec.worktreePath)
+        ? await withCheckoutTestRunLock(checkoutDir, runCommands)
+        : await runCommands();
     const oomKilled = result.oomKilled ?? false;
     let structuredResult: StructuredTestResult | null = null;
     if (testReportGlob) {
