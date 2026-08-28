@@ -15,6 +15,7 @@ vi.mock('../db/queries.js', () =>
     updatePRDraftStatus: vi.fn(),
     setPendingPush: vi.fn(),
     setPauseReason: vi.fn(),
+    clearPauseReasonEntry: vi.fn(),
     getLocalBranchBySession: vi.fn(),
     setLocalBranchPauseReason: vi.fn(),
     addAutofixSha: vi.fn(),
@@ -120,6 +121,7 @@ import {
   getAllPendingReviewSyncs,
   setPreReviewStage,
   setPendingPush,
+  clearPauseReasonEntry,
   setLastReviewedSha,
   enqueueFeedbackItem,
   upsertDepthReviewVerdict,
@@ -142,6 +144,8 @@ import type {
 import {
   pauseReasonFromCanonical,
   serializePauseReason,
+  serializePauseReasonSet,
+  isMergeBlockingPause,
 } from '../db/pauseReason';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1342,6 +1346,94 @@ describe('ReviewOrchestrator — depth review hold: clears depth_review_pending 
     ),
   };
 
+  it('clears depth_review_pending from a set that also contains test_report_acquisition_failed, leaving a non-merge-blocking surviving set', async () => {
+    const testReportEntry = {
+      ...pauseReasonFromCanonical('test_report_acquisition_failed'),
+      set_at: Date.now(),
+    };
+    const depthReviewEntry = {
+      ...pauseReasonFromCanonical('depth_review_pending'),
+      set_at: Date.now(),
+    };
+    const mixedSetRow = {
+      ...basePRRow,
+      pause_reason: serializePauseReasonSet([
+        depthReviewEntry,
+        testReportEntry,
+      ]),
+    };
+    vi.mocked(getPRByNumber).mockReturnValue(mixedSetRow as any);
+    vi.mocked(getDepthReviewVerdict).mockReturnValue(undefined);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'All good.',
+      reviewedAt: new Date().toISOString(),
+    });
+    const runDepthReview = vi.fn().mockResolvedValue(makeDepthResult({}));
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+    const autoMerger = makeMockAutoMerger();
+    orch.setAutoMerger(autoMerger as any);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(vi.mocked(clearPauseReasonEntry)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'depth_review_pending',
+    );
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      null,
+    );
+    expect(autoMerger.attempt).toHaveBeenCalledWith(1, 'owner/repo');
+
+    // Regression for the #1064 incident: the surviving set (with
+    // depth_review_pending removed) is no longer merge-blocking.
+    const survivingSet = serializePauseReasonSet([testReportEntry]);
+    expect(isMergeBlockingPause(survivingSet)).toBe(false);
+    expect(isMergeBlockingPause(mixedSetRow.pause_reason)).toBe(true);
+  });
+
+  it('leaves a set with no depth_review_pending entry untouched and still invokes AutoMerger.attempt', async () => {
+    const testReportOnlyRow = {
+      ...basePRRow,
+      pause_reason: serializePauseReason(
+        pauseReasonFromCanonical('test_report_acquisition_failed'),
+      ),
+    };
+    vi.mocked(getPRByNumber).mockReturnValue(testReportOnlyRow as any);
+    vi.mocked(getDepthReviewVerdict).mockReturnValue(undefined);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'All good.',
+      reviewedAt: new Date().toISOString(),
+    });
+    const runDepthReview = vi.fn().mockResolvedValue(makeDepthResult({}));
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+    const autoMerger = makeMockAutoMerger();
+    orch.setAutoMerger(autoMerger as any);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(vi.mocked(clearPauseReasonEntry)).not.toHaveBeenCalled();
+    expect(autoMerger.attempt).toHaveBeenCalledWith(1, 'owner/repo');
+  });
+
   function makeMockAutoMerger() {
     return { attempt: vi.fn() };
   }
@@ -1449,10 +1541,10 @@ describe('ReviewOrchestrator — depth review hold: clears depth_review_pending 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 40));
 
-    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+    expect(vi.mocked(clearPauseReasonEntry)).toHaveBeenCalledWith(
       1,
       'owner/repo',
-      null,
+      'depth_review_pending',
     );
     expect(autoMerger.attempt).toHaveBeenCalledWith(1, 'owner/repo');
   });
@@ -1496,10 +1588,10 @@ describe('ReviewOrchestrator — depth review hold: clears depth_review_pending 
       'owner/repo',
       'depth_review_escalation',
     );
-    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+    expect(vi.mocked(clearPauseReasonEntry)).toHaveBeenCalledWith(
       1,
       'owner/repo',
-      null,
+      'depth_review_pending',
     );
     expect(autoMerger.attempt).toHaveBeenCalledWith(1, 'owner/repo');
   });
@@ -1528,10 +1620,10 @@ describe('ReviewOrchestrator — depth review hold: clears depth_review_pending 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 40));
 
-    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+    expect(vi.mocked(clearPauseReasonEntry)).toHaveBeenCalledWith(
       1,
       'owner/repo',
-      null,
+      'depth_review_pending',
     );
     expect(autoMerger.attempt).toHaveBeenCalledWith(1, 'owner/repo');
   });
@@ -1559,10 +1651,10 @@ describe('ReviewOrchestrator — depth review hold: clears depth_review_pending 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 40));
 
-    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+    expect(vi.mocked(clearPauseReasonEntry)).toHaveBeenCalledWith(
       1,
       'owner/repo',
-      null,
+      'depth_review_pending',
     );
     expect(autoMerger.attempt).toHaveBeenCalledWith(1, 'owner/repo');
   });
@@ -1593,10 +1685,10 @@ describe('ReviewOrchestrator — depth review hold: clears depth_review_pending 
       await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
 
-      expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      expect(vi.mocked(clearPauseReasonEntry)).toHaveBeenCalledWith(
         1,
         'owner/repo',
-        null,
+        'depth_review_pending',
       );
       expect(autoMerger.attempt).toHaveBeenCalledWith(1, 'owner/repo');
     } finally {
