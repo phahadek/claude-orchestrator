@@ -86,6 +86,7 @@ function seedInbox(
 
 vi.mock('../db/queries', () => ({
   TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
+  getUsageDeferral: vi.fn(() => null),
   getGrantedCapabilities: vi.fn(() => []),
   addGrantedCapability: vi.fn(() => []),
   removeGrantedCapability: vi.fn(() => []),
@@ -257,11 +258,22 @@ import * as configModule from '../config';
 import { recordEvent } from '../audit/AuditLog';
 import fs from 'fs';
 import type { AgentSession } from '../session/AgentSession';
+import { hasMemoryHeadroom } from '../orchestration/memoryAdmission';
 
 beforeEach(() => {
   vi.clearAllMocks();
   inboxItemsBySession.clear();
   nextInboxId = 1;
+  // vi.clearAllMocks() clears call history but not a mockReturnValue set by
+  // an earlier test — reassert the "headroom available" default so a test
+  // that overrides this to simulate a decline can't leak into later tests.
+  vi.mocked(hasMemoryHeadroom).mockReturnValue({
+    allowed: true,
+    freeMemMB: 8192,
+    minHostFreeMemoryMB: 4096,
+    perSessionReserveMB: 3072,
+    projectedFreeMB: 5120,
+  });
 });
 
 describe('SessionManager.enqueueFeedback()', () => {
@@ -638,6 +650,229 @@ describe('SessionManager.enqueueFeedback()', () => {
       expect(queries.markInboxItemsDelivered).not.toHaveBeenCalled();
       expect(queries.listUndeliveredInboxItems('sess-idle-3')).toHaveLength(1);
     });
+  });
+});
+
+/**
+ * sendOrResume() driven end-to-end (not via the enqueueFeedback wrapper)
+ * against a parked session whose respawn the memory-admission gate
+ * declines — see respawnSession's memory-admission gate and
+ * _doSendOrResume's fast (worktree-reuse) path in SessionManager.ts. This
+ * exercises the real respawnSession/resolveRespawnDelivery logic (not a
+ * mocked respawnSession) so lastRespawnDeferral is genuinely populated by
+ * the memory gate rather than assumed.
+ */
+describe('SessionManager sendOrResume(): memory-admission gate deferral', () => {
+  const POKE_ROW = {
+    session_id: 'sess-poke',
+    task_id: 'task-poke',
+    task_url: null,
+    project_context_url: null,
+    project_id: 'proj-poke',
+    status: 'idle',
+    session_type: 'standard',
+    worktree_path: '/tmp/proj/.claude/worktrees/sess-poke',
+    pr_url: null,
+    task_name: 'Poke task',
+    archived: 0,
+  };
+
+  beforeEach(() => {
+    vi.mocked(queries.getSession).mockReturnValue(POKE_ROW as never);
+    vi.mocked(configModule.getProjectById).mockReturnValue({
+      id: 'proj-poke',
+      projectDir: '/tmp/proj',
+      taskSource: 'notion',
+      baseBranch: 'dev',
+      gitMode: 'worktree',
+    } as never);
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+  });
+
+  it('emits a memory-specific session_action_failed carrying the observed headroom, and persists the operator text without delivering it', async () => {
+    vi.mocked(hasMemoryHeadroom).mockReturnValue({
+      allowed: false,
+      freeMemMB: 1431.59,
+      minHostFreeMemoryMB: 4096,
+      perSessionReserveMB: 3072,
+      projectedFreeMB: -1640.41,
+    });
+
+    const sm = new SessionManager();
+    const emitSpy = vi.spyOn(sm, 'emit');
+
+    const result = await sm.sendOrResume('sess-poke', 'please check the PR');
+
+    expect(result).toBeNull();
+    expect(emitSpy).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        type: 'session_action_failed',
+        sessionId: 'sess-poke',
+        action: 'send_message',
+        reason: 'memory_admission_deferred',
+        detail: expect.stringContaining('projectedFreeMB=-1640.4'),
+      }),
+    );
+    expect(queries.enqueueFeedbackItem).toHaveBeenCalledWith(
+      'sess-poke',
+      'operator:message',
+      'please check the PR',
+    );
+    expect(queries.markInboxItemsDelivered).not.toHaveBeenCalled();
+    expect(queries.listUndeliveredInboxItems('sess-poke')).toHaveLength(1);
+  });
+
+  it('delivers the persisted message once a later respawn succeeds, and not twice', async () => {
+    vi.mocked(hasMemoryHeadroom).mockReturnValue({
+      allowed: false,
+      freeMemMB: 1000,
+      minHostFreeMemoryMB: 4096,
+      perSessionReserveMB: 3072,
+      projectedFreeMB: -3096,
+    });
+
+    const sm = new SessionManager();
+    const deferred = await sm.sendOrResume('sess-poke', 'first message');
+    expect(deferred).toBeNull();
+    expect(queries.listUndeliveredInboxItems('sess-poke')).toHaveLength(1);
+
+    vi.mocked(hasMemoryHeadroom).mockReturnValue({
+      allowed: true,
+      freeMemMB: 8192,
+      minHostFreeMemoryMB: 4096,
+      perSessionReserveMB: 3072,
+      projectedFreeMB: 5120,
+    });
+    const sendSpy = vi.spyOn(sm, 'send');
+
+    const delivered = await sm.sendOrResume('sess-poke', 'second message');
+
+    expect(delivered).toBe('sess-poke');
+    expect(queries.markInboxItemsDelivered).toHaveBeenCalledTimes(1);
+    expect(queries.listUndeliveredInboxItems('sess-poke')).toHaveLength(0);
+    // Both the deferred first message and the newly-sent second message are
+    // delivered together, in one call, exactly once — not just the latest,
+    // and not twice.
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(sendSpy).toHaveBeenCalledWith(
+      'sess-poke',
+      expect.stringContaining('first message'),
+    );
+    expect(sendSpy).toHaveBeenCalledWith(
+      'sess-poke',
+      expect.stringContaining('second message'),
+    );
+  });
+});
+
+/**
+ * Every null-returning branch of _doSendOrResume must surface a
+ * session_action_failed to the operator — enumerated explicitly here so a
+ * newly-added silent branch fails this test instead of shipping unnoticed.
+ */
+describe('SessionManager sendOrResume(): every null-returning branch reports itself', () => {
+  it('session not found in DB', async () => {
+    vi.mocked(queries.getSession).mockReturnValue(undefined as never);
+    const sm = new SessionManager();
+    const emitSpy = vi.spyOn(sm, 'emit');
+
+    const result = await sm.sendOrResume('sess-missing', 'hello');
+
+    expect(result).toBeNull();
+    expect(emitSpy).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        type: 'session_action_failed',
+        reason: 'session_not_found',
+      }),
+    );
+  });
+
+  it('terminal session (unchanged regression check)', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-term',
+      status: 'done',
+      archived: 0,
+    } as never);
+    const sm = new SessionManager();
+    const emitSpy = vi.spyOn(sm, 'emit');
+
+    const result = await sm.sendOrResume('sess-term', 'hello');
+
+    expect(result).toBeNull();
+    expect(emitSpy).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        type: 'session_action_failed',
+        reason: 'terminal_session',
+        detail: 'Session is in terminal state: done',
+      }),
+    );
+  });
+
+  it('planning session still initializing (unchanged regression check)', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-init',
+      status: 'starting',
+      session_type: 'groom',
+      archived: 0,
+    } as never);
+    const sm = new SessionManager();
+    const emitSpy = vi.spyOn(sm, 'emit');
+
+    const result = await sm.sendOrResume('sess-init', 'hello');
+
+    expect(result).toBeNull();
+    expect(emitSpy).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        type: 'session_action_failed',
+        reason: 'still_initializing',
+        detail: 'Session is still starting up — try again in a moment.',
+      }),
+    );
+  });
+
+  it('memory-admission deferral on respawn (fast worktree-reuse path)', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-mem',
+      task_id: 'task-mem',
+      project_id: 'proj-mem',
+      status: 'idle',
+      session_type: 'standard',
+      worktree_path: '/tmp/proj/.claude/worktrees/sess-mem',
+      archived: 0,
+    } as never);
+    vi.mocked(configModule.getProjectById).mockReturnValue({
+      id: 'proj-mem',
+      projectDir: '/tmp/proj',
+      taskSource: 'notion',
+      baseBranch: 'dev',
+      gitMode: 'worktree',
+    } as never);
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(hasMemoryHeadroom).mockReturnValue({
+      allowed: false,
+      freeMemMB: 500,
+      minHostFreeMemoryMB: 4096,
+      perSessionReserveMB: 3072,
+      projectedFreeMB: -2572,
+    });
+
+    const sm = new SessionManager();
+    const emitSpy = vi.spyOn(sm, 'emit');
+
+    const result = await sm.sendOrResume('sess-mem', 'hello');
+
+    expect(result).toBeNull();
+    expect(emitSpy).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        type: 'session_action_failed',
+        reason: 'memory_admission_deferred',
+      }),
+    );
   });
 });
 
