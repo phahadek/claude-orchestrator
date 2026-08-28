@@ -19,6 +19,14 @@
  *   item marked delivered-without-resend — and even then a needs-attention
  *   signal (pause reason + session_action_failed) is surfaced instead of a
  *   silent drop.
+ *
+ * This file exercises deliverUndeliveredInboxItems' contract with sendOrResume
+ * mocked at the boundary (a non-null resolution means "confirmed", null means
+ * "not delivered"). The deeper respawn-path confirmation logic itself —
+ * _doSendOrResume checking send()'s boolean return instead of discarding it,
+ * and recording inbox_delivery_unconfirmed when a respawned session never
+ * confirms delivery — is exercised against the real respawn machinery in
+ * SessionManager.sendOrResume.test.ts.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 

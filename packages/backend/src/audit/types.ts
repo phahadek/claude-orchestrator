@@ -27,6 +27,7 @@ type EventType =
   | 'session_errored'
   | 'session_backfilled'
   | 'verdict_routing_failed'
+  | 'inbox_delivery_unconfirmed'
   | 'manual_pr_clear'
   | 'sessions_auto_archived'
   | 'planning_sessions_idle_swept_terminal'
