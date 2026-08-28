@@ -12,12 +12,8 @@ const GIT_CONFIG_LOCK_RE =
 import { recordEvent } from '../audit/AuditLog';
 import type { WorktreeTeardownRefusedPayload } from '../audit/types';
 import { scrubSecrets } from '../security/scrubSecrets';
-import {
-  AgentSession,
-  parseNotionPageIdDashed,
-  isMcpUnreachable,
-} from './AgentSession';
-import { formatTaskId } from '../tasks/taskId';
+import { AgentSession, isMcpUnreachable } from './AgentSession';
+import { deriveTaskId } from '../tasks/deriveTaskId';
 import { buildSessionContext } from './ContextBuilder';
 import {
   buildReviewClaudeMd,
@@ -180,23 +176,7 @@ import {
 import type { PRReviewResult } from '../github/PRReviewService';
 import { logger } from '../logger';
 
-/**
- * Derive a prefixed task ID from a task URL, using the project's task source
- * to determine the format.
- * - notion: formatTaskId('notion', parseNotionPageIdDashed(url)) — existing logic
- * - github: extracts issue number from https://github.com/.../issues/<N>
- * - other sources: fall back to notion parsing (safe for YAML/Jira which pass
- *   explicit taskId via StartOptions.taskId anyway)
- */
-export function deriveTaskId(taskSource: string, taskUrl: string): string {
-  if (taskSource === 'github') {
-    const m = taskUrl.match(/\/issues\/(\d+)/);
-    if (m) return formatTaskId('github', m[1]);
-    // URL not parseable — store the raw URL under github prefix so lookups still work
-    return formatTaskId('github', taskUrl);
-  }
-  return formatTaskId('notion', parseNotionPageIdDashed(taskUrl));
-}
+export { deriveTaskId };
 
 /** Max chars per file snippet to avoid bloating the CLAUDE.md. */
 const MAX_FILE_CHARS = 8_000;

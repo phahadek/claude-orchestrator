@@ -1109,19 +1109,31 @@ describe('SessionManager — error broadcast and rollback', () => {
 });
 
 // ── AC: SessionManager.start() writes sessions.task_id in dashed UUID form ───
+// deriveTaskId (and its parseNotionPageIdDashed dependency) live in the leaf
+// module tasks/deriveTaskId.ts, re-exported through both AgentSession.ts and
+// SessionManager.ts — this keeps every existing import site working (and
+// keeps AgentSession's exports mockable the way many SessionManager tests
+// expect) while letting id-derivation-only callers like AutoLauncher's
+// branch-existence guard import the leaf module directly, without pulling in
+// SessionManager.ts's/AgentSession.ts's full dependency graph.
 describe('SessionManager.start() — dashed task_id', () => {
   const smSource = fs.readFileSync(
     path.join(__dirname, '..', 'session', 'SessionManager.ts'),
     'utf-8',
   );
+  const deriveTaskIdSource = fs.readFileSync(
+    path.join(__dirname, '..', 'tasks', 'deriveTaskId.ts'),
+    'utf-8',
+  );
 
-  it('imports parseNotionPageIdDashed (not parseNotionPageId) from AgentSession', () => {
-    expect(smSource).toMatch(/parseNotionPageIdDashed/);
-    expect(smSource).not.toMatch(/import.*parseNotionPageId[^D]/);
+  it('SessionManager.ts derives task ids via deriveTaskId from tasks/deriveTaskId', () => {
+    expect(smSource).toMatch(
+      /import\s*\{\s*deriveTaskId\s*\}\s*from\s*'\.\.\/tasks\/deriveTaskId'/,
+    );
   });
 
-  it('uses parseNotionPageIdDashed when building notionTaskId', () => {
-    expect(smSource).toMatch(
+  it('deriveTaskId uses parseNotionPageIdDashed (not parseNotionPageId) when building notionTaskId', () => {
+    expect(deriveTaskIdSource).toMatch(
       /formatTaskId\s*\(\s*'notion'\s*,\s*parseNotionPageIdDashed\s*\(\s*taskUrl\s*\)\s*\)/,
     );
   });

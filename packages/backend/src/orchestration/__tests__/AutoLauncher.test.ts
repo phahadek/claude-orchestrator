@@ -97,7 +97,7 @@ import {
   findWorktreePathForBranch,
   deriveBranchSlug,
 } from '../../session/branchModel.js';
-import { deriveTaskId } from '../../session/SessionManager.js';
+import { deriveTaskId } from '../../tasks/deriveTaskId.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

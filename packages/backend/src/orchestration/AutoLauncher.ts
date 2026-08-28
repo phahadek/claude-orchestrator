@@ -1,6 +1,6 @@
 import { logger } from '../logger';
 import type { SessionManager } from '../session/SessionManager';
-import { deriveTaskId } from '../session/SessionManager';
+import { deriveTaskId } from '../tasks/deriveTaskId';
 import { WorktreeSetupError } from '../session/WorktreeSetupError';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import { getTaskBackend } from '../tasks/TaskBackend';
