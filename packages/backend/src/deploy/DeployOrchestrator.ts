@@ -47,7 +47,7 @@ export const RESTART_STEP_ID = 'restart';
  * runs via checkoutInstallLock, since it's the one that wipes and
  * reinstalls `node_modules` a worktree-less run resolves through.
  */
-const INSTALL_DEPS_STEP_ID = 'install-deps';
+export const INSTALL_DEPS_STEP_ID = 'install-deps';
 
 /**
  * Conventional step id for the validation step that must confirm the
