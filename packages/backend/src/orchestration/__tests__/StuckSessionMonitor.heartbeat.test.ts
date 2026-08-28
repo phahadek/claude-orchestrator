@@ -14,6 +14,8 @@ vi.mock('../../db/queries.js', () => ({
   getPRBySessionId: vi.fn().mockReturnValue(null),
   setPauseReason: vi.fn(),
   setTaskPauseReason: vi.fn(),
+  setSessionPauseReason: vi.fn(),
+  archiveSession: vi.fn(),
   insertPauseInterval: vi.fn(),
   closePauseInterval: vi.fn(),
   upsertStuckSessionTimer: vi.fn(),
@@ -48,6 +50,7 @@ function makeSessionManager() {
     }),
     send: vi.fn(),
     kill: vi.fn().mockResolvedValue(undefined),
+    reclaimSessionProcess: vi.fn(),
     emit(event: string, msg: unknown) {
       handlers[event]?.(msg);
     },

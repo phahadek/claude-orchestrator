@@ -194,7 +194,7 @@ describe('AgentSession — null exit after a successful result event', () => {
     expect(row?.status).toBe('idle');
   });
 
-  it('a null exit with no successful result on record is still classified as runner_killed_unexpected', async () => {
+  it('a null exit with no successful result on record is still surfaced to the operator as runner_killed_unexpected, not markSessionErrored', async () => {
     const sessionId = 'sess-null-exit-no-result';
     seedSession(sessionId);
     // No result event recorded — this process never got that far.
@@ -207,11 +207,15 @@ describe('AgentSession — null exit after a successful result event', () => {
     resolveRun(null);
     await runPromise;
 
-    expect(sm.markSessionErrored).toHaveBeenCalledWith(
-      sessionId,
-      'killed',
-      'runner_killed_unexpected',
-      expect.any(String),
-    );
+    expect(sm.markSessionErrored).not.toHaveBeenCalled();
+    const row = db
+      .prepare(
+        'SELECT archived, pause_reason FROM sessions WHERE session_id = ?',
+      )
+      .get(sessionId) as
+      | { archived: number; pause_reason: string | null }
+      | undefined;
+    expect(row?.archived).toBe(1);
+    expect(row?.pause_reason).toBe('runner_killed_unexpected');
   });
 });
