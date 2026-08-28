@@ -353,26 +353,10 @@ function sessionLog(sessionId: string, ...args: unknown[]) {
   logger.info(`[Session ${sessionId.slice(0, 8)}]`, ...args);
 }
 
-/** Parse the Notion page ID out of a notion.so URL or return the raw value. */
-export function parseNotionPageId(url: string): string {
-  const match = url.match(/([a-f0-9]{32})$/i);
-  if (match) return match[1];
-  const uuidMatch = url.match(/([0-9a-f-]{36})$/i);
-  if (uuidMatch) return uuidMatch[1].replace(/-/g, '');
-  return url;
-}
-
-/**
- * Like parseNotionPageId, but always returns the dashed UUID form (Notion's native).
- * Converts a 32-hex dashless ID to dashed; passes through already-dashed or non-UUID inputs unchanged.
- */
-export function parseNotionPageIdDashed(url: string): string {
-  const raw = parseNotionPageId(url);
-  if (/^[0-9a-f]{32}$/i.test(raw)) {
-    return `${raw.slice(0, 8)}-${raw.slice(8, 12)}-${raw.slice(12, 16)}-${raw.slice(16, 20)}-${raw.slice(20)}`;
-  }
-  return raw;
-}
+export {
+  parseNotionPageId,
+  parseNotionPageIdDashed,
+} from '../tasks/deriveTaskId';
 
 /**
  * Attempt to extract an existing PR number from a GitHub 422 "already exists" error
