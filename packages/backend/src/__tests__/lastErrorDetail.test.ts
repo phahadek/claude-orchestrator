@@ -66,6 +66,7 @@ vi.mock('../db/queries', () => ({
   setHeadSha: vi.fn(),
   setPauseReason: vi.fn(),
   setSessionPauseReason: vi.fn(),
+  archiveSession: vi.fn(),
   insertPauseInterval: vi.fn(),
   getSession: vi.fn(() => null),
   getSessionTags: vi.fn(() => []),
@@ -120,7 +121,12 @@ vi.mock('../session/sessionRecovery', () => ({
 // ── Imports ──────────────────────────────────────────────────────────────────
 
 import { AgentSession } from '../session/AgentSession';
-import { getEventsBySession } from '../db/queries';
+import {
+  getEventsBySession,
+  archiveSession,
+  setSessionPauseReason,
+  setSessionLastErrorDetail,
+} from '../db/queries';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import type { ISessionManager } from '../session/SessionAuditor';
 
@@ -214,7 +220,7 @@ describe('AgentSession error paths pass a concise detail to markSessionErrored',
     );
   });
 
-  it('null exit code records "process killed unexpectedly"', async () => {
+  it('null exit code surfaces to the operator with "process killed unexpectedly", not markSessionErrored', async () => {
     const session = makeSession(sm as unknown as ISessionManager);
     const runPromise = session.run();
     await new Promise((r) => setTimeout(r, 10));
@@ -223,10 +229,14 @@ describe('AgentSession error paths pass a concise detail to markSessionErrored',
     mockProc.proc.emit('exit', null);
     await runPromise;
 
-    expect(sm.markSessionErrored).toHaveBeenCalledWith(
+    expect(sm.markSessionErrored).not.toHaveBeenCalled();
+    expect(archiveSession).toHaveBeenCalledWith('sess-err');
+    expect(setSessionPauseReason).toHaveBeenCalledWith(
       'sess-err',
-      'killed',
       'runner_killed_unexpected',
+    );
+    expect(setSessionLastErrorDetail).toHaveBeenCalledWith(
+      'sess-err',
       'process killed unexpectedly',
     );
   });

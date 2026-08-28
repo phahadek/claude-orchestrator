@@ -16,16 +16,26 @@ import { parsePauseReason } from '../../src/db/pauseReason';
 interface MockSessionManager extends SessionManager {
   send: ReturnType<typeof vi.fn>;
   kill: ReturnType<typeof vi.fn>;
+  reclaimSessionProcess: ReturnType<typeof vi.fn>;
 }
 
 function makeMockSessionManager(): MockSessionManager {
   const sm = new EventEmitter() as unknown as MockSessionManager;
   sm.send = vi.fn();
   sm.kill = vi.fn().mockResolvedValue(undefined);
+  sm.reclaimSessionProcess = vi.fn();
   (sm as unknown as { isAlive: ReturnType<typeof vi.fn> }).isAlive = vi
     .fn()
     .mockReturnValue(false);
   return sm;
+}
+
+function getSessionRow(sessionId: string) {
+  return db
+    .prepare('SELECT archived, pause_reason FROM sessions WHERE session_id = ?')
+    .get(sessionId) as
+    | { archived: number; pause_reason: string | null }
+    | undefined;
 }
 
 function fireMessage(sm: SessionManager, msg: ServerMessage): void {
@@ -305,7 +315,11 @@ describe('StuckSessionMonitor', () => {
       content: '',
     });
 
-    expect(sm.kill).toHaveBeenCalledWith(SESSION_ID);
+    expect(sm.kill).not.toHaveBeenCalled();
+    expect(sm.reclaimSessionProcess).toHaveBeenCalledWith(SESSION_ID);
+    const row = getSessionRow(SESSION_ID);
+    expect(row?.archived).toBe(1);
+    expect(row?.pause_reason).toBe('stuck_session_hard_stop_tool_use');
     expect(broadcast).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'stuck_session_killed',
@@ -322,9 +336,9 @@ describe('StuckSessionMonitor', () => {
     fireMessage(sm, sessionStarted());
     vi.advanceTimersByTime(120_000); // pause fires
     vi.advanceTimersByTime(31_000); // past window — the window's own expiry
-    // already force-killed the session (see the force-kill test below), so
-    // sm.kill was called exactly once by the time it expired.
-    sm.kill.mockClear();
+    // already reclaimed the session (see the force-kill test below), so
+    // reclaimSessionProcess was called exactly once by the time it expired.
+    sm.reclaimSessionProcess.mockClear();
 
     fireMessage(sm, {
       type: 'session_event',
@@ -332,13 +346,14 @@ describe('StuckSessionMonitor', () => {
       eventType: 'tool_use',
       content: '',
     });
-    // checkHardStop's own kill trigger no longer applies — hardStopArmed was
-    // already cleared when the window expired — so this specific tool_use
-    // event doesn't trigger a second, redundant kill call.
+    // checkHardStop's own escalation trigger no longer applies —
+    // hardStopArmed was already cleared when the window expired — so this
+    // specific tool_use event doesn't trigger a second, redundant reclaim.
     expect(sm.kill).not.toHaveBeenCalled();
+    expect(sm.reclaimSessionProcess).not.toHaveBeenCalled();
   });
 
-  it('force-kills a session that goes completely silent through the hard-stop window — no tool_use, no events at all', () => {
+  it('surfaces to the operator (reclaim + archive, never kill) a session that goes completely silent through the hard-stop window — no tool_use, no events at all', () => {
     const sm = makeMockSessionManager();
     const broadcast = vi.fn();
     new StuckSessionMonitor(sm, broadcast);
@@ -347,7 +362,11 @@ describe('StuckSessionMonitor', () => {
     vi.advanceTimersByTime(120_000); // pause fires, arms the hard-stop window
     vi.advanceTimersByTime(31_000); // window expires with zero further activity
 
-    expect(sm.kill).toHaveBeenCalledWith(SESSION_ID);
+    expect(sm.kill).not.toHaveBeenCalled();
+    expect(sm.reclaimSessionProcess).toHaveBeenCalledWith(SESSION_ID);
+    const row = getSessionRow(SESSION_ID);
+    expect(row?.archived).toBe(1);
+    expect(row?.pause_reason).toBe('stuck_session_hard_stop_window_expired');
     expect(broadcast).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'stuck_session_killed',
@@ -418,6 +437,7 @@ describe('StuckSessionMonitor', () => {
       content: '',
     });
     expect(sm.kill).not.toHaveBeenCalled();
+    expect(sm.reclaimSessionProcess).not.toHaveBeenCalled();
   });
 
   it('pr_created cancels notify, pause, and hard-stop timers', () => {
