@@ -696,7 +696,6 @@ describe('SessionManager sendOrResume(): every null-returning branch reports its
       }),
     );
   });
-
 });
 
 /**

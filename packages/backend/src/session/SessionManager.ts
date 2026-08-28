@@ -1223,8 +1223,10 @@ export class SessionManager extends EventEmitter {
    * sendOrResume calls because nothing awaits between the respawnSession()
    * call and the read of this field.
    */
-  private lastRespawnDeferral: { reason: 'usage_limit_deferred'; detail: string } | null =
-    null;
+  private lastRespawnDeferral: {
+    reason: 'usage_limit_deferred';
+    detail: string;
+  } | null = null;
 
   /**
    * Late-bound hook to PlanningOrchestrator.tryTerminalizeIfComplete — unset
