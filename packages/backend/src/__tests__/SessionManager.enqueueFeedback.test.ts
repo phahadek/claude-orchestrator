@@ -760,9 +760,9 @@ describe('SessionManager inbox drain: deferred delivery does not duplicate inbox
       'feedback_undelivered_terminal',
     );
     expect(queries.markInboxItemsDelivered).toHaveBeenCalled();
-    expect(queries.listUndeliveredInboxItems('sess-drain-terminal')).toHaveLength(
-      0,
-    );
+    expect(
+      queries.listUndeliveredInboxItems('sess-drain-terminal'),
+    ).toHaveLength(0);
   });
 });
 
