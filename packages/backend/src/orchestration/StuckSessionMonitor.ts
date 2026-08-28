@@ -393,20 +393,20 @@ export class StuckSessionMonitor {
       const rows = getStuckAliveSubprocessParkRows();
       const now = Date.now();
       for (const row of rows) {
-        // A new event since the park means the session is genuinely active
-        // again (e.g. a late-arriving event, or a respawn) — not a persistent
-        // park, regardless of how much time has passed.
-        const hasNewEvent =
-          row.latest_event_ts != null &&
-          row.latest_event_ts > row.last_known_event_ts;
-        if (hasNewEvent) continue;
-
-        const parkAgeMs = now - row.parked_at;
-        if (parkAgeMs < boundMs) continue;
+        // Event silence, not comparison against sessions.ended_at or
+        // parked_at, is what separates a genuinely wedged park from a
+        // working one: a resumed session's ended_at still carries its
+        // original clean-exit instant, and the resume's own hook events
+        // land within ~1s of the park itself, so either baseline would
+        // treat every resume as permanently active. Only the duration
+        // since the newest event actually distinguishes the two.
+        if (row.latest_event_ts == null) continue;
+        const silenceMs = now - row.latest_event_ts;
+        if (silenceMs < boundMs) continue;
 
         if (!isSessionProcessAlive(row.session_id)) continue;
 
-        await this.escalateStuckAliveSubprocessPark(row, parkAgeMs);
+        await this.escalateStuckAliveSubprocessPark(row, silenceMs);
       }
     } catch (e) {
       logger.error(
@@ -436,11 +436,11 @@ export class StuckSessionMonitor {
    */
   private async escalateStuckAliveSubprocessPark(
     row: StuckAliveSubprocessParkRow,
-    parkAgeMs: number,
+    silenceMs: number,
   ): Promise<void> {
     logger.warn(
       `[StuckSessionMonitor] reclaiming stuck_session_alive_subprocess park for ${row.session_id.slice(0, 8)} — ` +
-        `parked ${Math.round(parkAgeMs / 1000)}s with subprocess still alive and no new events`,
+        `subprocess still alive with ${Math.round(silenceMs / 1000)}s of event silence`,
     );
     this.sessionManager.reclaimSessionProcess(row.session_id);
     recordEvent({
@@ -452,7 +452,7 @@ export class StuckSessionMonitor {
       payload: {
         session_id: row.session_id,
         session_type: row.session_type,
-        park_age_ms: parkAgeMs,
+        park_age_ms: silenceMs,
         outcome: 'process_reclaimed',
       },
     });
