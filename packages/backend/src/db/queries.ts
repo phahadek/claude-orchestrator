@@ -2628,6 +2628,24 @@ export function deleteTaskCacheRow(taskId: string): void {
   db.prepare(`DELETE FROM task_cache WHERE task_id = ?`).run(taskId);
 }
 
+/**
+ * Deletes task_cache rows for the given ids in one transaction. Used by
+ * TaskCacheRefresher to evict rows for tasks that left a project's fetched
+ * set (archived/trashed/moved-off-board pages) so they stop being served as
+ * frozen-at-last-seen-status forever. Returns the number of rows actually
+ * removed.
+ */
+export function evictTaskCacheRows(taskIds: string[]): number {
+  if (taskIds.length === 0) return 0;
+  const stmt = db.prepare(`DELETE FROM task_cache WHERE task_id = ?`);
+  const tx = db.transaction((ids: string[]) => {
+    let count = 0;
+    for (const id of ids) count += stmt.run(id).changes;
+    return count;
+  });
+  return tx(taskIds);
+}
+
 let _stmtGetBoardCacheRows: Database.Statement | null = null;
 
 /** Lazily-prepared board:* cache read — shared by updateTaskStatusInBoardCaches and getAllBoardCacheTasks. */

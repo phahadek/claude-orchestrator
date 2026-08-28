@@ -99,6 +99,7 @@ import {
 import { getAllProjects } from '../config.js';
 import { isUsageAdmitted } from '../orchestration/usageAdmission.js';
 import { OrphanedTaskSweeper } from '../orchestration/OrphanedTaskSweeper.js';
+import { NotionApiError } from '../notion/types.js';
 import type { ServerMessage } from '../ws/types.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -2164,5 +2165,79 @@ describe('OrphanedTaskSweeper', () => {
 
     expect(enqueueFeedback).not.toHaveBeenCalled();
     expect(backend.updateStatus).not.toHaveBeenCalled();
+  });
+
+  describe('revert-failure visibility and permanent give-up', () => {
+    it('does not re-attempt a revert whose failure is an archived/trashed source page', async () => {
+      const backend = makeBackend([makeTask('notion:abc')]);
+      vi.mocked(backend.updateStatus).mockRejectedValueOnce(
+        new NotionApiError(
+          400,
+          JSON.stringify({
+            object: 'error',
+            status: 400,
+            code: 'validation_error',
+            message:
+              "Can't edit block that is archived. You must unarchive the block before editing.",
+          }),
+        ),
+      );
+
+      const sweeper = new OrphanedTaskSweeper(broadcast, {
+        listProjects: () => [
+          { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+        ],
+        resolveBackend: () => backend,
+      });
+
+      await expect(sweeper.sweepOnce()).rejects.toThrow(/1 revert check/);
+      expect(backend.updateStatus).toHaveBeenCalledTimes(1);
+
+      // Second tick sees the same In-Progress task again (still frozen in
+      // the source cache) — the permanent failure must not be retried.
+      vi.mocked(backend.updateStatus).mockClear();
+      await sweeper.sweepOnce();
+      expect(backend.updateStatus).not.toHaveBeenCalled();
+    });
+
+    it('throws summarizing the failure count for a transient (non-permanent) revert failure', async () => {
+      const backend = makeBackend([makeTask('notion:abc')]);
+      vi.mocked(backend.updateStatus).mockRejectedValue(
+        new Error('network timeout'),
+      );
+
+      const sweeper = new OrphanedTaskSweeper(broadcast, {
+        listProjects: () => [
+          { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+        ],
+        resolveBackend: () => backend,
+      });
+
+      await expect(sweeper.sweepOnce()).rejects.toThrow(
+        /1 revert check\(s\) failed.*notion:abc/,
+      );
+
+      // Not a permanent failure — retried on the next tick.
+      vi.mocked(backend.updateStatus).mockClear();
+      await expect(sweeper.sweepOnce()).rejects.toThrow();
+      expect(backend.updateStatus).toHaveBeenCalledTimes(1);
+    });
+
+    it('resolves without throwing on a clean tick', async () => {
+      const backend = makeBackend([makeTask('notion:abc')]);
+
+      const sweeper = new OrphanedTaskSweeper(broadcast, {
+        listProjects: () => [
+          { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+        ],
+        resolveBackend: () => backend,
+      });
+
+      await expect(sweeper.sweepOnce()).resolves.toBeUndefined();
+      expect(backend.updateStatus).toHaveBeenCalledWith(
+        'notion:abc',
+        '🗂️ Ready',
+      );
+    });
   });
 });

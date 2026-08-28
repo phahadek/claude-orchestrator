@@ -34,6 +34,21 @@ import {
 import type { Session } from '../db/types';
 import { GitHubClient } from '../github/GitHubClient';
 import type { PullRequest } from '../github/types';
+import { NotionApiError } from '../notion/types';
+
+/**
+ * True for a revert-write failure that can never succeed on retry — the
+ * source page is archived/trashed, so every identical retry reproduces the
+ * exact same 400 forever. Distinguishes this from a transient failure
+ * (network blip, rate limit) that's still worth retrying next tick.
+ */
+function isPermanentRevertFailure(err: unknown): boolean {
+  return (
+    err instanceof NotionApiError &&
+    err.statusCode === 400 &&
+    /archived/i.test(err.message)
+  );
+}
 
 /** Task types the orchestrator moves to In Progress itself on dispatch — eligible for orphan sweep. */
 const SWEEPABLE_TYPES = new Set([
@@ -75,6 +90,15 @@ const NO_PR_NUDGE_MESSAGE =
  * cadence so no additional timer is introduced to the system.
  */
 export class OrphanedTaskSweeper {
+  /**
+   * Task ids whose revert write failed permanently (source page
+   * archived/trashed) — never re-attempted once recorded here. Cleared only
+   * by process restart; the producer-side fix (TaskCacheRefresher evicting
+   * the vanished task_cache row) is what actually retires the entry, since a
+   * task once evicted no longer surfaces from listTasksByStatus at all.
+   */
+  private readonly permanentlyFailedTaskIds = new Set<string>();
+
   constructor(
     private readonly broadcast: (msg: ServerMessage) => void,
     private readonly options: {
@@ -117,6 +141,7 @@ export class OrphanedTaskSweeper {
     const listProjects = this.options.listProjects ?? getAllProjects;
     const resolveBackend = this.options.resolveBackend ?? getTaskBackend;
     const seen = new Set<string>();
+    const failedTaskIds: string[] = [];
 
     for (const project of listProjects()) {
       let backend: TaskBackend;
@@ -150,6 +175,11 @@ export class OrphanedTaskSweeper {
         // no session there is normal, not orphaned — leave them alone.
         if (!SWEEPABLE_TYPES.has(resolved.task.type)) continue;
 
+        // Already gave up on this task in a prior tick — the source page
+        // can't be edited, so retrying identically would just reproduce the
+        // same permanent failure forever.
+        if (this.permanentlyFailedTaskIds.has(taskId)) continue;
+
         try {
           await this.maybeRevertTask(
             taskId,
@@ -158,11 +188,25 @@ export class OrphanedTaskSweeper {
             backend,
           );
         } catch (err) {
-          logger.warn(
-            `[OrphanedTaskSweeper] revert check failed for ${taskId}: ${(err as Error).message}`,
-          );
+          failedTaskIds.push(taskId);
+          if (isPermanentRevertFailure(err)) {
+            this.permanentlyFailedTaskIds.add(taskId);
+            logger.error(
+              `[OrphanedTaskSweeper] revert check for ${taskId} failed permanently (source page archived/trashed) — giving up, will not retry: ${(err as Error).message}`,
+            );
+          } else {
+            logger.warn(
+              `[OrphanedTaskSweeper] revert check failed for ${taskId}: ${(err as Error).message}`,
+            );
+          }
         }
       }
+    }
+
+    if (failedTaskIds.length > 0) {
+      throw new Error(
+        `${failedTaskIds.length} revert check(s) failed: ${failedTaskIds.join(', ')}`,
+      );
     }
   }
 
