@@ -339,9 +339,9 @@ describe('sweepUndeliveredInbox()', () => {
       session_id: 'sess-nt-only',
       status: 'idle',
     } as never);
-    vi.mocked(queries.listNonTerminalSessionsWithUndeliveredInboxItems).mockReturnValue(
-      [],
-    );
+    vi.mocked(
+      queries.listNonTerminalSessionsWithUndeliveredInboxItems,
+    ).mockReturnValue([]);
 
     const sm = new SessionManager();
     const sendSpy = vi.spyOn(sm, 'sendOrResume');
