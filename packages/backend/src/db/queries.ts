@@ -970,9 +970,13 @@ export interface StuckAliveSubprocessParkRow {
   session_type: string;
   /** audit_log.ts of the session_status_changed row that parked this session via stuck_session_alive_subprocess. */
   parked_at: number;
-  /** sessions.ended_at as of that park — the last event timestamp known at park time. */
-  last_known_event_ts: number;
-  /** MAX(session_events.timestamp) for this session right now; null if it somehow has no events. */
+  /**
+   * MAX(session_events.timestamp) for this session right now; null if it
+   * somehow has no events. Escalation is bounded by silence since this
+   * timestamp, not by sessions.ended_at (which for a resumed session still
+   * carries its original clean-exit instant) or by parked_at (the resume's
+   * own hook events land within ~1s of the park itself).
+   */
   latest_event_ts: number | null;
 }
 
@@ -991,7 +995,7 @@ export function getStuckAliveSubprocessParkRows(): StuckAliveSubprocessParkRow[]
     .prepare(
       `
     SELECT s.session_id, s.task_id, s.project_id, s.pr_url, s.worktree_path,
-           s.session_type, al.ts AS parked_at, s.ended_at AS last_known_event_ts,
+           s.session_type, al.ts AS parked_at,
            (SELECT MAX(timestamp) FROM session_events se WHERE se.session_id = s.session_id) AS latest_event_ts
     FROM sessions s
     JOIN audit_log al ON al.actor_id = s.session_id
