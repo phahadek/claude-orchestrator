@@ -230,7 +230,7 @@ describe('mcp__orchestrator__ allow-list entries match the CLI-exposed tool name
     expect(ALLOWED_TOOLS).not.toContain('mcp__orchestrator__review.dispute');
   });
 
-  it("ALLOWED_TOOLS contains the underscore form of review_verdict — the CLI-exposed name the model actually calls for the schema-validated PR conformance verdict — not the dotted server registration name", () => {
+  it('ALLOWED_TOOLS contains the underscore form of review_verdict — the CLI-exposed name the model actually calls for the schema-validated PR conformance verdict — not the dotted server registration name', () => {
     expect(orchestratorMcpToolName('review.verdict')).toBe(
       'mcp__orchestrator__review_verdict',
     );

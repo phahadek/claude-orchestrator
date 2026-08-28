@@ -133,7 +133,7 @@ export function registerVerdictTools(
       {
         title: 'Report this PR conformance review verdict',
         description:
-          'Reports this review session\'s PR conformance verdict — approved/needs_changes/incomplete/error, plus the per-dimension pass/fail breakdown and a summary — as the definitive, schema-validated replacement for outputting a JSON verdict block in chat text. Call once per review iteration, as your final action once you have finished evaluating the diff against the task spec. A repeat call in the same iteration is last-write-wins.',
+          "Reports this review session's PR conformance verdict — approved/needs_changes/incomplete/error, plus the per-dimension pass/fail breakdown and a summary — as the definitive, schema-validated replacement for outputting a JSON verdict block in chat text. Call once per review iteration, as your final action once you have finished evaluating the diff against the task spec. A repeat call in the same iteration is last-write-wins.",
         inputSchema: {
           verdict: reviewVerdictSchema,
           dimensions: z.array(
