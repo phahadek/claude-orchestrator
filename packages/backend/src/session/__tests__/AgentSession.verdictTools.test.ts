@@ -268,6 +268,103 @@ describe('AgentSession.recordReviewDisposition', () => {
   });
 });
 
+// ── recordReviewVerdict ───────────────────────────────────────────────────────
+
+describe('AgentSession.recordReviewVerdict', () => {
+  it('emits review_verdict_recorded with the tool-call payload', () => {
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      pr_number: 42,
+      repo: 'owner/repo',
+    } as never);
+    const session = makeSession();
+    const emitted: unknown[] = [];
+    session.on('review_verdict_recorded', (p) => emitted.push(p));
+
+    session.recordReviewVerdict({
+      verdict: 'approved',
+      dimensions: [{ name: 'Diff vs Context spec', passed: true, notes: 'ok' }],
+      summary: 'Looks good.',
+    });
+
+    expect(emitted).toEqual([
+      {
+        sessionId: 'test-session-id',
+        prNumber: 42,
+        repo: 'owner/repo',
+        headSha: 'abc1234567890',
+        verdict: {
+          verdict: 'approved',
+          dimensions: [
+            { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
+          ],
+          summary: 'Looks good.',
+        },
+      },
+    ]);
+  });
+
+  it('is a no-op when there is no PR for the session', () => {
+    const session = makeSession();
+    const emitted: unknown[] = [];
+    session.on('review_verdict_recorded', (p) => emitted.push(p));
+
+    session.recordReviewVerdict({
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'x',
+    });
+
+    expect(emitted).toHaveLength(0);
+  });
+
+  it('is idempotent: an identical repeat call does not double-emit', () => {
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      pr_number: 42,
+      repo: 'owner/repo',
+    } as never);
+    const session = makeSession();
+    const emitted: unknown[] = [];
+    session.on('review_verdict_recorded', (p) => emitted.push(p));
+
+    const verdict = {
+      verdict: 'approved' as const,
+      dimensions: [],
+      summary: 'same',
+    };
+    session.recordReviewVerdict(verdict);
+    session.recordReviewVerdict({ ...verdict });
+
+    expect(emitted).toHaveLength(1);
+  });
+
+  it('last-write-wins: a changed verdict re-emits, and neither call throws', () => {
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      pr_number: 42,
+      repo: 'owner/repo',
+    } as never);
+    const session = makeSession();
+    const emitted: unknown[] = [];
+    session.on('review_verdict_recorded', (p) => emitted.push(p));
+
+    expect(() =>
+      session.recordReviewVerdict({
+        verdict: 'approved',
+        dimensions: [],
+        summary: 'first',
+      }),
+    ).not.toThrow();
+    expect(() =>
+      session.recordReviewVerdict({
+        verdict: 'needs_changes',
+        dimensions: [],
+        summary: 'second',
+      }),
+    ).not.toThrow();
+
+    expect(emitted).toHaveLength(2);
+  });
+});
+
 // ── recordVerifiedFlakyDisposition ───────────────────────────────────────────
 
 describe('AgentSession.recordVerifiedFlakyDisposition', () => {

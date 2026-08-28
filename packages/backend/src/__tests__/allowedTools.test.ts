@@ -40,6 +40,7 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
   'journal.setState',
   'session.requestCapability',
   'review.disposition',
+  'review.verdict',
   'flaky.confirm',
   'gate.verify',
   'ops.prIntent',
@@ -92,6 +93,7 @@ const CORE_KINDS = new Set([
   ...Object.values(PLANNING_INTENT_KINDS).flat(),
   ...CODE_INTENT_KINDS,
   'review.disposition',
+  'review.verdict',
   'flaky.confirm',
   ...TIER_B_KINDS,
 ]);
@@ -102,7 +104,9 @@ function coreRegisteredKinds(
 ): string[] {
   const kinds = workflow ? PLANNING_INTENT_KINDS[workflow] : CODE_INTENT_KINDS;
   const verdictKinds =
-    workflow === null ? ['review.disposition', 'flaky.confirm'] : [];
+    workflow === null
+      ? ['review.disposition', 'review.verdict', 'flaky.confirm']
+      : [];
   return ['health', ...kinds, ...verdictKinds, ...TIER_B_KINDS];
 }
 
@@ -224,6 +228,14 @@ describe('mcp__orchestrator__ allow-list entries match the CLI-exposed tool name
   it("ALLOWED_TOOLS contains the underscore form of review_dispute — a code session's route out of a needs_changes verdict it concludes is wrong, not the dotted registration name", () => {
     expect(ALLOWED_TOOLS).toContain('mcp__orchestrator__review_dispute');
     expect(ALLOWED_TOOLS).not.toContain('mcp__orchestrator__review.dispute');
+  });
+
+  it('ALLOWED_TOOLS contains the underscore form of review_verdict — the CLI-exposed name the model actually calls for the schema-validated PR conformance verdict — not the dotted server registration name', () => {
+    expect(orchestratorMcpToolName('review.verdict')).toBe(
+      'mcp__orchestrator__review_verdict',
+    );
+    expect(ALLOWED_TOOLS).toContain('mcp__orchestrator__review_verdict');
+    expect(ALLOWED_TOOLS).not.toContain('mcp__orchestrator__review.verdict');
   });
 
   it('design allow-list contains the underscore forms of completeness_disposition and completeness_traceCoverage', () => {

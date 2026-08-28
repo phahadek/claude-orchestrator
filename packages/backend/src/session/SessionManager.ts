@@ -2832,6 +2832,12 @@ export class SessionManager extends EventEmitter {
     session.on('verified_flaky_disposition', (payload: unknown) =>
       this.emit('verified_flaky_disposition', payload),
     );
+    // Forward review_verdict_recorded so PRReviewService.waitForVerdict can
+    // resolve directly from the review.verdict MCP tool instead of only via
+    // its text/session_ended fallback parse.
+    session.on('review_verdict_recorded', (payload: unknown) =>
+      this.emit('review_verdict_recorded', payload),
+    );
     // Forward gate_verify_disposition so the GateItemVerifier awaiting this
     // dispatched session's terminal report can resolve.
     session.on('gate_verify_disposition', (payload: unknown) =>

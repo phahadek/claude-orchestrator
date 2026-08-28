@@ -187,6 +187,17 @@ export const ALLOWED_TOOLS = [
   // recordVerifiedFlakyDisposition).
   orchestratorMcpToolName('health'),
   orchestratorMcpToolName('review.disposition'),
+  // review.verdict is a review session's schema-validated route to report
+  // its PR conformance verdict, replacing the retired stdout-scraped JSON
+  // verdict block tryParseVerdict repaired/parsed (see
+  // mcp/tools/verdictTools.ts, AgentSession.recordReviewVerdict,
+  // PRReviewService.waitForVerdict). Same failure mode as every other
+  // orchestratorMcpToolName entry in this file without an allow-list
+  // entry: the tool is registered server-side but unlisted here, so every
+  // call is denied by the CLI before it reaches the MCP server. Named
+  // through orchestratorMcpToolName so it emits the underscore CLI form
+  // the model actually calls.
+  orchestratorMcpToolName('review.verdict'),
   orchestratorMcpToolName('flaky.confirm'),
   // The injected Pre-PR Gate tells a code session that test commands are
   // blocked at the permission layer and must run via `test.request`. Without

@@ -32,7 +32,11 @@ import type { TaskBackend } from '../tasks/TaskBackend';
 import type { SessionManager } from '../session/SessionManager';
 import { GitHubApiError, GitHubRateLimitError } from './types';
 import { recordGitHubRateLimit } from './rateLimitBackoff';
-import type { PullRequest, PRDiff } from './types';
+import type {
+  PullRequest,
+  PRDiff,
+  ReviewVerdictRecordedPayload,
+} from './types';
 import type { ServerMessage } from '../ws/types';
 import type { SessionEvent } from '../db/types';
 import type { PRMergeWatcher } from './PRMergeWatcher';
@@ -1150,8 +1154,12 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
   }
 
   /**
-   * Listen to session_event messages for `sessionId` and resolve with the
-   * first verdict JSON block found in an assistant message.
+   * Listen for a schema-validated review.verdict MCP tool call
+   * (review_verdict_recorded, see AgentSession.recordReviewVerdict) and
+   * resolve with it directly, in preference to the legacy text-parsing
+   * path. Also still listens to session_event messages for `sessionId` and
+   * resolves with the first verdict JSON block found in an assistant
+   * message, so a session that never calls the tool still resolves.
    * Falls back to parseReviewResult over stored events if session_ended fires first.
    */
   private waitForVerdict(
@@ -1165,10 +1173,34 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
 
       const cleanup = () => {
         this.sessionManager.off('message', handler);
+        this.sessionManager.off('review_verdict_recorded', verdictHandler);
         if (timeoutHandle !== null) {
           clearTimeout(timeoutHandle);
           timeoutHandle = null;
         }
+      };
+
+      const verdictHandler = (payload: ReviewVerdictRecordedPayload) => {
+        if (payload.sessionId !== sessionId) return;
+        cleanup();
+        resolve({
+          prNumber,
+          repo,
+          verdict: payload.verdict.verdict,
+          dimensions: payload.verdict.dimensions as ReviewDimension[],
+          summary: payload.verdict.summary,
+          reviewedAt: new Date().toISOString(),
+          ...(payload.verdict.manualItemsForHuman &&
+          payload.verdict.manualItemsForHuman.length > 0
+            ? { manualItemsForHuman: payload.verdict.manualItemsForHuman }
+            : {}),
+          ...(payload.verdict.escalate
+            ? {
+                escalate: payload.verdict.escalate,
+                escalationReason: payload.verdict.escalationReason,
+              }
+            : {}),
+        });
       };
 
       const handler = (msg: ServerMessage) => {
@@ -1211,6 +1243,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       };
 
       this.sessionManager.on('message', handler);
+      this.sessionManager.on('review_verdict_recorded', verdictHandler);
 
       timeoutHandle = setTimeout(() => {
         cleanup();

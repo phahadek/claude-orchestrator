@@ -100,6 +100,8 @@ import type {
   DispositionsParsedPayload,
   VerifiedFlakyDisposition,
   VerifiedFlakyDispositionPayload,
+  ReviewVerdictItem,
+  ReviewVerdictRecordedPayload,
 } from '../github/types';
 
 const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
@@ -492,6 +494,7 @@ export class AgentSession extends EventEmitter {
    *  recordVerifiedFlakyDisposition below). */
   private readonly recordedDispositions = new Map<number, string>();
   private recordedVerifiedFlaky: string | null = null;
+  private recordedReviewVerdict: string | null = null;
   /** tool_use_ids already warned for worktree escape (deduplicate across streaming chunks). */
   private readonly warnedEscapeToolUseIds = new Set<string>();
   /** In-flight promise from handlePRBodyMarker; awaited by handleCleanExit before markSessionIdle. */
@@ -3278,6 +3281,36 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       dispositions: [item],
     };
     this.emit('dispositions_parsed', payload);
+  }
+
+  /**
+   * Record this review session's PR conformance verdict, delivered via the
+   * review.verdict MCP tool, and emit a `review_verdict_recorded` event that
+   * PRReviewService.waitForVerdict listens for directly — in preference to,
+   * but without removing, its legacy text/session_ended fallback parse, so a
+   * session that never calls this tool still resolves. One verdict per
+   * review iteration: a same-content repeat call is a dedup no-op; a changed
+   * verdict is last-write-wins. waitForVerdict resolves a Promise and
+   * unsubscribes on the first settlement, so a second emission — whether
+   * from a genuine last-write-wins revision or replay — simply has no
+   * listener left to reach; it never double-resolves.
+   */
+  recordReviewVerdict(verdict: ReviewVerdictItem): void {
+    const pr = getPRBySessionId(this.sessionId);
+    if (!pr) return;
+    const serialized = JSON.stringify(verdict);
+    if (this.recordedReviewVerdict === serialized) {
+      return;
+    }
+    this.recordedReviewVerdict = serialized;
+    const payload: ReviewVerdictRecordedPayload = {
+      sessionId: this.sessionId,
+      prNumber: pr.pr_number,
+      repo: pr.repo,
+      headSha: this.currentHeadSha(),
+      verdict,
+    };
+    this.emit('review_verdict_recorded', payload);
   }
 
   /**

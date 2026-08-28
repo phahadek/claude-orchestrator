@@ -274,6 +274,12 @@ export type ServerMessage =
     }
   | { type: 'push_detected'; sessionId: string; prNumber: number; repo: string }
   | {
+      // Outbound broadcast of a *settled* PR conformance verdict to the
+      // dashboard — distinct from the session->service `review_verdict_recorded`
+      // event (github/types.ts's ReviewVerdictRecordedPayload, emitted by
+      // AgentSession.recordReviewVerdict) that carries the review.verdict MCP
+      // tool's raw payload into PRReviewService.waitForVerdict. Do not conflate
+      // the two.
       type: 'review_verdict';
       prNumber: number;
       repo: string;
