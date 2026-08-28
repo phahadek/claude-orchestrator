@@ -16,13 +16,19 @@ export type BranchProbe = 'exists' | 'absent' | 'unknown';
  * inconclusive result (the invocation itself failed — spawn error, timeout,
  * unexpected exit code/signal). Callers that treat absence as "safe to
  * proceed" must treat 'unknown' the same as 'exists' — fail closed.
+ *
+ * `--quiet` is load-bearing: without it `git rev-parse --verify` reports a
+ * missing ref as exit 128 with `fatal: Needed a single revision` on stderr,
+ * which is indistinguishable from a genuine invocation failure and so reads
+ * as 'unknown' for every absent branch. With it, a missing ref is exit 1
+ * with empty stderr — the shape the absent-detection below matches on.
  */
 export function probeBranchLocally(
   branch: string,
   projectDir: string,
 ): BranchProbe {
   try {
-    execSync(`git rev-parse --verify refs/heads/${branch}`, {
+    execSync(`git rev-parse --verify --quiet refs/heads/${branch}`, {
       cwd: projectDir,
       stdio: 'pipe',
     });
