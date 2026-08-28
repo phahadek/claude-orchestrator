@@ -40,7 +40,7 @@ import {
 } from './usageAdmission';
 import type { BaseHealthCheckResult } from './baseHealthCheck';
 import {
-  branchExistsLocally,
+  probeBranchLocally,
   findWorktreePathForBranch,
   deriveBranchSlug,
 } from '../session/branchModel';
@@ -915,7 +915,8 @@ export class AutoLauncher {
       task.title || taskUrl,
       prefixedTaskId,
     );
-    if (branchExistsLocally(derivedBranch, project.projectDir)) {
+    const branchProbe = probeBranchLocally(derivedBranch, project.projectDir);
+    if (branchProbe === 'exists') {
       const worktreePath =
         findWorktreePathForBranch(derivedBranch, project.projectDir) ?? null;
       logger.info(
@@ -930,6 +931,22 @@ export class AutoLauncher {
         payload: {
           branch: derivedBranch,
           worktreePath,
+        },
+      });
+      return false;
+    }
+    if (branchProbe === 'unknown') {
+      logger.info(
+        `[AutoLauncher] skip launch for task ${task.id} — branch ${derivedBranch} existence probe was inconclusive`,
+      );
+      recordEvent({
+        event_type: 'task_launch_skipped_branch_probe_failed',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: project.id,
+        task_id: task.id,
+        payload: {
+          branch: derivedBranch,
         },
       });
       return false;
