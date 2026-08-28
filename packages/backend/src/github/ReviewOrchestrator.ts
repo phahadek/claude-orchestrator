@@ -12,6 +12,7 @@ import {
   getPRBySessionId,
   setPendingPush,
   setPauseReason,
+  clearPauseReasonEntry,
   getLocalBranchBySession,
   setLocalBranchPauseReason,
   getSession,
@@ -48,7 +49,7 @@ import type {
 } from './DepthReviewService';
 import { SIZE_DIMENSION_NAME as DEPTH_SIZE_DIMENSION_NAME } from './DepthReviewService';
 import type { AutoMerger } from './AutoMerger';
-import { parsePauseReason } from '../db/pauseReason';
+import { parsePauseReasonSet } from '../db/pauseReason';
 import type { SessionManager } from '../session/SessionManager';
 import type { GitHubClient } from './GitHubClient';
 import { parseDiffFiles } from './GitHubClient';
@@ -1687,11 +1688,9 @@ export class ReviewOrchestrator {
    */
   private clearDepthReviewHoldAndRemerge(job: ReviewJob): void {
     const row = getPRByNumber(job.prNumber, job.repo);
-    if (
-      parsePauseReason(row?.pause_reason ?? null)?.reason ===
-      'depth_review_pending'
-    ) {
-      setPauseReason(job.prNumber, job.repo, null);
+    const set = parsePauseReasonSet(row?.pause_reason ?? null);
+    if (set.some((entry) => entry.reason === 'depth_review_pending')) {
+      clearPauseReasonEntry(job.prNumber, job.repo, 'depth_review_pending');
     }
     if (this.autoMerger) {
       this.autoMerger.attempt(job.prNumber, job.repo);

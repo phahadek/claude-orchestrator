@@ -3992,6 +3992,61 @@ export function setPauseReason(
 }
 
 /**
+ * Removes a single entry from the concurrent pause-reason set by reason,
+ * leaving every other live entry — including its set_at — byte-identical.
+ * Unlike setPauseReason, this matches on reason rather than source, and
+ * never re-stamps set_at on a surviving entry (which would silently
+ * re-order severity ties elsewhere). See clearDepthReviewHoldAndRemerge in
+ * ReviewOrchestrator.ts, the motivating caller: a passing depth review must
+ * clear only depth_review_pending, not whichever entry parsePauseReason's
+ * severity-ranked resolver happens to surface.
+ */
+export function clearPauseReasonEntry(
+  prNumber: number,
+  repo: string,
+  reason: PauseReason,
+): void {
+  const before = getPRByNumber(prNumber, repo);
+  const nextSet = parsePauseReasonSet(before?.pause_reason ?? null).filter(
+    (entry) => entry.reason !== reason,
+  );
+  const serialized =
+    nextSet.length > 0 ? serializePauseReasonSet(nextSet) : null;
+  db.prepare<{
+    pr_number: number;
+    repo: string;
+    pause_reason: string | null;
+    pause_reason_set_at: number | null;
+  }>(
+    `
+    UPDATE pull_requests
+    SET pause_reason = @pause_reason,
+        pause_reason_set_at = @pause_reason_set_at
+    WHERE pr_number = @pr_number AND repo = @repo
+  `,
+  ).run({
+    pr_number: prNumber,
+    repo,
+    pause_reason: serialized,
+    pause_reason_set_at:
+      serialized !== null ? (before?.pause_reason_set_at ?? null) : null,
+  });
+  if (before && before.pause_reason !== serialized) {
+    recordEvent({
+      event_type: 'pr_pause_reason_changed',
+      actor_type: 'system',
+      task_id: before.task_id ?? null,
+      payload: {
+        pr_number: prNumber,
+        repo,
+        from: before.pause_reason,
+        to: serialized,
+      },
+    });
+  }
+}
+
+/**
  * Signals that may trigger clearTerminalPRFlags. Only a subset of these are
  * trusted to clear a live reconcile_exhausted escalation — see
  * RECONCILE_EXHAUSTED_CLEAR_ALLOWED_TRIGGERS below.
