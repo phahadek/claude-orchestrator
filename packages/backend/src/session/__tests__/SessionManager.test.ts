@@ -662,6 +662,14 @@ describe('enqueueFeedback — terminal session behavior', () => {
     ] as any);
   });
 
+  afterEach(() => {
+    // vi.clearAllMocks() in the next describe's beforeEach clears call
+    // history but not this mockReturnValue — without resetting it here it
+    // leaks into every later describe in this file and silently swaps in
+    // this stale pending item for whatever message that test actually sent.
+    vi.mocked(listUndeliveredInboxItems).mockReturnValue([]);
+  });
+
   it.each(['done', 'error', 'killed'])(
     'defaults to attempting a resume on a terminal (%s) session (no opts passed — existing callers unaffected)',
     async (terminalStatus) => {
@@ -769,6 +777,12 @@ describe('enqueueFeedback — usage admission gate', () => {
     vi.mocked(listUndeliveredInboxItems).mockReturnValue([
       { id: 'item-1', source: 'system:nudge', payload: 'nudge text' },
     ] as any);
+  });
+
+  afterEach(() => {
+    // See the identical reset in "enqueueFeedback — terminal session
+    // behavior" above — without it this leaks into every later describe.
+    vi.mocked(listUndeliveredInboxItems).mockReturnValue([]);
   });
 
   it('a nudge withheld by a usage deferral (sendOrResume returns null) is not marked delivered', async () => {
