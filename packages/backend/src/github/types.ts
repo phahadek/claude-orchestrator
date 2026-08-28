@@ -197,6 +197,30 @@ export interface VerifiedFlakyDispositionPayload {
 }
 
 /**
+ * A review session's PR conformance verdict delivered via the review.verdict
+ * MCP tool — the schema-validated replacement for the stdout-scraped JSON
+ * block PRReviewService.tryParseVerdict repairs/parses. Mirrors
+ * PRReviewResult's verdict-shaped fields (see PRReviewService.ts), minus the
+ * transport-assigned prNumber/repo/reviewedAt.
+ */
+export interface ReviewVerdictItem {
+  verdict: 'approved' | 'needs_changes' | 'incomplete' | 'error';
+  dimensions: Array<{ name: string; passed: boolean; notes?: string }>;
+  summary: string;
+  manualItemsForHuman?: string[];
+  escalate?: boolean;
+  escalationReason?: string;
+}
+
+export interface ReviewVerdictRecordedPayload {
+  sessionId: string;
+  prNumber: number;
+  repo: string;
+  headSha: string | null;
+  verdict: ReviewVerdictItem;
+}
+
+/**
  * Outcome of a flake-recovery gate re-run. 'inconclusive' means the PR's
  * head_sha drifted between kicking off the re-run and reading its result —
  * a new push landed mid-flight, so the re-run's pass/fail no longer speaks

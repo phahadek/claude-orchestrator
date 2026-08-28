@@ -51,6 +51,7 @@ function fakeSession() {
   return {
     worktreePath: '/fake/worktree',
     recordReviewDisposition: vi.fn(),
+    recordReviewVerdict: vi.fn(),
     recordVerifiedFlakyDisposition: vi.fn(),
     recordGateVerifyDisposition: vi
       .fn()
@@ -58,6 +59,7 @@ function fakeSession() {
     recordDeployAgenticVerdict: vi.fn(),
   } as unknown as AgentSession & {
     recordReviewDisposition: ReturnType<typeof vi.fn>;
+    recordReviewVerdict: ReturnType<typeof vi.fn>;
     recordVerifiedFlakyDisposition: ReturnType<typeof vi.fn>;
     recordGateVerifyDisposition: ReturnType<typeof vi.fn>;
     recordDeployAgenticVerdict: ReturnType<typeof vi.fn>;
@@ -101,7 +103,7 @@ describe('verdict-delivery MCP tools — registration', () => {
     const { client, close } = await connectedClient(() => fakeSession(), null);
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(
-      ['flaky.confirm', 'review.disposition'].sort(),
+      ['flaky.confirm', 'review.disposition', 'review.verdict'].sort(),
     );
     await close();
   });
@@ -164,6 +166,96 @@ describe('review.disposition', () => {
     const result = await client.callTool({
       name: 'review.disposition',
       arguments: { comment_id: 1, disposition: 'wont_fix' },
+    });
+    expect(resultOf(result as never)).toEqual({ error: 'session_not_live' });
+    await close();
+  });
+});
+
+describe('review.verdict', () => {
+  const validArgs = {
+    verdict: 'approved',
+    dimensions: [{ name: 'Diff vs Context spec', passed: true, notes: 'ok' }],
+    summary: 'Looks good.',
+  };
+
+  it('delegates to session.recordReviewVerdict with the tool-call payload', async () => {
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session);
+    const result = await client.callTool({
+      name: 'review.verdict',
+      arguments: validArgs,
+    });
+    expect(resultOf(result as never)).toEqual({ status: 'ok' });
+    expect(session.recordReviewVerdict).toHaveBeenCalledWith({
+      verdict: 'approved',
+      dimensions: validArgs.dimensions,
+      summary: 'Looks good.',
+      manualItemsForHuman: undefined,
+      escalate: undefined,
+      escalationReason: undefined,
+    });
+    await close();
+  });
+
+  it('rejects a payload missing verdict as a tool error, not a silent drop', async () => {
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session);
+    const result = await client.callTool({
+      name: 'review.verdict',
+      arguments: { dimensions: [], summary: 'no verdict field' },
+    });
+    expect(result.isError).toBe(true);
+    expect(session.recordReviewVerdict).not.toHaveBeenCalled();
+    await close();
+  });
+
+  it('rejects a payload missing summary as a tool error, not a silent drop', async () => {
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session);
+    const result = await client.callTool({
+      name: 'review.verdict',
+      arguments: { verdict: 'approved', dimensions: [] },
+    });
+    expect(result.isError).toBe(true);
+    expect(session.recordReviewVerdict).not.toHaveBeenCalled();
+    await close();
+  });
+
+  it('rejects a verdict outside the approved/needs_changes/incomplete/error vocabulary', async () => {
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session);
+    const result = await client.callTool({
+      name: 'review.verdict',
+      arguments: { ...validArgs, verdict: 'maybe' },
+    });
+    expect(result.isError).toBe(true);
+    expect(session.recordReviewVerdict).not.toHaveBeenCalled();
+    await close();
+  });
+
+  it('a second call in the same iteration is last-write-wins and does not throw', async () => {
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session);
+    const first = await client.callTool({
+      name: 'review.verdict',
+      arguments: validArgs,
+    });
+    const second = await client.callTool({
+      name: 'review.verdict',
+      arguments: { ...validArgs, verdict: 'needs_changes' },
+    });
+    expect(resultOf(first as never)).toEqual({ status: 'ok' });
+    expect(resultOf(second as never)).toEqual({ status: 'ok' });
+    expect(session.recordReviewVerdict).toHaveBeenCalledTimes(2);
+    await close();
+  });
+
+  it('returns session_not_live when the session has ended', async () => {
+    const { client, close } = await connectedClient(() => undefined);
+    const result = await client.callTool({
+      name: 'review.verdict',
+      arguments: validArgs,
     });
     expect(resultOf(result as never)).toEqual({ error: 'session_not_live' });
     await close();

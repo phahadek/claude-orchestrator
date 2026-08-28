@@ -749,6 +749,113 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
       ),
     ).rejects.toThrow('not found in database');
   });
+
+  it('resolves from a review.verdict tool-delivered review_verdict_recorded event with the same PRReviewResult shape the text path produces', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+
+    const toolVerdict = {
+      verdict: 'approved' as const,
+      dimensions: [
+        { name: 'Diff vs Context spec', passed: true, notes: 'Matches.' },
+      ],
+      summary: 'Approved via the review.verdict tool.',
+    };
+
+    const mockSM = makeMockSessionManager();
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const startMock = mockSM.start as ReturnType<typeof vi.fn>;
+    startMock.mockImplementationOnce(
+      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        const id = opts.sessionId;
+        setImmediate(() =>
+          mockSM.emit('review_verdict_recorded', {
+            sessionId: id,
+            prNumber: 42,
+            repo: 'owner/repo',
+            headSha: 'abc123',
+            verdict: toolVerdict,
+          }),
+        );
+        return id;
+      },
+    );
+
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    expect(result.verdict).toBe('approved');
+    expect(result.dimensions).toEqual(toolVerdict.dimensions);
+    expect(result.summary).toBe('Approved via the review.verdict tool.');
+    expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      expect.stringContaining('"approved"'),
+    );
+  });
+
+  it('prefers a tool-delivered verdict over a subsequent eventType==="text" block for the same session', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+
+    const toolVerdict = {
+      verdict: 'approved' as const,
+      dimensions: [{ name: 'Diff vs Context spec', passed: true, notes: 'ok' }],
+      summary: 'Tool-delivered verdict wins.',
+    };
+    const laterTextPayload = {
+      verdict: 'needs_changes',
+      dimensions: [
+        { name: 'Diff vs Context spec', passed: false, notes: 'stale text' },
+      ],
+      summary: 'This later text verdict must be ignored.',
+    };
+
+    const mockSM = makeMockSessionManager();
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const startMock = mockSM.start as ReturnType<typeof vi.fn>;
+    startMock.mockImplementationOnce(
+      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        const id = opts.sessionId;
+        mockSM.emit('review_verdict_recorded', {
+          sessionId: id,
+          prNumber: 42,
+          repo: 'owner/repo',
+          headSha: null,
+          verdict: toolVerdict,
+        });
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(id, JSON.stringify(laterTextPayload)),
+          ),
+        );
+        return id;
+      },
+    );
+
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    expect(result.verdict).toBe('approved');
+    expect(result.summary).toBe('Tool-delivered verdict wins.');
+  });
 });
 
 // ── Verdict ignores mergeability state ───────────────────────────────────────

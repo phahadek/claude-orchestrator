@@ -4,6 +4,7 @@ import type { AgentSession } from '../../session/AgentSession';
 import type { PlanningWorkflow } from '../../planning/planningIntentKinds';
 import {
   reviewDispositionSchema,
+  reviewVerdictSchema,
   flakyGateSchema,
   gateVerifyDispositionSchema,
   gateVerifyEvidenceSchema,
@@ -122,6 +123,42 @@ export function registerVerdictTools(
           comment_id: args.comment_id,
           disposition: args.disposition,
           reason: args.reason,
+        });
+        return ok();
+      },
+    );
+
+    server.registerTool(
+      'review.verdict',
+      {
+        title: 'Report this PR conformance review verdict',
+        description:
+          'Reports this review session\'s PR conformance verdict — approved/needs_changes/incomplete/error, plus the per-dimension pass/fail breakdown and a summary — as the definitive, schema-validated replacement for outputting a JSON verdict block in chat text. Call once per review iteration, as your final action once you have finished evaluating the diff against the task spec. A repeat call in the same iteration is last-write-wins.',
+        inputSchema: {
+          verdict: reviewVerdictSchema,
+          dimensions: z.array(
+            z.object({
+              name: z.string(),
+              passed: z.boolean(),
+              notes: z.string().optional(),
+            }),
+          ),
+          summary: z.string(),
+          manualItemsForHuman: z.array(z.string()).optional(),
+          escalate: z.boolean().optional(),
+          escalationReason: z.string().optional(),
+        },
+      },
+      async (args) => {
+        const session = ctx.getSession();
+        if (!session) return notLive();
+        session.recordReviewVerdict({
+          verdict: args.verdict,
+          dimensions: args.dimensions,
+          summary: args.summary,
+          manualItemsForHuman: args.manualItemsForHuman,
+          escalate: args.escalate,
+          escalationReason: args.escalationReason,
         });
         return ok();
       },

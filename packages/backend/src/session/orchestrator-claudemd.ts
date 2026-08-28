@@ -490,7 +490,7 @@ ${projectContextContent}`
  *
  * Review sessions must NOT receive code-session lifecycle rules (branch creation,
  * pre-PR gate, Notion fetching, etc.). They only need to know they are a reviewer
- * and should output JSON verdicts.
+ * and should report their verdict via the review.verdict MCP tool.
  */
 export function buildReviewClaudeMd(
   taskName: string,
@@ -499,11 +499,14 @@ export function buildReviewClaudeMd(
   return `# Review Session Rules
 
 You are a **PR review session**. Your only job is to evaluate pull request diffs
-against task specifications and output structured JSON verdicts.
+against task specifications and report your verdict via the \`mcp__orchestrator__review_verdict\`
+tool.
 
 ## What you are
 - A code reviewer. You read diffs and compare them against task specs.
-- You output JSON verdicts in the format requested by your prompt.
+- You report your verdict by calling the \`mcp__orchestrator__review_verdict\` tool with the
+  fields your prompt requests (verdict, dimensions, summary, manualItemsForHuman, escalate,
+  escalationReason) — never by writing a JSON block in chat text.
 
 ## What you must NOT do
 - Do NOT implement code, create branches, or make commits.
@@ -531,8 +534,8 @@ You MUST follow these rules for manual verification items when a spec carries th
 - **Do NOT fail the PR** solely because manual verification steps are not
   demonstrated in the PR body or diff.
 - **Do NOT pressure the coding session** to perform manual verification.
-- **DO list them** verbatim in the "manualItemsForHuman" field of your JSON
-  response so that a human reviewer can check them at PR-review time.
+- **DO list them** verbatim in the "manualItemsForHuman" argument of your
+  \`review.verdict\` tool call so that a human reviewer can check them at PR-review time.
 
 Evaluating manual verification items is a category error — it creates pressure
 for the coding session to either fake the verification or take risky autonomous
@@ -556,8 +559,8 @@ ${reviewRules.map((rule) => `- ${rule}`).join('\n')}
 }
 ## On session resume
 If this session is resumed or receives a follow-up message, it means there is
-a new diff to review. Wait for the diff content, then output a new JSON verdict.
-Do NOT start implementing anything.`.trimEnd();
+a new diff to review. Wait for the diff content, then call \`review.verdict\` again
+with your new verdict. Do NOT start implementing anything.`.trimEnd();
 }
 
 /**
