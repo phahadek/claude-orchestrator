@@ -1,6 +1,8 @@
 import {
   getMergeCommitForTask,
   findActiveGateVerifyMirrorForItem,
+  isStructurallyUnresolvableSource,
+  isSourceTaskDone,
 } from '../db/queries';
 import { hasGateItemRehomedEvent } from '../audit/AuditLog';
 import { logger } from '../logger';
@@ -179,13 +181,26 @@ export async function catchUpMergeCommits(): Promise<CatchUpMergeCommitsResult> 
     async (sourceTaskId) => {
       const mergeCommit = await getMergeCommitForTask(sourceTaskId);
       if (!mergeCommit) {
+        if (isStructurallyUnresolvableSource(sourceTaskId)) {
+          // Design task, or an Operational task with no PR at all — never
+          // produces a merge commit, no matter how long or how often this
+          // retries. Don't track attempts or ever escalate.
+          unresolvedAttempts.delete(sourceTaskId);
+          return;
+        }
         const attempts =
           (unresolvedAttempts.get(sourceTaskId)?.attempts ?? 0) + 1;
         unresolvedAttempts.set(sourceTaskId, {
           attempts,
           nextAttemptAt: nowMs + unresolvedBackoffMs(attempts),
         });
-        if (attempts >= ESCALATION_ATTEMPT_THRESHOLD) {
+        // A PR-producing source that simply hasn't merged yet has an
+        // expected, temporary null merge_commit — it must not march toward
+        // the escalation ceiling until it reaches a terminal (Done) state.
+        if (
+          attempts >= ESCALATION_ATTEMPT_THRESHOLD &&
+          isSourceTaskDone(sourceTaskId)
+        ) {
           escalateUnresolvedSource(sourceTaskId);
         }
         return;

@@ -11,7 +11,7 @@
  * reconciler catch-up net fills a merge_commit missed by a dropped event.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'events';
 
 vi.mock('../../db/db.js', async () => {
@@ -33,8 +33,12 @@ import {
   handleMergeCompleted,
   registerGateMergeConsumer,
   catchUpMergeCommits,
+  configureUnresolvedSourceEscalationSink,
 } from '../gateMergeConsumer.js';
 import type { PRMergeWatcher } from '../../github/PRMergeWatcher.js';
+import { upsertTaskCache } from '../../db/queries.js';
+
+let stageMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   db.prepare('DELETE FROM gate_item_event').run();
@@ -43,6 +47,10 @@ beforeEach(() => {
   db.prepare('DELETE FROM local_branches').run();
   db.prepare('DELETE FROM sessions').run();
   db.prepare('DELETE FROM audit_log').run();
+  db.prepare('DELETE FROM task_cache').run();
+  db.prepare('DELETE FROM pull_requests').run();
+  stageMock = vi.fn();
+  configureUnresolvedSourceEscalationSink({ stage: stageMock });
 });
 
 function seedMergedSession(taskId: string, commitSha: string): void {
@@ -323,5 +331,123 @@ describe('catchUpMergeCommits — backoff for a permanently-unresolved source', 
     expect(spy).toHaveBeenCalledTimes(1);
 
     spy.mockRestore();
+  });
+});
+
+describe('catchUpMergeCommits — escalation ceiling excludes structurally/temporarily unresolvable sources', () => {
+  /** Drives catchUpMergeCommits past the escalation ceiling, jumping the fake clock past the max backoff window between each call so every call performs a fresh lookup. */
+  async function driveAttempts(times: number): Promise<void> {
+    for (let i = 0; i < times; i++) {
+      await catchUpMergeCommits();
+      vi.advanceTimersByTime(25 * 60 * 60 * 1000);
+    }
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('never stages a mirror for a 📐 Design source, regardless of attempt count or elapsed time', async () => {
+    insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M16',
+      text: 'Design task can never produce a merge commit',
+      classification: 'needs-triage',
+      sources: [
+        { sourceTaskId: 'notion:design-src', sourceTaskTitle: 'Design work' },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+    upsertTaskCache(
+      'notion:design-src',
+      JSON.stringify({ type: '📐 Design', status: '✅ Done' }),
+    );
+
+    await driveAttempts(10);
+
+    expect(stageMock).not.toHaveBeenCalled();
+  });
+
+  it('never stages a mirror for a 🔧 Operational source with no associated PR, regardless of attempt count or elapsed time', async () => {
+    insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M16',
+      text: 'Operational task with no PR',
+      classification: 'needs-triage',
+      sources: [
+        {
+          sourceTaskId: 'notion:ops-src',
+          sourceTaskTitle: 'Config change done by hand',
+        },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+    upsertTaskCache(
+      'notion:ops-src',
+      JSON.stringify({ type: '🔧 Operational', status: '✅ Done' }),
+    );
+
+    await driveAttempts(10);
+
+    expect(stageMock).not.toHaveBeenCalled();
+  });
+
+  it('does not count toward the escalation ceiling while a 💻 Code source remains unmerged', async () => {
+    insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M16',
+      text: 'Code task still in flight',
+      classification: 'needs-triage',
+      sources: [
+        { sourceTaskId: 'notion:code-src', sourceTaskTitle: 'In-flight fix' },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+    upsertTaskCache(
+      'notion:code-src',
+      JSON.stringify({ type: '💻 Code', status: '🚫 Blocked' }),
+    );
+
+    await driveAttempts(10);
+
+    expect(stageMock).not.toHaveBeenCalled();
+
+    // Once the task actually reaches a terminal (Done) state, a still-null
+    // merge commit is genuinely suspicious again and escalation can fire.
+    upsertTaskCache(
+      'notion:code-src',
+      JSON.stringify({ type: '💻 Code', status: '✅ Done' }),
+    );
+    await driveAttempts(1);
+
+    expect(stageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('still escalates a genuine dropped-webhook case: a 💻 Code source that reached Done with no resolvable merge commit', async () => {
+    insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M16',
+      text: 'Merged out-of-band, webhook dropped',
+      classification: 'needs-triage',
+      sources: [
+        {
+          sourceTaskId: 'notion:dropped-webhook',
+          sourceTaskTitle: 'Out-of-band merge',
+        },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+    upsertTaskCache(
+      'notion:dropped-webhook',
+      JSON.stringify({ type: '💻 Code', status: '✅ Done' }),
+    );
+
+    await driveAttempts(8);
+
+    expect(stageMock).toHaveBeenCalledTimes(1);
   });
 });
