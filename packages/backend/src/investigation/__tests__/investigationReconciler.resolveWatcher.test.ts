@@ -115,15 +115,26 @@ describe('runReportResolveWatcherTick', () => {
     });
   });
 
-  it('resolves a report whose dispatched session staged zero intents (the vacuous case)', () => {
+  it('resolves a report whose dispatched session concluded cleanly having staged zero intents (the vacuous case)', () => {
     const report = makeReport();
-    insertSession('sess-1', 'killed');
+    insertSession('sess-1', 'done');
     recordDispatch(report.id, 'sess-1', new Date(0).toISOString());
 
     const result = runReportResolveWatcherTick();
 
     expect(result.resolved).toEqual([report.id]);
     expect(getReport(report.id)?.state).toBe('resolved');
+  });
+
+  it('does not resolve a report whose only dispatched session was killed before staging anything', () => {
+    const report = makeReport();
+    insertSession('sess-1', 'killed');
+    recordDispatch(report.id, 'sess-1', new Date(0).toISOString());
+
+    const result = runReportResolveWatcherTick();
+
+    expect(result.resolved).toEqual([]);
+    expect(getReport(report.id)?.state).toBe('committed');
   });
 
   it('does not resolve a report carrying a second, still-live dispatch even in a batched (one session, N reports) dispatch', () => {
