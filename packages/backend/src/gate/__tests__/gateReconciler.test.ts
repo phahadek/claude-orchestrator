@@ -1608,6 +1608,179 @@ describe('runGateReconcilerTick — verify concurrency budgeting', () => {
   });
 });
 
+describe('runGateReconcilerTick — auto-run dispatch is not serialized behind each item', () => {
+  beforeEach(() => {
+    typedSetSetting('max_concurrent_planning_sessions', 5);
+    typedSetSetting('human_reserve', 0);
+    typedSetSetting('max_concurrent_verify_sessions', 5);
+  });
+
+  it('invokes verify() for two runnable items before either invocation resolves', async () => {
+    await makeRunnableItem({ text: 'item a', classification: 'Read-Only' });
+    await makeRunnableItem({ text: 'item b', classification: 'Read-Only' });
+
+    const releasers: Array<() => void> = [];
+    let callCount = 0;
+    const verify: GateItemVerifier['verify'] = () => {
+      callCount += 1;
+      return new Promise((resolve) => {
+        releasers.push(() => resolve({ disposition: 'pass' as const }));
+      });
+    };
+
+    const tickPromise = runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    // Give the tick's synchronous dispatch loop a chance to reserve and
+    // fire both items before either verify() is released — proving
+    // dispatch #2 does not wait on dispatch #1's own verification.
+    await vi.waitFor(() => expect(callCount).toBe(2));
+    expect(releasers).toHaveLength(2);
+
+    releasers.forEach((release) => release());
+    const result = await tickPromise;
+
+    expect(result.processed).toHaveLength(2);
+  });
+
+  it('an item refused by hasLiveVerifySessionForGateItem consumes no dispatch budget and is absent from processed', async () => {
+    const blocked = await makeRunnableItem({
+      text: 'already has a live session',
+      classification: 'Read-Only',
+    });
+    const runnable = await makeRunnableItem({
+      text: 'freely runnable',
+      classification: 'Read-Only',
+    });
+    insertVerifySession(blocked.id, {
+      sessionId: 'sess-live-earlier-process',
+      status: 'running',
+    });
+
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(result.skippedForBudget).toBe(0);
+    expect(result.processed).toEqual([
+      { itemId: runnable.id, classification: 'Read-Only', disposition: 'pass' },
+    ]);
+  });
+
+  it('an item refused by tryReserveInFlight (already in flight) consumes no dispatch budget', async () => {
+    const item = await makeRunnableItem({ classification: 'Read-Only' });
+    let release: (() => void) | undefined;
+    const verify: GateItemVerifier['verify'] = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ disposition: 'pass' as const });
+        }),
+    );
+
+    const firstTick = runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+    await vi.waitFor(() => expect(verify).toHaveBeenCalledTimes(1));
+
+    const secondResult = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(secondResult.skippedForBudget).toBe(0);
+    expect(secondResult.processed).toEqual([]);
+
+    release?.();
+    await firstTick;
+    expect(getItem(item.id)?.state).toBe('pass');
+  });
+
+  it("one item's verify() rejecting does not reject the tick, and the other item's outcome still appears in processed", async () => {
+    const failing = await makeRunnableItem({
+      text: 'this one blows up filing its follow-up',
+      classification: 'Read-Only',
+    });
+    const succeeding = await makeRunnableItem({
+      text: 'this one passes cleanly',
+      classification: 'Read-Only',
+    });
+    const verify: GateItemVerifier['verify'] = async (item) =>
+      item.id === failing.id
+        ? { disposition: 'fail' as const, evidence: { log: 'boom' } }
+        : { disposition: 'pass' as const };
+    const followupFiler: FollowupFixTaskFiler = {
+      fileFollowupFixTask: vi.fn(async () => {
+        throw new Error('follow-up filer exploded');
+      }),
+    };
+
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+      followupFiler,
+    });
+
+    expect(result.processed).toEqual([
+      {
+        itemId: succeeding.id,
+        classification: 'Read-Only',
+        disposition: 'pass',
+      },
+    ]);
+    expect(getItem(failing.id)?.state).toBe('runnable');
+    expect(getItem(succeeding.id)?.state).toBe('pass');
+  });
+
+  it('releases inFlightVerifications for every reserved item once the tick resolves, including a rejecting one', async () => {
+    const failing = await makeRunnableItem({
+      text: 'rejects during routing',
+      classification: 'Read-Only',
+    });
+    const verify = vi.fn(async () => ({
+      disposition: 'fail' as const,
+      evidence: { log: 'boom' },
+    }));
+    const followupFiler: FollowupFixTaskFiler = {
+      fileFollowupFixTask: vi.fn(async () => {
+        throw new Error('follow-up filer exploded');
+      }),
+    };
+
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+      followupFiler,
+    });
+
+    // A stale in-flight reservation would permanently block re-dispatch —
+    // running a second tick over the same item proves the guard released.
+    const secondVerify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    const secondFollowupFiler: FollowupFixTaskFiler = {
+      fileFollowupFixTask: vi.fn(async () => ({
+        taskId: 'notion:followup-1',
+        taskTitle: 'fix it',
+      })),
+    };
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify: secondVerify },
+      followupFiler: secondFollowupFiler,
+    });
+
+    expect(secondVerify).toHaveBeenCalledTimes(1);
+    expect(result.processed).toEqual([
+      { itemId: failing.id, classification: 'Read-Only', disposition: 'pass' },
+    ]);
+  });
+});
+
 describe('runGateReconcilerTick — default deploy-advance trigger (getProjectDeployedSha)', () => {
   const exactMatchAncestrySource = () => ({
     isAncestor: (ancestorSha: string, descendantSha: string) =>

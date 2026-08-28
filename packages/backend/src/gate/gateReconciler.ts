@@ -462,34 +462,26 @@ function tryReserveInFlight(itemId: string): boolean {
   return true;
 }
 
-async function processItem(
-  item: GateItem,
-  verifier: GateItemVerifier,
-  followupFiler: FollowupFixTaskFiler,
-  deploySha: string | null,
-  concurrency: GateVerificationConcurrencyConfig = {},
-): Promise<ProcessedGateItem | null> {
-  // DB-backed guard, ahead of the in-memory reservation below: catches a
-  // live verify session dispatched by an earlier process (e.g. before a
-  // restart), which inFlightVerifications alone cannot see. Auto-run only —
-  // dispatchGateItemVerification (operator-triggered) intentionally skips
-  // this so an explicit re-verify is never blocked by a prior session.
+/**
+ * Synchronous reserve for the tick's auto-run loop — the DB-backed guard
+ * (catching a live verify session dispatched by an earlier process, e.g.
+ * before a restart, which inFlightVerifications alone cannot see) plus the
+ * in-memory reservation, with no intervening `await`. Auto-run only —
+ * dispatchGateItemVerification (operator-triggered) intentionally skips the
+ * live-session guard so an explicit re-verify is never blocked by a prior
+ * session.
+ *
+ * Split out from the dispatch itself (runReservedVerification) so the tick
+ * can spend dispatchBudget on a successful reservation and then fire the
+ * verification without awaiting it — see runGateReconcilerTick's auto-run
+ * passes below, which collect the returned promises and await them all
+ * together instead of serializing dispatch behind each one.
+ */
+function reserveItemForAutoRun(item: GateItem): boolean {
   if (hasLiveVerifySessionForGateItem(item.id)) {
-    return null;
+    return false;
   }
-  if (!tryReserveInFlight(item.id)) {
-    return null;
-  }
-  // processItem is only ever called from the tick's own auto-run loop — a
-  // fully-unattended verification, with no operator dispatch involved.
-  return runReservedVerification(
-    item,
-    verifier,
-    followupFiler,
-    deploySha,
-    concurrency,
-    true,
-  );
+  return tryReserveInFlight(item.id);
 }
 
 /**
@@ -678,14 +670,14 @@ export async function routeVerificationResult(
   };
 }
 
-/** The verify-dispatch-and-route body, assuming the in-flight slot is already reserved (by processItem or dispatchGateItemVerification). Always releases it. */
+/** The verify-dispatch-and-route body, assuming the in-flight slot is already reserved (by reserveItemForAutoRun or dispatchGateItemVerification). Always releases it. */
 async function runReservedVerification(
   item: GateItem,
   verifier: GateItemVerifier,
   followupFiler: FollowupFixTaskFiler,
   deploySha: string | null,
   concurrency: GateVerificationConcurrencyConfig = {},
-  /** true = reconciler auto-launch (processItem); false = operator-triggered manual dispatch (dispatchGateItemVerification) — recorded on every event this run appends. */
+  /** true = reconciler auto-launch (reserveItemForAutoRun); false = operator-triggered manual dispatch (dispatchGateItemVerification) — recorded on every event this run appends. */
   unattended = false,
 ): Promise<ProcessedGateItem | null> {
   const maxDispatchAttempts =
@@ -1130,6 +1122,17 @@ export async function runGateReconcilerTick(
       armedMilestones.push({ project, milestone });
     }
 
+    // Both passes below reserve synchronously and then fire the
+    // verification without awaiting it, collecting the returned promises in
+    // `inFlight` — mirroring dispatchGateItemVerification's fire-and-forget
+    // shape (see its comment) but awaiting all of them together at the end
+    // of the tick instead of never, since runGateReconcilerTick's return
+    // value is consumed by callers and by gateReconciler.test.ts. This is
+    // what lets dispatchBudget for N items actually dispatch N sessions
+    // concurrently instead of serializing behind each one's full
+    // verification.
+    const inFlight: Promise<ProcessedGateItem | null>[] = [];
+
     // Pass 1: backoff-elapsed `pending` items get first claim on the shared
     // dispatch budget, across every armed project/milestone, before any
     // runnable-tier item is dispatched. An item that has already waited out
@@ -1148,17 +1151,25 @@ export async function runGateReconcilerTick(
           skippedForBudget++;
           continue;
         }
-        const outcome = await processItem(
-          item,
-          verifier,
-          followupFiler,
-          deployShaByProject[item.project] ?? null,
-          options.concurrency,
-        );
-        if (outcome) {
-          processed.push(outcome);
-          dispatchBudget--;
+        if (!reserveItemForAutoRun(item)) {
+          continue;
         }
+        dispatchBudget--;
+        inFlight.push(
+          runReservedVerification(
+            item,
+            verifier,
+            followupFiler,
+            deployShaByProject[item.project] ?? null,
+            options.concurrency,
+            true,
+          ).catch((err) => {
+            logger.error(
+              `[GateReconciler] auto-run verification crashed for gate item ${item.id}: ${err instanceof Error ? err.message : err}`,
+            );
+            return null;
+          }),
+        );
       }
     }
 
@@ -1177,21 +1188,34 @@ export async function runGateReconcilerTick(
             skippedForBudget++;
             continue;
           }
-          const outcome = await processItem(
-            item,
-            verifier,
-            followupFiler,
-            deployShaByProject[item.project] ?? null,
-            options.concurrency,
-          );
-          // Only a genuine dispatch attempt (verify() invoked) spends
-          // budget — an item skipped by the in-flight/live-session guards
-          // (outcome === null) claimed no new capacity.
-          if (outcome) {
-            processed.push(outcome);
-            dispatchBudget--;
+          // Only a genuine reservation spends budget — an item refused by
+          // the in-flight/live-session guards claimed no new capacity.
+          if (!reserveItemForAutoRun(item)) {
+            continue;
           }
+          dispatchBudget--;
+          inFlight.push(
+            runReservedVerification(
+              item,
+              verifier,
+              followupFiler,
+              deployShaByProject[item.project] ?? null,
+              options.concurrency,
+              true,
+            ).catch((err) => {
+              logger.error(
+                `[GateReconciler] auto-run verification crashed for gate item ${item.id}: ${err instanceof Error ? err.message : err}`,
+              );
+              return null;
+            }),
+          );
         }
+      }
+    }
+
+    for (const outcome of await Promise.all(inFlight)) {
+      if (outcome) {
+        processed.push(outcome);
       }
     }
   }
