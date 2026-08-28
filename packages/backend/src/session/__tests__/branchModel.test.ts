@@ -1,5 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import crypto from 'crypto';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { execSync } from 'child_process';
 import { logger } from '../../logger';
 import {
@@ -219,6 +222,97 @@ describe('probeBranchLocally', () => {
     });
     expect(probeBranchLocally('feature/foo', '/proj')).toBe('unknown');
     expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it('passes --quiet to git rev-parse --verify, matching the exit-1/empty-stderr fixture shape', () => {
+    vi.mocked(execSync).mockReturnValue(Buffer.from(''));
+    probeBranchLocally('feature/foo', '/proj');
+    expect(vi.mocked(execSync)).toHaveBeenCalledWith(
+      expect.stringContaining('git rev-parse --verify --quiet refs/heads/feature/foo'),
+      expect.anything(),
+    );
+  });
+});
+
+describe('probeBranchLocally (real git)', () => {
+  const realExecSync =
+    vi.importActual<typeof import('child_process')>('child_process');
+  let repoDir: string;
+  let nonRepoDir: string;
+
+  beforeEach(async () => {
+    vi.mocked(execSync).mockImplementation((await realExecSync).execSync);
+    repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'branchmodel-repo-'));
+    execSync('git init', { cwd: repoDir, stdio: 'pipe' });
+    execSync('git config user.email test@example.com', {
+      cwd: repoDir,
+      stdio: 'pipe',
+    });
+    execSync('git config user.name Test', { cwd: repoDir, stdio: 'pipe' });
+    execSync('git commit --allow-empty -m init', {
+      cwd: repoDir,
+      stdio: 'pipe',
+    });
+    execSync('git branch existing-branch', { cwd: repoDir, stdio: 'pipe' });
+
+    nonRepoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'branchmodel-plain-'));
+  });
+
+  afterAll(() => {
+    vi.mocked(execSync).mockReset();
+  });
+
+  it('returns exists for a branch that was created', () => {
+    expect(probeBranchLocally('existing-branch', repoDir)).toBe('exists');
+  });
+
+  it('returns absent for a branch that was never created', () => {
+    expect(probeBranchLocally('never-created-branch', repoDir)).toBe(
+      'absent',
+    );
+  });
+
+  it('returns unknown when projectDir is not a git repository', () => {
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    expect(probeBranchLocally('any-branch', nonRepoDir)).toBe('unknown');
+  });
+});
+
+describe('resolveAvailableBranchSlug (real git)', () => {
+  const realExecSync =
+    vi.importActual<typeof import('child_process')>('child_process');
+  let repoDir: string;
+
+  beforeEach(async () => {
+    vi.mocked(execSync).mockImplementation((await realExecSync).execSync);
+    repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'branchmodel-avail-'));
+    execSync('git init', { cwd: repoDir, stdio: 'pipe' });
+    execSync('git config user.email test@example.com', {
+      cwd: repoDir,
+      stdio: 'pipe',
+    });
+    execSync('git config user.name Test', { cwd: repoDir, stdio: 'pipe' });
+    execSync('git commit --allow-empty -m init', {
+      cwd: repoDir,
+      stdio: 'pipe',
+    });
+  });
+
+  afterAll(() => {
+    vi.mocked(execSync).mockReset();
+  });
+
+  it('returns the base name unchanged when no branch of that name exists', () => {
+    expect(resolveAvailableBranchSlug('feature/my-task', repoDir)).toBe(
+      'feature/my-task',
+    );
+  });
+
+  it('returns <base>-2 when the base name already exists', () => {
+    execSync('git branch feature/my-task', { cwd: repoDir, stdio: 'pipe' });
+    expect(resolveAvailableBranchSlug('feature/my-task', repoDir)).toBe(
+      'feature/my-task-2',
+    );
   });
 });
 
