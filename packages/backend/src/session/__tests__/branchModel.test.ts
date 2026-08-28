@@ -176,9 +176,7 @@ describe('probeBranchLocally', () => {
       throw err;
     });
     expect(probeBranchLocally('feature/foo', '/proj')).toBe('unknown');
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('EAGAIN'),
-    );
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('EAGAIN'));
   });
 
   it('returns unknown for a non-1 non-zero exit code', () => {
