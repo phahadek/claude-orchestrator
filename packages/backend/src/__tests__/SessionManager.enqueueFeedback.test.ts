@@ -399,7 +399,7 @@ describe('SessionManager.enqueueFeedback()', () => {
     expect(sendSpy).toHaveBeenCalledWith(
       'sess-done',
       expect.stringContaining('stale failure'),
-      { allowTerminal: true },
+      { allowTerminal: true, persistTextOnDefer: false },
     );
     expect(queries.markInboxItemsDelivered).toHaveBeenCalled();
     expect(queries.listUndeliveredInboxItems('sess-done')).toHaveLength(0);
@@ -626,6 +626,157 @@ describe('SessionManager.enqueueFeedback()', () => {
       expect(queries.markInboxItemsDelivered).not.toHaveBeenCalled();
       expect(queries.listUndeliveredInboxItems('sess-idle-3')).toHaveLength(1);
     });
+  });
+});
+
+/**
+ * Regression coverage for the inbox-drain doubling bug: deliverUndeliveredInboxItems
+ * joins every undelivered row into one string and hands it to sendOrResume. Before
+ * persistTextOnDefer, _doSendOrResume persisted that joined text as a brand new
+ * row unconditionally before attempting the respawn — so a deferred respawn (e.g.
+ * the usage-admission gate) re-enqueued the concatenation of everything still
+ * pending, doubling the payload on every retry. These tests exercise the real
+ * _doSendOrResume path (the usage-admission gate genuinely deferring via a
+ * persisted deferral row, not a mocked sendOrResume) so the fix is verified at
+ * the actual call site.
+ */
+describe('SessionManager inbox drain: deferred delivery does not duplicate inbox rows', () => {
+  const DRAIN_ROW = {
+    session_id: 'sess-drain',
+    task_id: 'task-drain',
+    task_url: null,
+    project_context_url: null,
+    project_id: 'proj-drain',
+    status: 'idle',
+    session_type: 'standard',
+    worktree_path: '/tmp/proj/.claude/worktrees/sess-drain',
+    pr_url: null,
+    task_name: 'Drain task',
+    archived: 0,
+  };
+
+  // Deferred: five_hour usage admission still blocked (persisted deferral in
+  // the future). Admitted: no persisted deferral for either window.
+  function deferUsageAdmission() {
+    vi.mocked(queries.getUsageDeferral).mockImplementation((window) =>
+      window === 'five_hour' ? Date.now() + 5 * 60_000 : null,
+    );
+  }
+  function admitUsage() {
+    vi.mocked(queries.getUsageDeferral).mockReturnValue(null);
+  }
+
+  beforeEach(() => {
+    vi.mocked(queries.getSession).mockReturnValue(DRAIN_ROW as never);
+    vi.mocked(configModule.getProjectById).mockReturnValue({
+      id: 'proj-drain',
+      projectDir: '/tmp/proj',
+      taskSource: 'notion',
+      baseBranch: 'dev',
+      gitMode: 'worktree',
+    } as never);
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    seedInbox('sess-drain', [
+      { id: 1, source: 'operator:message', payload: 'first pending' },
+      { id: 2, source: 'system:nudge', payload: 'second pending' },
+    ]);
+  });
+
+  it('creates no new inbox row when sendOrResume returns null, and pre-existing rows keep delivered_at unset', async () => {
+    deferUsageAdmission();
+
+    const sm = new SessionManager();
+    const delivered = await sm.redeliverUndeliveredFeedback('sess-drain');
+
+    expect(delivered).toBe(false);
+    expect(queries.enqueueFeedbackItem).not.toHaveBeenCalled();
+    expect(queries.markInboxItemsDelivered).not.toHaveBeenCalled();
+    const remaining = queries.listUndeliveredInboxItems('sess-drain');
+    expect(remaining).toHaveLength(2);
+    expect(remaining.every((i) => i.delivered_at === null)).toBe(true);
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'verdict_routing_failed',
+        payload: expect.objectContaining({
+          reason: 'sendOrResume_returned_null',
+        }),
+      }),
+    );
+  });
+
+  it('three consecutive deferred drain cycles over the same two pending rows leave exactly two rows, with unchanged payload lengths', async () => {
+    deferUsageAdmission();
+
+    const sm = new SessionManager();
+    for (let i = 0; i < 3; i++) {
+      await sm.redeliverUndeliveredFeedback('sess-drain');
+    }
+
+    const remaining = queries.listUndeliveredInboxItems('sess-drain');
+    expect(remaining).toHaveLength(2);
+    expect(remaining.map((i) => i.payload.length)).toEqual([
+      'first pending'.length,
+      'second pending'.length,
+    ]);
+    expect(queries.enqueueFeedbackItem).not.toHaveBeenCalled();
+  });
+
+  it('once the respawn is admitted, every pending row is delivered', async () => {
+    deferUsageAdmission();
+
+    const sm = new SessionManager();
+    await sm.redeliverUndeliveredFeedback('sess-drain');
+    await sm.redeliverUndeliveredFeedback('sess-drain');
+    expect(queries.listUndeliveredInboxItems('sess-drain')).toHaveLength(2);
+
+    admitUsage();
+
+    const delivered = await sm.redeliverUndeliveredFeedback('sess-drain');
+
+    expect(delivered).toBe(true);
+    expect(queries.listUndeliveredInboxItems('sess-drain')).toHaveLength(0);
+    expect(queries.markInboxItemsDelivered).toHaveBeenCalledWith([1, 2]);
+    expect(queries.enqueueFeedbackItem).not.toHaveBeenCalled();
+  });
+
+  it('terminal-session resume branch also creates no duplicate row when its resume fails', async () => {
+    const TERMINAL_DRAIN_ROW = {
+      ...DRAIN_ROW,
+      session_id: 'sess-drain-terminal',
+      status: 'done',
+      worktree_path: '/tmp/proj/.claude/worktrees/sess-drain-terminal',
+    };
+    vi.mocked(queries.getSession).mockReturnValue(TERMINAL_DRAIN_ROW as never);
+    seedInbox('sess-drain-terminal', [
+      { id: 10, source: 'ci-failure', payload: 'stale failure text' },
+    ]);
+    deferUsageAdmission();
+
+    const sm = new SessionManager();
+    await sm.enqueueFeedback(
+      'sess-drain-terminal',
+      'ci-failure',
+      'new stale failure',
+    );
+
+    // Exactly one enqueueFeedbackItem call — enqueueFeedback's own persist of
+    // its caller-supplied payload. The internal resume attempt inside
+    // deliverUndeliveredInboxItems must not add a second, duplicate row for
+    // the combined text even though its resume fails (usage gate deferred).
+    expect(queries.enqueueFeedbackItem).toHaveBeenCalledTimes(1);
+    expect(queries.enqueueFeedbackItem).toHaveBeenCalledWith(
+      'sess-drain-terminal',
+      'ci-failure',
+      'new stale failure',
+    );
+    expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
+      'sess-drain-terminal',
+      'feedback_undelivered_terminal',
+    );
+    expect(queries.markInboxItemsDelivered).toHaveBeenCalled();
+    expect(queries.listUndeliveredInboxItems('sess-drain-terminal')).toHaveLength(
+      0,
+    );
   });
 });
 
