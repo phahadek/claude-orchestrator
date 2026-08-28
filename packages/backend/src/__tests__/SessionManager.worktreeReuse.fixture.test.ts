@@ -160,7 +160,7 @@ vi.mock('../tasks/TaskStatusEngine', () => ({
 
 vi.mock('../session/CliSessionRunner', () => ({
   CliSessionRunner: vi.fn().mockImplementation(() => ({
-    sendMessage: vi.fn(),
+    sendMessage: vi.fn().mockReturnValue(true),
     endSession: vi.fn(),
     // Never resolves so wireSession's run() fires session_status (resolving
     // firstEvent) but never completes.

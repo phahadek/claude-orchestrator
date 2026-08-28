@@ -5203,12 +5203,17 @@ export class SessionManager extends EventEmitter {
    * session (e.g. text from an earlier deferred poke) so a later successful
    * respawn delivers everything queued exactly once, rather than only the
    * latest text while older deferred pokes sit forgotten in the inbox.
+   *
+   * Deliberately does NOT stamp delivered_at — a successful respawnSession()
+   * call only proves the process was spawned, not that the payload reached
+   * its stdin/conversation. Callers stamp delivery only once that has been
+   * separately confirmed (see the firstEvent handling in _doSendOrResume).
    */
   private resolveRespawnDelivery(
     sessionId: string,
     text: string,
     session: AgentSession | null,
-  ): string | null {
+  ): { combinedText: string; itemIds: number[] } | null {
     if (!session) {
       const deferral = this.lastRespawnDeferral;
       this.emit('message', {
@@ -5225,10 +5230,10 @@ export class SessionManager extends EventEmitter {
     const combinedText = pendingItems.length
       ? pendingItems.map((item) => item.payload).join('\n\n')
       : text;
-    if (pendingItems.length) {
-      markInboxItemsDelivered(pendingItems.map((item) => item.id));
-    }
-    return combinedText;
+    return {
+      combinedText,
+      itemIds: pendingItems.map((item) => item.id),
+    };
   }
 
   private async _doSendOrResume(
@@ -5394,18 +5399,21 @@ export class SessionManager extends EventEmitter {
         fastPathSystemPromptPath,
         { allowReopenTerminal: opts.allowTerminal },
       );
-      const combinedText = this.resolveRespawnDelivery(
+      const respawnDelivery = this.resolveRespawnDelivery(
         sessionId,
         text,
         session,
       );
-      if (!session || combinedText === null) return null;
+      if (!session || respawnDelivery === null) return null;
       resetSessionPokeRetryCount(sessionId);
+      const { combinedText, itemIds } = respawnDelivery;
 
       // Proactive ceiling-escalation: if the session's persisted context occupancy
       // is at/over the HWM, spawn directly on large_task_model and deliver the
       // nudge via the 2s proactive timer instead of the first-event gate (which
-      // never fires for context-maxed sessions).
+      // never fires for context-maxed sessions). No first-event confirmation
+      // signal exists on this path, so — as before this change — delivery is
+      // considered confirmed as soon as the escalated session is spawned.
       if (isSessionAtContextCeiling(row)) {
         const largeModel = runtimeSettings.large_task_model!;
         session.setProactiveEscalation(
@@ -5418,17 +5426,55 @@ export class SessionManager extends EventEmitter {
             `model=${row.model ?? 'unknown'} → ${largeModel})`,
         );
         this.wireSession(sessionId, session, projectDir, recordedPath);
+        markInboxItemsDelivered(itemIds);
         return sessionId;
       }
 
+      // send()'s boolean return is the real confirmation signal — see the
+      // matching comment on the worktree-recreation respawn path below.
+      let sendConfirmed = false;
       const firstEvent = new Promise<void>((resolve) => {
         session.once('message', () => {
-          this.send(sessionId, combinedText);
+          sendConfirmed = this.send(sessionId, combinedText);
           resolve();
         });
       });
       this.wireSession(sessionId, session, projectDir, recordedPath);
-      await firstEvent;
+
+      const UNCONFIRMED_DELIVERY_TIMEOUT_MS = 30_000;
+      const timedOut = await new Promise<boolean>((resolve) => {
+        const timer = setTimeout(
+          () => resolve(true),
+          UNCONFIRMED_DELIVERY_TIMEOUT_MS,
+        );
+        timer.unref();
+        firstEvent.then(() => {
+          clearTimeout(timer);
+          resolve(false);
+        });
+      });
+
+      if (timedOut || !sendConfirmed) {
+        logger.warn(
+          `[SessionManager] sendOrResume: respawned session ${sessionId.slice(0, 8)} did not confirm delivery of inbox item(s) [${itemIds.join(', ')}] ` +
+            `(${timedOut ? 'no first event within 30s' : 'send() returned false'}) — leaving item(s) undelivered`,
+        );
+        recordEvent({
+          event_type: 'inbox_delivery_unconfirmed',
+          actor_type: 'system',
+          actor_id: sessionId,
+          project_id: row.project_id ?? null,
+          task_id: row.task_id ?? null,
+          payload: {
+            session_id: sessionId,
+            inbox_item_ids: itemIds,
+            reason: timedOut ? 'first_event_timeout' : 'send_failed',
+          },
+        });
+        return null;
+      }
+
+      markInboxItemsDelivered(itemIds);
       return sessionId;
     }
 
@@ -5686,9 +5732,14 @@ export class SessionManager extends EventEmitter {
       slowPathSystemPromptPath,
       { allowReopenTerminal: opts.allowTerminal },
     );
-    const combinedText = this.resolveRespawnDelivery(sessionId, text, session);
-    if (!session || combinedText === null) return null;
+    const respawnDelivery = this.resolveRespawnDelivery(
+      sessionId,
+      text,
+      session,
+    );
+    if (!session || respawnDelivery === null) return null;
     resetSessionPokeRetryCount(sessionId);
+    const { combinedText, itemIds } = respawnDelivery;
 
     // Register the pending text on the session so that if the resumed context
     // overflows, the escalated spawn re-delivers the original message rather
@@ -5698,7 +5749,9 @@ export class SessionManager extends EventEmitter {
     // Proactive ceiling-escalation: if the session's persisted context occupancy
     // is at/over the HWM, spawn directly on large_task_model and deliver the
     // nudge via the 2s proactive timer instead of the first-event gate (which
-    // never fires for context-maxed sessions).
+    // never fires for context-maxed sessions). This path has no first-event
+    // confirmation signal to gate on, so — as before this change — delivery
+    // is considered confirmed as soon as the escalated session is spawned.
     if (isSessionAtContextCeiling(row)) {
       const largeModel = runtimeSettings.large_task_model!;
       session.setProactiveEscalation(
@@ -5714,14 +5767,22 @@ export class SessionManager extends EventEmitter {
       // run() fire-and-forget. The proactive 2s timer in AgentSession.run() delivers
       // the nudge text to the large-model session without a first-event gate.
       this.wireSession(sessionId, session, projectDir, worktreePath);
+      markInboxItemsDelivered(itemIds);
       return sessionId;
     }
 
     // Register the first-event listener BEFORE wireSession starts run() to
     // avoid a race where the first message arrives before the listener is set.
+    // send()'s boolean return — not just the resumed session's existence — is
+    // the real confirmation signal: it is false whenever the stdin write did
+    // not reach the process, and only inserts the user_message event (the
+    // signal a live delivery already produces) when it returns true. Stamping
+    // delivered_at on anything less would repeat the bug this guards against:
+    // a session that was merely spawned, but never actually received the text.
+    let sendConfirmed = false;
     const firstEvent = new Promise<void>((resolve) => {
       session.once('message', () => {
-        this.send(sessionId, combinedText);
+        sendConfirmed = this.send(sessionId, combinedText);
         resolve();
       });
     });
@@ -5731,7 +5792,40 @@ export class SessionManager extends EventEmitter {
     // resume paths, preventing the divergence that was silently dropping pr_opened.
     this.wireSession(sessionId, session, projectDir, worktreePath);
 
-    await firstEvent;
+    const UNCONFIRMED_DELIVERY_TIMEOUT_MS = 30_000;
+    const timedOut = await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(
+        () => resolve(true),
+        UNCONFIRMED_DELIVERY_TIMEOUT_MS,
+      );
+      timer.unref();
+      firstEvent.then(() => {
+        clearTimeout(timer);
+        resolve(false);
+      });
+    });
+
+    if (timedOut || !sendConfirmed) {
+      logger.warn(
+        `[SessionManager] sendOrResume: respawned session ${sessionId.slice(0, 8)} did not confirm delivery of inbox item(s) [${itemIds.join(', ')}] ` +
+          `(${timedOut ? 'no first event within 30s' : 'send() returned false'}) — leaving item(s) undelivered`,
+      );
+      recordEvent({
+        event_type: 'inbox_delivery_unconfirmed',
+        actor_type: 'system',
+        actor_id: sessionId,
+        project_id: row.project_id ?? null,
+        task_id: row.task_id ?? null,
+        payload: {
+          session_id: sessionId,
+          inbox_item_ids: itemIds,
+          reason: timedOut ? 'first_event_timeout' : 'send_failed',
+        },
+      });
+      return null;
+    }
+
+    markInboxItemsDelivered(itemIds);
     return sessionId;
   }
 

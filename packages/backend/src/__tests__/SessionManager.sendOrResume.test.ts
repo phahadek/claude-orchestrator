@@ -189,7 +189,9 @@ vi.mock('../tasks/TaskStatusEngine', () => ({
 
 vi.mock('../session/CliSessionRunner', () => ({
   CliSessionRunner: vi.fn().mockImplementation(() => ({
-    sendMessage: vi.fn(),
+    // Confirmed send by default — tests exercising an unconfirmed delivery
+    // (send() returning false) override this per-test.
+    sendMessage: vi.fn().mockReturnValue(true),
     endSession: vi.fn(),
     // Never resolves so wireSession's run() fires session_status (resolving firstEvent)
     // but never completes, avoiding asynchronous markSessionErrored('run_error') noise.
@@ -226,6 +228,8 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 import { SessionManager } from '../session/SessionManager';
 import { AgentSession } from '../session/AgentSession';
+import { CliSessionRunner } from '../session/CliSessionRunner';
+import { recordEvent } from '../audit/AuditLog';
 import * as queries from '../db/queries';
 
 const SESSION_ID = 'aaaabbbb-cccc-dddd-eeee-ffffffffffff';
@@ -969,5 +973,77 @@ describe('sendOrResume() planning session: live in-memory session routes to send
     expect(fakeSendMessage).toHaveBeenCalledWith('hello');
     const calls = vi.mocked(execSync).mock.calls.map((c) => c[0] as string);
     expect(calls.some((c) => c.includes('worktree'))).toBe(false);
+  });
+});
+
+// ── Respawn-path delivery confirmation ────────────────────────────────────
+//
+// A successful respawnSession() call only proves the CLI process was
+// spawned — not that the coalesced text reached it. These verify that
+// _doSendOrResume now checks send()'s own boolean return (instead of
+// discarding it) as the real confirmation signal, mirroring the
+// user_message event send() only records on a confirmed delivery.
+
+describe('sendOrResume() respawn-path delivery confirmation', () => {
+  const CONFIRM_SESSION_ID = 'cccccccc-1111-2222-3333-444444444444';
+  const CONFIRM_SESSION_ROW = {
+    ...IDLE_SESSION_ROW,
+    session_id: CONFIRM_SESSION_ID,
+  };
+
+  beforeEach(() => {
+    vi.mocked(queries.getSession).mockReturnValue(CONFIRM_SESSION_ROW as never);
+  });
+
+  it('returns null, records inbox_delivery_unconfirmed, and leaves the item undelivered when send() fails after respawn', async () => {
+    vi.mocked(CliSessionRunner).mockImplementationOnce(
+      () =>
+        ({
+          sendMessage: vi.fn().mockReturnValue(false),
+          endSession: vi.fn(),
+          run: vi.fn().mockReturnValue(new Promise(() => {})),
+        }) as never,
+    );
+
+    const sm = new SessionManager();
+    const result = await sm.sendOrResume(
+      CONFIRM_SESSION_ID,
+      'operator disposition text',
+    );
+
+    expect(result).toBeNull();
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'inbox_delivery_unconfirmed',
+        actor_id: CONFIRM_SESSION_ID,
+        payload: expect.objectContaining({
+          session_id: CONFIRM_SESSION_ID,
+          reason: 'send_failed',
+        }),
+      }),
+    );
+    const undelivered = queries.listUndeliveredInboxItems(CONFIRM_SESSION_ID);
+    expect(
+      undelivered.some((i) => i.payload === 'operator disposition text'),
+    ).toBe(true);
+
+    // Clean up so later tests sharing this in-memory DB see an empty inbox.
+    queries.markInboxItemsDelivered(undelivered.map((i) => i.id));
+  });
+
+  it('stamps delivered_at exactly once and records no inbox_delivery_unconfirmed event when send() confirms', async () => {
+    const sm = new SessionManager();
+    const result = await sm.sendOrResume(
+      CONFIRM_SESSION_ID,
+      'confirmed payload',
+    );
+
+    expect(result).toBe(CONFIRM_SESSION_ID);
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'inbox_delivery_unconfirmed' }),
+    );
+    expect(queries.listUndeliveredInboxItems(CONFIRM_SESSION_ID)).toHaveLength(
+      0,
+    );
   });
 });
