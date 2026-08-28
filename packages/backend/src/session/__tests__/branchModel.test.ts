@@ -228,7 +228,9 @@ describe('probeBranchLocally', () => {
     vi.mocked(execSync).mockReturnValue(Buffer.from(''));
     probeBranchLocally('feature/foo', '/proj');
     expect(vi.mocked(execSync)).toHaveBeenCalledWith(
-      expect.stringContaining('git rev-parse --verify --quiet refs/heads/feature/foo'),
+      expect.stringContaining(
+        'git rev-parse --verify --quiet refs/heads/feature/foo',
+      ),
       expect.anything(),
     );
   });
@@ -267,9 +269,7 @@ describe('probeBranchLocally (real git)', () => {
   });
 
   it('returns absent for a branch that was never created', () => {
-    expect(probeBranchLocally('never-created-branch', repoDir)).toBe(
-      'absent',
-    );
+    expect(probeBranchLocally('never-created-branch', repoDir)).toBe('absent');
   });
 
   it('returns unknown when projectDir is not a git repository', () => {
