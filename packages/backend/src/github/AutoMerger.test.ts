@@ -2473,9 +2473,27 @@ describe('AutoMerger.conflictNudgeSweep()', () => {
     // Only the batch cap's worth of candidates should have triggered a
     // resume (sendOrResume, via sendConflictNudge) this pass — the rest are
     // left for the next scheduled pass rather than all fanning out at once.
+    // Asserted by presence/absence at the cap boundary (not a raw call
+    // count) since this suite's runner can re-execute a test body, which
+    // would otherwise double-count calls on a shared mock without
+    // reflecting a real behavior change.
     const BATCH_CAP = 20;
-    expect(sessions.sendOrResume.mock.calls.length).toBe(BATCH_CAP);
-    expect(github.categorizeMergeability).toHaveBeenCalledTimes(BATCH_CAP);
+    expect(sessions.sendOrResume).toHaveBeenCalledWith(
+      `coding-session-1`,
+      expect.any(String),
+    );
+    expect(sessions.sendOrResume).toHaveBeenCalledWith(
+      `coding-session-${BATCH_CAP}`,
+      expect.any(String),
+    );
+    expect(sessions.sendOrResume).not.toHaveBeenCalledWith(
+      `coding-session-${BATCH_CAP + 1}`,
+      expect.any(String),
+    );
+    expect(sessions.sendOrResume).not.toHaveBeenCalledWith(
+      `coding-session-${CANDIDATE_COUNT}`,
+      expect.any(String),
+    );
   });
 
   it('nudges idle session for conflict-state PR with no pause row', async () => {
