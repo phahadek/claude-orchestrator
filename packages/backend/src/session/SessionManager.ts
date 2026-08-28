@@ -24,6 +24,7 @@ import {
   ensureMilestoneBranch,
   deriveBranchSlug,
   resolveResumeBranchSlug,
+  resolveAvailableBranchSlug,
 } from './branchModel';
 import {
   loadOrchestratorConfig,
@@ -76,6 +77,7 @@ import {
   recordSessionErroredWriteSkipped,
   recordTaskDemotionSkippedOpenPr,
   updateSessionWorktreePath,
+  setSessionFeatureBranch,
   markSessionDone,
   markSessionIdle,
   applyPendingDone,
@@ -2115,7 +2117,10 @@ export class SessionManager extends EventEmitter {
           : `origin/${project.baseBranch}`;
 
       const featureBranch = taskName
-        ? deriveBranchSlug(taskName, sessionTaskId)
+        ? resolveAvailableBranchSlug(
+            deriveBranchSlug(taskName, sessionTaskId),
+            projectDir,
+          )
         : null;
       if (featureBranch) {
         try {
@@ -2123,6 +2128,7 @@ export class SessionManager extends EventEmitter {
             `git worktree add -b "${featureBranch}" "${worktreePath}" ${worktreeBase}`,
             { cwd: projectDir },
           );
+          setSessionFeatureBranch(sessionId, featureBranch);
         } catch (err) {
           const e = err as { stderr?: string | Buffer; message: string };
           const stderr = e.stderr ? e.stderr.toString() : '';
@@ -2226,6 +2232,7 @@ export class SessionManager extends EventEmitter {
                   `git worktree add -b "${featureBranch}" "${worktreePath}" ${worktreeBase}`,
                   { cwd: projectDir },
                 );
+                setSessionFeatureBranch(sessionId, featureBranch);
               } catch (retryErr) {
                 const re = retryErr as {
                   stderr?: string | Buffer;
@@ -2713,9 +2720,12 @@ export class SessionManager extends EventEmitter {
       // Best-effort — nothing to prune is a no-op
     }
 
-    const featureBranch = row.task_name
-      ? deriveBranchSlug(row.task_name, row.task_id)
-      : null;
+    // Only ever delete the branch this session itself created (persisted at
+    // worktree-add time) — never re-derive the default name here. A
+    // uniquified launch's default name may belong to an unrelated orphaned
+    // branch from a dead prior session, and re-deriving would delete that
+    // stranger's branch instead of this session's own.
+    const featureBranch = row.feature_branch;
     if (featureBranch) {
       try {
         await exec(`git branch -D "${featureBranch}"`, { cwd: projectDir });

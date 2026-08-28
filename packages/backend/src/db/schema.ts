@@ -3296,6 +3296,17 @@ export function runMigrations(target: Database.Database): void {
   `);
 
   runStructuredResultExtractedClearBackfill(target);
+
+  // The branch actually created at worktree-add time (see branchModel.ts's
+  // resolveAvailableBranchSlug) — may differ from deriveBranchSlug's default
+  // when that name collided with an orphaned branch from a dead prior
+  // session. NULL on rows predating this column; lookupSessionByBranch falls
+  // back to re-deriving for those.
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN feature_branch TEXT`);
+  } catch {
+    /* already exists */
+  }
 }
 
 // ─── test_run_results → test_perf_baselines digest backfill ────────────────

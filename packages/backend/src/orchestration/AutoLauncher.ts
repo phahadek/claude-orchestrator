@@ -39,11 +39,7 @@ import {
   parseThresholdPercent,
 } from './usageAdmission';
 import type { BaseHealthCheckResult } from './baseHealthCheck';
-import {
-  probeBranchLocally,
-  findWorktreePathForBranch,
-  deriveBranchSlug,
-} from '../session/branchModel';
+import { probeBranchLocally, deriveBranchSlug } from '../session/branchModel';
 
 const READY_STATUS = '🗂️ Ready';
 const DONE_STATUS = '✅ Done';
@@ -902,11 +898,16 @@ export class AutoLauncher {
     }
     if (hasActiveSessionForTask(task.id)) return false;
 
-    // Guard on branch ownership, not session liveness — archiving a session
+    // Probe branch ownership, not session liveness — archiving a session
     // releases it from the checks above but leaves its worktree and feature
-    // branch in place. Re-deriving the same deterministic branch name and
-    // attempting `git worktree add -b` on it would fail (or worse, orphan
-    // the prior session's commits), so skip before any worktree is touched.
+    // branch in place. By this point findLiveSessionIdForTask/
+    // hasActiveSessionForTask have already ruled out a live or DB-non-terminal
+    // session for this task, so a collision on the derived name here is by
+    // construction an orphaned branch left by a dead prior session — the
+    // launch proceeds and SessionManager uniquifies onto a fresh branch
+    // (`<base>-2`, ...) alongside it rather than failing on
+    // `git worktree add -b`. The stranded branch itself is left untouched;
+    // reclaiming it is a human decision, not this launch's.
     const prefixedTaskId = deriveTaskId(
       project.taskSource ?? 'notion',
       taskUrl,
@@ -916,25 +917,6 @@ export class AutoLauncher {
       prefixedTaskId,
     );
     const branchProbe = probeBranchLocally(derivedBranch, project.projectDir);
-    if (branchProbe === 'exists') {
-      const worktreePath =
-        findWorktreePathForBranch(derivedBranch, project.projectDir) ?? null;
-      logger.info(
-        `[AutoLauncher] skip launch for task ${task.id} — branch ${derivedBranch} already exists locally`,
-      );
-      recordEvent({
-        event_type: 'task_launch_skipped_branch_exists',
-        actor_type: 'system',
-        actor_id: null,
-        project_id: project.id,
-        task_id: task.id,
-        payload: {
-          branch: derivedBranch,
-          worktreePath,
-        },
-      });
-      return false;
-    }
     if (branchProbe === 'unknown') {
       logger.info(
         `[AutoLauncher] skip launch for task ${task.id} — branch ${derivedBranch} existence probe was inconclusive`,

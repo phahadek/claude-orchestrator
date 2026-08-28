@@ -136,6 +136,7 @@ vi.mock('../session/branchModel', () => ({
   ensureMilestoneBranch: vi.fn(),
   deriveBranchSlug: vi.fn().mockReturnValue('feature/my-task-abc12345'),
   resolveResumeBranchSlug: vi.fn().mockReturnValue('feature/my-task-abc12345'),
+  resolveAvailableBranchSlug: vi.fn((base: string) => base),
 }));
 
 vi.mock('../routes/tasks', () => ({ emitTaskUpdated: vi.fn() }));

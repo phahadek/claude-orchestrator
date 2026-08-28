@@ -6,6 +6,7 @@ import {
   deriveBranchSlug,
   probeBranchLocally,
   resolveResumeBranchSlug,
+  resolveAvailableBranchSlug,
   slugify,
 } from '../branchModel';
 
@@ -228,6 +229,67 @@ function absentError() {
     stderr: Buffer.from(''),
   });
 }
+
+describe('resolveAvailableBranchSlug', () => {
+  beforeEach(() => {
+    vi.mocked(execSync).mockReset();
+  });
+
+  it('returns the base name unchanged when it has no collision', () => {
+    vi.mocked(execSync).mockImplementation(() => {
+      throw absentError();
+    });
+    expect(resolveAvailableBranchSlug('feature/my-task', '/proj')).toBe(
+      'feature/my-task',
+    );
+  });
+
+  it('returns <base>-2 when the base name already exists locally', () => {
+    vi.mocked(execSync).mockImplementation((cmd) => {
+      if (String(cmd).includes('feature/my-task-2')) {
+        throw absentError();
+      }
+      return Buffer.from(''); // base "exists"
+    });
+    expect(resolveAvailableBranchSlug('feature/my-task', '/proj')).toBe(
+      'feature/my-task-2',
+    );
+  });
+
+  it('returns <base>-3 when both the base name and <base>-2 already exist', () => {
+    vi.mocked(execSync).mockImplementation((cmd) => {
+      if (String(cmd).includes('feature/my-task-3')) {
+        throw absentError();
+      }
+      return Buffer.from(''); // base and -2 both "exist"
+    });
+    expect(resolveAvailableBranchSlug('feature/my-task', '/proj')).toBe(
+      'feature/my-task-3',
+    );
+  });
+
+  it('treats an inconclusive probe the same as exists — fails closed, keeps probing', () => {
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const err = Object.assign(new Error('spawn failed'), {
+      errno: -11,
+      code: 'EAGAIN',
+      status: null,
+      signal: null,
+    });
+    vi.mocked(execSync).mockImplementation((cmd) => {
+      if (String(cmd).includes('feature/my-task-2')) {
+        throw err; // unknown — must not be treated as available
+      }
+      if (String(cmd).includes('feature/my-task-3')) {
+        throw absentError();
+      }
+      return Buffer.from(''); // base "exists"
+    });
+    expect(resolveAvailableBranchSlug('feature/my-task', '/proj')).toBe(
+      'feature/my-task-3',
+    );
+  });
+});
 
 describe('resolveResumeBranchSlug', () => {
   beforeEach(() => {

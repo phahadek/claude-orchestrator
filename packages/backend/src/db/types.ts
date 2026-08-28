@@ -69,6 +69,12 @@ export interface Session {
   // marker; asked_at bounds the unanswered window.
   awaiting_operator_question: string | null;
   awaiting_operator_asked_at: number | null;
+  // The branch actually created at worktree-add time (see
+  // branchModel.ts's resolveAvailableBranchSlug) — may differ from
+  // deriveBranchSlug(task_name, task_id) when that name collided with an
+  // orphaned branch from a dead prior session. NULL for rows predating this
+  // column and for sessions with no worktree (e.g. detached-checkout runs).
+  feature_branch: string | null;
 }
 
 export type NewSession = Omit<
@@ -103,6 +109,7 @@ export type NewSession = Omit<
   | 'last_event_at'
   | 'awaiting_operator_question'
   | 'awaiting_operator_asked_at'
+  | 'feature_branch'
 > & {
   ended_at?: number | null;
   terminalized_at?: number | null;

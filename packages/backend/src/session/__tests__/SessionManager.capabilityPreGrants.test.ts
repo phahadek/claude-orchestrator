@@ -57,6 +57,7 @@ vi.mock('../branchModel', () => ({
   ensureMilestoneBranch: vi.fn(),
   deriveBranchSlug: vi.fn().mockReturnValue('feature/my-task'),
   resolveResumeBranchSlug: vi.fn().mockReturnValue('feature/my-task'),
+  resolveAvailableBranchSlug: vi.fn((base: string) => base),
 }));
 
 // resolvePreGrantCapabilities/resolvePreGrantSessionKind's own resolution
