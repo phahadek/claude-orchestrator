@@ -149,9 +149,7 @@ describe('StuckSessionMonitor intra-tool heartbeat', () => {
     // The hard-stop window (armed by the pause) expires with no further
     // activity — the session is reclaimed (OS process torn down) and
     // surfaced to the operator, never terminalized directly.
-    expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith(
-      'sess-2',
-    );
+    expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith('sess-2');
     expect(queries.archiveSession).toHaveBeenCalledWith('sess-2');
     expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
       'sess-2',
@@ -185,9 +183,7 @@ describe('StuckSessionMonitor intra-tool heartbeat', () => {
     // A tool_use pending with the OS process already gone doesn't hold off
     // the hard-stop window — it still expires and reclaims the (already
     // dead) process, surfacing the session rather than terminalizing it.
-    expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith(
-      'sess-3',
-    );
+    expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith('sess-3');
     expect(queries.archiveSession).toHaveBeenCalledWith('sess-3');
   });
 
