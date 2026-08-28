@@ -507,14 +507,13 @@ export type ServerMessage =
       /**
        * A requested session action was declined. `reason` values seen from
        * the send_message/sendOrResume path include: 'session_not_found',
-       * 'terminal_session', 'still_initializing', 'usage_limit_deferred',
-       * and 'memory_admission_deferred' (the host memory-headroom admission
-       * gate — `detail` carries the observed free/reserved/projected MB
-       * values). It is a free-form string rather than a closed union so new
-       * refusal branches never need a type change here — see
-       * SessionManager's respawnSession/_doSendOrResume, which emit this on
-       * every one of their null-returning branches so a decline is never
-       * silent.
+       * 'terminal_session', 'still_initializing', and 'usage_limit_deferred'.
+       * Memory admission never appears here — it only gates the creation of
+       * new sessions (AutoLauncher), not resuming one that already exists.
+       * It is a free-form string rather than a closed union so new refusal
+       * branches never need a type change here — see SessionManager's
+       * respawnSession/_doSendOrResume, which emit this on every one of
+       * their null-returning branches so a decline is never silent.
        */
       type: 'session_action_failed';
       sessionId: string;

@@ -2428,6 +2428,51 @@ describe('AutoMerger.conflictNudgeSweep()', () => {
     );
   });
 
+  it('bounds fan-out to its own batch cap when the candidate list is oversized, instead of relying on memory admission at the resume transition', async () => {
+    const sessions = makeMockSessions();
+    const CANDIDATE_COUNT = 50;
+    const candidates = Array.from({ length: CANDIDATE_COUNT }, (_, i) => ({
+      pr_number: i + 1,
+      repo: 'owner/repo',
+    }));
+    vi.mocked(getConflictNudgeCandidates).mockReturnValue(candidates);
+    vi.mocked(getPRByNumber).mockImplementation((prNumber: number) =>
+      makePRRow({
+        pr_number: prNumber,
+        session_id: `coding-session-${prNumber}`,
+        head_sha: `sha-${prNumber}`,
+        conflict_nudge_sha: null,
+        pause_reason: null,
+        merge_state: 'dirty',
+      }),
+    );
+    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'idle' }));
+    const github = makeMockGitHub([]);
+    vi.mocked(github.categorizeMergeability).mockResolvedValue({
+      category: 'conflict',
+      mergeState: 'dirty',
+      rawMergeableState: 'dirty',
+      failingChecks: [],
+      headSha: 'sha-unused',
+    });
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(
+      github,
+      watcher,
+      () => {},
+      sessions as unknown as import('../session/SessionManager').SessionManager,
+    );
+
+    await merger.conflictNudgeSweep();
+
+    // Only the batch cap's worth of candidates should have triggered a
+    // resume (sendOrResume, via sendConflictNudge) this pass — the rest are
+    // left for the next scheduled pass rather than all fanning out at once.
+    const BATCH_CAP = 20;
+    expect(sessions.sendOrResume.mock.calls.length).toBe(BATCH_CAP);
+    expect(github.categorizeMergeability).toHaveBeenCalledTimes(BATCH_CAP);
+  });
+
   it('nudges idle session for conflict-state PR with no pause row', async () => {
     const sessions = makeMockSessions();
     vi.mocked(getConflictNudgeCandidates).mockReturnValue([

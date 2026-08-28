@@ -50,6 +50,14 @@ export function evaluateMemoryHeadroom(inputs: MemoryHeadroomInputs): boolean {
  * runtimeSettings. Returns the decision along with the inputs and projected
  * value it was computed from, so the caller can log/audit them without
  * recomputing (and risking drift from) the actual decision.
+ *
+ * Scope: this bounds the creation of new work — AutoLauncher's dispatch
+ * decision (its one justified consumer) and the test-request lane below.
+ * It must never gate resuming a session that already exists: that
+ * session's worktree, branch, conversation, and uncommitted changes are
+ * already on disk and already paid for, so refusing the idle-to-running
+ * transition doesn't free memory, it strands the work. SessionManager's
+ * respawnSession deliberately does not call this — see its doc comment.
  */
 export function hasMemoryHeadroom(
   freeMemBytes: number = os.freemem(),
