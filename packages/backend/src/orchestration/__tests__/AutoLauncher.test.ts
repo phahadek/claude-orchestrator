@@ -97,6 +97,7 @@ import {
   findWorktreePathForBranch,
   deriveBranchSlug,
 } from '../../session/branchModel.js';
+import { deriveTaskId } from '../../session/SessionManager.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -643,12 +644,122 @@ describe('AutoLauncher — project-driven polling', () => {
 
       await launcher.pollOnce();
 
+      const taskUrl =
+        task.task.notionUrl ||
+        `https://www.notion.so/${task.task.id.replace(/-/g, '')}`;
+      const prefixedTaskId = deriveTaskId('notion', taskUrl);
       const expectedBranch = deriveBranchSlug(
-        task.task.title || task.task.notionUrl,
-        task.task.id,
+        task.task.title || taskUrl,
+        prefixedTaskId,
       );
       expect(branchExistsLocally).toHaveBeenCalledWith(
         expectedBranch,
+        '/fake/project',
+      );
+    });
+
+    it('derives the byte-identical branch name the launch path (SessionManager) would derive for the same task', async () => {
+      // Guard against a repeat of the notion:-prefix mismatch bug: the guard
+      // must hash the same prefixed task id that session creation hashes, not
+      // the bare board-side task.id.
+      const task = makeResolvedTask({
+        id: '3ca22f91-52f3-8132-94c4-e964cd2cfbc7',
+        title: 'Some Task Title',
+        notionUrl: '',
+      });
+      const notionBackend = {
+        type: 'notion' as const,
+        fetchReadyTasks: vi.fn().mockResolvedValue([task]),
+      };
+      const resolveBackend = vi.fn().mockReturnValue(notionBackend);
+      const sessionManager = makeSessionManager(0);
+      const proj = makeProject({ projectDir: '/fake/project' });
+      const launcher = new AutoLauncher(sessionManager as never, undefined, {
+        listProjects: () => [proj],
+        resolveBackend,
+        pollOnStart: false,
+      });
+
+      await launcher.pollOnce();
+
+      const taskUrl = `https://www.notion.so/${task.task.id.replace(/-/g, '')}`;
+      // This is exactly what SessionManager's launch path computes when
+      // creating the sessions row for this task (see deriveTaskId call sites
+      // in SessionManager.ts).
+      const launchPathPrefixedId = deriveTaskId('notion', taskUrl);
+      const launchPathBranch = deriveBranchSlug(
+        task.task.title,
+        launchPathPrefixedId,
+      );
+      expect(branchExistsLocally).toHaveBeenCalledWith(
+        launchPathBranch,
+        '/fake/project',
+      );
+    });
+
+    it('reconstructs task 3ca22f91-52f3-8132-94c4-e964cd2cfbc7 and derives a branch ending in the notion:-prefixed hash b9c1c76b, not the bare-id hash 3b0876ee', async () => {
+      const longTitle =
+        'AutoLauncher branch existence guard hashes bare board id while launch hashes notion prefixed session id causing mismatch';
+      const task = makeResolvedTask({
+        id: '3ca22f91-52f3-8132-94c4-e964cd2cfbc7',
+        title: longTitle,
+        notionUrl: '',
+      });
+      const notionBackend = {
+        type: 'notion' as const,
+        fetchReadyTasks: vi.fn().mockResolvedValue([task]),
+      };
+      const resolveBackend = vi.fn().mockReturnValue(notionBackend);
+      const sessionManager = makeSessionManager(0);
+      const proj = makeProject({ projectDir: '/fake/project' });
+      const launcher = new AutoLauncher(sessionManager as never, undefined, {
+        listProjects: () => [proj],
+        resolveBackend,
+        pollOnStart: false,
+      });
+
+      await launcher.pollOnce();
+
+      expect(branchExistsLocally).toHaveBeenCalledTimes(1);
+      const [checkedBranch] = vi.mocked(branchExistsLocally).mock.calls[0];
+      expect(checkedBranch.endsWith('-b9c1c76b')).toBe(true);
+      expect(checkedBranch.endsWith('-3b0876ee')).toBe(false);
+    });
+
+    it('for a github-mode project, derives the prefixed id via deriveTaskId and produces a matching branch on both sides', async () => {
+      const task = makeResolvedTask({
+        id: '42',
+        title: 'Some GitHub Task Title',
+        notionUrl: 'https://github.com/acme/repo/issues/42',
+      });
+      const githubBackend = {
+        type: 'github' as const,
+        fetchReadyTasks: vi.fn().mockResolvedValue([task]),
+      };
+      const resolveBackend = vi.fn().mockReturnValue(githubBackend);
+      const sessionManager = makeSessionManager(0);
+      const proj = makeProject({
+        projectDir: '/fake/project',
+        taskSource: 'github',
+      });
+      const launcher = new AutoLauncher(sessionManager as never, undefined, {
+        listProjects: () => [proj],
+        resolveBackend,
+        pollOnStart: false,
+      });
+
+      await launcher.pollOnce();
+
+      const launchPathPrefixedId = deriveTaskId(
+        'github',
+        task.task.notionUrl,
+      );
+      const launchPathBranch = deriveBranchSlug(
+        task.task.title,
+        launchPathPrefixedId,
+      );
+      expect(branchExistsLocally).toHaveBeenCalledWith(
+        launchPathBranch,
         '/fake/project',
       );
     });
