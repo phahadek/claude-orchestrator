@@ -7,6 +7,8 @@ import {
   getPRBySessionId,
   setPauseReason,
   setTaskPauseReason,
+  setSessionPauseReason,
+  archiveSession,
   insertPauseInterval,
   closePauseInterval,
   upsertStuckSessionTimer,
@@ -1035,21 +1037,12 @@ export class StuckSessionMonitor {
       return;
     }
 
-    logger.warn(
-      `[StuckSessionMonitor] force-killing session ${sessionId.slice(0, 8)} — hard-stop window expired with no further activity after pause`,
-    );
-    this.broadcast({
-      type: 'stuck_session_killed',
+    this.escalateHardStop(
       sessionId,
-      taskName: state.taskName,
-    });
-    this.sessionManager
-      .kill(sessionId)
-      .catch((err: unknown) =>
-        logger.warn(
-          `[StuckSessionMonitor] kill failed for ${sessionId}: ${(err as Error).message}`,
-        ),
-      );
+      state.taskName,
+      'hard-stop window expired with no further activity after pause',
+      'stuck_session_hard_stop_window_expired',
+    );
   }
 
   private checkHardStop(sessionId: string): void {
@@ -1058,26 +1051,53 @@ export class StuckSessionMonitor {
     if (!state.hardStopArmed) return;
     if (Date.now() > state.hardStopDeadline) return;
 
-    logger.warn(
-      `[StuckSessionMonitor] hard-stopping session ${sessionId.slice(0, 8)} — tool_use within hard-stop window after pause`,
-    );
-    // Disarm immediately so a flurry of tool_use events doesn't spawn parallel kills.
+    // Disarm immediately so a flurry of tool_use events doesn't spawn parallel escalations.
     state.hardStopArmed = false;
     if (state.hardStopTimer) clearTimeout(state.hardStopTimer);
     state.hardStopTimer = null;
 
+    this.escalateHardStop(
+      sessionId,
+      state.taskName,
+      'tool_use within hard-stop window after pause',
+      'stuck_session_hard_stop_tool_use',
+    );
+  }
+
+  /**
+   * Surfaces a hard-stop condition to the operator instead of terminalizing
+   * the session — terminalizing is an operator action only (see the
+   * governing ruling in procedures.md). Reclaims the OS process (relieving
+   * memory/concurrency pressure the same way escalateStuckAliveSubprocessPark
+   * does) and archives the row out of the live population
+   * (countLivePlanningSessions, hasNonTerminalPlanningSessionForTask,
+   * hasActiveSessionForTask all filter on archived = 0) without ever writing
+   * a terminal status — the task, if any, is left with no non-terminal
+   * session and can be re-dispatched or nudged by OrphanedTaskSweeper.
+   */
+  private escalateHardStop(
+    sessionId: string,
+    taskName: string,
+    reasonDetail: string,
+    reason: string,
+  ): void {
+    logger.warn(
+      `[StuckSessionMonitor] surfacing session ${sessionId.slice(0, 8)} to operator — ${reasonDetail}`,
+    );
     this.broadcast({
       type: 'stuck_session_killed',
       sessionId,
-      taskName: state.taskName,
+      taskName,
     });
-    this.sessionManager
-      .kill(sessionId)
-      .catch((err: unknown) =>
-        logger.warn(
-          `[StuckSessionMonitor] kill failed for ${sessionId}: ${(err as Error).message}`,
-        ),
-      );
+    this.sessionManager.reclaimSessionProcess(sessionId);
+    archiveSession(sessionId);
+    setSessionPauseReason(sessionId, reason);
+    recordEvent({
+      event_type: 'stuck_session_surfaced_to_operator',
+      actor_type: 'system',
+      actor_id: sessionId,
+      payload: { sessionId, reason, detail: reasonDetail },
+    });
   }
 
   private clear(sessionId: string): void {
