@@ -63,7 +63,7 @@ vi.mock('../../session/branchModel.js', async () => {
     typeof import('../../session/branchSlug.js')
   >('../../session/branchSlug.js');
   return {
-    branchExistsLocally: vi.fn().mockReturnValue(false),
+    probeBranchLocally: vi.fn().mockReturnValue('absent'),
     findWorktreePathForBranch: vi.fn().mockReturnValue(null),
     deriveBranchSlug: actual.deriveBranchSlug,
   };
@@ -93,7 +93,7 @@ import {
 import { Scheduler, DEGRADED_TICK_THRESHOLD_MS } from '../Scheduler.js';
 import type { ServerMessage } from '../../ws/types';
 import {
-  branchExistsLocally,
+  probeBranchLocally,
   findWorktreePathForBranch,
   deriveBranchSlug,
 } from '../../session/branchModel.js';
@@ -146,12 +146,12 @@ function makeSessionManager(liveCount = 0) {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-// Global reset: branchExistsLocally/findWorktreePathForBranch mock return
+// Global reset: probeBranchLocally/findWorktreePathForBranch mock return
 // values persist across tests (vi.clearAllMocks() only clears call history,
 // not mockReturnValue), so any test that overrides them to simulate a stale
 // branch must not leak that override into unrelated tests in later describes.
 beforeEach(() => {
-  vi.mocked(branchExistsLocally).mockReturnValue(false);
+  vi.mocked(probeBranchLocally).mockReturnValue('absent');
   vi.mocked(findWorktreePathForBranch).mockReturnValue(null);
 });
 
@@ -555,7 +555,7 @@ describe('AutoLauncher — project-driven polling', () => {
 
   describe('branch-ownership guard', () => {
     beforeEach(() => {
-      vi.mocked(branchExistsLocally).mockReturnValue(false);
+      vi.mocked(probeBranchLocally).mockReturnValue('absent');
       vi.mocked(findWorktreePathForBranch).mockReturnValue(null);
     });
 
@@ -581,7 +581,7 @@ describe('AutoLauncher — project-driven polling', () => {
     }
 
     it('returns false without creating a session when the derived branch already exists locally', async () => {
-      vi.mocked(branchExistsLocally).mockReturnValue(true);
+      vi.mocked(probeBranchLocally).mockReturnValue('exists');
       const { launcher, sessionManager } =
         setupBranchGuardTest('task-branch-exists');
 
@@ -594,7 +594,7 @@ describe('AutoLauncher — project-driven polling', () => {
       // The guard is branch-existence based, not session-row based — it fires
       // regardless of the archived owning session's prior status, since the
       // branch/worktree survive archival either way.
-      vi.mocked(branchExistsLocally).mockReturnValue(true);
+      vi.mocked(probeBranchLocally).mockReturnValue('exists');
       const { launcher, sessionManager } = setupBranchGuardTest(
         'task-archived-running',
       );
@@ -605,7 +605,7 @@ describe('AutoLauncher — project-driven polling', () => {
     });
 
     it('fires for an owning session that was archived while idle (status=idle, archived=1)', async () => {
-      vi.mocked(branchExistsLocally).mockReturnValue(true);
+      vi.mocked(probeBranchLocally).mockReturnValue('exists');
       const { launcher, sessionManager } =
         setupBranchGuardTest('task-archived-idle');
 
@@ -615,13 +615,49 @@ describe('AutoLauncher — project-driven polling', () => {
     });
 
     it('proceeds normally when the derived branch does not exist locally', async () => {
-      vi.mocked(branchExistsLocally).mockReturnValue(false);
+      vi.mocked(probeBranchLocally).mockReturnValue('absent');
       const { launcher, sessionManager } =
         setupBranchGuardTest('task-no-branch');
 
       await launcher.pollOnce();
 
       expect(sessionManager.start).toHaveBeenCalledOnce();
+    });
+
+    it('skips the launch and creates no session when the branch probe is inconclusive', async () => {
+      vi.mocked(probeBranchLocally).mockReturnValue('unknown');
+      const { launcher, sessionManager } = setupBranchGuardTest(
+        'task-branch-unknown',
+      );
+
+      await launcher.pollOnce();
+
+      expect(sessionManager.start).not.toHaveBeenCalled();
+    });
+
+    it('records task_launch_skipped_branch_probe_failed with branch and task_id when the probe is inconclusive', async () => {
+      vi.mocked(probeBranchLocally).mockReturnValue('unknown');
+      const { launcher } = setupBranchGuardTest('task-branch-unknown-audit', {
+        id: 'proj-audit-unknown',
+      });
+
+      await launcher.pollOnce();
+
+      const probeFailedCalls = vi
+        .mocked(recordEvent)
+        .mock.calls.filter(
+          ([evt]) =>
+            evt.event_type === 'task_launch_skipped_branch_probe_failed',
+        );
+      expect(probeFailedCalls).toHaveLength(1);
+      expect(probeFailedCalls[0][0]).toMatchObject({
+        event_type: 'task_launch_skipped_branch_probe_failed',
+        task_id: 'task-branch-unknown-audit',
+        project_id: 'proj-audit-unknown',
+        payload: expect.objectContaining({
+          branch: expect.any(String),
+        }),
+      });
     });
 
     it('checks the same branch name the worktree-add path would use (deriveBranchSlug(taskName, taskId))', async () => {
@@ -652,7 +688,7 @@ describe('AutoLauncher — project-driven polling', () => {
         task.task.title || taskUrl,
         prefixedTaskId,
       );
-      expect(branchExistsLocally).toHaveBeenCalledWith(
+      expect(probeBranchLocally).toHaveBeenCalledWith(
         expectedBranch,
         '/fake/project',
       );
@@ -691,7 +727,7 @@ describe('AutoLauncher — project-driven polling', () => {
         task.task.title,
         launchPathPrefixedId,
       );
-      expect(branchExistsLocally).toHaveBeenCalledWith(
+      expect(probeBranchLocally).toHaveBeenCalledWith(
         launchPathBranch,
         '/fake/project',
       );
@@ -720,8 +756,8 @@ describe('AutoLauncher — project-driven polling', () => {
 
       await launcher.pollOnce();
 
-      expect(branchExistsLocally).toHaveBeenCalledTimes(1);
-      const [checkedBranch] = vi.mocked(branchExistsLocally).mock.calls[0];
+      expect(probeBranchLocally).toHaveBeenCalledTimes(1);
+      const [checkedBranch] = vi.mocked(probeBranchLocally).mock.calls[0];
       expect(checkedBranch.endsWith('-b9c1c76b')).toBe(true);
       expect(checkedBranch.endsWith('-3b0876ee')).toBe(false);
     });
@@ -755,14 +791,14 @@ describe('AutoLauncher — project-driven polling', () => {
         task.task.title,
         launchPathPrefixedId,
       );
-      expect(branchExistsLocally).toHaveBeenCalledWith(
+      expect(probeBranchLocally).toHaveBeenCalledWith(
         launchPathBranch,
         '/fake/project',
       );
     });
 
     it('records exactly one task_launch_skipped_branch_exists event with task_id, project_id, and branch, and creates no session', async () => {
-      vi.mocked(branchExistsLocally).mockReturnValue(true);
+      vi.mocked(probeBranchLocally).mockReturnValue('exists');
       vi.mocked(findWorktreePathForBranch).mockReturnValue(
         '/fake/project/.claude/worktrees/old-session-id',
       );
@@ -792,7 +828,7 @@ describe('AutoLauncher — project-driven polling', () => {
     });
 
     it('does not increment the consecutive-failure count that drives task_launch_escalated', async () => {
-      vi.mocked(branchExistsLocally).mockReturnValue(true);
+      vi.mocked(probeBranchLocally).mockReturnValue('exists');
       const { launcher } = setupBranchGuardTest('task-no-escalation');
 
       // Poll several times — a real launch_failed would escalate after 3.
@@ -811,13 +847,13 @@ describe('AutoLauncher — project-driven polling', () => {
     });
 
     it('never deletes a branch or removes a worktree — only reads branch/worktree state', async () => {
-      vi.mocked(branchExistsLocally).mockReturnValue(true);
+      vi.mocked(probeBranchLocally).mockReturnValue('exists');
       const { launcher } = setupBranchGuardTest('task-no-mutation');
 
       await launcher.pollOnce();
 
       // The guard's only allowed branchModel calls are the two read-only lookups.
-      expect(branchExistsLocally).toHaveBeenCalled();
+      expect(probeBranchLocally).toHaveBeenCalled();
       expect(findWorktreePathForBranch).toHaveBeenCalled();
     });
   });

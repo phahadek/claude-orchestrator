@@ -1,4 +1,5 @@
 import { execSync } from 'child_process';
+import { logger } from '../logger';
 import { getCorporateMode } from '../config/corporateMode';
 import { ProjectService } from '../projects/ProjectService';
 import { slugify, deriveBranchSlug } from './branchSlug';
@@ -7,19 +8,41 @@ export type BranchMode = 'two_tier' | 'flat';
 
 export { slugify, deriveBranchSlug };
 
-/** True when `branch` exists as a local ref in `projectDir`. */
-export function branchExistsLocally(
+export type BranchProbe = 'exists' | 'absent' | 'unknown';
+
+/**
+ * Probes whether `branch` exists as a local ref in `projectDir`, distinguishing
+ * a confirmed negative (git ran and reported the ref absent) from an
+ * inconclusive result (the invocation itself failed — spawn error, timeout,
+ * unexpected exit code/signal). Callers that treat absence as "safe to
+ * proceed" must treat 'unknown' the same as 'exists' — fail closed.
+ */
+export function probeBranchLocally(
   branch: string,
   projectDir: string,
-): boolean {
+): BranchProbe {
   try {
     execSync(`git rev-parse --verify refs/heads/${branch}`, {
       cwd: projectDir,
       stdio: 'pipe',
     });
-    return true;
-  } catch {
-    return false;
+    return 'exists';
+  } catch (err) {
+    const e = err as {
+      status?: number | null;
+      signal?: string | null;
+      code?: string;
+      errno?: number;
+      stderr?: Buffer | string;
+    };
+    const stderr = e.stderr?.toString() ?? '';
+    if (e.status === 1 && e.signal == null && stderr.trim() === '') {
+      return 'absent';
+    }
+    logger.warn(
+      `[branchModel] probeBranchLocally inconclusive for branch ${branch} — code=${e.code ?? 'n/a'} status=${e.status ?? 'n/a'} signal=${e.signal ?? 'n/a'} stderr=${stderr.trim()}`,
+    );
+    return 'unknown';
   }
 }
 
@@ -73,9 +96,13 @@ export function resolveResumeBranchSlug(
   if (!taskId) return current;
   const legacy = deriveBranchSlug(taskTitle, null, prefix);
   if (legacy === current) return current;
+  // An 'unknown' probe on `current` must not be read as absent — that would
+  // silently resume against the legacy branch (or worse, a fresh empty one)
+  // and orphan the session's prior commits. Only a confirmed absence of
+  // `current` combined with a confirmed existence of `legacy` migrates.
   if (
-    !branchExistsLocally(current, projectDir) &&
-    branchExistsLocally(legacy, projectDir)
+    probeBranchLocally(current, projectDir) === 'absent' &&
+    probeBranchLocally(legacy, projectDir) === 'exists'
   ) {
     return legacy;
   }

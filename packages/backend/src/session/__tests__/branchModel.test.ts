@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import crypto from 'crypto';
 import { execSync } from 'child_process';
+import { logger } from '../../logger';
 import {
   deriveBranchSlug,
+  probeBranchLocally,
   resolveResumeBranchSlug,
   slugify,
 } from '../branchModel';
@@ -139,9 +141,98 @@ describe('deriveBranchSlug', () => {
   });
 });
 
+describe('probeBranchLocally', () => {
+  beforeEach(() => {
+    vi.mocked(execSync).mockReset();
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
+  });
+
+  it('returns exists when the child exits 0', () => {
+    vi.mocked(execSync).mockReturnValue(Buffer.from(''));
+    expect(probeBranchLocally('feature/foo', '/proj')).toBe('exists');
+  });
+
+  it('returns absent when the child exits 1 with no stderr', () => {
+    const err = Object.assign(new Error('not found'), {
+      status: 1,
+      signal: null,
+      stderr: Buffer.from(''),
+    });
+    vi.mocked(execSync).mockImplementation(() => {
+      throw err;
+    });
+    expect(probeBranchLocally('feature/foo', '/proj')).toBe('absent');
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('returns unknown for a spawn error (no status, errno/code set)', () => {
+    const err = Object.assign(new Error('spawn failed'), {
+      errno: -11,
+      code: 'EAGAIN',
+      status: null,
+      signal: null,
+    });
+    vi.mocked(execSync).mockImplementation(() => {
+      throw err;
+    });
+    expect(probeBranchLocally('feature/foo', '/proj')).toBe('unknown');
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('EAGAIN'));
+  });
+
+  it('returns unknown for a non-1 non-zero exit code', () => {
+    const err = Object.assign(new Error('unexpected exit'), {
+      status: 128,
+      signal: null,
+      stderr: Buffer.from('fatal: not a git repository'),
+    });
+    vi.mocked(execSync).mockImplementation(() => {
+      throw err;
+    });
+    expect(probeBranchLocally('feature/foo', '/proj')).toBe('unknown');
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('128'));
+  });
+
+  it('returns unknown for a signal-terminated child', () => {
+    const err = Object.assign(new Error('killed'), {
+      status: null,
+      signal: 'SIGTERM',
+      stderr: Buffer.from(''),
+    });
+    vi.mocked(execSync).mockImplementation(() => {
+      throw err;
+    });
+    expect(probeBranchLocally('feature/foo', '/proj')).toBe('unknown');
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('SIGTERM'),
+    );
+  });
+
+  it('returns unknown when exit 1 carries stderr output (not the documented "ref not found" shape)', () => {
+    const err = Object.assign(new Error('git error'), {
+      status: 1,
+      signal: null,
+      stderr: Buffer.from('fatal: some other git error'),
+    });
+    vi.mocked(execSync).mockImplementation(() => {
+      throw err;
+    });
+    expect(probeBranchLocally('feature/foo', '/proj')).toBe('unknown');
+    expect(logger.warn).toHaveBeenCalled();
+  });
+});
+
+function absentError() {
+  return Object.assign(new Error('not found'), {
+    status: 1,
+    signal: null,
+    stderr: Buffer.from(''),
+  });
+}
+
 describe('resolveResumeBranchSlug', () => {
   beforeEach(() => {
     vi.mocked(execSync).mockReset();
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
   });
 
   it('returns the current-scheme branch unchanged for short titles (nothing to migrate)', () => {
@@ -166,7 +257,7 @@ describe('resolveResumeBranchSlug', () => {
 
     vi.mocked(execSync).mockImplementation((cmd: string) => {
       if (cmd.includes(`refs/heads/${current}`)) {
-        throw new Error('not found');
+        throw absentError();
       }
       if (cmd.includes(`refs/heads/${legacy}`)) {
         return Buffer.from('');
@@ -200,7 +291,32 @@ describe('resolveResumeBranchSlug', () => {
     const current = deriveBranchSlug(title, taskId);
 
     vi.mocked(execSync).mockImplementation(() => {
-      throw new Error('not found');
+      throw absentError();
+    });
+
+    const branch = resolveResumeBranchSlug(title, taskId, '/proj');
+    expect(branch).toBe(current);
+  });
+
+  it('does not treat an unknown probe on the current branch as absent — stays on the id-based branch even though the legacy branch exists', () => {
+    const title = 'word '.repeat(40).trim();
+    const taskId = 'task-abc';
+    const current = deriveBranchSlug(title, taskId);
+    const legacy = deriveBranchSlug(title, null);
+
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd.includes(`refs/heads/${current}`)) {
+        throw Object.assign(new Error('spawn failed'), {
+          errno: -11,
+          code: 'EAGAIN',
+          status: null,
+          signal: null,
+        });
+      }
+      if (cmd.includes(`refs/heads/${legacy}`)) {
+        return Buffer.from('');
+      }
+      throw new Error('unexpected command');
     });
 
     const branch = resolveResumeBranchSlug(title, taskId, '/proj');
