@@ -105,6 +105,7 @@ import {
   setTaskPauseReason,
   getTerminalSessionsForTask,
   listSessionsWithUndeliveredInboxItems,
+  listNonTerminalSessionsWithUndeliveredInboxItems,
   listUndeliveredInboxItems,
   markInboxItemsDelivered,
   enqueueFeedbackItem,
@@ -6004,5 +6005,36 @@ export class SessionManager extends EventEmitter {
       'redeliverUndeliveredFeedback',
     );
     return listUndeliveredInboxItems(sessionId).length < before;
+  }
+
+  /**
+   * Scheduled retry for inbox items a prior delivery attempt left undelivered
+   * (e.g. respawnSession's memory-admission gate deferring the respawn) —
+   * without this, such an item has no next attempt short of a backend
+   * restart (reconcileInboxAtBoot) or the session happening to already have
+   * an open PR (redeliverUndeliveredFeedback via StalledPRReconciler). Scoped
+   * to non-terminal, non-archived sessions only: terminal-session delivery
+   * stays reserved for reconcileInboxAtBoot/enqueueFeedback's
+   * attemptTerminalResume opt-in, so this sweep never re-drives that path on
+   * its own initiative. The memory-admission gate itself still applies on
+   * every retry — this only removes the once-then-never ceiling on attempts.
+   */
+  async sweepUndeliveredInbox(): Promise<{ itemsProcessed: number }> {
+    const sessionIds = listNonTerminalSessionsWithUndeliveredInboxItems();
+    if (sessionIds.length === 0) return { itemsProcessed: 0 };
+
+    let itemsProcessed = 0;
+    await Promise.allSettled(
+      sessionIds.map(async (sessionId) => {
+        const before = listUndeliveredInboxItems(sessionId).length;
+        await this.deliverUndeliveredInboxItems(
+          sessionId,
+          'inbox scheduled retry',
+        );
+        const after = listUndeliveredInboxItems(sessionId).length;
+        itemsProcessed += Math.max(0, before - after);
+      }),
+    );
+    return { itemsProcessed };
   }
 }

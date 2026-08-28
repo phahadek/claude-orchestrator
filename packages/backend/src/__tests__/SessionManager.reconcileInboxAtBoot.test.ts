@@ -94,6 +94,9 @@ vi.mock('../db/queries', () =>
     listSessionsWithUndeliveredInboxItems: vi.fn(() => [
       ...inboxItemsBySession.keys(),
     ]),
+    listNonTerminalSessionsWithUndeliveredInboxItems: vi.fn(() => [
+      ...inboxItemsBySession.keys(),
+    ]),
     listUndeliveredInboxItems: vi.fn((sessionId: string) =>
       (inboxItemsBySession.get(sessionId) ?? []).map((i) => ({
         ...i,
@@ -273,5 +276,80 @@ describe('reconcileInboxAtBoot()', () => {
     expect(sendSpy).not.toHaveBeenCalled();
     expect(queries.markInboxItemsDelivered).toHaveBeenCalledWith([3]);
     expect(queries.listUndeliveredInboxItems('sess-done')).toHaveLength(0);
+  });
+});
+
+describe('sweepUndeliveredInbox()', () => {
+  it('retries an item left undelivered by a memory-deferred respawn and marks it delivered once the send succeeds', async () => {
+    seedInbox('sess-retry', [
+      { id: 10, source: 'test_request', payload: '11434 passed, 0 failed' },
+    ]);
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-retry',
+      status: 'idle',
+    } as never);
+
+    const sm = new SessionManager();
+    // First tick: sendOrResume returns null (memory-deferred respawn).
+    const sendSpy = vi
+      .spyOn(sm, 'sendOrResume')
+      .mockResolvedValueOnce(null as never);
+
+    const firstTick = await sm.sweepUndeliveredInbox();
+    expect(firstTick).toEqual({ itemsProcessed: 0 });
+    expect(queries.markInboxItemsDelivered).not.toHaveBeenCalled();
+    expect(queries.listUndeliveredInboxItems('sess-retry')).toHaveLength(1);
+
+    // Second tick: sendOrResume succeeds.
+    sendSpy.mockResolvedValueOnce('sess-retry');
+    const secondTick = await sm.sweepUndeliveredInbox();
+
+    expect(secondTick).toEqual({ itemsProcessed: 1 });
+    expect(queries.markInboxItemsDelivered).toHaveBeenCalledWith([10]);
+    expect(queries.listUndeliveredInboxItems('sess-retry')).toHaveLength(0);
+  });
+
+  it('leaves an item undelivered with no duplicate row when the retry is deferred again', async () => {
+    seedInbox('sess-still-deferred', [
+      { id: 11, source: 'test_request', payload: 'still pending' },
+    ]);
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-still-deferred',
+      status: 'idle',
+    } as never);
+
+    const sm = new SessionManager();
+    vi.spyOn(sm, 'sendOrResume').mockResolvedValue(null as never);
+
+    await sm.sweepUndeliveredInbox();
+    const result = await sm.sweepUndeliveredInbox();
+
+    expect(result).toEqual({ itemsProcessed: 0 });
+    const remaining = queries.listUndeliveredInboxItems('sess-still-deferred');
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].delivered_at).toBeNull();
+    expect(remaining[0].id).toBe(11);
+  });
+
+  it('only considers rows returned by listNonTerminalSessionsWithUndeliveredInboxItems', async () => {
+    seedInbox('sess-nt-only', [
+      { id: 12, source: 'ai-reviewer', payload: 'payload' },
+    ]);
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-nt-only',
+      status: 'idle',
+    } as never);
+    vi.mocked(
+      queries.listNonTerminalSessionsWithUndeliveredInboxItems,
+    ).mockReturnValue([]);
+
+    const sm = new SessionManager();
+    const sendSpy = vi.spyOn(sm, 'sendOrResume');
+
+    const result = await sm.sweepUndeliveredInbox();
+
+    expect(result).toEqual({ itemsProcessed: 0 });
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(queries.listUndeliveredInboxItems('sess-nt-only')).toHaveLength(1);
   });
 });
