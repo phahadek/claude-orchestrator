@@ -70,7 +70,18 @@ describe('GET /api/test-request-runs', () => {
 
   it('returns a failed-with-cause snapshot carrying the output once completed', async () => {
     insertTestRequestRun('run-2', 'proj-1', 'hash-b');
-    completeTestRequestRun('run-2', 'failed', 'boom');
+    completeTestRequestRun(
+      'run-2',
+      'failed',
+      'boom',
+      'generic',
+      JSON.stringify({
+        format: 'junit-xml',
+        suites: [],
+        totals: { passed: 0, failed: 1, skipped: 0, errors: 0 },
+        durationMsTotal: 5,
+      }),
+    );
     const agent = supertest(makeApp());
 
     const res = await agent

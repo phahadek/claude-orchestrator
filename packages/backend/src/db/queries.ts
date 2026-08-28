@@ -9172,6 +9172,16 @@ export function countTestRequestRunsNeedingExtraction(): number {
  * project's test commands — F2 downgrades to cache-hit-only and skips
  * re-execution; a miss falls through to a real run via runProjectTestRequest,
  * which durably records into this same table.
+ *
+ * A `passed` row is always a genuine verdict — the process ran to completion
+ * to report it. A `failed` row is ambiguous: it's produced both by a real
+ * test failure and by a whole-process crash (missing dependency, OOM before
+ * any test ran, etc.), so a failed row only counts as a cache hit if it
+ * actually carries evidence of having executed: structured_result IS NOT
+ * NULL, or at least one test_run_results row exists for it. A failed row
+ * with neither is a crash record, not a verdict — it stays in the table but
+ * is invisible here, so a fresh run is triggered instead of the crash being
+ * served forever.
  */
 export function getLatestTestRequestRun(
   projectId: string,
@@ -9208,6 +9218,14 @@ export function getLatestTestRequestRun(
        WHERE project_id = @project_id AND content_hash = @content_hash AND state NOT IN ('running', 'queued')
          AND (@run_kind IS NULL OR run_kind = @run_kind)
          AND (@base_sha_provided = 0 OR base_sha IS @base_sha)
+         AND (
+           state != 'failed'
+           OR structured_result IS NOT NULL
+           OR EXISTS (
+             SELECT 1 FROM test_run_results
+             WHERE test_run_results.test_request_run_id = test_request_runs.id
+           )
+         )
        ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
     )
     .get({

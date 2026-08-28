@@ -66,7 +66,18 @@ describe('test_request_runs — F2 shared-cache read/invalidate', () => {
   it('returns the most recent completed run when several exist for the same key', () => {
     const first = nextRunId();
     insertTestRequestRun(first, 'proj-1', 'hash-b', null, Date.now());
-    completeTestRequestRun(first, 'failed', 'flaky failure');
+    completeTestRequestRun(
+      first,
+      'failed',
+      'flaky failure',
+      'generic',
+      JSON.stringify({
+        format: 'junit-xml',
+        suites: [],
+        totals: { passed: 0, failed: 1, skipped: 0, errors: 0 },
+        durationMsTotal: 5,
+      }),
+    );
     expect(getLatestTestRequestRun('proj-1', 'hash-b')?.state).toBe('failed');
 
     const second = nextRunId();
