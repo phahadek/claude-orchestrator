@@ -8813,6 +8813,29 @@ export function listSessionsWithUndeliveredInboxItems(): string[] {
   return rows.map((r) => r.session_id);
 }
 
+/**
+ * Same as listSessionsWithUndeliveredInboxItems, scoped to non-terminal,
+ * non-archived sessions — used by the scheduled retry sweep (see
+ * SessionManager.sweepUndeliveredInbox) so it never re-drives a terminal
+ * session's resume path on its own initiative; that path stays reserved for
+ * reconcileInboxAtBoot/enqueueFeedback's attemptTerminalResume opt-in.
+ */
+export function listNonTerminalSessionsWithUndeliveredInboxItems(): string[] {
+  const terminalStatuses = Array.from(TERMINAL_SESSION_STATUSES);
+  const placeholders = terminalStatuses.map(() => '?').join(', ');
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT sfi.session_id AS session_id
+       FROM session_feedback_inbox sfi
+       JOIN sessions s ON s.session_id = sfi.session_id
+       WHERE sfi.delivered_at IS NULL
+         AND s.archived != 1
+         AND s.status NOT IN (${placeholders})`,
+    )
+    .all(...terminalStatuses) as { session_id: string }[];
+  return rows.map((r) => r.session_id);
+}
+
 export function countUndeliveredInboxItems(sessionId: string): number {
   const row = db
     .prepare(

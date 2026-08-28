@@ -12,6 +12,7 @@ import {
   listUndeliveredInboxItems,
   markInboxItemsDelivered,
   listSessionsWithUndeliveredInboxItems,
+  listNonTerminalSessionsWithUndeliveredInboxItems,
 } from '../db/queries.js';
 
 function makeSession(sessionId: string, status: string): void {
@@ -118,6 +119,42 @@ describe('feedbackInbox queries', () => {
 
     const ids = listSessionsWithUndeliveredInboxItems();
     expect(ids).not.toContain('sess-7');
+  });
+
+  it('listNonTerminalSessionsWithUndeliveredInboxItems excludes done/error/killed and archived sessions', () => {
+    makeSession('sess-nt-running', 'running');
+    makeSession('sess-nt-idle', 'idle');
+    makeSession('sess-nt-done', 'done');
+    makeSession('sess-nt-error', 'error');
+    makeSession('sess-nt-killed', 'killed');
+    makeSession('sess-nt-archived', 'idle');
+    db.exec(
+      `UPDATE sessions SET archived = 1 WHERE session_id = 'sess-nt-archived'`,
+    );
+
+    for (const sessionId of [
+      'sess-nt-running',
+      'sess-nt-idle',
+      'sess-nt-done',
+      'sess-nt-error',
+      'sess-nt-killed',
+      'sess-nt-archived',
+    ]) {
+      enqueueFeedbackItem(sessionId, 'ai-reviewer', 'payload');
+    }
+
+    const ids = listNonTerminalSessionsWithUndeliveredInboxItems();
+    expect(ids.sort()).toEqual(['sess-nt-idle', 'sess-nt-running'].sort());
+  });
+
+  it('listNonTerminalSessionsWithUndeliveredInboxItems excludes sessions with all items delivered', () => {
+    makeSession('sess-nt-delivered', 'running');
+    enqueueFeedbackItem('sess-nt-delivered', 'ai-reviewer', 'payload');
+    const [item] = listUndeliveredInboxItems('sess-nt-delivered');
+    markInboxItemsDelivered([item.id]);
+
+    const ids = listNonTerminalSessionsWithUndeliveredInboxItems();
+    expect(ids).not.toContain('sess-nt-delivered');
   });
 });
 

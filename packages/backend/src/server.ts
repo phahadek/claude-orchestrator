@@ -882,6 +882,24 @@ scheduler.register({
     };
   },
 });
+// Undelivered-inbox retry sweep: a session_feedback_inbox item whose sole
+// enqueue-time delivery attempt was deferred by respawnSession's
+// memory-admission gate has no periodic retry short of a backend restart
+// (reconcileInboxAtBoot) or the session already having an open PR
+// (redeliverUndeliveredFeedback via StalledPRReconciler) — this sweep covers
+// every other non-terminal session. skip-if-running so a drain that's
+// itself memory-deferred can't pile up. Same cadence pattern as the
+// reconcilers above.
+scheduler.register({
+  name: 'undelivered_inbox_retry_sweep',
+  intervalMs: 10 * 60_000,
+  runOnBoot: false,
+  concurrency: 'skip-if-running',
+  run: async () => {
+    const { itemsProcessed } = await sessionManager.sweepUndeliveredInbox();
+    return { items_processed: itemsProcessed };
+  },
+});
 // Gate-verification reconciler: runnability/readiness reconcile on every
 // tick; auto-run verification drives the same wired verifier, gated by the
 // global gate_verification_enabled master switch and, per item, by that
