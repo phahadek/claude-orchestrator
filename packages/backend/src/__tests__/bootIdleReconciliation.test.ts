@@ -372,9 +372,7 @@ describe('runBootIdleReconciliation — pass 0: dead sessions at boot', () => {
     runBootIdleReconciliation();
 
     expect(getSession('review-running')?.archived).toBe(1);
-    expect(getSession('review-running')?.pause_reason).toBe(
-      'orphaned_at_boot',
-    );
+    expect(getSession('review-running')?.pause_reason).toBe('orphaned_at_boot');
   });
 
   it('does not touch idle sessions', () => {

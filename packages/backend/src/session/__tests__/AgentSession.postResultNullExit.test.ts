@@ -209,7 +209,9 @@ describe('AgentSession — null exit after a successful result event', () => {
 
     expect(sm.markSessionErrored).not.toHaveBeenCalled();
     const row = db
-      .prepare('SELECT archived, pause_reason FROM sessions WHERE session_id = ?')
+      .prepare(
+        'SELECT archived, pause_reason FROM sessions WHERE session_id = ?',
+      )
       .get(sessionId) as
       | { archived: number; pause_reason: string | null }
       | undefined;
