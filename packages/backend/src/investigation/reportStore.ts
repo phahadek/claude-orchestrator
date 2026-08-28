@@ -559,9 +559,18 @@ export function isInFlight(reportId: string): boolean {
  * (across its full dispatch history, via investigation_report_dispatch) has
  * reached a terminal session status — equivalent to !isInFlight(reportId) —
  * AND every staged_intent tied to any of those sessions is in a terminal
- * disposition state. Vacuously true for a session that stages nothing — a
- * report investigated and found not-actionable still resolves once its
- * session ends. A report with no dispatch history at all is never eligible.
+ * disposition state. A report with no dispatch history at all is never
+ * eligible.
+ *
+ * When no staged_intent rows exist at all (the vacuous case), resolving
+ * requires at least one dispatched session to have concluded cleanly
+ * (status 'done') — a report investigated to completion and found
+ * not-actionable still resolves once its session ends. A session that was
+ * killed or crashed ('error') before staging anything never ran the
+ * investigation, so it cannot vacuously satisfy this on its own; it blocks
+ * nothing, though — a later redispatch that concludes 'done' with nothing
+ * to stage still resolves the report.
+ *
  * Requiring the *whole* dispatch history to be terminal (not merely one
  * session) matters for a batched dispatch — a report sharing a session with
  * others, later re-dispatched on its own while a sibling's session is still
@@ -584,6 +593,11 @@ export function isResolveEligible(reportId: string): boolean {
       `SELECT state FROM staged_intent WHERE session_id IN (${placeholders})`,
     )
     .all(...sessionIds) as { state: string }[];
+
+  if (intentStates.length === 0) {
+    return [...statuses.values()].some((status) => status === 'done');
+  }
+
   return intentStates.every((row) =>
     TERMINAL_STAGED_INTENT_STATES.has(row.state),
   );
