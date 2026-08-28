@@ -686,7 +686,7 @@ describe('enqueueFeedback — terminal session behavior', () => {
       expect(sendOrResumeSpy).toHaveBeenCalledWith(
         SESSION_ID,
         expect.any(String),
-        { allowTerminal: true },
+        { allowTerminal: true, persistTextOnDefer: false },
       );
       expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith([
         'item-1',
@@ -739,6 +739,7 @@ describe('enqueueFeedback — terminal session behavior', () => {
     expect(sendOrResumeSpy).toHaveBeenCalledWith(
       SESSION_ID,
       expect.any(String),
+      { persistTextOnDefer: false },
     );
     expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith(['item-1']);
   });

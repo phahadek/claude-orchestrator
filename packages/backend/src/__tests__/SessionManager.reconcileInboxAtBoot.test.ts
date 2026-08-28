@@ -235,6 +235,7 @@ describe('reconcileInboxAtBoot()', () => {
     expect(sm.sendOrResume).toHaveBeenCalledWith(
       'sess-running',
       expect.stringContaining('verdict text'),
+      { persistTextOnDefer: false },
     );
     // Item remains undelivered — available for retry at the next boundary/boot
     expect(queries.markInboxItemsDelivered).not.toHaveBeenCalled();

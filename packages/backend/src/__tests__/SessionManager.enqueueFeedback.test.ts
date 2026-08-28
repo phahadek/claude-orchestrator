@@ -303,6 +303,7 @@ describe('SessionManager.enqueueFeedback()', () => {
     expect(sendSpy).toHaveBeenCalledWith(
       'sess-live-idle',
       expect.stringContaining('needs_changes feedback'),
+      { persistTextOnDefer: false },
     );
     expect(queries.markInboxItemsDelivered).toHaveBeenCalledTimes(1);
     expect(queries.listUndeliveredInboxItems('sess-live-idle')).toHaveLength(0);
@@ -327,6 +328,7 @@ describe('SessionManager.enqueueFeedback()', () => {
     expect(sm.sendOrResume).toHaveBeenCalledWith(
       'sess-idle',
       expect.stringContaining('verify failed'),
+      { persistTextOnDefer: false },
     );
     expect(queries.markInboxItemsDelivered).toHaveBeenCalled();
     expect(queries.listUndeliveredInboxItems('sess-idle')).toHaveLength(0);
