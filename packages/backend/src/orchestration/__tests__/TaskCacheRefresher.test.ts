@@ -27,7 +27,7 @@ import { getTaskBackend } from '../../tasks/TaskBackend.js';
 import { ProjectService } from '../../projects/ProjectService.js';
 import { TaskCacheRefresher } from '../TaskCacheRefresher.js';
 import { JiraApiError } from '../../tasks/JiraClient.js';
-import { upsertTaskCache } from '../../db/queries.js';
+import { upsertTaskCache, getTaskCache } from '../../db/queries.js';
 import { Scheduler, DEGRADED_TICK_THRESHOLD_MS } from '../Scheduler.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -636,6 +636,122 @@ describe('TaskCacheRefresher', () => {
       rawJson = JSON.stringify({ v: 2 });
       const third = await refresher.refreshOnce();
       expect(third).toBe(1);
+    });
+  });
+
+  describe('task_cache eviction', () => {
+    it('evicts a row whose task id is omitted from a subsequent successful refresh', async () => {
+      const project = makeProject({ id: 'p1' });
+      vi.mocked(getAllProjects).mockReturnValue([project]);
+      vi.mocked(ProjectService.listMilestones).mockReturnValue([
+        makeMilestone('m1', 'src-1'),
+      ]);
+
+      let ids = ['notion:kept', 'notion:vanished'];
+      const backend = makeBackend({
+        fetchReadyTasks: vi.fn().mockImplementation(async () => {
+          return ids.map((id) => {
+            upsertTaskCache(id, JSON.stringify({ v: 1 }));
+            return { task: { id } };
+          });
+        }),
+      });
+      vi.mocked(getTaskBackend).mockReturnValue(backend);
+
+      const refresher = new TaskCacheRefresher(undefined, {
+        listProjects: getAllProjects,
+        resolveBackend: getTaskBackend,
+      });
+
+      await refresher.refreshOnce();
+      expect(getTaskCache('notion:kept')).toBeDefined();
+      expect(getTaskCache('notion:vanished')).toBeDefined();
+
+      // Second refresh's fetched set no longer includes the vanished page —
+      // its cache row must be evicted, not left frozen at its last status.
+      ids = ['notion:kept'];
+      await refresher.refreshOnce();
+
+      expect(getTaskCache('notion:kept')).toBeDefined();
+      expect(getTaskCache('notion:vanished')).toBeUndefined();
+    });
+
+    it('does not evict rows belonging to another project', async () => {
+      const proj1 = makeProject({ id: 'p1' });
+      const proj2 = makeProject({ id: 'p2' });
+      vi.mocked(getAllProjects).mockReturnValue([proj1, proj2]);
+      vi.mocked(ProjectService.listMilestones).mockImplementation(
+        (projectId: string) => [
+          makeMilestone(`m-${projectId}`, `src-${projectId}`),
+        ],
+      );
+
+      let proj1Ids = ['notion:p1-task'];
+      const proj1Backend = makeBackend({
+        fetchReadyTasks: vi.fn().mockImplementation(async () =>
+          proj1Ids.map((id) => {
+            upsertTaskCache(id, JSON.stringify({ v: 1 }));
+            return { task: { id } };
+          }),
+        ),
+      });
+      const proj2Backend = makeBackend({
+        fetchReadyTasks: vi.fn().mockImplementation(async () => {
+          upsertTaskCache('notion:p2-task', JSON.stringify({ v: 1 }));
+          return [{ task: { id: 'notion:p2-task' } }];
+        }),
+      });
+      vi.mocked(getTaskBackend).mockImplementation((projectId: string) =>
+        projectId === 'p1' ? proj1Backend : proj2Backend,
+      );
+
+      const refresher = new TaskCacheRefresher(undefined, {
+        listProjects: getAllProjects,
+        resolveBackend: getTaskBackend,
+      });
+
+      await refresher.refreshOnce();
+
+      // p1's fetched set drops its only task on the second tick — only p1's
+      // row may be evicted; p2's row (same 'notion:' prefix) must survive.
+      proj1Ids = [];
+      await refresher.refreshOnce();
+
+      expect(getTaskCache('notion:p1-task')).toBeUndefined();
+      expect(getTaskCache('notion:p2-task')).toBeDefined();
+    });
+
+    it('evicts nothing after a failed or partial refresh', async () => {
+      const project = makeProject({ id: 'p1' });
+      vi.mocked(getAllProjects).mockReturnValue([project]);
+      vi.mocked(ProjectService.listMilestones).mockReturnValue([
+        makeMilestone('m1', 'src-1'),
+      ]);
+
+      let shouldFail = false;
+      const backend = makeBackend({
+        fetchReadyTasks: vi.fn().mockImplementation(async () => {
+          if (shouldFail) throw new Error('source unavailable');
+          upsertTaskCache('notion:surviving', JSON.stringify({ v: 1 }));
+          return [{ task: { id: 'notion:surviving' } }];
+        }),
+      });
+      vi.mocked(getTaskBackend).mockReturnValue(backend);
+
+      const refresher = new TaskCacheRefresher(undefined, {
+        listProjects: getAllProjects,
+        resolveBackend: getTaskBackend,
+      });
+
+      await refresher.refreshOnce();
+      expect(getTaskCache('notion:surviving')).toBeDefined();
+
+      // A failed fetch must not be treated as "this task vanished" — the row
+      // must survive the failed tick untouched.
+      shouldFail = true;
+      await refresher.refreshOnce();
+
+      expect(getTaskCache('notion:surviving')).toBeDefined();
     });
   });
 });
