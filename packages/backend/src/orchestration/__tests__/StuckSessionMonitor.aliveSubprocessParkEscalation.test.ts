@@ -156,9 +156,7 @@ describe('StuckSessionMonitor — stuck_session_alive_subprocess park escalation
 
     expect(sessionManager.markSessionErrored).not.toHaveBeenCalled();
     expect(sessionManager.endSession).not.toHaveBeenCalled();
-    expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith(
-      'sess-1',
-    );
+    expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith('sess-1');
     expect(recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         event_type: 'stuck_session_alive_park_escalated',
