@@ -5343,7 +5343,9 @@ export async function getMergeCommitForTask(
  * from cache falls back to the strict (PR-producing) assumption, matching
  * gateService.ts's isSourceCovered fallback.
  */
-export function isStructurallyUnresolvableSource(sourceTaskId: string): boolean {
+export function isStructurallyUnresolvableSource(
+  sourceTaskId: string,
+): boolean {
   const type = getTaskTypeFromCache(sourceTaskId);
   if (type === '📐 Design') return true;
   if (type === '🔧 Operational') {
