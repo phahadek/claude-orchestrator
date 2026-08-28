@@ -1728,7 +1728,11 @@ describe('runGateReconcilerTick — auto-run dispatch is not serialized behind e
     });
 
     expect(result.processed).toEqual([
-      { itemId: succeeding.id, classification: 'Read-Only', disposition: 'pass' },
+      {
+        itemId: succeeding.id,
+        classification: 'Read-Only',
+        disposition: 'pass',
+      },
     ]);
     expect(getItem(failing.id)?.state).toBe('runnable');
     expect(getItem(succeeding.id)?.state).toBe('pass');
