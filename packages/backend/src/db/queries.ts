@@ -5332,6 +5332,42 @@ export async function getMergeCommitForTask(
   }
 }
 
+/**
+ * True when a gate_item_source's task can never produce a resolvable merge
+ * commit: a 📐 Design task (no branch/PR ever exists for it), or a
+ * 🔧 Operational task with no pull_requests row at all (config/backfill work
+ * done outside the tracked PR/branch flow). Retrying — or escalating —
+ * these is pointless: escalationEvidence's "check for a dropped webhook or a
+ * merge outside the tracked PR/branch flow" can never apply, since there was
+ * never a PR to have dropped a webhook for. A type that can't be resolved
+ * from cache falls back to the strict (PR-producing) assumption, matching
+ * gateService.ts's isSourceCovered fallback.
+ */
+export function isStructurallyUnresolvableSource(
+  sourceTaskId: string,
+): boolean {
+  const type = getTaskTypeFromCache(sourceTaskId);
+  if (type === '📐 Design') return true;
+  if (type === '🔧 Operational') {
+    return !getPRByNotionTaskId(normalizeTaskId(sourceTaskId));
+  }
+  return false;
+}
+
+/**
+ * True once a gate_item_source's task has reached ✅ Done — the point at
+ * which a still-null merge_commit is genuinely suspicious. While the task
+ * sits in Backlog/Ready/In Progress/In Review/Blocked/Deferred, a null
+ * merge_commit is the expected, temporary state of a task that simply
+ * hasn't merged yet, and must not count toward the escalation ceiling. A
+ * status that can't be resolved from cache falls back to "not done" — the
+ * conservative direction that withholds escalation rather than risks one
+ * for a task that hasn't actually finished.
+ */
+export function isSourceTaskDone(sourceTaskId: string): boolean {
+  return getTaskStatusFromCache(sourceTaskId) === '✅ Done';
+}
+
 // ─── pr_review_comments_routed ────────────────────────────────────────────────
 
 /**
