@@ -8,7 +8,10 @@ export type BranchMode = 'two_tier' | 'flat';
 export { slugify, deriveBranchSlug };
 
 /** True when `branch` exists as a local ref in `projectDir`. */
-export function branchExistsLocally(branch: string, projectDir: string): boolean {
+export function branchExistsLocally(
+  branch: string,
+  projectDir: string,
+): boolean {
   try {
     execSync(`git rev-parse --verify refs/heads/${branch}`, {
       cwd: projectDir,

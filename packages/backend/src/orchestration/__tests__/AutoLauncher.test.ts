@@ -59,9 +59,9 @@ vi.mock('../../projects/ProjectService.js', () => ({
 }));
 
 vi.mock('../../session/branchModel.js', async () => {
-  const actual = await vi.importActual<typeof import('../../session/branchSlug.js')>(
-    '../../session/branchSlug.js',
-  );
+  const actual = await vi.importActual<
+    typeof import('../../session/branchSlug.js')
+  >('../../session/branchSlug.js');
   return {
     branchExistsLocally: vi.fn().mockReturnValue(false),
     findWorktreePathForBranch: vi.fn().mockReturnValue(null),
@@ -581,9 +581,8 @@ describe('AutoLauncher — project-driven polling', () => {
 
     it('returns false without creating a session when the derived branch already exists locally', async () => {
       vi.mocked(branchExistsLocally).mockReturnValue(true);
-      const { launcher, sessionManager } = setupBranchGuardTest(
-        'task-branch-exists',
-      );
+      const { launcher, sessionManager } =
+        setupBranchGuardTest('task-branch-exists');
 
       await launcher.pollOnce();
 
@@ -606,9 +605,8 @@ describe('AutoLauncher — project-driven polling', () => {
 
     it('fires for an owning session that was archived while idle (status=idle, archived=1)', async () => {
       vi.mocked(branchExistsLocally).mockReturnValue(true);
-      const { launcher, sessionManager } = setupBranchGuardTest(
-        'task-archived-idle',
-      );
+      const { launcher, sessionManager } =
+        setupBranchGuardTest('task-archived-idle');
 
       await launcher.pollOnce();
 
@@ -617,9 +615,8 @@ describe('AutoLauncher — project-driven polling', () => {
 
     it('proceeds normally when the derived branch does not exist locally', async () => {
       vi.mocked(branchExistsLocally).mockReturnValue(false);
-      const { launcher, sessionManager } = setupBranchGuardTest(
-        'task-no-branch',
-      );
+      const { launcher, sessionManager } =
+        setupBranchGuardTest('task-no-branch');
 
       await launcher.pollOnce();
 
