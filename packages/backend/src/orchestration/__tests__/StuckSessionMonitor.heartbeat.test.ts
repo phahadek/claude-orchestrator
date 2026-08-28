@@ -39,6 +39,7 @@ vi.mock('../../session/processLiveness', () => ({
 import { recordEvent } from '../../audit/AuditLog';
 import { isSessionProcessAlive } from '../../session/processLiveness';
 import { StuckSessionMonitor } from '../StuckSessionMonitor.js';
+import * as queries from '../../db/queries.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -144,6 +145,16 @@ describe('StuckSessionMonitor intra-tool heartbeat', () => {
       }),
     );
     expect(monitor.isTracking('sess-2')).toBe(true);
+
+    // The hard-stop window (armed by the pause) expires with no further
+    // activity — the session is reclaimed (OS process torn down) and
+    // surfaced to the operator, never terminalized directly.
+    expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith('sess-2');
+    expect(queries.archiveSession).toHaveBeenCalledWith('sess-2');
+    expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
+      'sess-2',
+      'stuck_session_hard_stop_window_expired',
+    );
   });
 
   it('still trips notify/pause once a long tool call is left running after the OS process has exited', () => {
@@ -168,6 +179,12 @@ describe('StuckSessionMonitor intra-tool heartbeat', () => {
         sessionId: 'sess-3',
       }),
     );
+
+    // A tool_use pending with the OS process already gone doesn't hold off
+    // the hard-stop window — it still expires and reclaims the (already
+    // dead) process, surfacing the session rather than terminalizing it.
+    expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith('sess-3');
+    expect(queries.archiveSession).toHaveBeenCalledWith('sess-3');
   });
 
   it('records each heartbeat tick via recordEvent (audit_log), not as a session_event', () => {

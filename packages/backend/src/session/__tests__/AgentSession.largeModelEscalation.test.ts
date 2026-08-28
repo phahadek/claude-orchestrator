@@ -41,6 +41,8 @@ vi.mock('../../db/queries', () =>
     setHeadSha: vi.fn(),
     setPauseReason: vi.fn(),
     setSessionPauseReason: vi.fn(),
+    archiveSession: vi.fn(),
+    setSessionLastErrorDetail: vi.fn(),
     insertPauseInterval: vi.fn(),
     getSessionTags: vi.fn().mockReturnValue([]),
     setSessionTags: vi.fn(),
@@ -781,11 +783,18 @@ describe('AgentSession — escalation deadlock watchdog + bounded retry', () => 
     // kill() called 3 times (once per deadlocked attempt).
     expect(mockKill).toHaveBeenCalledTimes(3);
 
-    // markSessionErrored called with escalation_deadlock reason.
-    expect(mockSessionManager.markSessionErrored).toHaveBeenCalledWith(
+    // Exhausted escalation retries are reported to the operator — never
+    // via a machine-written terminal status.
+    expect(mockSessionManager.markSessionErrored).not.toHaveBeenCalled();
+    expect(queries.archiveSession).toHaveBeenCalledWith(
       'test-session-overflow',
-      'error',
+    );
+    expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
+      'test-session-overflow',
       'escalation_deadlock',
+    );
+    expect(queries.setSessionLastErrorDetail).toHaveBeenCalledWith(
+      'test-session-overflow',
       'context overflow: all 3 escalation attempts exhausted',
     );
 
