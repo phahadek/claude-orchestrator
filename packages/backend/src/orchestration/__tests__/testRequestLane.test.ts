@@ -445,7 +445,13 @@ describe('getLatestTestRequestRun — a crash with no verdict must not squat the
   });
 
   it('still returns a settled failed row with zero test_run_results but a non-null structured_result', () => {
-    insertTestRequestRun('verdict-1', 'proj-1', 'hash-verdict-1', null, Date.now());
+    insertTestRequestRun(
+      'verdict-1',
+      'proj-1',
+      'hash-verdict-1',
+      null,
+      Date.now(),
+    );
     completeTestRequestRun(
       'verdict-1',
       'failed',
@@ -459,7 +465,13 @@ describe('getLatestTestRequestRun — a crash with no verdict must not squat the
   });
 
   it('still returns a settled failed row with test_run_results rows but a null structured_result', () => {
-    insertTestRequestRun('verdict-2', 'proj-1', 'hash-verdict-2', null, Date.now());
+    insertTestRequestRun(
+      'verdict-2',
+      'proj-1',
+      'hash-verdict-2',
+      null,
+      Date.now(),
+    );
     completeTestRequestRun('verdict-2', 'failed', 'one test failed', 'generic');
     insertResultRow('verdict-2');
 
@@ -468,8 +480,19 @@ describe('getLatestTestRequestRun — a crash with no verdict must not squat the
   });
 
   it('still returns a normal failed run with per-test rows — a real failing verdict is unaffected', () => {
-    insertTestRequestRun('failed-verdict-1', 'proj-1', 'hash-failed-1', null, Date.now());
-    completeTestRequestRun('failed-verdict-1', 'failed', 'one test failed', 'generic');
+    insertTestRequestRun(
+      'failed-verdict-1',
+      'proj-1',
+      'hash-failed-1',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun(
+      'failed-verdict-1',
+      'failed',
+      'one test failed',
+      'generic',
+    );
     insertResultRow('failed-verdict-1');
 
     const row = getLatestTestRequestRun('proj-1', 'hash-failed-1');
