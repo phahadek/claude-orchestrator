@@ -22,6 +22,20 @@ export interface VerifyResult {
 
 const OUTPUT_TAIL_CHARS = 750;
 
+/**
+ * Truncates a log to its final `chars` characters — the end of a test log is
+ * where the failure summary lives, not the startup banner at the head. Both
+ * writers of the ci_failing pause detail (this module and PRMergeWatcher)
+ * must agree on this semantic, or the same failure produces two different
+ * "truncated" excerpts depending on which code path wrote it.
+ */
+export function tailOfLog(
+  output: string,
+  chars: number = OUTPUT_TAIL_CHARS,
+): string {
+  return output.length > chars ? output.slice(output.length - chars) : output;
+}
+
 function runCommand(
   cmd: string,
   cwd: string,
@@ -58,10 +72,7 @@ export async function runVerifyAsGate(
   for (const cmd of commands) {
     const { exitCode, output } = await runCommand(cmd, worktreePath);
     if (exitCode !== 0) {
-      const truncated =
-        output.length > OUTPUT_TAIL_CHARS
-          ? output.slice(output.length - OUTPUT_TAIL_CHARS)
-          : output;
+      const truncated = tailOfLog(output);
       let structuredResult: StructuredTestResult | null = null;
       if (testReportGlob) {
         try {
