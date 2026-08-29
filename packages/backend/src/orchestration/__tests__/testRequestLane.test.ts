@@ -399,6 +399,16 @@ describe('runProjectTestRequest — coalescing', () => {
   });
 
   it('an ordinary settled failure IS replayed as unchangedReplay on a subsequent request against the same tree', async () => {
+    // A genuine failure (as opposed to a whole-process crash) carries a
+    // structured result — that's what makes it a verdict getLatestTestRequestRun
+    // will hand back instead of triggering a fresh run.
+    mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '*.xml' });
+    mockCollectStructuredTestResult.mockReturnValue({
+      format: 'junit-xml',
+      suites: [],
+      totals: { passed: 0, failed: 1, skipped: 0, errors: 0 },
+      durationMsTotal: 5,
+    });
     mockRunTestCommands.mockResolvedValueOnce({
       passed: false,
       output: 'assertion failed',
@@ -416,6 +426,133 @@ describe('runProjectTestRequest — coalescing', () => {
     expect(admission.unchangedReplay).toBe(true);
     expect(replay.unchangedReplay).toBe(true);
     expect(replay.passed).toBe(false);
+  });
+});
+
+describe('getLatestTestRequestRun — a crash with no verdict must not squat the cache slot', () => {
+  function insertResultRow(runId: string): void {
+    db.prepare(
+      `INSERT INTO test_run_results (test_request_run_id, project_id, test_id, name, outcome, duration_ms, created_at)
+       VALUES (?, 'proj-1', 'some-test', 'some-test', 'passed', 10, ?)`,
+    ).run(runId, Date.now());
+  }
+
+  it('excludes a settled row with structured_result NULL and zero test_run_results rows (a crash, not a verdict)', () => {
+    insertTestRequestRun('crash-1', 'proj-1', 'hash-crash-1', null, Date.now());
+    completeTestRequestRun('crash-1', 'failed', 'vitest: not found', 'generic');
+
+    expect(getLatestTestRequestRun('proj-1', 'hash-crash-1')).toBeUndefined();
+  });
+
+  it('still returns a settled failed row with zero test_run_results but a non-null structured_result', () => {
+    insertTestRequestRun(
+      'verdict-1',
+      'proj-1',
+      'hash-verdict-1',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun(
+      'verdict-1',
+      'failed',
+      'one test failed',
+      'generic',
+      '{"summary":"1 failed"}',
+    );
+
+    const row = getLatestTestRequestRun('proj-1', 'hash-verdict-1');
+    expect(row?.id).toBe('verdict-1');
+  });
+
+  it('still returns a settled failed row with test_run_results rows but a null structured_result', () => {
+    insertTestRequestRun(
+      'verdict-2',
+      'proj-1',
+      'hash-verdict-2',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun('verdict-2', 'failed', 'one test failed', 'generic');
+    insertResultRow('verdict-2');
+
+    const row = getLatestTestRequestRun('proj-1', 'hash-verdict-2');
+    expect(row?.id).toBe('verdict-2');
+  });
+
+  it('still returns a normal failed run with per-test rows — a real failing verdict is unaffected', () => {
+    insertTestRequestRun(
+      'failed-verdict-1',
+      'proj-1',
+      'hash-failed-1',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun(
+      'failed-verdict-1',
+      'failed',
+      'one test failed',
+      'generic',
+    );
+    insertResultRow('failed-verdict-1');
+
+    const row = getLatestTestRequestRun('proj-1', 'hash-failed-1');
+    expect(row?.id).toBe('failed-verdict-1');
+    expect(row?.state).toBe('failed');
+  });
+
+  it('excludes a crash row even when failure_reason is generic — the discriminator is result-presence, not the reason string', () => {
+    insertTestRequestRun('crash-2', 'proj-1', 'hash-crash-2', null, Date.now());
+    completeTestRequestRun('crash-2', 'failed', 'boom', 'generic');
+
+    const row = getLatestTestRequestRun('proj-1', 'hash-crash-2');
+    expect(row).toBeUndefined();
+  });
+
+  it('preserves the existing run_kind = "full" scoping alongside the new verdict filter', () => {
+    insertTestRequestRun(
+      'crash-scoped',
+      'proj-1',
+      'hash-crash-scoped',
+      null,
+      Date.now(),
+      null,
+      undefined,
+      undefined,
+      'running',
+      'scoped',
+    );
+    completeTestRequestRun(
+      'crash-scoped',
+      'failed',
+      'one test failed',
+      'generic',
+      '{"summary":"1 failed"}',
+    );
+
+    expect(
+      getLatestTestRequestRun('proj-1', 'hash-crash-scoped', 'full'),
+    ).toBeUndefined();
+    expect(
+      getLatestTestRequestRun('proj-1', 'hash-crash-scoped', 'scoped')?.id,
+    ).toBe('crash-scoped');
+  });
+
+  it('with only a crash row present for a content hash, a fresh test request runs instead of short-circuiting on the cached crash', async () => {
+    insertTestRequestRun('crash-3', 'proj-1', 'hash-crash-3', null, Date.now());
+    completeTestRequestRun('crash-3', 'failed', 'vitest: not found', 'generic');
+
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+    await runProjectTestRequest(baseSpec({ contentHash: 'hash-crash-3' }));
+
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    const rows = db
+      .prepare(
+        `SELECT id, state FROM test_request_runs WHERE project_id = ? AND content_hash = ? ORDER BY rowid`,
+      )
+      .all('proj-1', 'hash-crash-3') as Array<{ id: string; state: string }>;
+    expect(rows.map((r) => r.id)).toContain('crash-3');
+    expect(rows.length).toBe(2);
   });
 });
 
@@ -1521,6 +1658,16 @@ describe('admitTestRequest — settled-run guard', () => {
   });
 
   it('a session whose prior identical-tree run failed can still reach a fresh execution via the sanctioned flaky path (deleteTestRequestRunsForContentHash), rather than being pinned to the old failing result forever', async () => {
+    // A genuine failure (as opposed to a whole-process crash) carries a
+    // structured result — that's what makes it a cached verdict in the
+    // first place, which this test then invalidates via the flaky path.
+    mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '*.xml' });
+    mockCollectStructuredTestResult.mockReturnValue({
+      format: 'junit-xml',
+      suites: [],
+      totals: { passed: 0, failed: 1, skipped: 0, errors: 0 },
+      durationMsTotal: 5,
+    });
     mockRunTestCommands.mockResolvedValueOnce({
       passed: false,
       output: 'boom',
