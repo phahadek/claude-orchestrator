@@ -125,6 +125,11 @@ vi.mock('../session/orchestrator-config', () => ({
     allowedTools: [],
     mcp_servers: undefined,
   }),
+  // AgentSession.run() calls this on every spawn attempt, before invoking
+  // the runner — required now that the respawn-delivery gate waits for the
+  // runner to actually spawn instead of run()'s pre-spawn session_status
+  // broadcast.
+  getSessionAllowedTools: vi.fn(() => []),
 }));
 
 vi.mock('../session/ContextBuilder', () => ({
@@ -173,9 +178,16 @@ vi.mock('../session/CliSessionRunner', () => ({
   CliSessionRunner: vi.fn().mockImplementation(() => ({
     sendMessage: vi.fn().mockReturnValue(true),
     endSession: vi.fn(),
-    // Never resolves so wireSession's run() fires session_status (resolving firstEvent)
-    // but never completes, avoiding asynchronous markSessionErrored('run_error') noise.
-    run: vi.fn().mockReturnValue(new Promise(() => {})),
+    // Never resolves (simulating a long-running subprocess) so wireSession's
+    // run() never completes, avoiding asynchronous markSessionErrored
+    // ('run_error') noise — but invokes onEvent once on the next microtask
+    // to simulate the runner's first real stdout line, which is what the
+    // respawn-delivery gate now waits on instead of run()'s pre-spawn
+    // session_status broadcast.
+    run: vi.fn((_initialPrompt, _resumeSessionId, _options, onEvent) => {
+      queueMicrotask(() => onEvent({ type: 'system', subtype: 'hook_started' }));
+      return new Promise(() => {});
+    }),
   })),
 }));
 

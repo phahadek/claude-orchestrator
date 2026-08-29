@@ -144,6 +144,13 @@ vi.mock('../session/orchestrator-config', () => ({
     allowedTools: [],
     mcp_servers: undefined,
   }),
+  // AgentSession.run() calls this on every spawn attempt to build the
+  // --allowedTools list. Missing this previously went unnoticed because
+  // the respawn-delivery gate resolved off run()'s pre-spawn session_status
+  // broadcast, which fires before this call — the exact bug this task
+  // fixes. Now the gate waits for the runner to actually spawn, so run()
+  // must get past this call without throwing.
+  getSessionAllowedTools: vi.fn(() => []),
 }));
 
 vi.mock('../session/ContextBuilder', () => ({

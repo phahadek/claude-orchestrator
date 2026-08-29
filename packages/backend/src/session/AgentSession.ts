@@ -444,17 +444,6 @@ export class AgentSession extends EventEmitter {
   private totalOutputTokens = 0;
   /** Count of compact_boundary events seen this session (in-memory, synced to SQLite). */
   private compactionCount = 0;
-  /**
-   * Set once handleRawEvent processes the runner's first raw event this
-   * run(). Node creates a child's stdio pipes synchronously inside
-   * spawn(), before the process itself has finished starting — so any
-   * event reaching handleRawEvent (even a 'system'/hook_started line)
-   * proves spawn() already returned and stdin is writable. Emitted as a
-   * dedicated internal event ('runner-ready'), not on the public 'message'
-   * channel, so it is never satisfied by run()'s opening session_status
-   * broadcast (which fires before the runner is even spawned).
-   */
-  private runnerReadyEmitted = false;
   static contextWindowForModel(model: string | null): number {
     return model?.includes('[1m]') ? 1_000_000 : 200_000;
   }
@@ -1471,11 +1460,6 @@ The full task spec and all rules are in your system prompt. Begin implementing d
    */
   private handleRawEvent(event: Record<string, unknown>): void {
     const rawType = (event.type as string) ?? 'unknown';
-
-    if (!this.runnerReadyEmitted) {
-      this.runnerReadyEmitted = true;
-      this.emit('runner-ready');
-    }
 
     // Debug logging
     sessionLog(

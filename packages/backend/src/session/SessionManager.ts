@@ -5442,13 +5442,23 @@ export class SessionManager extends EventEmitter {
 
       // send()'s boolean return is the real confirmation signal — see the
       // matching comment on the worktree-recreation respawn path below.
-      // Gated on 'runner-ready' (the runner's first raw event), not the
-      // generic 'message' channel — run()'s opening session_status
-      // broadcast is also a 'message' emission but fires before the
-      // runner is even spawned, so stdin isn't writable yet. See
-      // AgentSession.runnerReadyEmitted.
+      // run()'s opening session_status:'running' broadcast is also a
+      // 'message' emission, but it fires before the runner is even
+      // spawned (see AgentSession.run()), so it proves nothing about
+      // stdin readiness. Skip that one broadcast and wait for the
+      // session's next 'message' — for a real AgentSession, nothing else
+      // reaches the 'message' channel before handleRawEvent processes the
+      // runner's first raw event, which can only happen once spawn() has
+      // already returned and stdin is writable.
       const firstEvent = new Promise<void>((resolve) => {
-        session.once('runner-ready', () => resolve());
+        const onMessage = (msg: ServerMessage) => {
+          if (msg.type === 'session_status' && msg.status === 'running') {
+            return;
+          }
+          session.off('message', onMessage);
+          resolve();
+        };
+        session.on('message', onMessage);
       });
       this.wireSession(sessionId, session, projectDir, recordedPath);
 
