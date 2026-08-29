@@ -26,6 +26,7 @@ import {
   setSessionEffortSettingKey,
   setSessionMetadata,
   getPRBySessionId,
+  getPRByReviewSessionId,
   isRepoConfigured,
   setHeadSha,
   setPauseReason,
@@ -3256,6 +3257,11 @@ The full task spec and all rules are in your system prompt. Begin implementing d
    * is unaffected. Idempotent per (session, comment_id): an identical repeat
    * call is a dedup no-op; a changed disposition for the same comment_id is
    * last-write-wins and re-emits.
+   *
+   * Confirmed session_id is the right lookup here: review.disposition is
+   * called by the implementation session addressing review feedback (see
+   * the "Responding to Review Comments" CLAUDE.md section), not by a review
+   * session — session_id holds that caller's own id.
    */
   recordReviewDisposition(item: ParsedDispositionItem): void {
     const pr = getPRBySessionId(this.sessionId);
@@ -3286,10 +3292,31 @@ The full task spec and all rules are in your system prompt. Begin implementing d
    * unsubscribes on the first settlement, so a second emission — whether
    * from a genuine last-write-wins revision or replay — simply has no
    * listener left to reach; it never double-resolves.
+   *
+   * Only a review session's own AgentSession ever calls this method, and a
+   * review session's id is stored on the PR row as review_session_id (set by
+   * setReviewSessionId when the review session is launched) — never as
+   * session_id, which holds the implementation session that opened the PR.
+   * So this resolves via getPRByReviewSessionId, not getPRBySessionId (unlike
+   * the sibling recordReviewDisposition/recordVerifiedFlakyDisposition below,
+   * which are invoked by a standard/implementation session and correctly use
+   * session_id). If no PR resolves — e.g. review_session_id not yet
+   * persisted at call time — a schema-validated verdict would otherwise be
+   * silently dropped, so a review_verdict_pr_unresolved audit event is
+   * recorded before returning.
    */
   recordReviewVerdict(verdict: ReviewVerdictItem): void {
-    const pr = getPRBySessionId(this.sessionId);
-    if (!pr) return;
+    const pr = getPRByReviewSessionId(this.sessionId);
+    if (!pr) {
+      recordEvent({
+        event_type: 'review_verdict_pr_unresolved',
+        actor_type: 'system',
+        actor_id: this.sessionId,
+        task_id: null,
+        payload: { sessionId: this.sessionId, verdict },
+      });
+      return;
+    }
     const serialized = JSON.stringify(verdict);
     if (this.recordedReviewVerdict === serialized) {
       return;
@@ -3311,6 +3338,11 @@ The full task spec and all rules are in your system prompt. Begin implementing d
    * stdout parser (parseVerifiedFlakyDisposition) used to emit, so
    * PRMergeWatcher is unaffected. Idempotent per session: an identical
    * repeat call is a dedup no-op; a changed disposition is last-write-wins.
+   *
+   * Confirmed session_id is the right lookup here: flaky.confirm is called
+   * by the implementation session responding to its own CI/gate failure
+   * (see the "Flaky / Transient CI or F2 Gate Failures" CLAUDE.md section),
+   * not by a review session — session_id holds that caller's own id.
    */
   recordVerifiedFlakyDisposition(disposition: VerifiedFlakyDisposition): void {
     const pr = getPRBySessionId(this.sessionId);

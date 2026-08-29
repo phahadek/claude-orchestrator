@@ -174,7 +174,8 @@ type EventType =
   | 'github_rate_limit_exhausted'
   | 'github_rate_limit_sampled'
   | 'auto_merge_declined'
-  | 'review_verdict_parse_fallback';
+  | 'review_verdict_parse_fallback'
+  | 'review_verdict_pr_unresolved';
 
 type ActorType = 'ai' | 'human' | 'system';
 
