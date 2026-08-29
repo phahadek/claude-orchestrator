@@ -171,7 +171,8 @@ type EventType =
   | 'session_awaiting_operator_decision'
   | 'session_operator_decision_answered'
   | 'github_rate_limit_exhausted'
-  | 'github_rate_limit_sampled';
+  | 'github_rate_limit_sampled'
+  | 'auto_merge_declined';
 
 type ActorType = 'ai' | 'human' | 'system';
 
