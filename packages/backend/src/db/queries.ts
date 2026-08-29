@@ -12244,6 +12244,37 @@ export function hasLiveGateVerifyIntentForItem(gateItemId: string): boolean {
   );
 }
 
+let _stmtFindLiveGenuineGateVerifyIntentForItem: Database.Statement | undefined;
+
+/**
+ * The live (staged/approved) genuine `gate.verify` intent for a gate item —
+ * a real dispatched verifier's own staged report (payload.origin unset),
+ * never a mirror/consent/unresolved-source intent (all of which carry
+ * payload.origin and, unlike a genuine intent, have no owning session to
+ * drive terminal). Used by the direct GateReadinessPanel Pass/Fail/Defer/
+ * reject/reopen paths (gateService.ts) to detect and retire a stranded
+ * verify session's staged intent when the item resolves through that path
+ * instead of the intent's own disposition route — see
+ * withdrawGateVerifyMirror + PlanningOrchestrator.checkTerminal.
+ */
+export function findLiveGenuineGateVerifyIntentForItem(
+  gateItemId: string,
+): StagedIntentRow | undefined {
+  _stmtFindLiveGenuineGateVerifyIntentForItem ??= db.prepare<{
+    gate_item_id: string;
+  }>(
+    `SELECT * FROM staged_intent
+     WHERE kind = 'gate.verify' AND state IN ('staged', 'approved')
+       AND json_extract(payload, '$.origin') IS NULL
+       AND json_extract(payload, '$.gateItemId') = @gate_item_id
+     ORDER BY created_at DESC
+     LIMIT 1`,
+  );
+  return _stmtFindLiveGenuineGateVerifyIntentForItem.get({
+    gate_item_id: gateItemId,
+  }) as StagedIntentRow | undefined;
+}
+
 let _stmtListLiveGateVerifyIntentsForMilestoneAndDisposition:
   | Database.Statement
   | undefined;
