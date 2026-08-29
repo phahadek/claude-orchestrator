@@ -750,8 +750,21 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
     ).rejects.toThrow('not found in database');
   });
 
+  // The event this suite emits on mockSM is exactly what AgentSession.recordReviewVerdict
+  // produces (see AgentSession.verdictTools.test.ts, which now proves that method resolves
+  // its PR via review_session_id — the id a review session actually holds — rather than
+  // session_id, which belongs to the implementation session that opened the PR). Together
+  // the two suites cover the full chain: the id-mismatch fix upstream in AgentSession, and
+  // waitForVerdict's resolution here from the resulting event, with populated dimensions
+  // rather than the legacy fallback's incomplete/empty-array shape.
   it('resolves from a review.verdict tool-delivered review_verdict_recorded event with the same PRReviewResult shape the text path produces', async () => {
-    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+    // The session id used below is deliberately NOT mockPRRow.session_id
+    // ('session-xyz', the implementation session) — it stands in for the
+    // review session's own id, which production stores as review_session_id.
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...mockPRRow,
+      review_session_id: 'review-session-id',
+    } as any);
 
     const toolVerdict = {
       verdict: 'approved' as const,

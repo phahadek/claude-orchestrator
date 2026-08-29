@@ -3342,6 +3342,24 @@ export function getPRBySessionId(sessionId: string): PullRequestRow | null {
     .get({ session_id: sessionId }) as PullRequestRow | null;
 }
 
+/**
+ * Resolves a PR by its review session's own id — review_session_id, set when
+ * a review session is launched (see setReviewSessionId) — distinct from
+ * getPRBySessionId, which matches session_id (the implementation session).
+ * A review session's own AgentSession only ever holds the former, so callers
+ * invoked exclusively by a review session (e.g. recordReviewVerdict) must use
+ * this lookup, not getPRBySessionId.
+ */
+export function getPRByReviewSessionId(sessionId: string): PullRequestRow | null {
+  return db
+    .prepare<{ review_session_id: string }>(
+      `
+    SELECT * FROM pull_requests WHERE review_session_id = @review_session_id LIMIT 1
+  `,
+    )
+    .get({ review_session_id: sessionId }) as PullRequestRow | null;
+}
+
 function getPRByTaskId(taskId: string): PullRequestRow | null {
   return db
     .prepare<{ task_id: string }>(

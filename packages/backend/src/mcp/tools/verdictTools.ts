@@ -181,6 +181,10 @@ export function registerVerdictTools(
         const session = ctx.getSession();
         if (!session) return notLive();
 
+        // Confirmed session_id is the right lookup: flaky.confirm is only
+        // ever called by the implementation session for its own PR/CI
+        // failure, never by a review session — see AgentSession's
+        // recordVerifiedFlakyDisposition doc comment.
         const pr = getPRBySessionId(ctx.sessionId);
         if (!pr) return invalid('no open PR for this session');
 

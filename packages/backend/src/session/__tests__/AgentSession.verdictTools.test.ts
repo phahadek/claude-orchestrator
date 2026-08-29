@@ -35,6 +35,7 @@ vi.mock('../../db/queries', () =>
     setSessionEffortSettingKey: vi.fn(),
     setSessionMetadata: vi.fn(),
     getPRBySessionId: vi.fn().mockReturnValue(null),
+    getPRByReviewSessionId: vi.fn().mockReturnValue(null),
     setHeadSha: vi.fn(),
     setPauseReason: vi.fn(),
     setSessionPauseReason: vi.fn(),
@@ -132,9 +133,10 @@ vi.mock('../../gate/gateService', () => ({
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
 import { AgentSession } from '../AgentSession';
-import { getPRBySessionId } from '../../db/queries';
+import { getPRBySessionId, getPRByReviewSessionId } from '../../db/queries';
 import { stageIntent } from '../../routes/stagedIntents';
 import { getGateItem } from '../../gate/gateService';
+import { recordEvent } from '../../audit/AuditLog';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -161,6 +163,7 @@ function makeSession() {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getPRBySessionId).mockReturnValue(null);
+  vi.mocked(getPRByReviewSessionId).mockReturnValue(null);
   vi.mocked(getGateItem).mockReturnValue(null);
 });
 
@@ -271,11 +274,16 @@ describe('AgentSession.recordReviewDisposition', () => {
 // ── recordReviewVerdict ───────────────────────────────────────────────────────
 
 describe('AgentSession.recordReviewVerdict', () => {
-  it('emits review_verdict_recorded with the tool-call payload', () => {
-    vi.mocked(getPRBySessionId).mockReturnValue({
-      pr_number: 42,
-      repo: 'owner/repo',
-    } as never);
+  it('resolves the PR by review_session_id, not session_id — a review session only ever holds its own id, which production stores as review_session_id on a row whose session_id is a different (implementation) session', () => {
+    // The row a review session was launched against: session_id is the
+    // *implementation* session's id, review_session_id is this review
+    // session's own id ('test-session-id', matching makeSession()).
+    vi.mocked(getPRByReviewSessionId).mockImplementation((id) =>
+      id === 'test-session-id'
+        ? ({ pr_number: 42, repo: 'owner/repo' } as never)
+        : null,
+    );
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
     const session = makeSession();
     const emitted: unknown[] = [];
     session.on('review_verdict_recorded', (p) => emitted.push(p));
@@ -286,6 +294,7 @@ describe('AgentSession.recordReviewVerdict', () => {
       summary: 'Looks good.',
     });
 
+    expect(getPRByReviewSessionId).toHaveBeenCalledWith('test-session-id');
     expect(emitted).toEqual([
       {
         sessionId: 'test-session-id',
@@ -303,7 +312,32 @@ describe('AgentSession.recordReviewVerdict', () => {
     ]);
   });
 
-  it('is a no-op when there is no PR for the session', () => {
+  it('is a no-op — but records a review_verdict_pr_unresolved audit event naming the session — when no PR resolves', () => {
+    const session = makeSession();
+    const emitted: unknown[] = [];
+    session.on('review_verdict_recorded', (p) => emitted.push(p));
+
+    session.recordReviewVerdict({
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'x',
+    });
+
+    expect(emitted).toHaveLength(0);
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'review_verdict_pr_unresolved',
+        actor_id: 'test-session-id',
+      }),
+    );
+  });
+
+  it('does not fall back to session_id when review_session_id lookup misses — a row matching only by session_id must not resolve', () => {
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      pr_number: 42,
+      repo: 'owner/repo',
+    } as never);
+    vi.mocked(getPRByReviewSessionId).mockReturnValue(null);
     const session = makeSession();
     const emitted: unknown[] = [];
     session.on('review_verdict_recorded', (p) => emitted.push(p));
@@ -318,7 +352,7 @@ describe('AgentSession.recordReviewVerdict', () => {
   });
 
   it('is idempotent: an identical repeat call does not double-emit', () => {
-    vi.mocked(getPRBySessionId).mockReturnValue({
+    vi.mocked(getPRByReviewSessionId).mockReturnValue({
       pr_number: 42,
       repo: 'owner/repo',
     } as never);
@@ -338,7 +372,7 @@ describe('AgentSession.recordReviewVerdict', () => {
   });
 
   it('last-write-wins: a changed verdict re-emits, and neither call throws', () => {
-    vi.mocked(getPRBySessionId).mockReturnValue({
+    vi.mocked(getPRByReviewSessionId).mockReturnValue({
       pr_number: 42,
       repo: 'owner/repo',
     } as never);
