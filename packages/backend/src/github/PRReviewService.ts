@@ -1237,7 +1237,12 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
           }
           // Fallback: parse from stored events (tolerant/repair parse included)
           const events = getEventsBySession(sessionId);
-          const result = this.parseReviewResult(events, prNumber, repo, sessionId);
+          const result = this.parseReviewResult(
+            events,
+            prNumber,
+            repo,
+            sessionId,
+          );
           resolve(result);
         }
       };
@@ -1254,7 +1259,12 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
         // tryParseVerdict (called inside parseReviewResult) now includes a repair pass,
         // so malformed-JSON verdicts (e.g. unescaped inner quotes) resolve here.
         const events = getEventsBySession(sessionId);
-        const recovered = this.parseReviewResult(events, prNumber, repo, sessionId);
+        const recovered = this.parseReviewResult(
+          events,
+          prNumber,
+          repo,
+          sessionId,
+        );
         if (recovered.verdict !== 'incomplete') {
           resolve(recovered);
           return;

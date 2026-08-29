@@ -411,9 +411,16 @@ describe('PRReviewService parse-fallback audit event', () => {
 
   it('records verdict incomplete with empty dimensions when no verdict is recoverable', () => {
     const service = makeService();
-    const events = [assistantTextEvent('Just reading the diff, no verdict yet.')];
+    const events = [
+      assistantTextEvent('Just reading the diff, no verdict yet.'),
+    ];
 
-    const result = service.parseReviewResult(events, 42, 'owner/repo', 'sess-1');
+    const result = service.parseReviewResult(
+      events,
+      42,
+      'owner/repo',
+      'sess-1',
+    );
 
     expect(result.verdict).toBe('incomplete');
     expect(result.dimensions).toEqual([]);
@@ -421,7 +428,9 @@ describe('PRReviewService parse-fallback audit event', () => {
 
   it('records a review_verdict_parse_fallback audit event naming the session and PR when the fallback fires', () => {
     const service = makeService();
-    const events = [assistantTextEvent('Just reading the diff, no verdict yet.')];
+    const events = [
+      assistantTextEvent('Just reading the diff, no verdict yet.'),
+    ];
 
     service.parseReviewResult(events, 42, 'owner/repo', 'sess-1');
 
@@ -451,14 +460,21 @@ describe('PRReviewService parse-fallback audit event', () => {
       payload: JSON.stringify({
         type: 'assistant',
         message: {
-          content: [{ type: 'tool_use', id: 'tu1', name: 'read_file', input: {} }],
+          content: [
+            { type: 'tool_use', id: 'tu1', name: 'read_file', input: {} },
+          ],
         },
       }),
       created_at: '2024-01-01T00:00:01Z',
     } as unknown as SessionEvent;
     const events = [assistantTextEvent(verdictJson), toolCallOnlyEvent];
 
-    const result = service.parseReviewResult(events, 42, 'owner/repo', 'sess-1');
+    const result = service.parseReviewResult(
+      events,
+      42,
+      'owner/repo',
+      'sess-1',
+    );
 
     expect(result.verdict).toBe('approved');
     expect(auditLog.recordEvent).not.toHaveBeenCalledWith(
@@ -468,7 +484,9 @@ describe('PRReviewService parse-fallback audit event', () => {
 
   it('does not record the audit event when no sessionId is passed', () => {
     const service = makeService();
-    const events = [assistantTextEvent('Just reading the diff, no verdict yet.')];
+    const events = [
+      assistantTextEvent('Just reading the diff, no verdict yet.'),
+    ];
 
     service.parseReviewResult(events, 42, 'owner/repo');
 
