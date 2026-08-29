@@ -5442,12 +5442,23 @@ export class SessionManager extends EventEmitter {
 
       // send()'s boolean return is the real confirmation signal — see the
       // matching comment on the worktree-recreation respawn path below.
-      let sendConfirmed = false;
+      // run()'s opening session_status:'running' broadcast is also a
+      // 'message' emission, but it fires before the runner is even
+      // spawned (see AgentSession.run()), so it proves nothing about
+      // stdin readiness. Skip that one broadcast and wait for the
+      // session's next 'message' — for a real AgentSession, nothing else
+      // reaches the 'message' channel before handleRawEvent processes the
+      // runner's first raw event, which can only happen once spawn() has
+      // already returned and stdin is writable.
       const firstEvent = new Promise<void>((resolve) => {
-        session.once('message', () => {
-          sendConfirmed = this.send(sessionId, combinedText);
+        const onMessage = (msg: ServerMessage) => {
+          if (msg.type === 'session_status' && msg.status === 'running') {
+            return;
+          }
+          session.off('message', onMessage);
           resolve();
-        });
+        };
+        session.on('message', onMessage);
       });
       this.wireSession(sessionId, session, projectDir, recordedPath);
 
@@ -5463,6 +5474,27 @@ export class SessionManager extends EventEmitter {
           resolve(false);
         });
       });
+
+      // Bounded backoff retry on a failed send() — the undelivered_inbox_retry_sweep
+      // job only runs every 600s, so a single transient send() failure (e.g. a
+      // stdin write racing the runner's very first tick) would otherwise cost
+      // up to 10 minutes to recover. Retries stay well inside that window and
+      // give up after a fixed number of attempts, falling through to the same
+      // inbox_delivery_unconfirmed recording (and the sweep as backstop) as
+      // before.
+      const SEND_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000];
+      let sendConfirmed = false;
+      if (!timedOut) {
+        sendConfirmed = this.send(sessionId, combinedText);
+        for (const delayMs of SEND_RETRY_DELAYS_MS) {
+          if (sendConfirmed) break;
+          await new Promise<void>((resolve) => {
+            const t = setTimeout(resolve, delayMs);
+            t.unref();
+          });
+          sendConfirmed = this.send(sessionId, combinedText);
+        }
+      }
 
       if (timedOut || !sendConfirmed) {
         logger.warn(
