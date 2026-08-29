@@ -2993,6 +2993,26 @@ export function getTaskStatusFromCache(taskId: string): string | null {
 
 // ─── pull_requests ──────────────────────────────────────────────────────────
 
+/**
+ * True when `repo` (owner/repo) matches a configured project's github_repo
+ * (single string or JSON array of strings). Used to reject PR URLs — whether
+ * from a live GitHub event or a scraped fallback scan — that point at repos
+ * this orchestrator instance doesn't own, e.g. fixture URLs from test source.
+ */
+export function isRepoConfigured(repo: string): boolean {
+  return listProjectRows().some((row) => {
+    const raw = row.github_repo;
+    if (!raw) return false;
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return (parsed as string[]).includes(repo);
+    } catch {
+      // bare string
+    }
+    return raw === repo;
+  });
+}
+
 export function upsertPullRequest(
   pr: Omit<
     PullRequestRow,
@@ -3032,18 +3052,7 @@ export function upsertPullRequest(
     pause_reason?: PullRequestRow['pause_reason'];
   },
 ): PullRequestRow | null {
-  const repoConfigured = listProjectRows().some((row) => {
-    const raw = row.github_repo;
-    if (!raw) return false;
-    try {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return (parsed as string[]).includes(pr.repo);
-    } catch {
-      // bare string
-    }
-    return raw === pr.repo;
-  });
-  if (!repoConfigured) {
+  if (!isRepoConfigured(pr.repo)) {
     logger.warn(
       `[upsertPullRequest] rejected: repo "${pr.repo}" not configured in any project — skipping upsert to prevent phantom row (pr_url=${pr.pr_url})`,
     );

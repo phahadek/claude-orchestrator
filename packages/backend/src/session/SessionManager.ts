@@ -158,8 +158,8 @@ import {
   usesWorktree,
   type SessionType,
 } from './sessionPredicates';
-import { eventKind } from './eventKind';
 import type { Session, StagedIntentRow } from '../db/types';
+import { eventKind } from './eventKind';
 import { deriveSessionStatus } from './sessionStatusDeriver';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { STATUS_DISPLAY } from '../tasks/statusCanonical';
