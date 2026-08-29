@@ -44,6 +44,7 @@ vi.mock('../db/queries.js', () =>
     getTaskCache: vi.fn().mockReturnValue(undefined),
     getPendingRoutedCommentCount: vi.fn().mockReturnValue(0),
     markReviewerRequested: vi.fn(),
+    getAnalyzeResult: vi.fn().mockReturnValue(undefined),
   }),
 );
 
@@ -112,6 +113,7 @@ import {
   getTaskCache,
   getPendingRoutedCommentCount,
   markReviewerRequested,
+  getAnalyzeResult,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { squashMergeLocal } from '../orchestration/localMergeRunner';
@@ -383,6 +385,89 @@ describe('AutoMerger.attempt() — CI green', () => {
         }),
       }),
     );
+  });
+});
+
+// ── attempt() — analyze-stage gate ───────────────────────────────────────────
+
+describe('AutoMerger.attempt() — analyze gate', () => {
+  it('declines to merge when the recorded analyze result for the head SHA failed, even with no pause_reason set', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({ pause_reason: null, head_sha: 'sha-abc' }),
+    );
+    vi.mocked(getAnalyzeResult).mockReturnValue({
+      pr_number: 42,
+      repo: 'owner/repo',
+      sha: 'sha-abc',
+      passed: 0,
+      output: 'knip: unused export',
+      ran_at: '2024-01-01T00:00:00Z',
+      is_transient: 0,
+    });
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('clean'),
+        headSha: 'sha-abc',
+      },
+    ]);
+    const watcher = makeMockWatcher();
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.mergePR).not.toHaveBeenCalled();
+    expect(watcher.handleMerged).not.toHaveBeenCalled();
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'auto_merge_declined',
+        payload: expect.objectContaining({
+          pr_number: 42,
+          repo: 'owner/repo',
+          sha: 'sha-abc',
+          stage: 'analyze',
+        }),
+      }),
+    );
+  });
+
+  it('merges once the analyze stage passes on a new head SHA after a failed run', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({ pause_reason: null, head_sha: 'sha-def' }),
+    );
+    vi.mocked(getAnalyzeResult).mockImplementation((_pr, _repo, sha) =>
+      sha === 'sha-def'
+        ? {
+            pr_number: 42,
+            repo: 'owner/repo',
+            sha: 'sha-def',
+            passed: 1,
+            output: '',
+            ran_at: '2024-01-01T00:00:00Z',
+            is_transient: 0,
+          }
+        : undefined,
+    );
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('clean'),
+        headSha: 'sha-def',
+      },
+    ]);
+    const watcher = makeMockWatcher();
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.mergePR).toHaveBeenCalledWith(42, 'feat: test', 'owner/repo');
+    expect(watcher.handleMerged).toHaveBeenCalled();
   });
 });
 

@@ -28,6 +28,7 @@ import {
   getTaskCache,
   getPendingRoutedCommentCount,
   markReviewerRequested,
+  getAnalyzeResult,
 } from '../db/queries';
 import type { GitHubClient, PRReviewDecision } from './GitHubClient';
 import { GitHubApiError, GitHubRateLimitError } from './types';
@@ -651,6 +652,37 @@ export class AutoMerger {
       const category = poll.mergeability.category;
       switch (category) {
         case 'clean': {
+          // Independent backstop against the recorded analyze-stage outcome
+          // for this exact head SHA — keyed on orchestrator_analyze_results,
+          // not on pause_reason. A PR can reach here with pause_reason unset
+          // (e.g. a race between the pipeline recording the failure and a
+          // merge attempt), so this check must not assume the pause was
+          // persisted. A new head SHA has its own row (or none), so a
+          // re-run-then-pass push clears the block on its own.
+          const analyzeSha = poll.mergeability.headSha ?? row.head_sha;
+          if (analyzeSha) {
+            const analyzeResult = getAnalyzeResult(prNumber, repo, analyzeSha);
+            if (analyzeResult && analyzeResult.passed === 0) {
+              logger.info(
+                `[AutoMerger] PR #${prNumber}: analyze stage failed for SHA ${analyzeSha.slice(0, 7)} — declining merge`,
+              );
+              recordEvent({
+                event_type: 'auto_merge_declined',
+                actor_type: 'system',
+                actor_id: null,
+                project_id: project.id,
+                task_id: row.task_id ?? null,
+                payload: {
+                  pr_number: prNumber,
+                  repo,
+                  sha: analyzeSha,
+                  stage: 'analyze',
+                  reason: 'analyze_stage_failed',
+                },
+              });
+              return;
+            }
+          }
           const corpMode = getCorporateMode();
           if (corpMode.gates.requireHumanApproval) {
             let reviewDecision: PRReviewDecision | null;

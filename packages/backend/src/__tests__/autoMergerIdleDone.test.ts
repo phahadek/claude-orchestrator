@@ -59,6 +59,7 @@ vi.mock('../db/queries.js', () => ({
   markSessionDone: vi.fn(),
   recordPrAnchoredCompletingSignal: vi.fn(),
   archiveConcludedSessionsOlderThan: vi.fn().mockReturnValue([]),
+  getAnalyzeResult: vi.fn().mockReturnValue(undefined),
 }));
 
 vi.mock('../config.js', () => ({
