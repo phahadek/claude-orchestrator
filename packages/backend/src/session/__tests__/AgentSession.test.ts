@@ -252,7 +252,8 @@ describe('AgentSession.handleCleanExit — broadcasts the real post-write status
 
   describe('fallback PR-URL scan (no PR detected live)', () => {
     function makeEvent(
-      overrides: Partial<SessionEvent> & Pick<SessionEvent, 'event_type' | 'payload'>,
+      overrides: Partial<SessionEvent> &
+        Pick<SessionEvent, 'event_type' | 'payload'>,
     ): SessionEvent {
       return {
         id: 1,
@@ -269,9 +270,7 @@ describe('AgentSession.handleCleanExit — broadcasts the real post-write status
         payload: JSON.stringify({
           type: 'user',
           message: {
-            content: [
-              { type: 'tool_result', content: `pr_url: ${url}` },
-            ],
+            content: [{ type: 'tool_result', content: `pr_url: ${url}` }],
           },
         }),
       });
