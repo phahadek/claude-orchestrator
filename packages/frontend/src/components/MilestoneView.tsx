@@ -11,6 +11,7 @@ import { apiRequest } from '../api/projects';
 import { MilestoneBurndown } from './MilestoneBurndown';
 import { DeploySection } from './DeploySection';
 import { FlowArmToggle } from './FlowArmToggle';
+import { WrapSection } from './WrapSection';
 import {
   MilestoneDecisionStack,
   type MilestoneStackSelection,
@@ -315,6 +316,10 @@ export function MilestoneView({
         milestoneId={activeBoardId}
         projectId={activeProjectId}
         autoLaunchEnabled={project?.autoLaunchEnabled}
+      />
+      <WrapSection
+        activeProjectId={activeProjectId}
+        closingMilestoneId={activeBoardId}
       />
     </>
   );
