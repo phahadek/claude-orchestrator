@@ -1,7 +1,10 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { getTaskBackend } from '../tasks/TaskBackend';
-import { assertTaskIdResolves } from '../tasks/taskReferenceValidation';
+import {
+  assertTaskIdResolves,
+  assertNoDependencyCycle,
+} from '../tasks/taskReferenceValidation';
 import {
   BackendTaskWriteCommands,
   type FlipReadyParams,
@@ -218,6 +221,7 @@ export function createGroomFlipRouter(
         for (const depId of dependsOn) {
           await assertTaskIdResolves(depId, project);
         }
+        assertNoDependencyCycle(project, taskId, dependsOn);
 
         const backend = getTaskBackend(project);
         const commands = new BackendTaskWriteCommands(backend, project);
