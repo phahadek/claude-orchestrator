@@ -210,7 +210,9 @@ vi.mock('../session/CliSessionRunner', () => ({
     // now waits on (not run()'s opening session_status broadcast, which
     // fires before this mock's run() is even called).
     run: vi.fn((_initialPrompt, _resumeSessionId, _options, onEvent) => {
-      queueMicrotask(() => onEvent({ type: 'system', subtype: 'hook_started' }));
+      queueMicrotask(() =>
+        onEvent({ type: 'system', subtype: 'hook_started' }),
+      );
       return new Promise(() => {});
     }),
   })),
@@ -1127,9 +1129,9 @@ describe('sendOrResume() respawn-path delivery confirmation', () => {
       expect.objectContaining({ event_type: 'inbox_delivery_unconfirmed' }),
     );
     const undelivered = queries.listUndeliveredInboxItems(CONFIRM_SESSION_ID);
-    expect(
-      undelivered.some((i) => i.payload === 'retried payload'),
-    ).toBe(false);
+    expect(undelivered.some((i) => i.payload === 'retried payload')).toBe(
+      false,
+    );
   });
 
   it('stamps delivered_at exactly once and records no inbox_delivery_unconfirmed event when send() confirms', async () => {
@@ -1148,7 +1150,7 @@ describe('sendOrResume() respawn-path delivery confirmation', () => {
     );
   });
 
-  it('does not deliver on run()\'s opening session_status broadcast — only once the runner emits its first real event (stdin writable)', async () => {
+  it("does not deliver on run()'s opening session_status broadcast — only once the runner emits its first real event (stdin writable)", async () => {
     let capturedOnEvent: ((event: unknown) => void) | undefined;
     const sendMessageMock = vi.fn().mockReturnValue(true);
     vi.mocked(CliSessionRunner).mockImplementationOnce(
@@ -1164,10 +1166,7 @@ describe('sendOrResume() respawn-path delivery confirmation', () => {
     );
 
     const sm = new SessionManager();
-    const resultPromise = sm.sendOrResume(
-      CONFIRM_SESSION_ID,
-      'gated payload',
-    );
+    const resultPromise = sm.sendOrResume(CONFIRM_SESSION_ID, 'gated payload');
 
     // Let the microtask queue drain a few times. AgentSession.run() has
     // already broadcast session_status='running' synchronously by now
@@ -1185,8 +1184,6 @@ describe('sendOrResume() respawn-path delivery confirmation', () => {
     expect(sendMessageMock).toHaveBeenCalledWith('gated payload');
     expect(result).toBe(CONFIRM_SESSION_ID);
     const undelivered = queries.listUndeliveredInboxItems(CONFIRM_SESSION_ID);
-    expect(undelivered.some((i) => i.payload === 'gated payload')).toBe(
-      false,
-    );
+    expect(undelivered.some((i) => i.payload === 'gated payload')).toBe(false);
   });
 });

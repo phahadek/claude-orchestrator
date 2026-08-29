@@ -185,7 +185,9 @@ vi.mock('../session/CliSessionRunner', () => ({
     // respawn-delivery gate now waits on instead of run()'s pre-spawn
     // session_status broadcast.
     run: vi.fn((_initialPrompt, _resumeSessionId, _options, onEvent) => {
-      queueMicrotask(() => onEvent({ type: 'system', subtype: 'hook_started' }));
+      queueMicrotask(() =>
+        onEvent({ type: 'system', subtype: 'hook_started' }),
+      );
       return new Promise(() => {});
     }),
   })),
