@@ -80,6 +80,7 @@ vi.mock('../github/NoOpInvestigator', () => ({
   NoOpInvestigator: vi.fn().mockImplementation(() => ({
     investigate: vi.fn(async () => {}),
   })),
+  isSessionStreamQuiet: vi.fn(() => true),
 }));
 
 // Mock AuditLog to avoid real SQLite writes and to spy on recordEvent calls
