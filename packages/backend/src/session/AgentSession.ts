@@ -105,7 +105,7 @@ import type {
   ReviewVerdictRecordedPayload,
 } from '../github/types';
 
-const PR_URL_REGEX = /https:\/\/github\.com\/([^\/"\\]+\/[^\/"\\]+)\/pull\/\d+/;
+const PR_URL_REGEX = /https:\/\/github\.com\/([^/"\\]+\/[^/"\\]+)\/pull\/\d+/;
 const PR_BODY_MARKER_REGEX = /<pr-body>([\s\S]*?)<\/pr-body>/;
 
 /**
