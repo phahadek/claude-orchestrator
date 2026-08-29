@@ -26,6 +26,7 @@ import {
   setSessionEffortSettingKey,
   setSessionMetadata,
   getPRBySessionId,
+  isRepoConfigured,
   setHeadSha,
   setPauseReason,
   setSessionPauseReason,
@@ -104,7 +105,7 @@ import type {
   ReviewVerdictRecordedPayload,
 } from '../github/types';
 
-const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
+const PR_URL_REGEX = /https:\/\/github\.com\/([^/"\\]+\/[^/"\\]+)\/pull\/\d+/;
 const PR_BODY_MARKER_REGEX = /<pr-body>([\s\S]*?)<\/pr-body>/;
 
 /**
@@ -3120,7 +3121,9 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     try {
       const events = getEventsBySession(this.sessionId);
       // Exclude tool-call and user-message events — tool_use inputs (Write, Edit,
-      // etc.) may contain placeholder URLs producing phantom pull_requests rows.
+      // etc.) and tool_result outputs (e.g. a Read/Grep hit on this repo's own
+      // test fixtures) may contain placeholder/fixture URLs producing phantom
+      // pull_requests rows.
       const last20 = events
         .filter((ev) => {
           const k = eventKind(ev);
@@ -3132,10 +3135,15 @@ The full task spec and all rules are in your system prompt. Begin implementing d
 
       for (const ev of last20) {
         const match = ev.payload.match(PR_URL_REGEX);
-        if (match) {
-          prUrl = match[0];
-          break;
-        }
+        if (!match) continue;
+        // Even after event-kind filtering, only accept a URL whose repo
+        // resolves to a configured project — the same guard upsertPullRequest
+        // applies — so a fixture/placeholder URL for an unowned repo is
+        // discarded rather than scraped into sessions.pr_url.
+        const repo = match[1];
+        if (!repo || !isRepoConfigured(repo)) continue;
+        prUrl = match[0];
+        break;
       }
     } catch (e) {
       logger.error(

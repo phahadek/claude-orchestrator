@@ -48,6 +48,7 @@ vi.mock('../db/queries', () =>
     getRules: vi.fn(() => []),
     insertPermissionDenial: vi.fn(),
     upsertPullRequest: vi.fn(),
+    isRepoConfigured: vi.fn(() => true),
     insertSessionAudit: vi.fn(),
     incrementTokens: vi.fn(),
     setContextOccupancy: vi.fn(),

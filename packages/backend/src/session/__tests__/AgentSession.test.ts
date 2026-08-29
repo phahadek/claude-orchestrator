@@ -133,8 +133,11 @@ import {
   markSessionIdle,
   listUndeliveredInboxItems,
   markInboxItemsDelivered,
+  getEventsBySession,
 } from '../../db/queries';
+import { db } from '../../db/db';
 import { recoverSession } from '../sessionRecovery';
+import type { SessionEvent } from '../../db/types';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -243,6 +246,95 @@ describe('AgentSession.handleCleanExit — broadcasts the real post-write status
           scope: 'clean_exit',
           effectiveStatus: 'idle',
         }),
+      );
+    });
+  });
+
+  describe('fallback PR-URL scan (no PR detected live)', () => {
+    function makeEvent(
+      overrides: Partial<SessionEvent> &
+        Pick<SessionEvent, 'event_type' | 'payload'>,
+    ): SessionEvent {
+      return {
+        id: 1,
+        session_id: 'test-clean-exit',
+        timestamp: Date.now(),
+        message_id: null,
+        ...overrides,
+      };
+    }
+
+    function toolResultEvent(url: string): SessionEvent {
+      return makeEvent({
+        event_type: 'system',
+        payload: JSON.stringify({
+          type: 'user',
+          message: {
+            content: [{ type: 'tool_result', content: `pr_url: ${url}` }],
+          },
+        }),
+      });
+    }
+
+    function assistantTextEvent(text: string): SessionEvent {
+      return makeEvent({
+        event_type: 'text',
+        payload: JSON.stringify({
+          type: 'assistant',
+          message: { content: [{ type: 'text', text }] },
+        }),
+      });
+    }
+
+    beforeEach(() => {
+      db.prepare('DELETE FROM projects').run();
+    });
+
+    it('discards a fixture URL scraped from a tool-result event for an unconfigured repo', async () => {
+      vi.mocked(markSessionIdle).mockReturnValue('idle');
+      vi.mocked(getEventsBySession).mockReturnValue([
+        toolResultEvent('https://github.com/owner/repo/pull/42'),
+      ]);
+
+      const session = makeSession('standard');
+      await callHandleCleanExit(session);
+
+      expect(markSessionIdle).toHaveBeenCalledWith(
+        'test-clean-exit',
+        expect.any(Number),
+        null,
+      );
+      expect(recoverSession).toHaveBeenCalledWith(
+        'test-clean-exit',
+        expect.objectContaining({ prUrl: undefined }),
+      );
+    });
+
+    it('still picks up a genuine PR URL for a configured repo emitted in assistant text', async () => {
+      db.prepare(
+        `INSERT INTO projects (id, name, project_dir, github_repo, task_source, created_at, updated_at)
+         VALUES (?, ?, '/test', ?, 'notion', 1000, 1000)`,
+      ).run('proj-real', 'Project real', 'myorg/myrepo');
+
+      vi.mocked(markSessionIdle).mockReturnValue('idle');
+      vi.mocked(getEventsBySession).mockReturnValue([
+        assistantTextEvent(
+          'Draft PR opened: https://github.com/myorg/myrepo/pull/100',
+        ),
+      ]);
+
+      const session = makeSession('standard');
+      await callHandleCleanExit(session);
+
+      const expectedUrl = 'https://github.com/myorg/myrepo/pull/100';
+      expect(markSessionIdle).toHaveBeenCalledWith(
+        'test-clean-exit',
+        expect.any(Number),
+        expectedUrl,
+      );
+      expect(recoverSession).toHaveBeenCalledWith(
+        'test-clean-exit',
+        expect.objectContaining({ prUrl: expectedUrl }),
       );
     });
   });
