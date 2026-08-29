@@ -948,7 +948,8 @@ export class PreReviewPipeline {
     const retryableBlockedStages = new Set(
       this.stages
         .filter(
-          (s): s is GateStageDescriptor => s.mode === 'gate' && s.id !== 'autofix',
+          (s): s is GateStageDescriptor =>
+            s.mode === 'gate' && s.id !== 'autofix',
         )
         .map((s) => s.blockedStage),
     );
