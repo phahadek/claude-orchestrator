@@ -6979,9 +6979,17 @@ function resolveEffectiveType(
   // sibling's just-applied retype as if it had never happened. It also
   // covers the halted-then-retried case: a prior partial commit of this
   // same group that already landed the retype before failing elsewhere.
+  //
+  // Also includes 'needs_revision': that's a normal, non-abandoned state for
+  // a same-group task.setType (see EXPLICIT_SUPERSEDES_ALLOWED_STATES's
+  // comment above — it's "exactly the state a stage-time validation block
+  // leaves behind," still the session's live, intended change). Without it,
+  // a blocked mid-groom retype silently falls back to the stale cached type
+  // here, reproducing the exact bug this function exists to prevent.
   const relevantSetTypeStates: readonly StagedIntentState[] = [
     ...ACTIVE_STATES,
     'committed',
+    'needs_revision',
   ];
   const setTypeRow = groupId
     ? listStagedIntentsByGroup(groupId).find(

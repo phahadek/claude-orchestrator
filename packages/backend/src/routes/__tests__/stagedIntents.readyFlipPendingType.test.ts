@@ -219,6 +219,83 @@ describe('Ready-flip gate resolves a group-pending task.setType', () => {
     expect(commit.status).toBe(200);
   });
 
+  it('promotes using the pending type when the sibling task.setType is needs_revision, not staged — mirrors the pending-type case above but with the retype blocked mid-groom', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+      updateBody: vi.fn(),
+      setType: vi.fn(),
+    });
+    // Committed cache still says 💻 Code — the stale value the bug would
+    // fall back to once the sibling task.setType is no longer 'staged'.
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: 't-retype-nr',
+      fetched_at: 0,
+      raw_json: JSON.stringify({ type: '💻 Code' }),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-retype-nr',
+      groupId: 'g-retype-nr',
+      payload: { taskId: 't-retype-nr', dependsOn: [] },
+    });
+    const setType = await agent.post('/api/staged-intents').send({
+      kind: 'task.setType',
+      projectId: 'proj-retype-nr',
+      groupId: 'g-retype-nr',
+      payload: { taskId: 't-retype-nr', type: '📐 Design' },
+    });
+
+    // Simulate the sibling task.setType being blocked mid-groom (its own
+    // stage-time validation failure, or a group-level route-back) — exactly
+    // the scenario this task reproduces: the retype intent sits in
+    // needs_revision, still the session's live, intended change, not an
+    // abandoned one (see EXPLICIT_SUPERSEDES_ALLOWED_STATES's comment).
+    db.prepare(
+      "UPDATE staged_intent SET state = 'needs_revision' WHERE id = ?",
+    ).run(setType.body.id);
+
+    await agent.post('/api/staged-intents').send({
+      kind: 'task.updateBody',
+      projectId: 'proj-retype-nr',
+      groupId: 'g-retype-nr',
+      payload: { taskId: 't-retype-nr', sections: sections() },
+    });
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-retype-nr',
+      groupId: 'g-retype-nr',
+      payload: {
+        taskId: 't-retype-nr',
+        status: 'Ready',
+        groomingGate: {
+          size_check: { decision: 'n/a' },
+          type_check: { decision: 'none' },
+          triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
+        },
+      },
+    });
+
+    // Stage-time (runStageTimeReadyChecks): the setStatus intent must not
+    // carry a blocked annotation from a stale Code-typed resolution — the
+    // needs_revision task.setType must still be honored as the pending type.
+    // (The group itself cannot commit while a member sits in needs_revision
+    // — that's an unrelated, correct refusal — so this test only exercises
+    // the stage-time resolution, not commit.)
+    const staged = await agent
+      .get('/api/staged-intents')
+      .query({ projectId: 'proj-retype-nr' });
+    const setStatusRow = staged.body.intents.find(
+      (i: { id: string }) => i.id === setStatus.body.id,
+    );
+    expect(setStatusRow.annotation).toBeNull();
+  });
+
   it('falls back to the committed cached type when no task.setType is staged in the group — unchanged existing behavior', async () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
