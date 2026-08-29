@@ -13,6 +13,7 @@ import {
   getGateItemsWithPendingCapabilityRequest,
   hasLiveGateVerifyIntentForItem,
   hasLiveVerifySessionForGateItem,
+  isStructurallyUnresolvableSource,
   listActiveGateVerifyMirrors,
   type GateVerifyMirrorOrigin,
 } from '../db/queries';
@@ -851,20 +852,39 @@ const TERMINAL_GATE_ITEM_STATES = new Set(['pass', 'deferred', 'discarded']);
  * DB-queryable item shape. This predicate only decides retirement — once
  * every source has a merge_commit (a later catchUpMergeCommits pass filled
  * it) or the item resolved another way, the mirror is stale.
+ *
+ * A source that is structurally unresolvable (a 📐 Design task, or a
+ * 🔧 Operational task with no PR — see isStructurallyUnresolvableSource)
+ * can never produce a merge_commit, however many ticks pass, so it must
+ * not keep the mirror "still live" either — see 2b87f60c, which stopped
+ * catchUpMergeCommits from newly escalating these sources but left this
+ * retirement predicate unpatched.
  */
 function isUnresolvedSourceStillLive(item: GateItem): boolean {
   return (
     !TERMINAL_GATE_ITEM_STATES.has(item.state) &&
-    item.sources.some((s) => !s.mergeCommit)
+    item.sources.some(
+      (s) =>
+        !s.mergeCommit && !isStructurallyUnresolvableSource(s.sourceTaskId),
+    )
   );
 }
 
 /** The withdrawal reason for a mirror whose backing item left the classification/state that earned it a mirror of the given origin. */
 function retireReasonFor(origin: GateItemMirrorOrigin, item: GateItem): string {
   if (origin === 'unresolved-source') {
-    return item.sources.every((s) => s.mergeCommit)
-      ? 'source merge commit resolved'
-      : `gate_item resolved to ${item.state}`;
+    if (item.sources.every((s) => s.mergeCommit)) {
+      return 'source merge commit resolved';
+    }
+    if (
+      item.sources.some(
+        (s) =>
+          !s.mergeCommit && isStructurallyUnresolvableSource(s.sourceTaskId),
+      )
+    ) {
+      return 'source structurally unresolvable';
+    }
+    return `gate_item resolved to ${item.state}`;
   }
   const expectedClassification: GateItemClassification =
     origin === 'mirror' ? 'Human-Observation' : 'Prod-Mutating';
