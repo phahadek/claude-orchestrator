@@ -3350,7 +3350,9 @@ export function getPRBySessionId(sessionId: string): PullRequestRow | null {
  * invoked exclusively by a review session (e.g. recordReviewVerdict) must use
  * this lookup, not getPRBySessionId.
  */
-export function getPRByReviewSessionId(sessionId: string): PullRequestRow | null {
+export function getPRByReviewSessionId(
+  sessionId: string,
+): PullRequestRow | null {
   return db
     .prepare<{ review_session_id: string }>(
       `
