@@ -238,7 +238,7 @@ describe('Ready-flip gate resolves a group-pending task.setType', () => {
     const app = makeApp();
     const agent = supertest(app);
 
-    const dependsOn = await agent.post('/api/staged-intents').send({
+    await agent.post('/api/staged-intents').send({
       kind: 'task.setDependsOn',
       projectId: 'proj-retype-nr',
       groupId: 'g-retype-nr',
