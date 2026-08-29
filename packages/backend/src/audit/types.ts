@@ -167,6 +167,7 @@ type EventType =
   | 'base_health_remediation_task_filed'
   | 'no_op_investigation_skipped'
   | 'no_op_investigation_failed'
+  | 'no_op_verdict_abstained'
   | 'test_request_cycle_limit_crossed'
   | 'session_awaiting_operator_decision'
   | 'session_operator_decision_answered'

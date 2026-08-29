@@ -5,13 +5,35 @@ import {
   getEventsBySession,
   getTaskNoOpAttempts,
   bumpTaskNoOpAttempts,
+  getSession,
 } from '../db/queries';
+import { typedGetSetting } from '../config/settings';
 import { renderNoOpInvestigationPrompt } from './reviewUtils';
 import type { GitHubClient } from './GitHubClient';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import type { ServerMessage } from '../ws/types';
 import { eventKind } from '../session/eventKind';
 import { recordEvent } from '../audit/AuditLog';
+
+/**
+ * Recency gate shared by the no-op investigation spawn (sessionRecovery.ts)
+ * and the retry-verdict apply below: run() returning does not mean the CLI
+ * subprocess has exited, so a session can still be advancing its event
+ * stream after recovery starts. Reuses session_inert_threshold_seconds — the
+ * same "genuinely gone quiet" bar StalledPRReconciler/OrphanedTaskSweeper
+ * apply elsewhere — rather than trusting ended_at or session status, neither
+ * of which tracks whether the subprocess is still emitting events.
+ */
+export function isSessionStreamQuiet(
+  sessionId: string,
+  nowMs: number = Date.now(),
+): boolean {
+  const session = getSession(sessionId);
+  const lastEventAt = session?.last_event_at ?? null;
+  if (lastEventAt === null) return true;
+  const quietMs = typedGetSetting('session_inert_threshold_seconds') * 1000;
+  return nowMs - lastEventAt >= quietMs;
+}
 
 function recordInvestigationFailure(
   ctx: Pick<NoOpInvestigatorContext, 'taskId' | 'projectId'>,
@@ -368,70 +390,100 @@ export class NoOpInvestigator {
       return;
     }
 
-    await this.applyVerdict(verdict, ctx, investigatorSessionId);
+    await applyNoOpVerdict(verdict, ctx, this.taskBackend, this.githubClient);
+  }
+}
+
+/**
+ * Applies an investigator verdict to the task. Exported (rather than a
+ * private class method) so the retry-verdict liveness gate below can be
+ * driven directly in tests without spinning up a full investigate() run.
+ */
+export async function applyNoOpVerdict(
+  verdict: NoOpVerdict,
+  ctx: NoOpInvestigatorContext,
+  taskBackend: TaskBackend,
+  githubClient: GitHubClient | undefined,
+): Promise<void> {
+  const { taskId, repo, featureBranchName, noOpSessionId, projectId } = ctx;
+
+  if (verdict.kind === 'resolved') {
+    await applyResolvedNoOp(
+      taskBackend,
+      taskId,
+      `Auto-resolved by investigator: ${verdict.resolvedByPrUrl} — ${verdict.reason}`,
+    );
+    if (githubClient && repo && featureBranchName) {
+      try {
+        await githubClient.deleteBranch(repo, featureBranchName);
+      } catch (e) {
+        logger.error(
+          `[NoOpInvestigator] deleteBranch(${featureBranchName}) failed:`,
+          e,
+        );
+      }
+    }
+    return;
   }
 
-  private async applyVerdict(
-    verdict: NoOpVerdict,
-    ctx: NoOpInvestigatorContext,
-    _investigatorSessionId: string,
-  ): Promise<void> {
-    const { taskId, repo, featureBranchName } = ctx;
-
-    if (verdict.kind === 'resolved') {
-      await applyResolvedNoOp(
-        this.taskBackend,
-        taskId,
-        `Auto-resolved by investigator: ${verdict.resolvedByPrUrl} — ${verdict.reason}`,
+  if (verdict.kind === 'retry') {
+    if (!isSessionStreamQuiet(noOpSessionId)) {
+      logger.warn(
+        `[NoOpInvestigator] abstaining from retry verdict for ${taskId} — session ${noOpSessionId} still shows recent event-stream activity`,
       );
-      if (this.githubClient && repo && featureBranchName) {
-        try {
-          await this.githubClient.deleteBranch(repo, featureBranchName);
-        } catch (e) {
-          logger.error(
-            `[NoOpInvestigator] deleteBranch(${featureBranchName}) failed:`,
-            e,
-          );
-        }
+      try {
+        recordEvent({
+          event_type: 'no_op_verdict_abstained',
+          actor_type: 'system',
+          actor_id: noOpSessionId,
+          project_id: projectId || null,
+          task_id: taskId || null,
+          payload: {
+            reason: 'recent_event_stream_activity',
+            verdictKind: 'retry',
+          },
+        });
+      } catch (e) {
+        logger.error(
+          `[NoOpInvestigator] recordEvent(no_op_verdict_abstained) failed: ${e}`,
+        );
       }
       return;
     }
 
-    if (verdict.kind === 'retry') {
-      const existing = getTaskNoOpAttempts(taskId);
-      const retryCount = existing?.retry_count ?? 0;
-      if (retryCount === 0) {
-        bumpTaskNoOpAttempts(taskId);
-        try {
-          await this.taskBackend.updateStatus(taskId, '🗂️ Ready');
-        } catch (e) {
-          logger.error(
-            `[NoOpInvestigator] updateStatus(Ready) failed for ${taskId}:`,
-            e,
-          );
-        }
-        return;
+    const existing = getTaskNoOpAttempts(taskId);
+    const retryCount = existing?.retry_count ?? 0;
+    if (retryCount === 0) {
+      bumpTaskNoOpAttempts(taskId);
+      try {
+        await taskBackend.updateStatus(taskId, '🗂️ Ready');
+      } catch (e) {
+        logger.error(
+          `[NoOpInvestigator] updateStatus(Ready) failed for ${taskId}:`,
+          e,
+        );
       }
-      // retry_count >= 1 — fall through to human branch
+      return;
     }
+    // retry_count >= 1 — fall through to human branch
+  }
 
-    // verdict.kind === 'human' OR retry budget exhausted
-    try {
-      await this.taskBackend.updateStatus(taskId, '🚫 Blocked');
-    } catch (e) {
-      logger.error(
-        `[NoOpInvestigator] updateStatus(Blocked) failed for ${taskId}:`,
-        e,
-      );
-    }
-    try {
-      const reason =
-        verdict.kind === 'retry'
-          ? `Retry budget exhausted. Last investigator verdict: ${verdict.reason}`
-          : verdict.reason;
-      await this.taskBackend.updateNotes(taskId, reason);
-    } catch (e) {
-      logger.error(`[NoOpInvestigator] updateNotes failed for ${taskId}:`, e);
-    }
+  // verdict.kind === 'human' OR retry budget exhausted
+  try {
+    await taskBackend.updateStatus(taskId, '🚫 Blocked');
+  } catch (e) {
+    logger.error(
+      `[NoOpInvestigator] updateStatus(Blocked) failed for ${taskId}:`,
+      e,
+    );
+  }
+  try {
+    const reason =
+      verdict.kind === 'retry'
+        ? `Retry budget exhausted. Last investigator verdict: ${verdict.reason}`
+        : verdict.reason;
+    await taskBackend.updateNotes(taskId, reason);
+  } catch (e) {
+    logger.error(`[NoOpInvestigator] updateNotes failed for ${taskId}:`, e);
   }
 }

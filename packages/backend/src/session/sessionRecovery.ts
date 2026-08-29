@@ -17,7 +17,10 @@ import type { GitHubClient } from '../github/GitHubClient';
 import type { ServerMessage } from '../ws/types';
 import type { ISessionManager } from './SessionAuditor';
 import { SessionAuditor } from './SessionAuditor';
-import { NoOpInvestigator } from '../github/NoOpInvestigator';
+import {
+  NoOpInvestigator,
+  isSessionStreamQuiet,
+} from '../github/NoOpInvestigator';
 import type { INoOpSessionManager } from '../github/NoOpInvestigator';
 import { recordEvent } from '../audit/AuditLog';
 import { isCodeSession } from './sessionPredicates';
@@ -106,7 +109,8 @@ export async function recoverSession(
       // No-op detection: skipped for periodic scope (StuckSessionMonitor handles retries differently).
       if (scope !== 'periodic') {
         const hasSessionManager = !!sessionManager && 'start' in sessionManager;
-        if (!prUrl && !hasDiff && taskId && hasSessionManager) {
+        const streamQuiet = isSessionStreamQuiet(sessionId);
+        if (!prUrl && !hasDiff && taskId && hasSessionManager && streamQuiet) {
           const project = projectId ? getProjectRowById(projectId) : undefined;
           const repo = project?.github_repo ?? '';
           const sessionRow = getSession(sessionId);
@@ -155,8 +159,13 @@ export async function recoverSession(
           if (hasDiff) reasons.push('has_diff');
           if (!taskId) reasons.push('missing_task_id');
           if (!hasSessionManager) reasons.push('missing_session_manager');
+          if (!streamQuiet) reasons.push('recent_event_stream_activity');
           try {
             recordEvent({
+              // Abstaining on stream recency is re-checkable — the next
+              // clean-exit turn or recovery pass re-runs this same gate —
+              // so it's recorded under the existing skip event rather than
+              // a terminal-sounding one, distinguished by the reason above.
               event_type: 'no_op_investigation_skipped',
               actor_type: 'system',
               actor_id: sessionId,

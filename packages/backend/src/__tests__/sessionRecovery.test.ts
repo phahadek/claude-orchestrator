@@ -28,6 +28,7 @@ vi.mock('../github/NoOpInvestigator', () => ({
   NoOpInvestigator: vi.fn().mockImplementation(() => ({
     investigate: vi.fn(async () => {}),
   })),
+  isSessionStreamQuiet: vi.fn(() => true),
 }));
 
 vi.mock('../session/SessionAuditor', () => ({
@@ -63,6 +64,7 @@ import {
 import { recordEvent } from '../audit/AuditLog';
 import { emitTaskUpdated } from '../routes/tasks';
 import { hasNonEmptyDiff } from '../orchestration/localBranchHelpers';
+import { isSessionStreamQuiet } from '../github/NoOpInvestigator';
 import type { TaskBackend } from '../tasks/TaskBackend';
 
 function makeTaskBackend(): TaskBackend {
@@ -557,6 +559,48 @@ describe('recoverSession', () => {
           payload: expect.objectContaining({ stage: 'investigate_rejected' }),
         }),
       );
+    });
+
+    describe('event-stream recency gate', () => {
+      beforeEach(() => {
+        vi.mocked(isSessionStreamQuiet).mockReturnValue(true);
+      });
+
+      it('abstains when the session still shows recent event-stream activity', async () => {
+        const { NoOpInvestigator } = await import('../github/NoOpInvestigator');
+        vi.mocked(isSessionStreamQuiet).mockReturnValue(false);
+        await recoverSession(
+          'sess-noop-live',
+          baseOpts({ sessionManager: fakeSessionManager() }),
+        );
+        expect(NoOpInvestigator).not.toHaveBeenCalled();
+        expect(recordEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            event_type: 'no_op_investigation_skipped',
+            actor_id: 'sess-noop-live',
+            payload: expect.objectContaining({
+              reasons: expect.arrayContaining(['recent_event_stream_activity']),
+            }),
+          }),
+        );
+      });
+
+      it('re-checks the gate: investigation runs once the stream has genuinely gone quiet', async () => {
+        const { NoOpInvestigator } = await import('../github/NoOpInvestigator');
+        vi.mocked(isSessionStreamQuiet).mockReturnValueOnce(false);
+        await recoverSession(
+          'sess-noop-recheck',
+          baseOpts({ sessionManager: fakeSessionManager() }),
+        );
+        expect(NoOpInvestigator).not.toHaveBeenCalled();
+
+        vi.mocked(isSessionStreamQuiet).mockReturnValueOnce(true);
+        await recoverSession(
+          'sess-noop-recheck',
+          baseOpts({ sessionManager: fakeSessionManager() }),
+        );
+        expect(NoOpInvestigator).toHaveBeenCalledTimes(1);
+      });
     });
   });
 });
