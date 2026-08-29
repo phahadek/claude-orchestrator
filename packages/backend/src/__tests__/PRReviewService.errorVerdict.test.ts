@@ -357,18 +357,21 @@ describe('PRReviewService error verdict construction', () => {
 
 describe('PRReviewService tool-submitted verdict preference', () => {
   it('resolves with the tool-submitted verdict, not a later prose text block', async () => {
+    // Uses needs_changes (not approved) so the result is asserted directly,
+    // without also exercising the approved-verdict side-effect path
+    // (handleApprovedVerdict), which is orthogonal to what this test covers.
     const result = await runReviewWithToolVerdict(
       {
-        verdict: 'approved',
-        dimensions: [{ name: 'Tests', passed: true, notes: 'all good' }],
+        verdict: 'needs_changes',
+        dimensions: [{ name: 'Tests', passed: false, notes: 'flaky test' }],
         summary: 'Tool-submitted verdict summary',
       },
       'Great, the review is complete and everything looks fine! No issues found.',
     );
 
-    expect(result.verdict).toBe('approved');
+    expect(result.verdict).toBe('needs_changes');
     expect(result.dimensions).toEqual([
-      { name: 'Tests', passed: true, notes: 'all good' },
+      { name: 'Tests', passed: false, notes: 'flaky test' },
     ]);
     expect(result.summary).toBe('Tool-submitted verdict summary');
     expect(result.verdict).not.toBe('incomplete');
