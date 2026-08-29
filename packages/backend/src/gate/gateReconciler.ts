@@ -864,7 +864,8 @@ function isUnresolvedSourceStillLive(item: GateItem): boolean {
   return (
     !TERMINAL_GATE_ITEM_STATES.has(item.state) &&
     item.sources.some(
-      (s) => !s.mergeCommit && !isStructurallyUnresolvableSource(s.sourceTaskId),
+      (s) =>
+        !s.mergeCommit && !isStructurallyUnresolvableSource(s.sourceTaskId),
     )
   );
 }
@@ -877,7 +878,8 @@ function retireReasonFor(origin: GateItemMirrorOrigin, item: GateItem): string {
     }
     if (
       item.sources.some(
-        (s) => !s.mergeCommit && isStructurallyUnresolvableSource(s.sourceTaskId),
+        (s) =>
+          !s.mergeCommit && isStructurallyUnresolvableSource(s.sourceTaskId),
       )
     ) {
       return 'source structurally unresolvable';
