@@ -7,6 +7,8 @@ const mockGetTaskBackend = vi.fn();
 const mockFetchTaskSummary = vi.fn();
 const mockResolveMilestoneForProject = vi.fn();
 const mockGetProjectRowById = vi.fn();
+const mockListMilestonesByProject = vi.fn();
+const mockGetTaskCache = vi.fn();
 
 vi.mock('../tasks/TaskBackend', () => ({
   getTaskBackend: (...args: unknown[]) => mockGetTaskBackend(...args),
@@ -14,6 +16,12 @@ vi.mock('../tasks/TaskBackend', () => ({
 
 vi.mock('../db/queries', () => ({
   getProjectRowById: (...args: unknown[]) => mockGetProjectRowById(...args),
+  // Backs assertNoDependencyCycle's reverse-edge walk (resolveProjectDepStatus)
+  // — empty by default so existing tests (no cycle in play) see every dep as
+  // 'dangling', which never triggers the cycle-detection branch.
+  listMilestonesByProject: (...args: unknown[]) =>
+    mockListMilestonesByProject(...args),
+  getTaskCache: (...args: unknown[]) => mockGetTaskCache(...args),
 }));
 
 vi.mock('../tasks/TaskWriteCommands', async () => {
@@ -102,6 +110,10 @@ beforeEach(() => {
     launched: ['notion:abc'],
     deferred: [],
   });
+  mockListMilestonesByProject.mockReset();
+  mockListMilestonesByProject.mockReturnValue([]);
+  mockGetTaskCache.mockReset();
+  mockGetTaskCache.mockReturnValue(null);
 });
 
 describe('POST /api/groom/flip', () => {
@@ -363,5 +375,38 @@ describe('POST /api/groom/flip — dependsOn existence validation', () => {
       'notion:dep-on-other-milestone',
     );
     expect(mockFlipToReady).toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/groom/flip — dependency cycle validation', () => {
+  it('rejects a dependsOn write that closes a cycle back to the task itself, with a 4xx', async () => {
+    mockListMilestonesByProject.mockReturnValue([{ id: 'm-cycle' }]);
+    mockGetTaskCache.mockImplementation((key: string) => {
+      if (key === 'board:m-cycle') {
+        return {
+          raw_json: JSON.stringify([
+            {
+              id: 'dep-1',
+              title: 'Dep 1',
+              status: '🗂️ Ready',
+              type: '💻 Code',
+              dependsOn: ['abc'],
+              notionUrl: '',
+            },
+          ]),
+        };
+      }
+      return null;
+    });
+
+    const res = await request(makeApp())
+      .post('/api/groom/flip')
+      .send(validBody); // taskId: notion:abc, dependsOn: [notion:dep-1] — dep-1 already depends on abc.
+
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
+    expect(res.body.error).toContain('notion:abc');
+    expect(res.body.error).toContain('dep-1');
+    expect(mockFlipToReady).not.toHaveBeenCalled();
   });
 });

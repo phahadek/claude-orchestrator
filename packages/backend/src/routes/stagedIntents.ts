@@ -6,7 +6,9 @@ import { runWithConcurrency } from '../utils/concurrency';
 import { getTaskBackend, type TaskBackend } from '../tasks/TaskBackend';
 import {
   assertTaskIdResolves,
+  assertNoDependencyCycle,
   TaskReferenceValidationError,
+  DependencyCycleError,
 } from '../tasks/taskReferenceValidation';
 import {
   BackendTaskWriteCommands,
@@ -3174,6 +3176,7 @@ export async function validateAndNormalizeTaskReferences(
         );
       }
       const normalizedDependsOn: string[] = [];
+      const literalDependsOn: string[] = [];
       for (const [i, dep] of rawDependsOn.entries()) {
         // Symbolic references are accepted only for task.setDependsOn — an
         // existing task wiring onto a sibling task.create. task.create's own
@@ -3198,7 +3201,13 @@ export async function validateAndNormalizeTaskReferences(
         const normalized = normalizeOrRejectTaskId(dep, `dependsOn[${i}]`);
         await assertTaskIdResolves(normalized, projectId);
         normalizedDependsOn.push(normalized);
+        literalDependsOn.push(normalized);
       }
+      assertNoDependencyCycle(
+        projectId,
+        kind === 'task.setDependsOn' ? (p.taskId as string) : null,
+        literalDependsOn,
+      );
       p.dependsOn = normalizedDependsOn;
     }
   }
@@ -8776,6 +8785,7 @@ export function createStagedIntentsRouter(
       } catch (err) {
         if (
           err instanceof TaskReferenceValidationError ||
+          err instanceof DependencyCycleError ||
           err instanceof InvestigationAccretionRejectedError ||
           err instanceof OpsJournalTransitionRejectedError ||
           err instanceof OpsReconciliationAssertionMissingError
