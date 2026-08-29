@@ -328,12 +328,29 @@ describe('sendOrResume() worktree-recreate failure: no rethrow', () => {
 
 describe('sendOrResume() worktree-recreate failure: session marked errored', () => {
   it('calls updateSessionStatus with error status when worktree add fails', async () => {
-    vi.mocked(execSync).mockImplementation((cmd: string) => {
-      if ((cmd as string).includes('worktree add')) {
-        throw makeWorktreeError('fatal: branch already exists');
-      }
-      return '' as never;
-    });
+    // gitWorktreeAddWithRetry uses the promisified async exec, not execSync
+    // — inject the failure on that path (see the "prune + reattach" and
+    // "session_action_failed broadcast" describe blocks below for the same
+    // pattern).
+    mockExecCallback.mockImplementation(
+      (
+        cmd: string,
+        opts: unknown,
+        cb?: (err: unknown, result?: unknown) => void,
+      ) => {
+        const callback = (typeof opts === 'function' ? opts : cb) as (
+          err: unknown,
+          result?: unknown,
+        ) => void;
+        if (cmd.includes('worktree add')) {
+          process.nextTick(() =>
+            callback(makeWorktreeError('fatal: branch already exists')),
+          );
+          return;
+        }
+        process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
+      },
+    );
 
     const sm = new SessionManager();
     await sm.sendOrResume(SESSION_ID, 'fix this');
