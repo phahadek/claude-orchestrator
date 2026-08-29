@@ -7,6 +7,14 @@ vi.mock('../db/queries', () => ({
   getEventsBySession: vi.fn(() => []),
   getTaskNoOpAttempts: vi.fn(() => undefined),
   bumpTaskNoOpAttempts: vi.fn(),
+  // Default: no session row → last_event_at is null → treated as quiet
+  // (genuinely dead), matching the pre-existing tests' assumption that the
+  // investigated session has already ended with no further activity.
+  getSession: vi.fn(() => undefined),
+}));
+
+vi.mock('../config/settings', () => ({
+  typedGetSetting: vi.fn(() => 600),
 }));
 
 vi.mock('../audit/AuditLog', () => ({
@@ -16,6 +24,8 @@ vi.mock('../audit/AuditLog', () => ({
 import {
   NoOpInvestigator,
   tryParseNoOpVerdict,
+  isSessionStreamQuiet,
+  applyNoOpVerdict,
   type INoOpSessionManager,
   type NoOpInvestigatorContext,
 } from '../github/NoOpInvestigator';
@@ -23,11 +33,13 @@ import {
   getEventsBySession,
   getTaskNoOpAttempts,
   bumpTaskNoOpAttempts,
+  getSession,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import type { GitHubClient } from '../github/GitHubClient';
 import type { ResolvedTask } from '../tasks/types';
+import type { Session } from '../db/types';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -398,5 +410,108 @@ describe('NoOpInvestigator.investigate', () => {
     );
 
     consoleSpy.mockRestore();
+  });
+});
+
+// ── isSessionStreamQuiet ──────────────────────────────────────────────────────
+
+function sessionRow(overrides: Partial<Session>): Session {
+  return {
+    session_id: 'session-abc',
+    ended_at: null,
+    last_event_at: null,
+    ...overrides,
+  } as Session;
+}
+
+describe('isSessionStreamQuiet', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getSession).mockReturnValue(undefined);
+  });
+
+  it('treats a session with no recorded activity as quiet', () => {
+    vi.mocked(getSession).mockReturnValue(undefined);
+    expect(isSessionStreamQuiet('session-abc', 1_000_000)).toBe(true);
+  });
+
+  it('abstains (not quiet) when ended_at is set but last_event_at is recent', () => {
+    // The exact race this task closes: run() returning sets ended_at, but
+    // the CLI subprocess can still be emitting events afterward.
+    vi.mocked(getSession).mockReturnValue(
+      sessionRow({ ended_at: 990_000, last_event_at: 995_000 }),
+    );
+    expect(isSessionStreamQuiet('session-abc', 1_000_000)).toBe(false);
+  });
+
+  it('is quiet once last_event_at is older than the inert threshold', () => {
+    vi.mocked(getSession).mockReturnValue(
+      sessionRow({ ended_at: 990_000, last_event_at: 995_000 }),
+    );
+    const nowMs = 995_000 + 600_000; // exactly the 600s default threshold
+    expect(isSessionStreamQuiet('session-abc', nowMs)).toBe(true);
+  });
+
+  it('is re-checkable: the same session flips from live to quiet as time passes', () => {
+    vi.mocked(getSession).mockReturnValue(
+      sessionRow({ ended_at: 990_000, last_event_at: 995_000 }),
+    );
+    expect(isSessionStreamQuiet('session-abc', 995_500)).toBe(false);
+    expect(isSessionStreamQuiet('session-abc', 995_000 + 600_000)).toBe(true);
+  });
+});
+
+// ── applyNoOpVerdict retry liveness gate ─────────────────────────────────────
+
+describe('applyNoOpVerdict retry liveness gate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getSession).mockReturnValue(undefined);
+  });
+
+  it('does not write Ready or bump retry count when the session is still live', async () => {
+    const backend = fakeTaskBackend();
+    vi.mocked(getTaskNoOpAttempts).mockReturnValue(undefined);
+    vi.mocked(getSession).mockReturnValue(
+      sessionRow({ ended_at: 1_000, last_event_at: 1_500 }),
+    );
+
+    await applyNoOpVerdict(
+      { kind: 'retry', reason: 'Session was confused' },
+      baseCtx(),
+      backend,
+      undefined,
+    );
+
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(bumpTaskNoOpAttempts).not.toHaveBeenCalled();
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'no_op_verdict_abstained',
+        actor_id: 'session-abc',
+        payload: expect.objectContaining({
+          reason: 'recent_event_stream_activity',
+        }),
+      }),
+    );
+  });
+
+  it('reverts to Ready once the session has genuinely gone quiet (unchanged behaviour)', async () => {
+    const backend = fakeTaskBackend();
+    vi.mocked(getTaskNoOpAttempts).mockReturnValue(undefined);
+    vi.mocked(getSession).mockReturnValue(undefined); // no activity recorded → quiet
+
+    await applyNoOpVerdict(
+      { kind: 'retry', reason: 'Session was confused' },
+      baseCtx(),
+      backend,
+      undefined,
+    );
+
+    expect(bumpTaskNoOpAttempts).toHaveBeenCalledWith('notion:abc123');
+    expect(backend.updateStatus).toHaveBeenCalledWith(
+      'notion:abc123',
+      '🗂️ Ready',
+    );
   });
 });
