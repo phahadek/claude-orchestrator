@@ -29,7 +29,10 @@ export const OUTPUT_TAIL_CHARS = 750;
  * must agree on this semantic, or the same failure produces two different
  * "truncated" excerpts depending on which code path wrote it.
  */
-export function tailOfLog(output: string, chars: number = OUTPUT_TAIL_CHARS): string {
+export function tailOfLog(
+  output: string,
+  chars: number = OUTPUT_TAIL_CHARS,
+): string {
   return output.length > chars ? output.slice(output.length - chars) : output;
 }
 

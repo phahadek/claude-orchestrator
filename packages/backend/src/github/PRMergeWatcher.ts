@@ -808,9 +808,9 @@ export class PRMergeWatcher extends EventEmitter {
                 gateDigest
                   ? gateDigest.slice(0, 1000)
                   : (digest ??
-                    (testResult.output
-                      ? tailOfLog(testResult.output, 1000)
-                      : undefined)),
+                      (testResult.output
+                        ? tailOfLog(testResult.output, 1000)
+                        : undefined)),
               );
               const verifyMsg = formatCIFailureFeedback({
                 source: 'verify',

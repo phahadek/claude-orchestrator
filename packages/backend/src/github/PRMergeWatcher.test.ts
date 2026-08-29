@@ -3616,9 +3616,9 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
     );
     await watcher.poll();
 
-    const storedDetail = vi.mocked(setPauseReason).mock.calls.find(
-      (call) => call[2] === 'ci_failing',
-    )?.[3] as string;
+    const storedDetail = vi
+      .mocked(setPauseReason)
+      .mock.calls.find((call) => call[2] === 'ci_failing')?.[3] as string;
     expect(storedDetail).toBeDefined();
     expect(storedDetail).toContain('test_the_actual_failing_test');
     expect(storedDetail).not.toContain('test session starts');
