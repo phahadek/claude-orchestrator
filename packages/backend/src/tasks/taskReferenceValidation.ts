@@ -85,9 +85,7 @@ export function assertNoDependencyCycle(
       );
     }
     const closingNorm = normalizeBoardId(rawPath[rawPath.length - 1]);
-    const idx = rawPath.findIndex(
-      (id) => normalizeBoardId(id) === closingNorm,
-    );
+    const idx = rawPath.findIndex((id) => normalizeBoardId(id) === closingNorm);
     throw new DependencyCycleError(
       rawPath.slice(idx, rawPath.length - 1).map((id) => normalizeTaskId(id)),
     );

@@ -25,11 +25,7 @@ vi.mock('../db/db', async () => {
 
 import { db } from '../db/db';
 import { createStagedIntentsRouter } from '../routes/stagedIntents';
-import {
-  upsertTaskCache,
-  insertProject,
-  insertMilestone,
-} from '../db/queries';
+import { upsertTaskCache, insertProject, insertMilestone } from '../db/queries';
 import type { NotionTask } from '../notion/types';
 
 const KNOWN_TASK_IDS = new Set([
@@ -107,7 +103,11 @@ function boardTask(
 }
 
 /** Registers a project with one milestone board seeded in task_cache — the reverse-edge data assertNoDependencyCycle walks. */
-function seedBoard(projectId: string, milestoneId: string, tasks: NotionTask[]) {
+function seedBoard(
+  projectId: string,
+  milestoneId: string,
+  tasks: NotionTask[],
+) {
   insertProject({
     id: projectId,
     name: projectId,

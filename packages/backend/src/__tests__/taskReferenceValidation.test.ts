@@ -172,7 +172,11 @@ describe('assertNoDependencyCycle', () => {
       thrown = err as DependencyCycleError;
     }
     expect(thrown).toBeInstanceOf(DependencyCycleError);
-    expect(thrown!.cycle).toEqual(['notion:81d5', 'notion:8161', 'notion:81ce']);
+    expect(thrown!.cycle).toEqual([
+      'notion:81d5',
+      'notion:8161',
+      'notion:81ce',
+    ]);
   });
 
   it('rejects a task.create-shaped write (no subject id) that attaches to an already-cyclic subgraph', () => {
@@ -180,9 +184,9 @@ describe('assertNoDependencyCycle', () => {
     // would make the new task just as permanently undispatchable.
     stubBoards({ m1: [makeTask('x', ['y']), makeTask('y', ['x'])] });
 
-    expect(() =>
-      assertNoDependencyCycle(PROJECT, null, ['notion:x']),
-    ).toThrow(DependencyCycleError);
+    expect(() => assertNoDependencyCycle(PROJECT, null, ['notion:x'])).toThrow(
+      DependencyCycleError,
+    );
   });
 
   it('accepts a legitimate deep (4-level) acyclic chain spanning two milestone boards', () => {
