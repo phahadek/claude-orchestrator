@@ -1237,7 +1237,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
           }
           // Fallback: parse from stored events (tolerant/repair parse included)
           const events = getEventsBySession(sessionId);
-          const result = this.parseReviewResult(events, prNumber, repo);
+          const result = this.parseReviewResult(events, prNumber, repo, sessionId);
           resolve(result);
         }
       };
@@ -1254,7 +1254,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
         // tryParseVerdict (called inside parseReviewResult) now includes a repair pass,
         // so malformed-JSON verdicts (e.g. unescaped inner quotes) resolve here.
         const events = getEventsBySession(sessionId);
-        const recovered = this.parseReviewResult(events, prNumber, repo);
+        const recovered = this.parseReviewResult(events, prNumber, repo, sessionId);
         if (recovered.verdict !== 'incomplete') {
           resolve(recovered);
           return;
@@ -1779,6 +1779,7 @@ ${schemaBlock}`;
     events: SessionEvent[],
     prNumber: number,
     repo: string,
+    sessionId?: string,
   ): PRReviewResult {
     // Only use text blocks from the LAST assistant message to avoid pollution
     // from earlier tool-call assistant events.
@@ -1852,6 +1853,16 @@ ${schemaBlock}`;
         );
         if (recovered) return recovered;
       }
+    }
+
+    if (sessionId) {
+      recordEvent({
+        event_type: 'review_verdict_parse_fallback',
+        actor_type: 'system',
+        actor_id: sessionId,
+        task_id: null,
+        payload: { sessionId, prNumber, repo },
+      });
     }
 
     return {
