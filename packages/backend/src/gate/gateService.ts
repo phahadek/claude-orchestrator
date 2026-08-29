@@ -11,6 +11,7 @@ import {
   getLiveGateVerifySessions,
   getSkippedForBudgetHistory,
   hasActiveCapabilityRequestForSession,
+  findLiveGenuineGateVerifyIntentForItem,
 } from '../db/queries';
 import type { GateItemListOrder, GateItemVerifySession } from '../db/queries';
 import { backfillGateBody, type GateBackfillResult } from './gateBackfill';
@@ -820,6 +821,58 @@ function computeNotYetTriggerableBackoffHours(attemptCount: number): number {
  * same item through the /gate skill (any other operator) still resolves it
  * normally.
  */
+/**
+ * Retires a genuine (session-backed, non-mirror) `gate.verify` intent still
+ * staged for an item that just resolved through a direct disposition path
+ * (appendGateItemEvent/approveGateItem/rejectGateItem/reopenGateItem)
+ * instead of through that intent's own staged-intent disposition route.
+ * Without this, the intent sits at `state==='staged'` forever — every
+ * terminal-detection mechanism (PlanningOrchestrator.checkTerminal, the cold
+ * idle-sweep backstop) refuses to conclude its owning session while any of
+ * its own intents remain staged, stranding that session's Planning slot.
+ *
+ * Wired at server bootstrap (see configureGateVerifyIntentRetireSink in
+ * server.ts) to stagedIntents.ts's withdrawGateVerifyMirror, followed by an
+ * explicit PlanningOrchestrator.checkTerminal(sessionId) call — nothing
+ * polls for this on its own, unlike reconcileHumanObservationMirrors'
+ * mirror/consent retire pass, whose sessionless intents (session_id=null)
+ * never needed a terminal nudge. Kept as an injected interface rather than a
+ * direct import of stagedIntents.ts, which itself imports from this module
+ * (getGateItem) — a static import in the other direction would be a cycle.
+ */
+export interface GateVerifyIntentRetireSink {
+  retireGenuineIntent(intentId: string, sessionId: string, reason: string): void;
+}
+
+let configuredGenuineIntentRetireSink: GateVerifyIntentRetireSink | null = null;
+
+/** Wires the genuine-intent retire sink for the direct disposition paths below. */
+export function configureGateVerifyIntentRetireSink(
+  sink: GateVerifyIntentRetireSink,
+): void {
+  configuredGenuineIntentRetireSink = sink;
+}
+
+/**
+ * Checked after every direct state-advancing disposition — a no-op unless a
+ * live genuine `gate.verify` intent for this item exists (the common case:
+ * the item was never dispatched to a verify session, or its intent already
+ * went through its own disposition route).
+ */
+function retireLiveGenuineGateVerifyIntent(
+  gateItemId: string,
+  reason: string,
+): void {
+  if (!configuredGenuineIntentRetireSink) return;
+  const intent = findLiveGenuineGateVerifyIntentForItem(gateItemId);
+  if (!intent || !intent.session_id) return;
+  configuredGenuineIntentRetireSink.retireGenuineIntent(
+    intent.id,
+    intent.session_id,
+    reason,
+  );
+}
+
 function isVerifierBlockedFromPassing(
   disposition: GateDisposition,
   classification: GateItemClassification,
@@ -892,6 +945,10 @@ export function appendGateItemEvent(
       item.classification,
     );
     gateStore.advanceState(gateItemId, nextState, event.disposition, now);
+    retireLiveGenuineGateVerifyIntent(
+      gateItemId,
+      `gate_item resolved to ${nextState} via direct disposition`,
+    );
   }
 
   if (event.disposition === 'not-yet-triggerable') {
@@ -947,6 +1004,10 @@ export function approveGateItem(
     at: now,
   });
   gateStore.advanceState(gateItemId, 'pass', 'pass', now);
+  retireLiveGenuineGateVerifyIntent(
+    gateItemId,
+    `gate_item resolved to pass via direct approval`,
+  );
 
   const updated = gateStore.getItem(gateItemId);
   if (!updated) {
@@ -999,6 +1060,10 @@ export function rejectGateItem(
     at: now,
   });
   gateStore.advanceState(gateItemId, 'fail', 'fail', now);
+  retireLiveGenuineGateVerifyIntent(
+    gateItemId,
+    `gate_item resolved to fail via direct rejection`,
+  );
 
   const updated = gateStore.getItem(gateItemId);
   if (!updated) {
@@ -1055,6 +1120,10 @@ export function reopenGateItem(
     at: now,
   });
   gateStore.advanceState(gateItemId, 'open', 'reopened', now);
+  retireLiveGenuineGateVerifyIntent(
+    gateItemId,
+    `gate_item reopened via direct disposition`,
+  );
 
   const updated = gateStore.getItem(gateItemId);
   if (!updated) {

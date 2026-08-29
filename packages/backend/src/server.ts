@@ -93,7 +93,10 @@ import {
   configureUnresolvedSourceEscalationSink,
 } from './gate/gateMergeConsumer';
 import { registerSeedMergeConsumer } from './seed/seedMergeConsumer';
-import { latestDispositionEvidence } from './gate/gateService';
+import {
+  latestDispositionEvidence,
+  configureGateVerifyIntentRetireSink,
+} from './gate/gateService';
 import { SessionGateItemVerifier } from './gate/gateItemVerifier';
 import { register as registerInvestigationReconciler } from './investigation/investigationReconciler';
 import { createInvestigateRouter } from './routes/investigate';
@@ -956,6 +959,22 @@ configureGateItemMirrorSink({
   },
   retireMirror(intentId, reason) {
     withdrawGateVerifyMirror(intentId, reason);
+  },
+});
+
+// Genuine gate.verify intent retire sink: when a gate item resolves through
+// the direct GateReadinessPanel Pass/Fail/Defer/reject/reopen path while a
+// live (staged/approved) verify-session-backed `gate.verify` intent still
+// exists for it, that intent is stranded at `state==='staged'` forever
+// unless retired here — checkTerminal refuses to conclude a session while
+// any of its own intents remain staged. Reuses the same withdraw mechanism
+// as the mirror/consent retire pass above, followed by an explicit
+// checkTerminal call — the session_id makes it recoverable, unlike a
+// mirror/consent intent's session_id=null.
+configureGateVerifyIntentRetireSink({
+  retireGenuineIntent(intentId, sessionId, reason) {
+    withdrawGateVerifyMirror(intentId, reason);
+    planningOrchestrator.checkTerminal(sessionId);
   },
 });
 
