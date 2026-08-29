@@ -93,6 +93,13 @@ interface StageContext {
   worktreePath: string;
   project: ProjectConfig;
   job: ReviewJob;
+  /**
+   * Set by the autofix stage's run() to signal whether the autofix pass left
+   * the tree byte-identical (no commit produced). Read by the outer run()
+   * loop to short-circuit a retry into a gate that already failed against
+   * this same tree — re-running it would be deterministic and wasteful.
+   */
+  autofixNoDiff?: boolean;
 }
 
 export class PreReviewPipeline {
@@ -142,6 +149,7 @@ export class PreReviewPipeline {
 
         let success = true;
         let summary = 'no worktree available — autofix skipped';
+        let noDiff = true;
 
         if (ctx.worktreePath) {
           const autofixCfg = loadOrchestratorConfig(ctx.project.projectDir);
@@ -182,6 +190,7 @@ export class PreReviewPipeline {
 
             success = result.success;
             summary = result.summary;
+            noDiff = !result.commitSha;
 
             // When autofix commands exit 1 and leave violations they could not
             // fix automatically (e.g. ruff E501), route a nudge to the
@@ -273,6 +282,8 @@ export class PreReviewPipeline {
           task_id: ctx.job.taskId ?? null,
           payload: { prNumber: ctx.prNumber, repo: ctx.repo, success, summary },
         });
+
+        ctx.autofixNoDiff = noDiff;
 
         if (!success) {
           return { summary };
@@ -929,6 +940,18 @@ export class PreReviewPipeline {
     const worktreePath = prRow?.session_id
       ? (getSession(prRow.session_id)?.worktree_path ?? '')
       : '';
+    // Captured before this run touches anything: if this run was dispatched
+    // as a retry of an already-failed gate (verify/analyze), and autofix
+    // below turns out to have produced no diff, the tree that gate would
+    // re-run against is byte-identical to the one that already failed it.
+    const priorPreReviewStage = prRow?.pre_review_stage ?? null;
+    const retryableBlockedStages = new Set(
+      this.stages
+        .filter(
+          (s): s is GateStageDescriptor => s.mode === 'gate' && s.id !== 'autofix',
+        )
+        .map((s) => s.blockedStage),
+    );
 
     const ctx: StageContext = {
       prNumber: job.prNumber,
@@ -1006,6 +1029,36 @@ export class PreReviewPipeline {
           project,
           stage.id,
         );
+
+        if (
+          stage.id === 'autofix' &&
+          ctx.autofixNoDiff &&
+          priorPreReviewStage &&
+          retryableBlockedStages.has(priorPreReviewStage)
+        ) {
+          const blockedStage = this.stages.find(
+            (s): s is GateStageDescriptor =>
+              s.mode === 'gate' && s.blockedStage === priorPreReviewStage,
+          );
+          logger.info(
+            `[PreReviewPipeline] PR #${job.prNumber}: autofix produced no diff — skipping retry of stage=${blockedStage?.id ?? priorPreReviewStage}, settling at ${priorPreReviewStage}`,
+          );
+          setPreReviewStage(job.prNumber, job.repo, priorPreReviewStage);
+          recordEvent({
+            event_type: 'autofix_noop_retry_skipped',
+            actor_type: 'system',
+            project_id: project.id,
+            task_id: job.taskId ?? null,
+            payload: {
+              prNumber: job.prNumber,
+              repo: job.repo,
+              stage: blockedStage?.id ?? priorPreReviewStage,
+              reason:
+                'autofix produced no diff; tree is unchanged from the prior failure so the gate was not re-run',
+            },
+          });
+          return { passed: false };
+        }
       } else {
         await stage.run(ctx);
         logger.info(

@@ -476,6 +476,90 @@ describe('PreReviewPipeline — autofix gate', () => {
   });
 });
 
+describe('PreReviewPipeline — autofix no-diff retry short-circuit', () => {
+  it('does not re-enter the failed gate when autofix produces no diff on retry', async () => {
+    mockGetPRByNumber.mockReturnValue(
+      makePRRow({
+        pre_review_stage: 'blocked_verify',
+        pause_reason: 'ci_failing',
+      }),
+    );
+    mockLoadAutofixCommands.mockReturnValue(['npm run fix']);
+    mockRunAutofix.mockResolvedValue({
+      success: true,
+      summary: 'autofix commands produced no diff',
+      commitSha: null,
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(false);
+    expect(mockRunVerifyAsGate).not.toHaveBeenCalled();
+    expect(sm.emit).not.toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        type: 'pipeline_stage_entered',
+        stage: 'verify',
+      }),
+    );
+    expect(mockRecordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'pipeline_stage_failed',
+        payload: expect.objectContaining({ stage: 'verify' }),
+      }),
+    );
+    expect(mockSetPreReviewStage).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'blocked_verify',
+    );
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'autofix_noop_retry_skipped',
+        payload: expect.objectContaining({
+          prNumber: PR_NUMBER,
+          repo: REPO,
+          stage: 'verify',
+        }),
+      }),
+    );
+    // Existing pause reason is left alone — untouched by this run.
+    expect(mockSetPauseReason).not.toHaveBeenCalled();
+  });
+
+  it('still re-enters the failed stage and can pass on retry when autofix commits a diff', async () => {
+    mockGetPRByNumber.mockReturnValue(
+      makePRRow({
+        pre_review_stage: 'blocked_verify',
+        pause_reason: 'ci_failing',
+      }),
+    );
+    mockLoadAutofixCommands.mockReturnValue(['npm run fix']);
+    mockRunAutofix.mockResolvedValue({
+      success: true,
+      summary: 'fixed',
+      commitSha: 'deadbeef',
+    });
+    mockRunVerifyAsGate.mockResolvedValue({ passed: true });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(true);
+    expect(mockRunVerifyAsGate).toHaveBeenCalledOnce();
+    expect(sm.emit).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        type: 'pipeline_stage_entered',
+        stage: 'verify',
+      }),
+    );
+  });
+});
+
 describe('PreReviewPipeline — autofix git infra failure (exit 128)', () => {
   it('invokes validateAndRepairGitConfig when runAutofix returns isGitInfraFailure', async () => {
     mockLoadAutofixCommands.mockReturnValue(['npm run fix']);
