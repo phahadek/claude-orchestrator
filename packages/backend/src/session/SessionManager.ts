@@ -5442,12 +5442,13 @@ export class SessionManager extends EventEmitter {
 
       // send()'s boolean return is the real confirmation signal — see the
       // matching comment on the worktree-recreation respawn path below.
-      let sendConfirmed = false;
+      // Gated on 'runner-ready' (the runner's first raw event), not the
+      // generic 'message' channel — run()'s opening session_status
+      // broadcast is also a 'message' emission but fires before the
+      // runner is even spawned, so stdin isn't writable yet. See
+      // AgentSession.runnerReadyEmitted.
       const firstEvent = new Promise<void>((resolve) => {
-        session.once('message', () => {
-          sendConfirmed = this.send(sessionId, combinedText);
-          resolve();
-        });
+        session.once('runner-ready', () => resolve());
       });
       this.wireSession(sessionId, session, projectDir, recordedPath);
 
@@ -5463,6 +5464,27 @@ export class SessionManager extends EventEmitter {
           resolve(false);
         });
       });
+
+      // Bounded backoff retry on a failed send() — the undelivered_inbox_retry_sweep
+      // job only runs every 600s, so a single transient send() failure (e.g. a
+      // stdin write racing the runner's very first tick) would otherwise cost
+      // up to 10 minutes to recover. Retries stay well inside that window and
+      // give up after a fixed number of attempts, falling through to the same
+      // inbox_delivery_unconfirmed recording (and the sweep as backstop) as
+      // before.
+      const SEND_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000];
+      let sendConfirmed = false;
+      if (!timedOut) {
+        sendConfirmed = this.send(sessionId, combinedText);
+        for (const delayMs of SEND_RETRY_DELAYS_MS) {
+          if (sendConfirmed) break;
+          await new Promise<void>((resolve) => {
+            const t = setTimeout(resolve, delayMs);
+            t.unref();
+          });
+          sendConfirmed = this.send(sessionId, combinedText);
+        }
+      }
 
       if (timedOut || !sendConfirmed) {
         logger.warn(

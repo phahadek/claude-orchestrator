@@ -194,9 +194,18 @@ vi.mock('../session/CliSessionRunner', () => ({
     // (send() returning false) override this per-test.
     sendMessage: vi.fn().mockReturnValue(true),
     endSession: vi.fn(),
-    // Never resolves so wireSession's run() fires session_status (resolving firstEvent)
-    // but never completes, avoiding asynchronous markSessionErrored('run_error') noise.
-    run: vi.fn().mockReturnValue(new Promise(() => {})),
+    // Never resolves (simulating a long-running subprocess) so
+    // wireSession's run() never completes, avoiding asynchronous
+    // markSessionErrored('run_error') noise — but invokes onEvent once on
+    // the next microtask to simulate the runner's first real stdout line.
+    // That line is only possible once spawn() has returned and stdin is
+    // writable, which is the signal SessionManager's respawn-delivery gate
+    // now waits on (not run()'s opening session_status broadcast, which
+    // fires before this mock's run() is even called).
+    run: vi.fn((_initialPrompt, _resumeSessionId, _options, onEvent) => {
+      queueMicrotask(() => onEvent({ type: 'system', subtype: 'hook_started' }));
+      return new Promise(() => {});
+    }),
   })),
 }));
 
@@ -825,8 +834,10 @@ describe('sendOrResume() integration: stale-registration reattach', () => {
 
 describe('sendOrResume() overflow escalation: setPendingOverflowText', () => {
   it('registers the feedback text on the session for re-delivery on overflow', async () => {
-    // Worktree setup succeeds; session is spawned and firstEvent resolves from the
-    // session_status broadcast emitted by AgentSession.run() before runner.run() is called.
+    // Worktree setup succeeds; session is spawned and firstEvent resolves from
+    // the runner's first real event (see the CliSessionRunner mock above),
+    // not the session_status broadcast emitted by AgentSession.run() before
+    // runner.run() is even called.
     vi.mocked(execSync).mockReturnValue('' as never);
 
     const spy = vi.spyOn(AgentSession.prototype, 'setPendingOverflowText');
@@ -996,23 +1007,42 @@ describe('sendOrResume() respawn-path delivery confirmation', () => {
     vi.mocked(queries.getSession).mockReturnValue(CONFIRM_SESSION_ROW as never);
   });
 
-  it('returns null, records inbox_delivery_unconfirmed, and leaves the item undelivered when send() fails after respawn', async () => {
+  it('retries a persistently failing send() with bounded backoff, then returns null, records inbox_delivery_unconfirmed, and leaves the item undelivered', async () => {
+    const sendMessageMock = vi.fn().mockReturnValue(false);
     vi.mocked(CliSessionRunner).mockImplementationOnce(
       () =>
         ({
-          sendMessage: vi.fn().mockReturnValue(false),
+          sendMessage: sendMessageMock,
           endSession: vi.fn(),
-          run: vi.fn().mockReturnValue(new Promise(() => {})),
+          run: vi.fn((_p, _r, _o, onEvent) => {
+            queueMicrotask(() =>
+              onEvent({ type: 'system', subtype: 'hook_started' }),
+            );
+            return new Promise(() => {});
+          }),
         }) as never,
     );
 
     const sm = new SessionManager();
-    const result = await sm.sendOrResume(
-      CONFIRM_SESSION_ID,
-      'operator disposition text',
-    );
+    vi.useFakeTimers();
+    let result: string | null;
+    try {
+      const resultPromise = sm.sendOrResume(
+        CONFIRM_SESSION_ID,
+        'operator disposition text',
+      );
+      // Bounded retries stay well inside the 600s undelivered_inbox_retry_sweep
+      // interval — fast-forward through all of them in one shot.
+      await vi.runAllTimersAsync();
+      result = await resultPromise;
+    } finally {
+      vi.useRealTimers();
+    }
 
     expect(result).toBeNull();
+    // Initial attempt + bounded retries — never unbounded.
+    expect(sendMessageMock.mock.calls.length).toBeGreaterThan(1);
+    expect(sendMessageMock.mock.calls.length).toBeLessThanOrEqual(5);
     expect(recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         event_type: 'inbox_delivery_unconfirmed',
@@ -1023,13 +1053,59 @@ describe('sendOrResume() respawn-path delivery confirmation', () => {
         }),
       }),
     );
+    // Retries terminate without creating duplicate inbox rows for the same text.
     const undelivered = queries.listUndeliveredInboxItems(CONFIRM_SESSION_ID);
     expect(
-      undelivered.some((i) => i.payload === 'operator disposition text'),
-    ).toBe(true);
+      undelivered.filter((i) => i.payload === 'operator disposition text'),
+    ).toHaveLength(1);
 
     // Clean up so later tests sharing this in-memory DB see an empty inbox.
     queries.markInboxItemsDelivered(undelivered.map((i) => i.id));
+  });
+
+  it('recovers within one retry cycle (well under the 600s sweep) once send() starts succeeding', async () => {
+    const sendMessageMock = vi
+      .fn()
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(false)
+      .mockReturnValue(true);
+    vi.mocked(CliSessionRunner).mockImplementationOnce(
+      () =>
+        ({
+          sendMessage: sendMessageMock,
+          endSession: vi.fn(),
+          run: vi.fn((_p, _r, _o, onEvent) => {
+            queueMicrotask(() =>
+              onEvent({ type: 'system', subtype: 'hook_started' }),
+            );
+            return new Promise(() => {});
+          }),
+        }) as never,
+    );
+
+    const sm = new SessionManager();
+    vi.useFakeTimers();
+    let result: string | null;
+    try {
+      const resultPromise = sm.sendOrResume(
+        CONFIRM_SESSION_ID,
+        'retried payload',
+      );
+      await vi.runAllTimersAsync();
+      result = await resultPromise;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(result).toBe(CONFIRM_SESSION_ID);
+    expect(sendMessageMock.mock.calls.length).toBe(3);
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'inbox_delivery_unconfirmed' }),
+    );
+    const undelivered = queries.listUndeliveredInboxItems(CONFIRM_SESSION_ID);
+    expect(
+      undelivered.some((i) => i.payload === 'retried payload'),
+    ).toBe(false);
   });
 
   it('stamps delivered_at exactly once and records no inbox_delivery_unconfirmed event when send() confirms', async () => {
@@ -1045,6 +1121,48 @@ describe('sendOrResume() respawn-path delivery confirmation', () => {
     );
     expect(queries.listUndeliveredInboxItems(CONFIRM_SESSION_ID)).toHaveLength(
       0,
+    );
+  });
+
+  it('does not deliver on run()\'s opening session_status broadcast — only once the runner emits its first real event (stdin writable)', async () => {
+    let capturedOnEvent: ((event: unknown) => void) | undefined;
+    const sendMessageMock = vi.fn().mockReturnValue(true);
+    vi.mocked(CliSessionRunner).mockImplementationOnce(
+      () =>
+        ({
+          sendMessage: sendMessageMock,
+          endSession: vi.fn(),
+          run: vi.fn((_p, _r, _o, onEvent) => {
+            capturedOnEvent = onEvent;
+            return new Promise(() => {});
+          }),
+        }) as never,
+    );
+
+    const sm = new SessionManager();
+    const resultPromise = sm.sendOrResume(
+      CONFIRM_SESSION_ID,
+      'gated payload',
+    );
+
+    // Let the microtask queue drain a few times. AgentSession.run() has
+    // already broadcast session_status='running' synchronously by now
+    // (before runner.run() was even called) — if the gate still keyed off
+    // the generic 'message' event, delivery would already have happened.
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(sendMessageMock).not.toHaveBeenCalled();
+
+    // Now simulate the runner's first real stdout line — proof spawn()
+    // returned and stdin is writable — and confirm delivery proceeds.
+    expect(capturedOnEvent).toBeDefined();
+    capturedOnEvent!({ type: 'system', subtype: 'hook_started' });
+    const result = await resultPromise;
+
+    expect(sendMessageMock).toHaveBeenCalledWith('gated payload');
+    expect(result).toBe(CONFIRM_SESSION_ID);
+    const undelivered = queries.listUndeliveredInboxItems(CONFIRM_SESSION_ID);
+    expect(undelivered.some((i) => i.payload === 'gated payload')).toBe(
+      false,
     );
   });
 });
