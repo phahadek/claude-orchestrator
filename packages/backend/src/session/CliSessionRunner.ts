@@ -58,6 +58,10 @@ function log(sessionId: string, ...args: unknown[]) {
 export class CliSessionRunner implements ISessionRunner {
   private proc: ChildProcess | null = null;
   private _hasSpawnError = false;
+  // Set by run() for the duration of the subprocess's lifetime — lets
+  // sendMessage() (called from outside run()'s closure, for a new turn on
+  // an already-resumed process) reset the post-result grace latch below.
+  private resetResultGrace: (() => void) | null = null;
 
   constructor(private readonly sessionId: string) {}
 
@@ -315,6 +319,24 @@ export class CliSessionRunner implements ISessionRunner {
       }, RESULT_EVENT_EXIT_GRACE_MS);
     };
 
+    // A single `claude` process serves many turns (via --resume /
+    // sendMessage() on the same stdin). resultEventSeen latching true
+    // forever would arm the grace timer for every turn after the first —
+    // a later turn that legitimately goes quiet for 15s mid-work (e.g.
+    // waiting on a long tool call) would look identical to a finished
+    // process that failed to exit, and get force-killed. Clearing it here
+    // — on a new prompt going out over stdin, or on the CLI's own `init`
+    // event marking a new turn started — scopes the timer back down to
+    // "this specific turn's process really did finish and won't exit."
+    const clearResultGrace = () => {
+      if (resultGraceTimer) {
+        clearTimeout(resultGraceTimer);
+        resultGraceTimer = null;
+      }
+      resultEventSeen = false;
+    };
+    this.resetResultGrace = clearResultGrace;
+
     rl.on('line', (line) => {
       if (!line.trim()) return;
       let event: Record<string, unknown>;
@@ -330,6 +352,12 @@ export class CliSessionRunner implements ISessionRunner {
           `[CliSessionRunner] event handler threw for session ${this.sessionId}: ${(err as Error).message}`,
           err,
         );
+      }
+      if (resultEventSeen && event.type === 'init') {
+        // A new turn has started in the same process — the previous
+        // turn's result event no longer describes the process's current
+        // state.
+        clearResultGrace();
       }
       if (!resultEventSeen && event.type === 'result') {
         resultEventSeen = true;
@@ -347,6 +375,7 @@ export class CliSessionRunner implements ISessionRunner {
       this.proc!.once('exit', (code) => resolve(code));
     });
     if (resultGraceTimer) clearTimeout(resultGraceTimer);
+    this.resetResultGrace = null;
     const exitCode = killedByResultGrace ? null : rawExitCode;
 
     // Drain remaining buffered lines (5s guard).
@@ -376,6 +405,9 @@ export class CliSessionRunner implements ISessionRunner {
           message: { role: 'user', content: message },
         }) + '\n',
       );
+      // A new turn is going out on this same process — any latched
+      // post-result grace timer from a prior turn must not apply to it.
+      this.resetResultGrace?.();
       return true;
     } catch (err) {
       log(

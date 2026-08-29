@@ -265,4 +265,63 @@ describe('CliSessionRunner.run — post-result grace timeout', () => {
     await vi.advanceTimersByTimeAsync(RESULT_EVENT_EXIT_GRACE_MS * 2);
     expect(killSpy).not.toHaveBeenCalled();
   });
+
+  it('does not force-kill a later turn that goes quiet after a new turn starts (init event resets the latch)', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    const events: Record<string, unknown>[] = [];
+    const runPromise = runner.run('hello', undefined, defaultOptions, (event) =>
+      events.push(event),
+    );
+    await Promise.resolve();
+    expect(lastProc).not.toBeNull();
+
+    // First turn finishes with a result event — same process, no exit
+    // (e.g. a resumed session waiting on the next prompt over stdin).
+    lastProc!.stdout.push(
+      JSON.stringify({ type: 'result', is_error: false }) + '\n',
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // A new turn starts in the same process: the CLI emits an `init` event
+    // before doing any real work.
+    lastProc!.stdout.push(JSON.stringify({ type: 'init' }) + '\n');
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The new turn then goes quiet for well over the grace window — e.g.
+    // block-buffered stdout during a long-running tool call — without
+    // emitting a further result. It must not be force-killed: the prior
+    // turn's result event no longer describes this process's state.
+    await vi.advanceTimersByTimeAsync(RESULT_EVENT_EXIT_GRACE_MS * 2);
+    expect(killSpy).not.toHaveBeenCalled();
+
+    lastProc!.stdout.push(null);
+    lastProc!.emit('exit', 0);
+    const exitCode = await runPromise;
+    expect(exitCode).toBe(0);
+  });
+
+  it('resets the grace latch when sendMessage() delivers a new turn over stdin', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    const runPromise = runner.run('hello', undefined, defaultOptions, () => {});
+    await Promise.resolve();
+    expect(lastProc).not.toBeNull();
+
+    lastProc!.stdout.push(
+      JSON.stringify({ type: 'result', is_error: false }) + '\n',
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Caller delivers the next turn's prompt directly over stdin (the
+    // resumed-session path), rather than waiting for the CLI's own `init`
+    // event — this must reset the latch just the same.
+    runner.sendMessage('do the next thing');
+
+    await vi.advanceTimersByTimeAsync(RESULT_EVENT_EXIT_GRACE_MS * 2);
+    expect(killSpy).not.toHaveBeenCalled();
+
+    lastProc!.stdout.push(null);
+    lastProc!.emit('exit', 0);
+    const exitCode = await runPromise;
+    expect(exitCode).toBe(0);
+  });
 });
