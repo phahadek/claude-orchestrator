@@ -30,6 +30,7 @@ import {
   evaluateF2LaneFlakyDisposition,
   runProjectTestRequest,
 } from '../orchestration/testRequestLane';
+import { tailOfLog } from '../orchestration/verifyRunner';
 import {
   filterBaseAttributableFailures,
   applyF2GateMaskingGuards,
@@ -797,19 +798,20 @@ export class PRMergeWatcher extends EventEmitter {
                       gate.guardBlocked,
                     )
                   : null;
+              const digest = testResult.structured_result
+                ? buildTestResultDigest(testResult.structured_result)
+                : null;
               setPauseReason(
                 pr.pr_number,
                 pr.repo,
                 'ci_failing',
                 gateDigest
                   ? gateDigest.slice(0, 1000)
-                  : testResult.output
-                    ? testResult.output.slice(0, 1000)
-                    : undefined,
+                  : (digest ??
+                    (testResult.output
+                      ? tailOfLog(testResult.output, 1000)
+                      : undefined)),
               );
-              const digest = testResult.structured_result
-                ? buildTestResultDigest(testResult.structured_result)
-                : null;
               const verifyMsg = formatCIFailureFeedback({
                 source: 'verify',
                 failedCommand: config.test.join(' && '),

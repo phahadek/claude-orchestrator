@@ -12,7 +12,7 @@ vi.mock('child_process', () => ({
 }));
 
 import { spawn } from 'child_process';
-import { runVerifyAsGate } from '../verifyRunner';
+import { runVerifyAsGate, tailOfLog } from '../verifyRunner';
 
 type CloseCallback = (code: number | null) => void;
 type DataCallback = (data: Buffer) => void;
@@ -156,5 +156,23 @@ describe('runVerifyAsGate()', () => {
     const result = await runVerifyAsGate('/repo', ['cmd1', 'cmd2', 'cmd3']);
     expect(result).toEqual({ passed: true });
     expect(callCount).toBe(3);
+  });
+});
+
+describe('tailOfLog()', () => {
+  it('keeps the end of the log, not the head, so the two ci_failing writers agree', () => {
+    const banner = 'startup banner\n' + 'plugin list\n'.repeat(100);
+    const failure = 'FAILED test_the_real_failure — AssertionError\n';
+    const output = banner + failure;
+
+    // This module's own truncation (used by verifyRunner's ci_failing writer).
+    const verifyRunnerExcerpt = tailOfLog(output);
+    // PRMergeWatcher's ci_failing writer calls the same helper with its own cap.
+    const prMergeWatcherExcerpt = tailOfLog(output, 1000);
+
+    for (const excerpt of [verifyRunnerExcerpt, prMergeWatcherExcerpt]) {
+      expect(excerpt).toContain('test_the_real_failure');
+      expect(excerpt).not.toContain('startup banner');
+    }
   });
 });

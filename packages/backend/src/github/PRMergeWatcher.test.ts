@@ -3556,6 +3556,75 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
     expect(vi.mocked(github.categorizeMergeability)).not.toHaveBeenCalled();
   });
 
+  it('pauses with ci_failing using the log tail, not the head, when the failure summary is only at the end', async () => {
+    const banner =
+      '===== test session starts =====\n' +
+      'platform linux -- Python 3.13.14, pytest-8.4.2, pluggy-1.6.0\n' +
+      'rootdir: /worktree\n' +
+      'plugins: cov-6.3.0, asyncio-0.26.0\n' +
+      '2 workers [6851 items]\n' +
+      Array.from({ length: 200 }, (_, i) => `test_${i} PASS`).join('\n') +
+      '\n';
+    const failureSummary =
+      '\n===== FAILURES =====\n' +
+      '___ test_the_actual_failing_test ___\n' +
+      'AssertionError: expected 1 to equal 2\n' +
+      '===== 1 failed, 6850 passed =====\n';
+    const longOutput = banner + failureSummary;
+    // Confirm the fixture is actually long enough to exercise truncation.
+    expect(longOutput.length).toBeGreaterThan(1000);
+
+    const pr = makePRRow({
+      head_sha: 'sha-fail',
+      session_id: 'coding-session',
+      ci_remediation_attempted_sha: null,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeClean(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['uv run task test'],
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-1',
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
+      state: 'failed',
+      output: longOutput,
+      structured_result: null,
+      started_at: 1000,
+      finished_at: 2000,
+    } as any);
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    const storedDetail = vi.mocked(setPauseReason).mock.calls.find(
+      (call) => call[2] === 'ci_failing',
+    )?.[3] as string;
+    expect(storedDetail).toBeDefined();
+    expect(storedDetail).toContain('test_the_actual_failing_test');
+    expect(storedDetail).not.toContain('test session starts');
+    expect(storedDetail).not.toContain('platform linux');
+  });
+
   it('still pauses with ci_failing when reconcile_exhausted is set but no live blocking cause exists (#1037 regression)', async () => {
     // reconcile_exhausted is orthogonal to pause_reason and must never
     // suppress the F2 gate's own CI-failure detection. Exercised via
