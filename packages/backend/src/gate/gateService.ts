@@ -540,9 +540,13 @@ export function nextRunnableGateItems(
  * `pending` items — skipping one whose backoff (next_attempt_at) hasn't
  * elapsed yet, the same way nextRunnableGateItems skips a `needs-setup`
  * abstain via isAwaitingSetup. A `pending` item may be any pending-eligible
- * classification (Read-Only or Prod-Mutating — see appendGateItemEvent's
- * not-yet-triggerable guard), so there is no tier argument to mirror
- * TIER_ORDER with; the caller pulls across tiers in one batch.
+ * classification (Read-Only, Prod-Mutating, or Human-Observation — see
+ * appendGateItemEvent's not-yet-triggerable guard / PENDING_ELIGIBLE_CLASSIFICATIONS).
+ * Defaults to pulling across every pending-eligible tier (for read surfaces
+ * like GET /api/gate/pending-due, which never dispatches anything) — but a
+ * dispatch call site (gateReconciler's auto-run Pass 1) MUST pass
+ * `classifications: AUTO_RUN_TIERS` explicitly, since Human-Observation
+ * items must never reach a headless auto-run session.
  */
 function isBackoffPending(item: GateItem, now: string): boolean {
   return item.nextAttemptAt !== undefined && item.nextAttemptAt > now;
@@ -551,13 +555,17 @@ function isBackoffPending(item: GateItem, now: string): boolean {
 export function nextPendingGateItems(
   project: string,
   milestone: string,
-  options: { limit?: number } = {},
+  options: { limit?: number; classifications?: GateItemClassification[] } = {},
 ): GateItem[] {
   const limit = options.limit ?? DEFAULT_BATCH_LIMIT;
   const now = new Date().toISOString();
+  const allowed = new Set(
+    options.classifications ?? PENDING_ELIGIBLE_CLASSIFICATIONS,
+  );
   return gateStore
     .listByMilestone(project, milestone)
     .filter((item) => item.state === 'pending')
+    .filter((item) => allowed.has(item.classification))
     .filter((item) => !isBackoffPending(item, now))
     .slice(0, limit);
 }

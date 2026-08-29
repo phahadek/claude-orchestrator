@@ -534,6 +534,53 @@ describe('runGateReconcilerTick', () => {
     expect(getItem(item.id)?.state).toBe('pass');
   });
 
+  it('never dispatches a backoff-elapsed pending Human-Observation item, unlike a same-shaped Read-Only/Prod-Mutating one', async () => {
+    const humanObservation = await makeRunnableItem({
+      text: 'human-observation, parked not-yet-triggerable, now elapsed',
+      classification: 'Human-Observation',
+    });
+    appendGateItemEvent(humanObservation.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'still waiting',
+    });
+    expect(getItem(humanObservation.id)?.state).toBe('pending');
+    schedulePendingAttempt(
+      humanObservation.id,
+      new Date(Date.now() - 1000).toISOString(),
+      1,
+      new Date().toISOString(),
+    );
+
+    const readOnly = await makeRunnableItem({
+      text: 'read-only, parked not-yet-triggerable, now elapsed',
+      classification: 'Read-Only',
+    });
+    appendGateItemEvent(readOnly.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'still waiting',
+    });
+    schedulePendingAttempt(
+      readOnly.id,
+      new Date(Date.now() - 1000).toISOString(),
+      1,
+      new Date().toISOString(),
+    );
+
+    const verifier: GateItemVerifier = {
+      verify: vi.fn(async () => ({ disposition: 'pass' })),
+    };
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(verifier.verify).toHaveBeenCalledTimes(1);
+    expect(verifier.verify).toHaveBeenCalledWith(
+      expect.objectContaining({ id: readOnly.id }),
+    );
+    expect(getItem(humanObservation.id)?.state).toBe('pending');
+    expect(getItem(readOnly.id)?.state).toBe('pass');
+  });
+
   it('does not dispatch a pending item whose backoff has not elapsed yet', async () => {
     const item = await makeRunnableItem({
       text: 'not yet triggerable, still backing off',
