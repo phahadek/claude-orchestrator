@@ -20,7 +20,7 @@ export interface VerifyResult {
   structuredResult?: StructuredTestResult | null;
 }
 
-export const OUTPUT_TAIL_CHARS = 750;
+const OUTPUT_TAIL_CHARS = 750;
 
 /**
  * Truncates a log to its final `chars` characters — the end of a test log is
