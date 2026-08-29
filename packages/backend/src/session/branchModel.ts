@@ -69,20 +69,37 @@ const MAX_BRANCH_UNIQUIFY_ATTEMPTS = 1000;
  * `git worktree add -b`.
  *
  * `probeBranchLocally`'s 'unknown' result (an inconclusive git invocation)
- * is treated the same as 'exists' — fail closed, never risk colliding with
- * a ref we couldn't actually verify is absent.
+ * is treated the same as 'exists' for the purpose of not returning that
+ * name — fail closed, never risk colliding with a ref we couldn't actually
+ * verify is absent. But unlike 'exists', 'unknown' aborts the search
+ * immediately instead of continuing to probe: an inconclusive invocation
+ * most plausibly means git itself is failing (spawn exhaustion, not a repo,
+ * timeout), and looping through up to 1000 more candidates would just
+ * amplify that failure with 1000 more subprocess spawns.
  */
 export function resolveAvailableBranchSlug(
   base: string,
   projectDir: string,
 ): string {
-  if (probeBranchLocally(base, projectDir) === 'absent') {
+  const baseProbe = probeBranchLocally(base, projectDir);
+  if (baseProbe === 'absent') {
     return base;
+  }
+  if (baseProbe === 'unknown') {
+    throw new Error(
+      `[branchModel] resolveAvailableBranchSlug: git invocation to probe branch "${base}" was inconclusive — aborting instead of probing further candidates`,
+    );
   }
   for (let i = 2; i <= MAX_BRANCH_UNIQUIFY_ATTEMPTS; i++) {
     const candidate = `${base}-${i}`;
-    if (probeBranchLocally(candidate, projectDir) === 'absent') {
+    const probe = probeBranchLocally(candidate, projectDir);
+    if (probe === 'absent') {
       return candidate;
+    }
+    if (probe === 'unknown') {
+      throw new Error(
+        `[branchModel] resolveAvailableBranchSlug: git invocation to probe branch "${candidate}" was inconclusive — aborting instead of probing further candidates`,
+      );
     }
   }
   throw new Error(

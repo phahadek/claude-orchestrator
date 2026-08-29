@@ -362,7 +362,24 @@ describe('resolveAvailableBranchSlug', () => {
     );
   });
 
-  it('treats an inconclusive probe the same as exists — fails closed, keeps probing', () => {
+  it('aborts immediately on an unknown probe of the base name — never returns the base and probes only once', () => {
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const err = Object.assign(new Error('spawn failed'), {
+      errno: -11,
+      code: 'EAGAIN',
+      status: null,
+      signal: null,
+    });
+    vi.mocked(execSync).mockImplementation(() => {
+      throw err;
+    });
+    expect(() =>
+      resolveAvailableBranchSlug('feature/my-task', '/proj'),
+    ).toThrow(/inconclusive/);
+    expect(execSync).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts immediately on an unknown probe mid-loop rather than continuing to the cap', () => {
     vi.spyOn(logger, 'warn').mockImplementation(() => {});
     const err = Object.assign(new Error('spawn failed'), {
       errno: -11,
@@ -372,16 +389,43 @@ describe('resolveAvailableBranchSlug', () => {
     });
     vi.mocked(execSync).mockImplementation((cmd) => {
       if (String(cmd).includes('feature/my-task-2')) {
-        throw err; // unknown — must not be treated as available
-      }
-      if (String(cmd).includes('feature/my-task-3')) {
-        throw absentError();
+        throw err; // unknown mid-loop — must abort here, not keep probing
       }
       return Buffer.from(''); // base "exists"
     });
-    expect(resolveAvailableBranchSlug('feature/my-task', '/proj')).toBe(
-      'feature/my-task-3',
-    );
+    expect(() =>
+      resolveAvailableBranchSlug('feature/my-task', '/proj'),
+    ).toThrow(/inconclusive/);
+    // one call for the base ("exists"), one for -2 (the unknown that aborts)
+    expect(execSync).toHaveBeenCalledTimes(2);
+  });
+
+  it('the thrown message on unknown names the probe failure, not uniquification exhaustion', () => {
+    const err = Object.assign(new Error('spawn failed'), {
+      errno: -11,
+      code: 'EAGAIN',
+      status: null,
+      signal: null,
+    });
+    vi.mocked(execSync).mockImplementation(() => {
+      throw err;
+    });
+    expect(() =>
+      resolveAvailableBranchSlug('feature/my-task', '/proj'),
+    ).toThrow(/inconclusive/);
+    try {
+      resolveAvailableBranchSlug('feature/my-task', '/proj');
+    } catch (e) {
+      expect((e as Error).message).not.toMatch(/exhausted/i);
+      expect((e as Error).message).not.toMatch(/uniquification attempts/i);
+    }
+  });
+
+  it('reaches the cap and throws the exhaustion error for a genuine long collision chain with no inconclusive probes', () => {
+    vi.mocked(execSync).mockImplementation(() => Buffer.from('')); // every candidate "exists"
+    expect(() =>
+      resolveAvailableBranchSlug('feature/my-task', '/proj'),
+    ).toThrow(/exhausted 1000 uniquification attempts/);
   });
 });
 
