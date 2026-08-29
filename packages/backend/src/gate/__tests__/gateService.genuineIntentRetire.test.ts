@@ -24,7 +24,11 @@ vi.mock('../../db/db.js', async () => {
 
 import { db } from '../../db/db.js';
 import { ProjectService } from '../../projects/ProjectService.js';
-import { insertItem, setMinDeployedCommit, setSourceMergeCommit } from '../gateStore.js';
+import {
+  insertItem,
+  setMinDeployedCommit,
+  setSourceMergeCommit,
+} from '../gateStore.js';
 import {
   appendGateItemEvent,
   approveGateItem,
@@ -37,7 +41,10 @@ import {
   configureGateItemMirrorSink,
   reconcileHumanObservationMirrors,
 } from '../gateReconciler.js';
-import { stageIntent, withdrawGateVerifyMirror } from '../../routes/stagedIntents.js';
+import {
+  stageIntent,
+  withdrawGateVerifyMirror,
+} from '../../routes/stagedIntents.js';
 import { countLivePlanningSessions } from '../../db/queries.js';
 import { PlanningOrchestrator } from '../../orchestration/PlanningOrchestrator.js';
 
@@ -163,13 +170,12 @@ function dispatchVerifySession(itemId: string, sessionId: string) {
   return intent;
 }
 
-function getIntentRow(
-  id: string,
-): { state: string; disposition_reason: string | null } {
+function getIntentRow(id: string): {
+  state: string;
+  disposition_reason: string | null;
+} {
   return db
-    .prepare(
-      'SELECT state, disposition_reason FROM staged_intent WHERE id = ?',
-    )
+    .prepare('SELECT state, disposition_reason FROM staged_intent WHERE id = ?')
     .get(id) as { state: string; disposition_reason: string | null };
 }
 

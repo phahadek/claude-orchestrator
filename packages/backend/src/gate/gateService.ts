@@ -841,7 +841,11 @@ function computeNotYetTriggerableBackoffHours(attemptCount: number): number {
  * (getGateItem) — a static import in the other direction would be a cycle.
  */
 export interface GateVerifyIntentRetireSink {
-  retireGenuineIntent(intentId: string, sessionId: string, reason: string): void;
+  retireGenuineIntent(
+    intentId: string,
+    sessionId: string,
+    reason: string,
+  ): void;
 }
 
 let configuredGenuineIntentRetireSink: GateVerifyIntentRetireSink | null = null;
