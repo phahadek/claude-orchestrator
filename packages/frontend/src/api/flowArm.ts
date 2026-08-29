@@ -36,14 +36,14 @@ export const flowArmApi = {
 export type GateVerifyPolicyState = Record<string, { armed: boolean }>;
 
 export const gateVerifyPolicyApi = {
-  /** GET /api/milestones/:milestoneId/gate-verify-policy — effective per-disposition-class policy. */
+  /** GET /api/milestones/:milestoneId/auto-commit-policy — effective per-disposition-class policy. */
   get(milestoneId: string): Promise<GateVerifyPolicyState> {
     return apiRequest<GateVerifyPolicyState>(
-      `/api/milestones/${encodeURIComponent(milestoneId)}/gate-verify-policy`,
+      `/api/milestones/${encodeURIComponent(milestoneId)}/auto-commit-policy`,
     );
   },
 
-  /** PUT /api/milestones/:milestoneId/gate-verify-policy/:dispositionClass — set the auto-commit policy for one disposition class. */
+  /** PUT /api/milestones/:milestoneId/auto-commit-policy/:dispositionClass — set the auto-commit policy for one disposition class. */
   set(
     milestoneId: string,
     dispositionClass: string,
@@ -58,7 +58,7 @@ export const gateVerifyPolicyApi = {
       dispositionClass: string;
       armed: boolean;
     }>(
-      `/api/milestones/${encodeURIComponent(milestoneId)}/gate-verify-policy/${encodeURIComponent(dispositionClass)}`,
+      `/api/milestones/${encodeURIComponent(milestoneId)}/auto-commit-policy/${encodeURIComponent(dispositionClass)}`,
       {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
