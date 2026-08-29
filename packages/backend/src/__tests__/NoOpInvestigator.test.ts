@@ -472,8 +472,12 @@ describe('applyNoOpVerdict retry liveness gate', () => {
   it('does not write Ready or bump retry count when the session is still live', async () => {
     const backend = fakeTaskBackend();
     vi.mocked(getTaskNoOpAttempts).mockReturnValue(undefined);
+    // applyNoOpVerdict checks liveness against the real Date.now(), so the
+    // fixture's last_event_at must be recent relative to wall-clock time,
+    // not an arbitrary small epoch value.
+    const now = Date.now();
     vi.mocked(getSession).mockReturnValue(
-      sessionRow({ ended_at: 1_000, last_event_at: 1_500 }),
+      sessionRow({ ended_at: now - 10_000, last_event_at: now - 5_000 }),
     );
 
     await applyNoOpVerdict(
