@@ -46,7 +46,9 @@ const FLAKY_INVESTIGATION_ERROR_STATUS: Record<
 // — otherwise an armed policy is written under a key the eligibility check
 // never looks up.
 function resolveMilestoneKey(milestoneId: string): string {
-  return ProjectService.getMilestone(milestoneId)?.canonicalShortId ?? milestoneId;
+  return (
+    ProjectService.getMilestone(milestoneId)?.canonicalShortId ?? milestoneId
+  );
 }
 
 /**

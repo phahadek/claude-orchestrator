@@ -413,7 +413,11 @@ describe('gate.verify auto-commit — backlog sweep on policy arm', () => {
       null,
     );
 
-    await autoCommitGateVerifyIntent(staged as any, sm as any, planningOrchestrator);
+    await autoCommitGateVerifyIntent(
+      staged as any,
+      sm as any,
+      planningOrchestrator,
+    );
 
     const row = db
       .prepare('SELECT state FROM staged_intent WHERE id = ?')
