@@ -372,6 +372,30 @@ describe('catchUpMergeCommits — escalation ceiling excludes structurally/tempo
     expect(stageMock).not.toHaveBeenCalled();
   });
 
+  it('never stages a mirror for a 🧪 Testing source, regardless of attempt count or elapsed time', async () => {
+    insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M16',
+      text: 'Testing task can never produce a merge commit',
+      classification: 'needs-triage',
+      sources: [
+        {
+          sourceTaskId: 'notion:testing-src',
+          sourceTaskTitle: 'Observational E2E check',
+        },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+    upsertTaskCache(
+      'notion:testing-src',
+      JSON.stringify({ type: '🧪 Testing', status: '✅ Done' }),
+    );
+
+    await driveAttempts(10);
+
+    expect(stageMock).not.toHaveBeenCalled();
+  });
+
   it('never stages a mirror for a 🔧 Operational source with no associated PR, regardless of attempt count or elapsed time', async () => {
     insertItem({
       project: 'polimarket-analyser',

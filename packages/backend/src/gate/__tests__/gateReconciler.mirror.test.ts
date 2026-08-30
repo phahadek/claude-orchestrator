@@ -444,6 +444,25 @@ describe('reconcileHumanObservationMirrors — unresolved-source mirrors', () =>
     expect(row.disposition_reason).toMatch(/structurally unresolvable/);
   });
 
+  it('retires a mirror whose backing source is a 🧪 Testing task — it can never produce a merge commit', () => {
+    const item = makeUnresolvedSourceItem('notion:testing-src');
+    upsertTaskCache(
+      'notion:testing-src',
+      JSON.stringify({ type: '🧪 Testing', status: '✅ Done' }),
+    );
+    stageUnresolvedSourceMirror(item);
+    expect(liveMirrorRows('unresolved-source')).toHaveLength(1);
+
+    const result = reconcileHumanObservationMirrors();
+
+    expect(result.retired).toHaveLength(1);
+    expect(liveMirrorRows('unresolved-source')).toHaveLength(0);
+    const row = db
+      .prepare('SELECT disposition_reason FROM staged_intent WHERE id = ?')
+      .get(result.retired[0]) as { disposition_reason: string | null };
+    expect(row.disposition_reason).toMatch(/structurally unresolvable/);
+  });
+
   it('retires a mirror whose backing source is a 🔧 Operational task with no associated PR — it can never produce a merge commit', () => {
     const item = makeUnresolvedSourceItem('notion:ops-src');
     upsertTaskCache(
