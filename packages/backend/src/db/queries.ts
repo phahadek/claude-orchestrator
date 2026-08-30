@@ -5491,6 +5491,7 @@ export function isStructurallyUnresolvableSource(
 ): boolean {
   const type = getTaskTypeFromCache(sourceTaskId);
   if (type === '📐 Design') return true;
+  if (type === '🧪 Testing') return true;
   if (type === '🔧 Operational') {
     return !getPRByNotionTaskId(normalizeTaskId(sourceTaskId));
   }
