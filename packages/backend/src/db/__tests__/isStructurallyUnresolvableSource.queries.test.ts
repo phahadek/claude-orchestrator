@@ -5,7 +5,10 @@ vi.mock('../db.js', async () => {
   return { db: setupTestDb() };
 });
 
-import { upsertTaskCache, isStructurallyUnresolvableSource } from '../queries.js';
+import {
+  upsertTaskCache,
+  isStructurallyUnresolvableSource,
+} from '../queries.js';
 
 describe('isStructurallyUnresolvableSource', () => {
   it('returns true for a 📐 Design source, without requiring any pull_requests row', () => {
