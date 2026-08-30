@@ -374,4 +374,51 @@ describe('gate.verify auto-commit — backlog sweep on policy arm', () => {
     expect(row.state).toBe('committed');
     expect(getSession('verify-session-e2e')?.status).toBe('done');
   });
+
+  it('end-to-end: arming via the milestone DB board UUID (as the arm UI does) still auto-commits a subsequently-staged matching intent', async () => {
+    const item = makeRunnableGateItem({ text: 'UUID-armed item' });
+    seedVerifySession('verify-session-uuid-armed', item.id);
+
+    const milestonesApp = express();
+    milestonesApp.use(express.json());
+    milestonesApp.use('/api', createMilestonesRouter());
+
+    // The arm UI passes the milestone's DB board UUID, not its canonical
+    // short id ('M12'), as :milestoneId.
+    const armRes = await supertest(milestonesApp)
+      .put('/api/milestones/ms-uuid-auto-commit-m12/auto-commit-policy/pass')
+      .send({ armed: true });
+    expect(armRes.status).toBe(200);
+    expect(armRes.body.armed).toBe(true);
+
+    const sm = makeSessionManager();
+    const planningOrchestrator = new PlanningOrchestrator(sm as any);
+    const stagedApp = express();
+    stagedApp.use(express.json());
+    stagedApp.use(
+      '/api',
+      createStagedIntentsRouter(planningOrchestrator, sm as any),
+    );
+
+    const staged = stageIntent(
+      'gate.verify',
+      { gateItemId: item.id, disposition: 'pass' },
+      'proj-auto-commit',
+      null,
+      'verify-session-uuid-armed',
+      `Gate item ${item.id}: reported pass`,
+      null,
+      null,
+      item.milestone,
+      null,
+    );
+
+    await autoCommitGateVerifyIntent(staged as any, sm as any, planningOrchestrator);
+
+    const row = db
+      .prepare('SELECT state FROM staged_intent WHERE id = ?')
+      .get(staged.id) as { state: string };
+    expect(row.state).toBe('committed');
+    expect(getSession('verify-session-uuid-armed')?.status).toBe('done');
+  });
 });

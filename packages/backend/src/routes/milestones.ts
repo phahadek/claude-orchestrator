@@ -39,6 +39,16 @@ const FLAKY_INVESTIGATION_ERROR_STATUS: Record<
   'backend-unsupported': 400,
 };
 
+// Auto-commit policy rows and the eligibility check that reads them are both
+// keyed by the milestone's canonical short id (e.g. "M12"), not its DB board
+// UUID. The arm UI passes the DB board UUID as :milestoneId, so every policy
+// route must resolve it to the canonical short id before touching the table
+// — otherwise an armed policy is written under a key the eligibility check
+// never looks up.
+function resolveMilestoneKey(milestoneId: string): string {
+  return ProjectService.getMilestone(milestoneId)?.canonicalShortId ?? milestoneId;
+}
+
 /**
  * Per-flow auto-dispatch arm surface (Technical Architecture § "Per-flow
  * auto-dispatch arm model"). Independent of autoLaunchEnabled — no gating
@@ -114,7 +124,7 @@ export function createMilestonesRouter(): Router {
   router.get(
     '/milestones/:milestoneId/auto-commit-policy',
     (req: Request, res: Response) => {
-      const milestoneId = String(req.params.milestoneId);
+      const milestoneId = resolveMilestoneKey(String(req.params.milestoneId));
       const rows = listGateVerifyAutoCommitPolicy(milestoneId);
       const armedByClass = new Map(
         rows.map((r) => [r.disposition_class, r.armed === 1]),
@@ -136,7 +146,7 @@ export function createMilestonesRouter(): Router {
   router.put(
     '/milestones/:milestoneId/auto-commit-policy/:class',
     asyncHandler(async (req: Request, res: Response) => {
-      const milestoneId = String(req.params.milestoneId);
+      const milestoneId = resolveMilestoneKey(String(req.params.milestoneId));
       const dispositionClass = String(req.params.class);
       if (!isGateVerifyAutoCommitDispositionClass(dispositionClass)) {
         res.status(400).json({
