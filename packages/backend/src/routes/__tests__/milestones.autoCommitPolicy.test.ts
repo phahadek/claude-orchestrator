@@ -19,6 +19,8 @@ vi.mock('../../db/db.js', async () => {
 import { db } from '../../db/db.js';
 import { createMilestonesRouter } from '../milestones.js';
 import { GATE_VERIFY_AUTO_COMMIT_DISPOSITION_CLASSES } from '../stagedIntents.js';
+import { getGateVerifyAutoCommitPolicy } from '../../db/queries.js';
+import { ProjectService } from '../../projects/ProjectService.js';
 
 function makeApp() {
   const app = express();
@@ -83,5 +85,47 @@ describe('PUT /api/milestones/:milestoneId/auto-commit-policy/:class', () => {
       '/api/milestones/m1/auto-commit-policy',
     );
     expect(res.headers['content-type']).toMatch(/json/);
+  });
+});
+
+describe('auto-commit-policy routes keyed by the DB board UUID (arm UI input)', () => {
+  it('resolves the DB board UUID to the canonical short id, so the armed state is readable/effective under the canonical short id', async () => {
+    if (!ProjectService.getById('proj-policy-uuid')) {
+      ProjectService.create({
+        id: 'proj-policy-uuid',
+        name: 'Project Policy UUID',
+        projectDir: '/tmp/proj-policy-uuid',
+      });
+      ProjectService.createMilestone({
+        id: 'ms-uuid-policy-m7',
+        projectId: 'proj-policy-uuid',
+        name: 'M7',
+        canonicalShortId: 'M7',
+        sourceId: 'db00d3a1-aaaa-bbbb-cccc-1234567890ff',
+      });
+    }
+
+    const putRes = await request(makeApp())
+      .put('/api/milestones/ms-uuid-policy-m7/auto-commit-policy/pass')
+      .send({ armed: true });
+
+    expect(putRes.status).toBe(200);
+    expect(putRes.body).toMatchObject({
+      dispositionClass: 'pass',
+      armed: true,
+    });
+
+    // The route response echoes the resolved key, not the raw UUID input.
+    expect(putRes.body.milestoneId).toBe('M7');
+
+    // Reading back via the UUID must also resolve to the same row.
+    const getRes = await request(makeApp()).get(
+      '/api/milestones/ms-uuid-policy-m7/auto-commit-policy',
+    );
+    expect(getRes.body.pass).toEqual({ armed: true });
+
+    // And the eligibility check — which always reads by canonical short id —
+    // must see the policy as armed.
+    expect(getGateVerifyAutoCommitPolicy('M7', 'pass')).toBe(true);
   });
 });
