@@ -537,7 +537,11 @@ export async function loadOpsContext(
   // seeded/preserved — dep_blocked is still open, still on the board, and is
   // exactly the state a task waits in across sessions, so its staged journal
   // entry must survive rather than be trimmed alongside genuinely Done/off-board
-  // rows).
+  // rows). executable/dep_blocked rows are also flagged taskNotDone: true —
+  // this run knows their task isn't ✅ Done, so reconcileJournal can trim a
+  // stuck `resolved` entry (e.g. left behind by blocked-pending-fix) and
+  // re-seed it at pending. Passthrough otherEntries rows leave the flag unset
+  // since their task's current status isn't known here.
   const otherEntries = listOpsJournalEntries().filter(
     (e) => e.project !== project || e.milestone !== milestoneId,
   );
@@ -546,11 +550,13 @@ export async function loadOpsContext(
       taskId: t.id,
       project,
       milestone: milestoneId,
+      taskNotDone: true,
     })),
     ...depBlocked.map((t) => ({
       taskId: t.id,
       project,
       milestone: milestoneId,
+      taskNotDone: true,
     })),
     ...otherEntries.map((e) => ({
       taskId: e.task_id,

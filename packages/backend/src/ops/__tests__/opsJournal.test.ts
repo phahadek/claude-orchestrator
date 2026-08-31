@@ -272,6 +272,43 @@ describe('reconcileJournal', () => {
     expect(entry?.project).toBe('polimarket-analyser');
     expect(entry?.milestone).toBe('M12');
   });
+
+  it('re-seeds a resolved entry at pending when its task is flagged taskNotDone (blocked-pending-fix returned it to Ready)', () => {
+    seedEntry('reworked', {
+      state: 'resolved',
+      disposition: 'blocked-pending-fix',
+    });
+    reconcileJournal([
+      {
+        taskId: 'reworked',
+        project: 'polimarket-analyser',
+        milestone: 'M12',
+        taskNotDone: true,
+      },
+    ]);
+    const entry = getEntry('reworked');
+    expect(entry?.state).toBe('pending');
+    expect(entry?.disposition).toBeUndefined();
+  });
+
+  it('leaves a resolved entry alone when its liveBoard row is not flagged taskNotDone (unknown/other-run status)', () => {
+    seedEntry('other-run-resolved', { state: 'resolved' });
+    reconcileJournal([
+      {
+        taskId: 'other-run-resolved',
+        project: 'polimarket-analyser',
+        milestone: 'M12',
+      },
+    ]);
+    const entry = getEntry('other-run-resolved');
+    expect(entry?.state).toBe('resolved');
+  });
+
+  it('drops (never re-opens) a resolved entry once its task is off the live board entirely (✅ Done) — the terminal guarantee holds', () => {
+    seedEntry('genuinely-done', { state: 'resolved' });
+    reconcileJournal([]);
+    expect(getEntry('genuinely-done')).toBeUndefined();
+  });
 });
 
 describe('setEntryState resolves a capability disqualification', () => {

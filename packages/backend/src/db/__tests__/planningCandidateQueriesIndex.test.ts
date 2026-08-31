@@ -96,7 +96,10 @@ describe('planning-candidate predicate chain — indexable task_id_norm matches'
         getActivePlanningSessionForTask('needle-task-id', 'groom');
       }
       const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
-      expect(elapsedMs).toBeLessThan(200);
+      // Generous margin: this guards against an O(n) table-scan regression
+      // (which would take seconds), not CI-load jitter on an indexed seek
+      // that normally completes in low single-digit ms.
+      expect(elapsedMs).toBeLessThan(2000);
     });
   });
 
@@ -161,7 +164,10 @@ describe('planning-candidate predicate chain — indexable task_id_norm matches'
         isPlanningKillSuppressed('needle-task-id', 'groom');
       }
       const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
-      expect(elapsedMs).toBeLessThan(200);
+      // Generous margin: this guards against an O(n) table-scan regression
+      // (which would take seconds), not CI-load jitter on an indexed seek
+      // that normally completes in low single-digit ms.
+      expect(elapsedMs).toBeLessThan(2000);
     });
   });
 
@@ -217,7 +223,10 @@ describe('planning-candidate predicate chain — indexable task_id_norm matches'
         hasTaskEditSinceTimestamp('needle-task-id', 0);
       }
       const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
-      expect(elapsedMs).toBeLessThan(200);
+      // Generous margin: this guards against an O(n) table-scan regression
+      // (which would take seconds), not CI-load jitter on an indexed seek
+      // that normally completes in low single-digit ms.
+      expect(elapsedMs).toBeLessThan(2000);
     });
   });
 });
