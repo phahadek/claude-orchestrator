@@ -1090,7 +1090,7 @@ export class StuckSessionMonitor {
       taskName,
     });
     this.sessionManager.reclaimSessionProcess(sessionId);
-    archiveSession(sessionId);
+    archiveSession(sessionId, 'machine_park');
     setSessionPauseReason(sessionId, reason);
     recordEvent({
       event_type: 'stuck_session_surfaced_to_operator',

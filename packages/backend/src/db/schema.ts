@@ -3307,6 +3307,19 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // archive_kind: distinguishes the two opposite-meaning producers of
+  // archived = 1 — 'operator' (the operator archive route, or a
+  // terminal-status writer via archiveAndEndSession) vs 'machine_park' (a
+  // machine path draining a session out of the live population while it is
+  // explicitly NOT done — see sendOrResume's guard in SessionManager.ts).
+  // NULL on rows predating this column; sendOrResume treats NULL the same
+  // as 'operator' (fail-closed) so no backfill is required.
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN archive_kind TEXT`);
+  } catch {
+    /* already exists */
+  }
 }
 
 // ─── test_run_results → test_perf_baselines digest backfill ────────────────

@@ -76,7 +76,7 @@ function _runPass0(isSessionLive: (sessionId: string) => boolean): void {
   );
 
   for (const row of rows) {
-    archiveSession(row.session_id);
+    archiveSession(row.session_id, 'machine_park');
     setSessionPauseReason(row.session_id, 'orphaned_at_boot');
     try {
       setSessionLastErrorDetail(

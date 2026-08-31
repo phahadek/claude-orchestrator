@@ -980,8 +980,8 @@ describe('getLastActivityMsForArchivedSessions — denormalised read', () => {
       ...makeEventRow('text').live,
       timestamp: 999,
     });
-    archiveSession('arch-with-events');
-    archiveSession('arch-no-events');
+    archiveSession('arch-with-events', 'operator');
+    archiveSession('arch-no-events', 'operator');
 
     // Pre-change aggregate, reproduced directly against session_events, for
     // comparison against the denormalised read.

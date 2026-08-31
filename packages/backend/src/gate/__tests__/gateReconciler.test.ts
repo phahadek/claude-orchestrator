@@ -1599,7 +1599,7 @@ describe('runGateReconcilerTick — verify concurrency budgeting', () => {
       db.prepare(
         `UPDATE sessions SET status = 'idle' WHERE session_id = ?`,
       ).run(`archived-idle-${i}`);
-      archiveSession(`archived-idle-${i}`);
+      archiveSession(`archived-idle-${i}`, 'operator');
     }
     insertLiveSession({
       sessionId: 'live-running',

@@ -240,4 +240,69 @@ describe('SessionManager.sendOrResume — null sentinel on non-resumable session
       freememSpy.mockRestore();
     }
   });
+
+  it('resumes a session archived with archive_kind="machine_park" — a machine park is explicitly not done', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      status: 'idle',
+      archived: 1,
+      archive_kind: 'machine_park',
+      project_id: 'missing-project',
+    } as any);
+
+    const sm = new SessionManager();
+    const emitSpy = vi.spyOn(sm, 'emit');
+
+    const result = await sm.sendOrResume('parked-session-id', 'hello');
+
+    // getProjectById is mocked to return null, so the respawn path returns
+    // early with the sessionId — the point is that the terminal-session
+    // guard did not fire and reject it first.
+    expect(result).toBe('parked-session-id');
+    expect(emitSpy).not.toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        type: 'session_action_failed',
+        reason: 'terminal_session',
+      }),
+    );
+  });
+
+  it('returns null when archived=1 with archive_kind="operator" — an explicit operator conclusion', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      status: 'idle',
+      archived: 1,
+      archive_kind: 'operator',
+    } as any);
+
+    const sm = new SessionManager();
+    const result = await sm.sendOrResume('operator-archived-id', 'hello');
+
+    expect(result).toBeNull();
+  });
+
+  it('returns null when archived=1 with archive_kind NULL — legacy rows fail closed', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      status: 'idle',
+      archived: 1,
+      archive_kind: null,
+    } as any);
+
+    const sm = new SessionManager();
+    const result = await sm.sendOrResume('legacy-archived-id', 'hello');
+
+    expect(result).toBeNull();
+  });
+
+  it('returns null for a terminal status even with archive_kind="machine_park"', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      status: 'done',
+      archived: 1,
+      archive_kind: 'machine_park',
+    } as any);
+
+    const sm = new SessionManager();
+    const result = await sm.sendOrResume('done-parked-id', 'hello');
+
+    expect(result).toBeNull();
+  });
 });

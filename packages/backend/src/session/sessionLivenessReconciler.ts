@@ -252,7 +252,7 @@ function runLivenessSweep(
     // An operator can always unarchive it, or the task can simply be
     // relaunched — see the governing decision's "a session whose OS process
     // is gone can always be relaunched".
-    archiveSession(row.session_id);
+    archiveSession(row.session_id, 'machine_park');
     evictSessionMapEntry(row.session_id);
     revokeStageCredential(
       row.session_id,

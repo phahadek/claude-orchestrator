@@ -75,6 +75,13 @@ export interface Session {
   // orphaned branch from a dead prior session. NULL for rows predating this
   // column and for sessions with no worktree (e.g. detached-checkout runs).
   feature_branch: string | null;
+  // Distinguishes the two opposite-meaning producers of archived = 1: the
+  // operator concluding a session ('operator', including a terminal-status
+  // writer via archiveAndEndSession) vs a machine path parking a session
+  // that is explicitly not done ('machine_park'). NULL for rows predating
+  // this column — sendOrResume treats NULL as fail-closed, same as
+  // 'operator'.
+  archive_kind: 'machine_park' | 'operator' | null;
 }
 
 export type NewSession = Omit<
@@ -84,6 +91,7 @@ export type NewSession = Omit<
   | 'pr_url'
   | 'worktree_path'
   | 'archived'
+  | 'archive_kind'
   | 'favorited'
   | 'project_id'
   | 'session_type'

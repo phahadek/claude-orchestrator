@@ -41,7 +41,7 @@ function seedSession(opts: {
     session_type: opts.sessionType,
     task_name: null,
   } as never);
-  if (opts.archived) archiveSession(opts.sessionId);
+  if (opts.archived) archiveSession(opts.sessionId, 'operator');
 }
 
 describe('countLivePlanningSessions', () => {
