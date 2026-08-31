@@ -74,7 +74,7 @@ describe('runBootIdleReconciliation — Pass 0 (dead-at-boot)', () => {
       makeDeadRow({ session_id: 'dead-1', status: 'starting' }),
     ]);
     runBootIdleReconciliation(() => false);
-    expect(archiveSession).toHaveBeenCalledWith('dead-1');
+    expect(archiveSession).toHaveBeenCalledWith('dead-1', 'machine_park');
     expect(setSessionPauseReason).toHaveBeenCalledWith(
       'dead-1',
       'orphaned_at_boot',
@@ -97,7 +97,7 @@ describe('runBootIdleReconciliation — Pass 0 (dead-at-boot)', () => {
       makeDeadRow({ session_id: 'dead-2', status: 'starting' }),
     ]);
     runBootIdleReconciliation();
-    expect(archiveSession).toHaveBeenCalledWith('dead-2');
+    expect(archiveSession).toHaveBeenCalledWith('dead-2', 'machine_park');
   });
 
   it('archives only the not-live rows out of a mixed batch', () => {
@@ -107,7 +107,7 @@ describe('runBootIdleReconciliation — Pass 0 (dead-at-boot)', () => {
     ]);
     runBootIdleReconciliation((sessionId) => sessionId === 'live-1');
     expect(archiveSession).toHaveBeenCalledTimes(1);
-    expect(archiveSession).toHaveBeenCalledWith('dead-3');
+    expect(archiveSession).toHaveBeenCalledWith('dead-3', 'machine_park');
   });
 });
 
