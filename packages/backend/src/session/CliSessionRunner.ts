@@ -45,6 +45,15 @@ export const GRACEFUL_END_TIMEOUT_MS = 15_000;
  */
 export const RESULT_EVENT_EXIT_GRACE_MS = 15_000;
 
+/**
+ * Ceiling on how long the post-result grace timer will keep re-arming while
+ * a background task is reported live (via `background_tasks_changed`)
+ * instead of force-killing on schedule. Measured from the last stdout line
+ * seen — bounds a wedged/leaked background subagent from disabling the
+ * grace kill forever.
+ */
+export const BACKGROUND_TASK_MAX_SILENCE_MS = 10 * 60_000;
+
 function log(sessionId: string, ...args: unknown[]) {
   logger.info(`[CliSessionRunner ${sessionId.slice(0, 8)}]`, ...args);
 }
@@ -298,6 +307,17 @@ export class CliSessionRunner implements ISessionRunner {
     // it only ever fires after RESULT_EVENT_EXIT_GRACE_MS of true silence.
     let resultEventSeen = false;
     let resultGraceTimer: NodeJS.Timeout | null = null;
+    // Timestamp of the most recently seen stdout line — the basis for the
+    // BACKGROUND_TASK_MAX_SILENCE_MS ceiling below (true silence duration,
+    // not "how many times has the timer re-armed").
+    let lastLineAt = Date.now();
+    // Current count of live background tasks, from the CLI's own
+    // `background_tasks_changed` system event (self-correcting snapshot of
+    // tasks[], not an increment/decrement). A live background subagent
+    // (e.g. a quiet Explore call) means the top-level turn's `result` event
+    // does not mean the process is idle — it must not be killed on the
+    // fixed RESULT_EVENT_EXIT_GRACE_MS schedule.
+    let liveBackgroundTasks = 0;
     // Set only when THIS runner's own post-result grace timer fires and
     // force-kills the process — never by endSession()'s stdin-close
     // escalation or an external kill() (operator abort, StuckSessionMonitor
@@ -310,6 +330,16 @@ export class CliSessionRunner implements ISessionRunner {
     const armResultGraceTimer = () => {
       if (resultGraceTimer) clearTimeout(resultGraceTimer);
       resultGraceTimer = setTimeout(() => {
+        if (
+          liveBackgroundTasks > 0 &&
+          Date.now() - lastLineAt < BACKGROUND_TASK_MAX_SILENCE_MS
+        ) {
+          // A background subagent is still live and hasn't been silent
+          // long enough to hit the ceiling — re-check on the same cadence
+          // instead of killing a process that's genuinely still working.
+          armResultGraceTimer();
+          return;
+        }
         log(
           this.sessionId,
           `emitted no further events for ${RESULT_EVENT_EXIT_GRACE_MS}ms after terminal result event and did not exit on its own; force-killing`,
@@ -352,6 +382,15 @@ export class CliSessionRunner implements ISessionRunner {
           `[CliSessionRunner] event handler threw for session ${this.sessionId}: ${(err as Error).message}`,
           err,
         );
+      }
+      lastLineAt = Date.now();
+      if (
+        event.type === 'system' &&
+        event.subtype === 'background_tasks_changed'
+      ) {
+        liveBackgroundTasks = Array.isArray(event.tasks)
+          ? (event.tasks as unknown[]).length
+          : 0;
       }
       if (resultEventSeen && event.type === 'init') {
         // A new turn has started in the same process — the previous

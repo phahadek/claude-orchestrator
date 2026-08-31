@@ -65,6 +65,7 @@ vi.mock('../sessionCgroup', () => ({
 import {
   CliSessionRunner,
   RESULT_EVENT_EXIT_GRACE_MS,
+  BACKGROUND_TASK_MAX_SILENCE_MS,
 } from '../CliSessionRunner';
 
 const SESSION_ID = 'aaaabbbb-cccc-dddd-eeee-ffffffffffff';
@@ -323,5 +324,120 @@ describe('CliSessionRunner.run — post-result grace timeout', () => {
     lastProc!.emit('exit', 0);
     const exitCode = await runPromise;
     expect(exitCode).toBe(0);
+  });
+
+  it('does not force-kill past the grace window while background_tasks_changed reports a live task', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    const runPromise = runner.run('hello', undefined, defaultOptions, () => {});
+    await Promise.resolve();
+    expect(lastProc).not.toBeNull();
+
+    lastProc!.stdout.push(
+      JSON.stringify({ type: 'result', is_error: false }) + '\n',
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    lastProc!.stdout.push(
+      JSON.stringify({
+        type: 'system',
+        subtype: 'background_tasks_changed',
+        tasks: [{ id: 'bg-1' }],
+      }) + '\n',
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Total silence beyond the fixed grace window — a live background task
+    // must keep the process alive instead of triggering the fixed-schedule
+    // kill.
+    await vi.advanceTimersByTimeAsync(RESULT_EVENT_EXIT_GRACE_MS * 2);
+    expect(killSpy).not.toHaveBeenCalled();
+
+    lastProc!.stdout.push(null);
+    lastProc!.emit('exit', 0);
+    const exitCode = await runPromise;
+    expect(exitCode).toBe(0);
+  });
+
+  it('force-kills once background_tasks_changed reports the task list empty again', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    const runPromise = runner.run('hello', undefined, defaultOptions, () => {});
+    await Promise.resolve();
+    expect(lastProc).not.toBeNull();
+
+    lastProc!.stdout.push(
+      JSON.stringify({ type: 'result', is_error: false }) + '\n',
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    lastProc!.stdout.push(
+      JSON.stringify({
+        type: 'system',
+        subtype: 'background_tasks_changed',
+        tasks: [{ id: 'bg-1' }],
+      }) + '\n',
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The background task finishes — the CLI's self-correcting snapshot
+    // reports an empty tasks[] array.
+    lastProc!.stdout.push(
+      JSON.stringify({
+        type: 'system',
+        subtype: 'background_tasks_changed',
+        tasks: [],
+      }) + '\n',
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Now that no background task is live, silence beyond the grace window
+    // fires the kill as usual.
+    await vi.advanceTimersByTimeAsync(RESULT_EVENT_EXIT_GRACE_MS);
+    expect(killSpy).toHaveBeenCalledWith(-4242, 'SIGTERM');
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(killSpy).toHaveBeenCalledWith(-4242, 'SIGKILL');
+
+    lastProc!.stdout.push(null);
+    lastProc!.emit('exit', null);
+    const exitCode = await runPromise;
+    expect(exitCode).toBeNull();
+  });
+
+  it('force-kills once BACKGROUND_TASK_MAX_SILENCE_MS elapses with a background task live and no further lines at all', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    const runPromise = runner.run('hello', undefined, defaultOptions, () => {});
+    await Promise.resolve();
+    expect(lastProc).not.toBeNull();
+
+    lastProc!.stdout.push(
+      JSON.stringify({ type: 'result', is_error: false }) + '\n',
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    lastProc!.stdout.push(
+      JSON.stringify({
+        type: 'system',
+        subtype: 'background_tasks_changed',
+        tasks: [{ id: 'bg-1' }],
+      }) + '\n',
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // No further lines at all — the grace timer keeps re-arming on the
+    // fixed cadence while the background task is live, but the ceiling
+    // still bounds total silence.
+    await vi.advanceTimersByTimeAsync(BACKGROUND_TASK_MAX_SILENCE_MS - 1_000);
+    expect(killSpy).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(killSpy).toHaveBeenCalledWith(-4242, 'SIGTERM');
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(killSpy).toHaveBeenCalledWith(-4242, 'SIGKILL');
+
+    lastProc!.stdout.push(null);
+    lastProc!.emit('exit', null);
+    const exitCode = await runPromise;
+    expect(exitCode).toBeNull();
   });
 });
