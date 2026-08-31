@@ -665,6 +665,71 @@ describe('loadOpsContext — ops_journal pre-seed / reconcile', () => {
     expect(stillOpen?.evidence).toEqual(['proof']);
   });
 
+  it('drops (never re-opens) a resolved entry once its task reaches ✅ Done and falls off the board — the terminal guarantee is preserved', async () => {
+    rows = [];
+    upsertOpsJournalEntry({
+      task_id: 'genuinely-done',
+      project: PROJECT,
+      milestone: MILESTONE,
+      state: 'resolved',
+      disposition: 'pass',
+      worked_in: null,
+      evidence: null,
+      finding_or_proposal: null,
+      falsification: null,
+      filed_followons: null,
+      needs_from_operator: null,
+      resolution: null,
+      updated_at: new Date(0).toISOString(),
+    } as never);
+
+    await loadOpsContext(MILESTONE);
+
+    expect(getOpsJournalEntry('genuinely-done')).toBeUndefined();
+  });
+
+  it('re-seeds a resolved blocked-pending-fix entry at pending once the task is back on the board, so a later run can record new state against it', async () => {
+    rows = [
+      {
+        id: 'reworked-task',
+        name: 'Reworked task',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+      },
+    ];
+    // An earlier run recorded disposition='blocked-pending-fix' and resolved
+    // the entry, per the /ops skill — the task itself went back to 🗂️ Ready
+    // so a later run re-works it once its fix lands.
+    upsertOpsJournalEntry({
+      task_id: 'reworked-task',
+      project: PROJECT,
+      milestone: MILESTONE,
+      state: 'resolved',
+      disposition: 'blocked-pending-fix',
+      worked_in: null,
+      evidence: null,
+      finding_or_proposal: null,
+      falsification: null,
+      filed_followons: null,
+      needs_from_operator: null,
+      resolution: JSON.stringify({ note: 'fix filed as follow-on' }),
+      updated_at: new Date(0).toISOString(),
+    } as never);
+
+    await loadOpsContext(MILESTONE);
+
+    const reseeded = getEntry('reworked-task');
+    expect(reseeded?.state).toBe('pending');
+    expect(reseeded?.disposition).toBeUndefined();
+
+    // The entry is no longer terminal — a later run can record new state
+    // against the same taskId, which previously threw "invalid transition
+    // resolved -> ...".
+    const { setEntryState } = await import('../opsJournal.js');
+    expect(() => setEntryState('reworked-task', 'candidate')).not.toThrow();
+    expect(getEntry('reworked-task')?.state).toBe('candidate');
+  });
+
   it('does not touch ops_journal entries belonging to other projects/milestones', async () => {
     rows = [];
     upsertOpsJournalEntry({
