@@ -7,6 +7,7 @@ import {
   parseOperationalSeedItems,
   checkAccretionContentMatch,
   extractDeclaredWrites,
+  hasSeedShape,
 } from '../readinessGate';
 
 const repoRoot = join(__dirname, '..', '..', '..', '..', '..');
@@ -373,6 +374,67 @@ describe('parseOperationalSeedItems', () => {
   it('returns an empty array for the rendered "None." placeholder', () => {
     const body = '## Operational seed\nNone.\n';
     expect(parseOperationalSeedItems(body)).toEqual([]);
+  });
+});
+
+describe('hasSeedShape', () => {
+  it('distinguishes a bullet naming no target category or entity key from one that does', () => {
+    expect(
+      hasSeedShape(
+        'analyzer_configs: set momentum_threshold=1.5 for MOM-14 (default was 1.0)',
+      ),
+    ).toBe(true);
+    expect(
+      hasSeedShape('Record before/after row counts in Implementation Notes'),
+    ).toBe(false);
+  });
+
+  it('flags a gate verification scope (M15 shape) as not a seed', () => {
+    expect(
+      hasSeedShape(
+        'Verify the gate item resolves correctly for market_id=1509611 and market_id=2309959, and cross-check coverage against tournament_id=48213',
+      ),
+    ).toBe(false);
+  });
+
+  it('flags an explicit out-of-scope note (M15 shape) as not a seed', () => {
+    expect(
+      hasSeedShape('Leave the other 19 TI2026-linked rows untouched'),
+    ).toBe(false);
+    expect(
+      hasSeedShape(
+        'Also out of scope: rows belonging to the prior cohort',
+      ),
+    ).toBe(false);
+  });
+
+  it('flags a bookkeeping instruction (M15 shape) as not a seed', () => {
+    expect(
+      hasSeedShape(
+        "Record exact before/after row counts and the commands run in this task's Implementation Notes",
+      ),
+    ).toBe(false);
+  });
+
+  it('flags a migration-number assignment (M15 shape) as not a seed', () => {
+    expect(
+      hasSeedShape(
+        "Assign this task's schema change the next available migration number",
+      ),
+    ).toBe(false);
+  });
+
+  it('recognizes a genuine seed naming a target category and entity key', () => {
+    expect(
+      hasSeedShape(
+        'daemon_roster: add the `coverage-sweeper` daemon with default schedule `*/15 * * * *`',
+      ),
+    ).toBe(true);
+    expect(
+      hasSeedShape(
+        'catalog: register canary_scenarios.MOM-14 as the default rollout scenario',
+      ),
+    ).toBe(true);
   });
 });
 

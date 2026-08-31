@@ -657,6 +657,45 @@ export function parseOperationalSeedItems(body: string): string[] {
   return items;
 }
 
+/**
+ * Known milestone config-seed target categories, drawn from the M15 seed
+ * set — the vocabulary genuine `## Operational seed` bullets actually name.
+ * Not exhaustive by design: this backs an advisory shape check
+ * (hasSeedShape), never a hard reject, so an unusually-worded genuine seed
+ * that misses this list is admitted with `needs-triage` rather than
+ * dropped — see stageSeedContribution.
+ */
+const SEED_TARGET_CATEGORIES = [
+  'analyzer_configs',
+  'alarm_rules',
+  'data_invariants',
+  'catalog',
+  'daemon_roster',
+  'canary_scenarios',
+];
+
+/** Matches an entity-key-shaped token: a snake_case identifier, a backtick-quoted name, or a `key=value`/`key: value` assignment. */
+const ENTITY_KEY_PATTERN =
+  /`[^`]+`|\b[a-zA-Z][a-zA-Z0-9]*(?:_[a-zA-Z0-9]+)+\b|\b[a-zA-Z][\w.]*\s*=\s*\S+/;
+
+/**
+ * The shape heuristic behind the seed-accretion guard (see
+ * stageSeedContribution): a genuine `## Operational seed` bullet names both
+ * a target category (analyzer_configs, alarm_rules, ...) and an entity key
+ * within it. Verification scopes, out-of-scope notes, bookkeeping
+ * instructions, and migration-number assignments — the four non-seed shapes
+ * seen in the M15 run — name neither. Advisory only: a `false` result flags
+ * the item for human triage, it never blocks accretion outright.
+ */
+export function hasSeedShape(spec: string): boolean {
+  const category = SEED_TARGET_CATEGORIES.find((c) =>
+    new RegExp(`\\b${c}\\b`, 'i').test(spec),
+  );
+  if (!category) return false;
+  const withoutCategory = spec.replace(new RegExp(category, 'gi'), '');
+  return ENTITY_KEY_PATTERN.test(withoutCategory);
+}
+
 export interface AccretionContentMatchResult {
   ok: boolean;
   reasons: string[];
