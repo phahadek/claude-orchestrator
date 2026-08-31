@@ -46,6 +46,7 @@ import {
   getLatestTestRequestRun,
   setSessionLastErrorDetail,
   archiveSession,
+  TERMINAL_SESSION_STATUSES,
 } from '../db/queries';
 import { groomSessionConcludedWithDecision } from '../orchestration/planningDecisionKinds';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
@@ -3559,11 +3560,24 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     }
   }
 
+  /**
+   * hasEnded is deliberately NOT the gate here: reclaimProcess() and
+   * surfaceUnresolvedToOperator() both set it unconditionally to stop
+   * run()'s exit-handling from writing a terminal status of its own once
+   * the OS process is gone, while leaving the session's DB row (and thus
+   * its resumability) untouched. A manual kill() must still be able to
+   * conclude that same session, so it reads the row's persisted status —
+   * the actual terminal signal — instead of trusting the in-memory flag.
+   */
   async kill(opts?: { suppressReap?: boolean }): Promise<void> {
     if (this.isKilling) return;
     this.isKilling = true;
     await this.runner.kill();
-    if (!this.hasEnded) {
+    const priorRow = getSession(this.sessionId);
+    const alreadyConcluded = priorRow
+      ? TERMINAL_SESSION_STATUSES.has(priorRow.status)
+      : this.hasEnded;
+    if (!alreadyConcluded) {
       if (opts) {
         this.sessionManager?.markSessionErrored?.(
           this.sessionId,
@@ -3580,7 +3594,11 @@ The full task spec and all rules are in your system prompt. Begin implementing d
           'killed by user request',
         );
       }
-      if (!this.hasEnded) {
+      const rowAfter = getSession(this.sessionId);
+      const stillOpen = rowAfter
+        ? !TERMINAL_SESSION_STATUSES.has(rowAfter.status)
+        : !this.hasEnded;
+      if (stillOpen) {
         // Fallback when sessionManager is absent (e.g. unit tests without a manager)
         updateSessionStatus(this.sessionId, 'killed', Date.now());
         this.broadcast({
