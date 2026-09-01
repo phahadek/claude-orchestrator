@@ -150,7 +150,10 @@ describe('StuckSessionMonitor intra-tool heartbeat', () => {
     // activity — the session is reclaimed (OS process torn down) and
     // surfaced to the operator, never terminalized directly.
     expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith('sess-2');
-    expect(queries.archiveSession).toHaveBeenCalledWith('sess-2');
+    expect(queries.archiveSession).toHaveBeenCalledWith(
+      'sess-2',
+      'machine_park',
+    );
     expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
       'sess-2',
       'stuck_session_hard_stop_window_expired',
@@ -184,7 +187,10 @@ describe('StuckSessionMonitor intra-tool heartbeat', () => {
     // the hard-stop window — it still expires and reclaims the (already
     // dead) process, surfacing the session rather than terminalizing it.
     expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith('sess-3');
-    expect(queries.archiveSession).toHaveBeenCalledWith('sess-3');
+    expect(queries.archiveSession).toHaveBeenCalledWith(
+      'sess-3',
+      'machine_park',
+    );
   });
 
   it('records each heartbeat tick via recordEvent (audit_log), not as a session_event', () => {

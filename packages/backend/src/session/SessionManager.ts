@@ -4711,7 +4711,7 @@ export class SessionManager extends EventEmitter {
   ): void {
     const row = getSession(sessionId);
     const reason = `credential_revoked_${surface}`;
-    archiveSession(sessionId);
+    archiveSession(sessionId, 'machine_park');
     setSessionPauseReason(sessionId, reason);
 
     recordEvent({
@@ -4818,7 +4818,7 @@ export class SessionManager extends EventEmitter {
    * true rather than just closing stdin and hoping.
    */
   archiveAndEndSession(sessionId: string): void {
-    archiveSession(sessionId);
+    archiveSession(sessionId, 'operator');
     this.endSession(sessionId);
   }
 
@@ -5269,21 +5269,24 @@ export class SessionManager extends EventEmitter {
 
     // Refuse to respawn sessions that reached a terminal state — done/error/killed
     // sessions are intentionally finished and must not be revived by stale feedback.
-    // archived=1 is included alongside the terminal statuses: archiveAndEndSession
-    // documents archival as "an explicit operator signal the session is done — reap
-    // any live subprocess", so an archived session (even one left `idle`, which is
-    // otherwise never terminal) must not be silently resumed either. PR-scoped
-    // relaunches (relaunchFixerForPR) opt out via allowTerminal since a dead session
-    // is exactly the case they exist to recover from.
+    // archived=1 is included alongside the terminal statuses, but only when
+    // archive_kind is not 'machine_park': archiveAndEndSession documents that
+    // flavor of archival as "an explicit operator signal the session is done —
+    // reap any live subprocess", so an operator-archived (or legacy NULL,
+    // fail-closed) session must not be silently resumed. A machine_park archive
+    // is the opposite signal — a session explicitly left non-terminal so the
+    // operator (or sendOrResume itself) can act on it — so it stays resumable.
+    // PR-scoped relaunches (relaunchFixerForPR) opt out via allowTerminal since
+    // a dead session is exactly the case they exist to recover from.
     if (
       !opts.allowTerminal &&
       (row.status === 'done' ||
         row.status === 'error' ||
         row.status === 'killed' ||
-        row.archived === 1)
+        (row.archived === 1 && row.archive_kind !== 'machine_park'))
     ) {
       logger.warn(
-        `[SessionManager] sendOrResume: refusing to respawn terminal session ${sessionId} (status=${row.status}, archived=${row.archived})`,
+        `[SessionManager] sendOrResume: refusing to respawn terminal session ${sessionId} (status=${row.status}, archived=${row.archived}, archive_kind=${row.archive_kind ?? 'null'})`,
       );
       this.emit('message', {
         type: 'session_action_failed',

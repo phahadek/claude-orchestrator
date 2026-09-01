@@ -230,7 +230,7 @@ describe('AgentSession error paths pass a concise detail to markSessionErrored',
     await runPromise;
 
     expect(sm.markSessionErrored).not.toHaveBeenCalled();
-    expect(archiveSession).toHaveBeenCalledWith('sess-err');
+    expect(archiveSession).toHaveBeenCalledWith('sess-err', 'machine_park');
     expect(setSessionPauseReason).toHaveBeenCalledWith(
       'sess-err',
       'runner_killed_unexpected',

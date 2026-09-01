@@ -89,7 +89,10 @@ describe('SessionManager — reclaims a session on a revoked stage credential', 
       'session_credential_revoked',
     );
     expect(queries.updateSessionStatus).not.toHaveBeenCalled();
-    expect(queries.archiveSession).toHaveBeenCalledWith('live-but-revoked');
+    expect(queries.archiveSession).toHaveBeenCalledWith(
+      'live-but-revoked',
+      'machine_park',
+    );
     expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
       'live-but-revoked',
       'credential_revoked_mcp',
@@ -122,7 +125,10 @@ describe('SessionManager — reclaims a session on a revoked stage credential', 
     requireSessionStageAuth(req, res, () => {});
 
     expect(queries.updateSessionStatus).not.toHaveBeenCalled();
-    expect(queries.archiveSession).toHaveBeenCalledWith('already-killed');
+    expect(queries.archiveSession).toHaveBeenCalledWith(
+      'already-killed',
+      'machine_park',
+    );
     expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
       'already-killed',
       'credential_revoked_mcp',
@@ -155,6 +161,7 @@ describe('SessionManager — reclaims a session on a revoked route credential', 
     );
     expect(queries.archiveSession).toHaveBeenCalledWith(
       'live-but-revoked-route',
+      'machine_park',
     );
     expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
       'live-but-revoked-route',

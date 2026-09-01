@@ -200,7 +200,7 @@ sessionsRouter.patch('/:id/archive', (req: Request, res: Response) => {
   if (_sessionManager) {
     _sessionManager.archiveAndEndSession(sessionId);
   } else {
-    archiveSession(sessionId);
+    archiveSession(sessionId, 'operator');
   }
   res.json({ ok: true });
 });

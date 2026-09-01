@@ -788,6 +788,7 @@ describe('AgentSession — escalation deadlock watchdog + bounded retry', () => 
     expect(mockSessionManager.markSessionErrored).not.toHaveBeenCalled();
     expect(queries.archiveSession).toHaveBeenCalledWith(
       'test-session-overflow',
+      'machine_park',
     );
     expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
       'test-session-overflow',

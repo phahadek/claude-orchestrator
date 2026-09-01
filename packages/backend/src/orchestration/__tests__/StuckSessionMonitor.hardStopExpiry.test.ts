@@ -108,7 +108,7 @@ describe('StuckSessionMonitor hard-stop window expiry', () => {
     expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith(
       'sess-silent',
     );
-    expect(archiveSession).toHaveBeenCalledWith('sess-silent');
+    expect(archiveSession).toHaveBeenCalledWith('sess-silent', 'machine_park');
     expect(broadcast).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'stuck_session_killed',
@@ -149,7 +149,7 @@ describe('StuckSessionMonitor hard-stop window expiry', () => {
     expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith(
       'sess-crashed',
     );
-    expect(archiveSession).toHaveBeenCalledWith('sess-crashed');
+    expect(archiveSession).toHaveBeenCalledWith('sess-crashed', 'machine_park');
   });
 
   it('is a no-op if the timer state was already cleared', () => {

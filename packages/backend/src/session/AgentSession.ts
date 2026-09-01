@@ -1157,7 +1157,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
   private surfaceUnresolvedToOperator(reason: string, detail?: string): void {
     this.hasEnded = true;
     try {
-      archiveSession(this.sessionId);
+      archiveSession(this.sessionId, 'machine_park');
     } catch {
       // Best-effort — DB may be unavailable or mocked without this function.
     }

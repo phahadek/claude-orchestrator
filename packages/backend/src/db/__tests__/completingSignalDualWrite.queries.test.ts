@@ -214,7 +214,7 @@ describe('archive sweep dual-write (routes/sessions.ts operator archive + Conclu
   it('archiveSession (operator-initiated, routes/sessions.ts PATCH /:id/archive) records a ledger row', () => {
     insertSession({ session_id: 'arch1', status: 'done' });
 
-    archiveSession('arch1');
+    archiveSession('arch1', 'operator');
 
     const signals = listCompletingSignalsForSession('arch1');
     expect(signals).toHaveLength(1);
@@ -224,7 +224,7 @@ describe('archive sweep dual-write (routes/sessions.ts operator archive + Conclu
   it('archiveSession is a no-op (no ledger row) when the session is already archived', () => {
     insertSession({ session_id: 'arch2', status: 'done', archived: 1 });
 
-    archiveSession('arch2');
+    archiveSession('arch2', 'operator');
 
     expect(listCompletingSignalsForSession('arch2')).toHaveLength(0);
   });
