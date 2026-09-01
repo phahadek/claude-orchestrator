@@ -402,9 +402,7 @@ describe('hasSeedShape', () => {
       hasSeedShape('Leave the other 19 TI2026-linked rows untouched'),
     ).toBe(false);
     expect(
-      hasSeedShape(
-        'Also out of scope: rows belonging to the prior cohort',
-      ),
+      hasSeedShape('Also out of scope: rows belonging to the prior cohort'),
     ).toBe(false);
   });
 
