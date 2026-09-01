@@ -18,6 +18,7 @@ import {
   checkReadiness,
   ReadinessGateError,
   standardTriageCleanDesignOverrideReason,
+  hasSeedShape,
   type ReadinessViolation,
 } from './readinessGate';
 import {
@@ -832,7 +833,14 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
           project: sourceTask.project,
           milestone,
           spec: seed.spec,
-          classification: seed.classification,
+          // Admit-and-flag, not hard-reject: a bullet naming neither a
+          // target category nor an entity key is still accreted (it still
+          // counts toward the milestone's seed rollup blocking set via
+          // `state`, unchanged), but classified `needs-triage` so the human
+          // clearing it gets a pre-filled reason instead of a bare spec.
+          classification: hasSeedShape(seed.spec)
+            ? seed.classification
+            : 'needs-triage',
           sources: [
             {
               sourceTaskId,

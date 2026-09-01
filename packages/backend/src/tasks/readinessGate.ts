@@ -657,6 +657,86 @@ export function parseOperationalSeedItems(body: string): string[] {
   return items;
 }
 
+/**
+ * Known milestone config-seed target categories, drawn from the M15 seed
+ * set — the vocabulary genuine `## Operational seed` bullets actually name.
+ * Not exhaustive by design: this backs an advisory shape check
+ * (hasSeedShape), never a hard reject, so an unusually-worded genuine seed
+ * that misses this list is admitted with `needs-triage` rather than
+ * dropped — see stageSeedContribution.
+ */
+const SEED_TARGET_CATEGORIES = [
+  'analyzer_configs',
+  'alarm_rules',
+  'data_invariants',
+  'catalog',
+  'daemon_roster',
+  'canary_scenarios',
+];
+
+/** Matches an entity-key-shaped token: a snake_case identifier, a backtick-quoted name, or a `key=value` assignment. */
+const ENTITY_KEY_PATTERN =
+  /`[^`]+`|\b[a-zA-Z][a-zA-Z0-9]*_[a-zA-Z0-9_]*\b|\b[a-zA-Z_][\w.]*=\S+/;
+
+const WORD_CHAR_PATTERN = /[a-z0-9_]/;
+
+/** True when `needle` occurs in `haystack` as a whole word, case-insensitively — a fixed-pattern stand-in for a dynamically-built `\bneedle\b` RegExp. */
+function containsWholeWordCI(haystack: string, needle: string): boolean {
+  const lower = haystack.toLowerCase();
+  const target = needle.toLowerCase();
+  let from = 0;
+  for (;;) {
+    const idx = lower.indexOf(target, from);
+    if (idx === -1) return false;
+    const before = idx === 0 ? '' : lower[idx - 1];
+    const after = lower[idx + target.length] ?? '';
+    if (!WORD_CHAR_PATTERN.test(before) && !WORD_CHAR_PATTERN.test(after)) {
+      return true;
+    }
+    from = idx + 1;
+  }
+}
+
+/** Removes every whole-word, case-insensitive occurrence of `needle` from `haystack` — the strip counterpart to containsWholeWordCI. */
+function stripWholeWordCI(haystack: string, needle: string): string {
+  const lower = haystack.toLowerCase();
+  const target = needle.toLowerCase();
+  let result = '';
+  let i = 0;
+  while (i < haystack.length) {
+    if (lower.startsWith(target, i)) {
+      const before = i === 0 ? '' : lower[i - 1];
+      const afterIdx = i + target.length;
+      const after = afterIdx < lower.length ? lower[afterIdx] : '';
+      if (!WORD_CHAR_PATTERN.test(before) && !WORD_CHAR_PATTERN.test(after)) {
+        i = afterIdx;
+        continue;
+      }
+    }
+    result += haystack[i];
+    i += 1;
+  }
+  return result;
+}
+
+/**
+ * The shape heuristic behind the seed-accretion guard (see
+ * stageSeedContribution): a genuine `## Operational seed` bullet names both
+ * a target category (analyzer_configs, alarm_rules, ...) and an entity key
+ * within it. Verification scopes, out-of-scope notes, bookkeeping
+ * instructions, and migration-number assignments — the four non-seed shapes
+ * seen in the M15 run — name neither. Advisory only: a `false` result flags
+ * the item for human triage, it never blocks accretion outright.
+ */
+export function hasSeedShape(spec: string): boolean {
+  const category = SEED_TARGET_CATEGORIES.find((c) =>
+    containsWholeWordCI(spec, c),
+  );
+  if (!category) return false;
+  const withoutCategory = stripWholeWordCI(spec, category);
+  return ENTITY_KEY_PATTERN.test(withoutCategory);
+}
+
 export interface AccretionContentMatchResult {
   ok: boolean;
   reasons: string[];
