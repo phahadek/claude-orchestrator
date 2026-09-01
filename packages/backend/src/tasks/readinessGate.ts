@@ -674,9 +674,50 @@ const SEED_TARGET_CATEGORIES = [
   'canary_scenarios',
 ];
 
-/** Matches an entity-key-shaped token: a snake_case identifier, a backtick-quoted name, or a `key=value`/`key: value` assignment. */
+/** Matches an entity-key-shaped token: a snake_case identifier, a backtick-quoted name, or a `key=value` assignment. */
 const ENTITY_KEY_PATTERN =
-  /`[^`]+`|\b[a-zA-Z][a-zA-Z0-9]*(?:_[a-zA-Z0-9]+)+\b|\b[a-zA-Z][\w.]*\s*=\s*\S+/;
+  /`[^`]+`|\b[a-zA-Z][a-zA-Z0-9]*_[a-zA-Z0-9_]*\b|\b[a-zA-Z_][\w.]*=\S+/;
+
+const WORD_CHAR_PATTERN = /[a-z0-9_]/;
+
+/** True when `needle` occurs in `haystack` as a whole word, case-insensitively — a fixed-pattern stand-in for a dynamically-built `\bneedle\b` RegExp. */
+function containsWholeWordCI(haystack: string, needle: string): boolean {
+  const lower = haystack.toLowerCase();
+  const target = needle.toLowerCase();
+  let from = 0;
+  for (;;) {
+    const idx = lower.indexOf(target, from);
+    if (idx === -1) return false;
+    const before = idx === 0 ? '' : lower[idx - 1];
+    const after = lower[idx + target.length] ?? '';
+    if (!WORD_CHAR_PATTERN.test(before) && !WORD_CHAR_PATTERN.test(after)) {
+      return true;
+    }
+    from = idx + 1;
+  }
+}
+
+/** Removes every whole-word, case-insensitive occurrence of `needle` from `haystack` — the strip counterpart to containsWholeWordCI. */
+function stripWholeWordCI(haystack: string, needle: string): string {
+  const lower = haystack.toLowerCase();
+  const target = needle.toLowerCase();
+  let result = '';
+  let i = 0;
+  while (i < haystack.length) {
+    if (lower.startsWith(target, i)) {
+      const before = i === 0 ? '' : lower[i - 1];
+      const afterIdx = i + target.length;
+      const after = afterIdx < lower.length ? lower[afterIdx] : '';
+      if (!WORD_CHAR_PATTERN.test(before) && !WORD_CHAR_PATTERN.test(after)) {
+        i = afterIdx;
+        continue;
+      }
+    }
+    result += haystack[i];
+    i += 1;
+  }
+  return result;
+}
 
 /**
  * The shape heuristic behind the seed-accretion guard (see
@@ -689,10 +730,10 @@ const ENTITY_KEY_PATTERN =
  */
 export function hasSeedShape(spec: string): boolean {
   const category = SEED_TARGET_CATEGORIES.find((c) =>
-    new RegExp(`\\b${c}\\b`, 'i').test(spec),
+    containsWholeWordCI(spec, c),
   );
   if (!category) return false;
-  const withoutCategory = spec.replace(new RegExp(category, 'gi'), '');
+  const withoutCategory = stripWholeWordCI(spec, category);
   return ENTITY_KEY_PATTERN.test(withoutCategory);
 }
 
