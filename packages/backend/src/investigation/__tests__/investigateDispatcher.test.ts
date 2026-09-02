@@ -247,7 +247,7 @@ describe('launchInvestigateBatch', () => {
     expect(options.projectId).toBe('proj-a');
   });
 
-  it('rejects a batch spanning more than one project rather than silently applying the first report\'s project to all of it', async () => {
+  it("rejects a batch spanning more than one project rather than silently applying the first report's project to all of it", async () => {
     const reportA = insertReport({
       projectId: 'proj-a',
       milestoneId: 'milestone-1',

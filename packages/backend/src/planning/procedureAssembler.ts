@@ -473,7 +473,7 @@ export function renderAdHocReadCapability(projectId: string): string[] {
         'it settles this>"}}`. This project has not declared a sanctioned ad hoc ' +
         'read command, so name the exact read-only command/script this project ' +
         'sanctions for it in the request. This is the sanctioned route for ' +
-        "exactly this gap: for a claim about DB state, `needs-setup` should mean " +
+        'exactly this gap: for a claim about DB state, `needs-setup` should mean ' +
         'this specific request is pending, refused, or the tooling is not ' +
         "installed — never that this class of claim can't be settled at all.",
     ];
@@ -488,7 +488,7 @@ export function renderAdHocReadCapability(projectId: string): string[] {
       'why it settles this>"}}`. This runs this project\'s own declared, ' +
       'sanctioned read-only ad hoc query command, so an operator can approve the ' +
       'exact query text on sight. This is the sanctioned route for exactly this ' +
-      "gap: for a claim about DB state, `needs-setup` should mean this specific " +
+      'gap: for a claim about DB state, `needs-setup` should mean this specific ' +
       'request is pending, refused, or the tooling is not installed — never ' +
       "that this class of claim can't be settled at all.",
   ];
