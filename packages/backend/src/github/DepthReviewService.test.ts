@@ -93,6 +93,14 @@ function wireVerdict(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // clearAllMocks() wipes call history but not implementations set via
+  // mockReturnValue — without this, a getSession stub left behind by an
+  // earlier test (e.g. `.mockReturnValue({ status: 'idle' })`) would still
+  // apply here, and combined with watchForSessionEnd's real background
+  // timeout (see the 25ms-timeout test below) could make a stray, already-
+  // scheduled markSessionDone call resolve mid-test and pollute an unrelated
+  // assertion later in the file.
+  (getSession as ReturnType<typeof vi.fn>).mockReturnValue(undefined);
 });
 
 // ── runDepthReview() — dimension classification ──────────────────────────────
@@ -338,6 +346,13 @@ describe('DepthReviewService.runDepthReview() — fails open', () => {
     );
 
     expect(result).toBeNull();
+
+    // runDepthReview only awaits waitForVerdict's timeout branch; the
+    // independent watchForSessionEnd timer (same 25ms timeoutMs, armed a
+    // moment later) is still pending here. Drain it before the test ends so
+    // its real setTimeout doesn't fire in the background during a later
+    // test and pollute that test's markSessionDone assertion.
+    await new Promise((resolve) => setTimeout(resolve, 50));
   });
 
   it('resolves null when session.start() itself throws', async () => {
