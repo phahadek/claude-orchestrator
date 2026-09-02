@@ -601,6 +601,31 @@ describe('loadOrchestratorConfig', () => {
     expect(config.bash_rules).toEqual([]);
     expect(config.session_rules).toEqual([]);
     expect(config.review_rules).toEqual([]);
+    expect(config.ad_hoc_read_command).toBe('');
+  });
+
+  it('reads ad_hoc_read_command from .claude-orchestrator.yml', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      "ad_hoc_read_command: 'Bash(npx ts-node scripts/ro-query.ts:*)'\n",
+      'utf-8',
+    );
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.ad_hoc_read_command).toBe(
+      'Bash(npx ts-node scripts/ro-query.ts:*)',
+    );
+  });
+
+  it('ignores a non-string ad_hoc_read_command and yields the empty default', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      'ad_hoc_read_command:\n  - not a string\n',
+      'utf-8',
+    );
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.ad_hoc_read_command).toBe('');
   });
 
   it('reads session_rules and review_rules from .claude-orchestrator.yml', () => {

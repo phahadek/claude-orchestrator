@@ -10,8 +10,18 @@
  * denial — still stands.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+
+const mockGetProjectById = vi.fn();
+vi.mock('../../config', () => ({
+  getProjectById: (...args: unknown[]) => mockGetProjectById(...args),
+}));
+
 import { buildGateVerifyProcedure } from '../gateItemVerifier';
+import { renderAdHocReadCapability } from '../../planning/procedureAssembler';
 import type { GateItem } from '../gateStore';
 
 function makeItem(overrides: Partial<GateItem> = {}): GateItem {
@@ -30,6 +40,23 @@ function makeItem(overrides: Partial<GateItem> = {}): GateItem {
 }
 
 describe('buildGateVerifyProcedure', () => {
+  let projectDir: string;
+
+  // A real tmp project dir with no `.claude-orchestrator.yml` (or, per-test,
+  // one written with a declared `ad_hoc_read_command`) so
+  // `renderAdHocReadCapability`'s project resolution runs for real rather
+  // than mocking `loadOrchestratorConfig` itself — mirrors
+  // `procedureAssembler.projectRecordAccess.test.ts`'s fixture pattern.
+  beforeEach(() => {
+    projectDir = mkdtempSync(join(tmpdir(), 'gate-verify-procedure-'));
+    mockGetProjectById.mockReturnValue({ id: 'proj-a', projectDir });
+  });
+
+  afterEach(() => {
+    rmSync(projectDir, { recursive: true, force: true });
+    mockGetProjectById.mockReset();
+  });
+
   it('does not contain the "not practical for a bounded one-shot investigation" escape clause', () => {
     const procedure = buildGateVerifyProcedure(makeItem());
     expect(procedure).not.toMatch(/not practical for a bounded one-shot/i);
@@ -64,7 +91,21 @@ describe('buildGateVerifyProcedure', () => {
     expect(procedure).toMatch(/hasn't happened yet|has not happened yet/i);
   });
 
-  it('names the read-only ad hoc query capability as the sanctioned route for a DB table with no dedicated MCP tool, before a needs-setup abstain', () => {
+  it('falls back to a generic ad hoc read paragraph naming no script when the project declares no ad_hoc_read_command', () => {
+    const procedure = buildGateVerifyProcedure(makeItem());
+    expect(procedure).not.toContain('adhoc-query');
+    expect(procedure).not.toContain('packages/backend/scripts/');
+    expect(procedure).toMatch(/no dedicated MCP read tool/);
+    expect(procedure).toMatch(
+      /needs-setup.+should mean this specific request is pending, refused/s,
+    );
+  });
+
+  it('names the project-declared ad hoc read command verbatim as the sanctioned route for a DB table with no dedicated MCP tool, before a needs-setup abstain', () => {
+    writeFileSync(
+      join(projectDir, '.claude-orchestrator.yml'),
+      "ad_hoc_read_command: 'Bash(npx ts-node packages/backend/scripts/adhoc-query.ts:*)'\n",
+    );
     const procedure = buildGateVerifyProcedure(makeItem());
     expect(procedure).toContain('packages/backend/scripts/adhoc-query.ts');
     expect(procedure).toMatch(
@@ -82,5 +123,15 @@ describe('buildGateVerifyProcedure', () => {
     const abstainIdx = procedure.indexOf('Two abstains, not one');
     expect(capIdx).toBeGreaterThanOrEqual(0);
     expect(abstainIdx).toBeGreaterThan(capIdx);
+  });
+
+  it('renders the ad hoc read paragraph from the same shared source procedureAssembler.ts exports, never a hand-rolled copy', () => {
+    writeFileSync(
+      join(projectDir, '.claude-orchestrator.yml'),
+      "ad_hoc_read_command: 'Bash(npx ts-node packages/backend/scripts/adhoc-query.ts:*)'\n",
+    );
+    const procedure = buildGateVerifyProcedure(makeItem());
+    const shared = renderAdHocReadCapability('proj-a').join('\n');
+    expect(procedure).toContain(shared);
   });
 });

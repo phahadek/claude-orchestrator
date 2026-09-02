@@ -202,6 +202,21 @@ export interface OrchestratorConfig {
    * (default).
    */
   capability_pre_grants: Partial<Record<PreGrantSessionKind, string[]>>;
+  /**
+   * This project's sanctioned read-only ad hoc DB query command, verbatim
+   * as the capability string a dispatched session requests through
+   * `session.requestCapability` (e.g. `'Bash(npx ts-node
+   * packages/backend/scripts/adhoc-query.ts:*)'` for this repo, or a
+   * project's own equivalent script). Read by
+   * `planning/procedureAssembler.ts#renderAdHocReadCapability`, the single
+   * shared source for the "no dedicated MCP read tool" DB-read paragraph
+   * injected into every dispatched ops/gate-verify/investigate/deploy-step
+   * session. Empty (default) = this project has not declared one; the
+   * rendered paragraph falls back to a generic, project-agnostic version
+   * that still routes through `session.requestCapability` rather than
+   * naming a script that may not exist in this project's checkout.
+   */
+  ad_hoc_read_command: string;
 }
 
 const DEFAULTS: OrchestratorConfig = {
@@ -232,6 +247,7 @@ const DEFAULTS: OrchestratorConfig = {
   dependency_cache_dirs: [],
   dependency_verify_command: '',
   capability_pre_grants: {},
+  ad_hoc_read_command: '',
 };
 
 function isPreGrantSessionKind(v: string): v is PreGrantSessionKind {
@@ -401,6 +417,10 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
       capability_pre_grants: parseCapabilityPreGrants(
         parsed.capability_pre_grants,
       ),
+      ad_hoc_read_command:
+        typeof parsed.ad_hoc_read_command === 'string'
+          ? parsed.ad_hoc_read_command
+          : DEFAULTS.ad_hoc_read_command,
       mcp_servers:
         parsed.mcp_servers !== null &&
         typeof parsed.mcp_servers === 'object' &&

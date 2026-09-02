@@ -133,7 +133,7 @@ function buildDeployAgenticStepProcedure(input: {
     step.command_or_prompt ?? '(no instruction text)',
     '',
     ...renderProjectRecordAccess('ops', project),
-    ...renderOpsCapabilities(),
+    ...renderOpsCapabilities(project),
     '### Procedure',
     '',
     'Carry out the instruction above using your available read tools and ' +

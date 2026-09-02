@@ -11,6 +11,7 @@ import {
 import type { SessionManager } from '../session/SessionManager';
 import type { GateVerifyDispositionPayload } from '../session/AgentSession';
 import {
+  renderAdHocReadCapability,
   renderOpsCapabilities,
   renderProjectRecordAccess,
 } from '../planning/procedureAssembler';
@@ -102,7 +103,7 @@ export function buildGateVerifyProcedure(item: GateItem): string {
       'the current value.',
     '',
     ...renderProjectRecordAccess('ops', item.project),
-    ...renderOpsCapabilities(),
+    ...renderOpsCapabilities(item.project),
     '### Procedure',
     '',
     "This item's associated PR(s) are already merged and deployed — that " +
@@ -227,21 +228,7 @@ export function buildGateVerifyProcedure(item: GateItem): string {
       'a pass/fail to route around a permission denial — a blocked read is ' +
       'grounds for needs-setup, not for guessing.',
     '',
-    'For a DB table with no dedicated MCP read tool and no session-record/audit-log ' +
-      'broker above (e.g. `ops_journal`, `gate_item`, `deploy_run`) — the case most ' +
-      'likely to look unreachable — request the read-only ad hoc query capability ' +
-      'instead of abstaining: call `session.requestCapability` with ' +
-      '`{"payload":{"capability":"Bash(npx ts-node packages/backend/scripts/' +
-      'adhoc-query.ts:*)","plan":"<what this session will do with the result>",' +
-      '"evidence":"<the exact SELECT/WITH query text and why it settles this>"}}`. ' +
-      'This runs `packages/backend/scripts/adhoc-query.ts`, a single-statement, ' +
-      'driver-enforced-read-only `SELECT`/`WITH` (a syntactic check before any ' +
-      'connection opens, plus the connection itself is `readonly: true` at the ' +
-      'SQLite driver level), so an operator can approve the exact query text on ' +
-      'sight. This is the sanctioned route for exactly this gap, offered before a ' +
-      '`needs-setup` abstain: for a claim about DB state, `needs-setup` should mean ' +
-      "this specific request is pending, refused, or the tooling isn't installed — " +
-      "never that this class of claim can't be settled at all.",
+    ...renderAdHocReadCapability(item.project),
     '',
     '**Before abstaining for a missing identifier** (e.g. "no target session ' +
       'ID to read"): exhaust the record surfaces your base tools already ' +
