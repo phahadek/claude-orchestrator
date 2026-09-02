@@ -569,7 +569,9 @@ export async function loadOpsContext(
     })),
     ...otherEntries.map((e) => {
       const liveStatus =
-        e.project === project ? depMap.get(normId(e.task_id))?.status : undefined;
+        e.project === project
+          ? depMap.get(normId(e.task_id))?.status
+          : undefined;
       return {
         taskId: e.task_id,
         project: e.project,

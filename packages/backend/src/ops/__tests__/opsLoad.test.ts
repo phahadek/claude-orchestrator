@@ -129,9 +129,7 @@ beforeEach(() => {
     if (boardMatch && method === 'POST') {
       const boardId = boardMatch[1];
       const boardRows =
-        boardId === TARGET_BOARD
-          ? rows
-          : (neighbourBoardRows[boardId] ?? []);
+        boardId === TARGET_BOARD ? rows : (neighbourBoardRows[boardId] ?? []);
       return jsonResponse({
         results: boardRows.map(pageFor),
         has_more: false,
@@ -758,7 +756,7 @@ describe('loadOpsContext — ops_journal pre-seed / reconcile', () => {
     expect(getOpsJournalEntry('other-task')).toBeDefined();
   });
 
-  it('re-seeds a resolved blocked-pending-fix entry stuck on a prior milestone of the same project once the task is back on that milestone\'s board', async () => {
+  it("re-seeds a resolved blocked-pending-fix entry stuck on a prior milestone of the same project once the task is back on that milestone's board", async () => {
     const PRIOR_BOARD = 'prior-board-id';
     const PRIOR_MILESTONE = 'm-0';
     insertMilestone({
