@@ -1,14 +1,18 @@
 import { describe, it, expect, vi } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 
 vi.mock('../../db/db.js', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
   return { db: setupTestDb() };
 });
 
+const mockGetProjectById = vi.hoisted(() =>
+  vi.fn().mockReturnValue({ contextUrl: 'https://notion.so/project' }),
+);
 vi.mock('../../config', () => ({
-  getProjectById: vi
-    .fn()
-    .mockReturnValue({ contextUrl: 'https://notion.so/project' }),
+  getProjectById: mockGetProjectById,
 }));
 
 import {
@@ -127,6 +131,25 @@ describe('buildInvestigateProcedure', () => {
     expect(fileSection).not.toMatch(/planning\.noOp/);
     expect(fileSection).not.toMatch(/planning_noOp/);
     expect(fileSection).not.toMatch(/no actionable finding" note/i);
+  });
+
+  it("passes the batch's project id through to the injected ad hoc read capability paragraph", () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'investigate-procedure-'));
+    try {
+      writeFileSync(
+        join(projectDir, '.claude-orchestrator.yml'),
+        "ad_hoc_read_command: 'Bash(python3 scripts/ro_query.py:*)'\n",
+      );
+      mockGetProjectById.mockReturnValueOnce({
+        contextUrl: 'https://notion.so/project',
+        projectDir,
+      });
+
+      const procedure = buildInvestigateProcedure([makeReport()], 'proj-a');
+      expect(procedure).toContain('Bash(python3 scripts/ro_query.py:*)');
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
   });
 });
 
