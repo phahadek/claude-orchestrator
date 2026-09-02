@@ -76,6 +76,7 @@ import { recordEvent } from '../audit/AuditLog';
 import { opensPr } from '../session/sessionPredicates';
 import type { ServerMessage } from '../ws/types';
 import { PreReviewPipeline } from './PreReviewPipeline';
+import { DEFAULT_RETRY_CAP } from '../orchestration/StalledPRReconciler';
 
 function getMaxReviewIterations(): number {
   return typedGetSetting('max_review_iterations');
@@ -1375,7 +1376,20 @@ export class ReviewOrchestrator {
         });
       }
     } else if (result.verdict === 'incomplete') {
-      const message = `Review for PR #${job.prNumber} returned an incomplete verdict — the reviewer could not assess the PR. Manual intervention needed.`;
+      // StalledPRReconciler's incomplete_verdict classification (pollUtils.ts)
+      // automatically re-enqueues a fresh review for this exact state on its
+      // next sweep, up to DEFAULT_RETRY_CAP attempts, before it escalates via
+      // reconcile_exhausted. Only announce that intervention is actually
+      // needed once that budget is spent — otherwise this is routine, and
+      // saying so up front just invites a premature manual override of a
+      // self-healing loop.
+      const freshPrRow = getPRByNumber(job.prNumber, job.repo);
+      const retryExhausted =
+        !!freshPrRow?.reconcile_exhausted ||
+        (freshPrRow?.stalled_pr_retry_count ?? 0) >= DEFAULT_RETRY_CAP;
+      const message = retryExhausted
+        ? `Review for PR #${job.prNumber} returned an incomplete verdict — the reviewer could not assess the PR, and automatic retries are exhausted. Manual intervention needed.`
+        : `Review for PR #${job.prNumber} returned an incomplete verdict — the reviewer could not assess the PR. Automatic retry is still available; no manual intervention needed yet.`;
       logger.warn(`[ReviewOrchestrator] ${message}`);
       this.sessionManager.emit('message', {
         type: 'review_incomplete',

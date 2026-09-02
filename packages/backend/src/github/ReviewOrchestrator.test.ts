@@ -134,6 +134,7 @@ import { runVerifyAsGate } from '../orchestration/verifyRunner';
 import { filterVerifyFailureByBaseHealth } from '../orchestration/baseAttributableFilter';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import type { PRReviewService } from './PRReviewService';
+import { DEFAULT_RETRY_CAP } from '../orchestration/StalledPRReconciler';
 import type { GitHubClient } from './GitHubClient';
 import type { PullRequest } from './types';
 import type { ReviewJob } from './types';
@@ -2017,6 +2018,73 @@ describe('ReviewOrchestrator — incomplete verdict', () => {
     await new Promise((r) => setTimeout(r, 30));
 
     expect(vi.mocked(sm.sendOrResume)).not.toHaveBeenCalled();
+  });
+
+  it('does not claim manual intervention is needed while automatic retries remain', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      session_id: 'coding-session-id',
+      stalled_pr_retry_count: 0,
+      reconcile_exhausted: 0,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'incomplete',
+      dimensions: [],
+      summary: 'Could not assess the PR.',
+      reviewedAt: new Date().toISOString(),
+    });
+
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    const messages: object[] = [];
+    sm.on('message', (msg: object) => messages.push(msg));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    const incompleteMsg = messages.find(
+      (m: any) => m.type === 'review_incomplete',
+    ) as any;
+    expect(incompleteMsg).toBeDefined();
+    expect(incompleteMsg.message).toMatch(/no manual intervention needed yet/i);
+    expect(incompleteMsg.message).not.toMatch(/retries are exhausted/i);
+  });
+
+  it('claims manual intervention is needed once StalledPRReconciler retries are exhausted', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      session_id: 'coding-session-id',
+      stalled_pr_retry_count: DEFAULT_RETRY_CAP,
+      reconcile_exhausted: 0,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'incomplete',
+      dimensions: [],
+      summary: 'Could not assess the PR.',
+      reviewedAt: new Date().toISOString(),
+    });
+
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    const messages: object[] = [];
+    sm.on('message', (msg: object) => messages.push(msg));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    const incompleteMsg = messages.find(
+      (m: any) => m.type === 'review_incomplete',
+    ) as any;
+    expect(incompleteMsg).toBeDefined();
+    expect(incompleteMsg.message).toMatch(/manual intervention needed/i);
   });
 });
 

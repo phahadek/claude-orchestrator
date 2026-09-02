@@ -48,7 +48,10 @@ import {
 } from '../github/reviewUtils';
 
 const DEFAULT_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
-const DEFAULT_RETRY_CAP = 2;
+// Exported so callers that report on a PR's stall state (e.g.
+// ReviewOrchestrator's incomplete-verdict messaging) can tell whether the
+// reconciler still has automatic retries left before quoting this cap.
+export const DEFAULT_RETRY_CAP = 2;
 
 /**
  * Stall kinds whose escalation may plausibly trace back to a broken base
