@@ -540,8 +540,17 @@ export async function loadOpsContext(
   // rows). executable/dep_blocked rows are also flagged taskNotDone: true —
   // this run knows their task isn't ✅ Done, so reconcileJournal can trim a
   // stuck `resolved` entry (e.g. left behind by blocked-pending-fix) and
-  // re-seed it at pending. Passthrough otherEntries rows leave the flag unset
-  // since their task's current status isn't known here.
+  // re-seed it at pending. Passthrough otherEntries rows belonging to a prior
+  // milestone of *this same project* can still be resolved: depMap already
+  // carries their live status (target + up-to-neighbourLimit prior-milestone
+  // boards, see "neighbours" above) even though those rows weren't looped for
+  // classification, so we look it up rather than leaving the flag permanently
+  // unset — otherwise a task returned to 🗂️ Ready by blocked-pending-fix on a
+  // milestone that has since scrolled out of the *target* board (e.g. M15
+  // once M16 is the active target) would never again pass through the
+  // executable/depBlocked branches above, and its stuck `resolved` entry
+  // could never self-heal. Entries outside this project, or on a milestone
+  // beyond neighbourLimit, still leave the flag unset since status is unknown.
   const otherEntries = listOpsJournalEntries().filter(
     (e) => e.project !== project || e.milestone !== milestoneId,
   );
@@ -558,11 +567,21 @@ export async function loadOpsContext(
       milestone: milestoneId,
       taskNotDone: true,
     })),
-    ...otherEntries.map((e) => ({
-      taskId: e.task_id,
-      project: e.project,
-      milestone: e.milestone,
-    })),
+    ...otherEntries.map((e) => {
+      const liveStatus =
+        e.project === project ? depMap.get(normId(e.task_id))?.status : undefined;
+      return {
+        taskId: e.task_id,
+        project: e.project,
+        milestone: e.milestone,
+        ...(liveStatus !== undefined
+          ? {
+              taskNotDone:
+                liveStatus !== STATUS.done && liveStatus !== STATUS.deferred,
+            }
+          : {}),
+      };
+    }),
   ];
   reconcileJournal(liveBoard);
 
