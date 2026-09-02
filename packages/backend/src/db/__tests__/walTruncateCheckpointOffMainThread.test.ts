@@ -68,14 +68,18 @@ describe('worker-thread checkpoint dispatch does not block the main event loop',
       Atomics.wait(sab, 0, 0, workerData.delayMs);
       parentPort.postMessage('done');
     `;
-    const delayMs = 300;
+    const delayMs = 500;
     const start = Date.now();
     const worker = new Worker(slowWorkerScript, {
       eval: true,
       workerData: { delayMs },
     });
+    let workerElapsedMs: number | null = null;
     const checkpointDone = new Promise<void>((resolve) => {
-      worker.once('message', () => resolve());
+      worker.once('message', () => {
+        workerElapsedMs = Date.now() - start;
+        resolve();
+      });
     });
 
     let timerElapsedMs: number | null = null;
@@ -89,11 +93,22 @@ describe('worker-thread checkpoint dispatch does not block the main event loop',
 
     expect(timerElapsedMs).not.toBeNull();
     // If the "checkpoint" ran inline on the main thread, this timer would
-    // have queued behind its 300ms of blocking work. Running it on a worker
-    // thread instead means the timer fires close to its own delay.
-    expect(timerElapsedMs as number).toBeLessThan(delayMs / 2);
+    // have queued behind its 500ms of blocking work, so it would fire no
+    // earlier than the worker's own message. Running it on a worker thread
+    // instead means the timer fires well before the worker's blocking delay
+    // is up. Use a generous absolute bound (well above what scheduling
+    // jitter under load could plausibly add to a 20ms timer, but well below
+    // the worker's 500ms blocking delay) so this doesn't flake under load
+    // while still catching a regression to inline/blocking dispatch.
+    expect(timerElapsedMs as number).toBeLessThan(delayMs * 0.6);
 
     await checkpointDone;
+    // The timer must have resolved strictly before the worker's blocking
+    // work finished — this is the real signal that dispatch happened off
+    // the main thread, and it's immune to absolute timing jitter.
+    expect(workerElapsedMs).not.toBeNull();
+    expect(timerElapsedMs as number).toBeLessThan(workerElapsedMs as number);
+
     await worker.terminate();
   }, 15000);
 });
