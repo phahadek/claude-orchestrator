@@ -24,7 +24,10 @@ describe('isStructurallyUnresolvableSource', () => {
   });
 
   it('returns true for a 📋 Planning source, without requiring any pull_requests row', () => {
-    upsertTaskCache('notion:planning-1', JSON.stringify({ type: '📋 Planning' }));
+    upsertTaskCache(
+      'notion:planning-1',
+      JSON.stringify({ type: '📋 Planning' }),
+    );
 
     expect(isStructurallyUnresolvableSource('notion:planning-1')).toBe(true);
   });
