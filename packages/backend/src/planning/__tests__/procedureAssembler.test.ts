@@ -31,6 +31,26 @@ vi.mock('../../config', async () => {
   };
 });
 
+// `renderAdHocReadCapability`'s per-project `.claude-orchestrator.yml`
+// lookup, mocked so this file's `p1`/`other-project` fixtures (whose
+// `projectDir` is a literal path string, not a real directory on the test
+// host) don't need a real file to read — mirrors `getProjectById` above.
+// Defaults to "no command declared" (the empty string
+// `OrchestratorConfig.ad_hoc_read_command` defaults to); the one test that
+// needs a declared command overrides this per-call with `mockReturnValueOnce`.
+const mockLoadOrchestratorConfig = vi.hoisted(() =>
+  vi.fn(() => ({ ad_hoc_read_command: '' })),
+);
+vi.mock('../../session/orchestrator-config', async () => {
+  const actual = await vi.importActual<
+    typeof import('../../session/orchestrator-config')
+  >('../../session/orchestrator-config');
+  return {
+    ...actual,
+    loadOrchestratorConfig: mockLoadOrchestratorConfig,
+  };
+});
+
 import {
   assemblePlanningProcedure,
   deriveGroomDigestSlice,
@@ -1998,6 +2018,10 @@ describe('injected-procedure style standard', () => {
   });
 
   it('names the read-only ad hoc query capability as the sanctioned route for a DB table with no dedicated MCP tool', () => {
+    mockLoadOrchestratorConfig.mockReturnValueOnce({
+      ad_hoc_read_command:
+        'Bash(npx ts-node packages/backend/scripts/adhoc-query.ts:*)',
+    });
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
