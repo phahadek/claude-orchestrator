@@ -50,6 +50,7 @@ beforeEach(() => {
   db.prepare('DELETE FROM task_cache').run();
   db.prepare('DELETE FROM milestones').run();
   db.prepare('DELETE FROM projects').run();
+  neighbourBoardRows = {};
 
   insertProject({
     id: PROJECT,
@@ -93,6 +94,7 @@ interface FixtureRow {
 }
 
 let rows: FixtureRow[] = [];
+let neighbourBoardRows: Record<string, FixtureRow[]> = {};
 const testingBodies: Record<string, string> = {};
 
 function pageFor(row: FixtureRow) {
@@ -126,7 +128,8 @@ beforeEach(() => {
     const boardMatch = u.match(/\/databases\/([^/]+)\/query/);
     if (boardMatch && method === 'POST') {
       const boardId = boardMatch[1];
-      const boardRows = boardId === TARGET_BOARD ? rows : [];
+      const boardRows =
+        boardId === TARGET_BOARD ? rows : (neighbourBoardRows[boardId] ?? []);
       return jsonResponse({
         results: boardRows.map(pageFor),
         has_more: false,
@@ -751,6 +754,52 @@ describe('loadOpsContext — ops_journal pre-seed / reconcile', () => {
     await loadOpsContext(MILESTONE);
 
     expect(getOpsJournalEntry('other-task')).toBeDefined();
+  });
+
+  it("re-seeds a resolved blocked-pending-fix entry stuck on a prior milestone of the same project once the task is back on that milestone's board", async () => {
+    const PRIOR_BOARD = 'prior-board-id';
+    const PRIOR_MILESTONE = 'm-0';
+    insertMilestone({
+      id: PRIOR_MILESTONE,
+      project_id: PROJECT,
+      name: 'M0',
+      source_id: PRIOR_BOARD,
+      canonical_short_id: 'M0',
+      display_order: 0,
+    });
+    rows = [];
+    // The prior milestone's board is only reachable as a *neighbour* of the
+    // current target milestone — reconcileJournal no longer runs against it
+    // directly once the active target has moved on to a later milestone.
+    neighbourBoardRows[PRIOR_BOARD] = [
+      {
+        id: 'reworked-prior-task',
+        name: 'Reworked prior task',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+      },
+    ];
+    upsertOpsJournalEntry({
+      task_id: 'reworked-prior-task',
+      project: PROJECT,
+      milestone: PRIOR_MILESTONE,
+      state: 'resolved',
+      disposition: 'blocked-pending-fix',
+      worked_in: null,
+      evidence: null,
+      finding_or_proposal: null,
+      falsification: null,
+      filed_followons: null,
+      needs_from_operator: null,
+      resolution: JSON.stringify({ note: 'fix filed as follow-on' }),
+      updated_at: new Date(0).toISOString(),
+    } as never);
+
+    await loadOpsContext(MILESTONE);
+
+    const reseeded = getEntry('reworked-prior-task');
+    expect(reseeded?.state).toBe('pending');
+    expect(reseeded?.disposition).toBeUndefined();
   });
 
   it('fires the newly-unblocked signal the run after a blocking dep goes ✅ Done', async () => {
