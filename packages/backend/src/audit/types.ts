@@ -150,6 +150,7 @@ type EventType =
   | 'orphan_processes_reaped'
   | 'staged_intent_group_committed'
   | 'manual_verification_cleared'
+  | 'manual_review_override'
   | 'admission_stall_started'
   | 'admission_stall_cleared'
   | 'session_teardown_escalated'
