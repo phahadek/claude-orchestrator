@@ -2050,8 +2050,8 @@ describe('ReviewOrchestrator — incomplete verdict', () => {
       (m: any) => m.type === 'review_incomplete',
     ) as any;
     expect(incompleteMsg).toBeDefined();
-    expect(incompleteMsg.message).not.toMatch(/manual intervention needed/i);
     expect(incompleteMsg.message).toMatch(/no manual intervention needed yet/i);
+    expect(incompleteMsg.message).not.toMatch(/retries are exhausted/i);
   });
 
   it('claims manual intervention is needed once StalledPRReconciler retries are exhausted', async () => {
