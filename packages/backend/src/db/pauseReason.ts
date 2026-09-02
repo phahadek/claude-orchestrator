@@ -458,10 +458,17 @@ export interface RecoveryDescriptor {
   label?: string;
 }
 
-// Exhaustive by construction (mirrors PAUSE_REASON_REGISTRY): every
-// CanonicalPauseReason needs an explicit, reviewed entry here — either a real
-// RecoveryAction or a deliberate 'none' — so adding a new reason without
-// deciding its discharge path is a typecheck failure, not a silent omission.
+// Discharge-path completeness decision: enforced at the type level, not by
+// convention. The enforcement mechanism is the `Record<CanonicalPauseReason,
+// RecoveryAction | 'none'>` annotation below — TypeScript's mapped-type
+// checker rejects this file at `tsc` compile time if any CanonicalPauseReason
+// key is missing an entry (mirrors PAUSE_REASON_REGISTRY, which uses the same
+// `Record<CanonicalPauseReason, RegistryEntry>` mechanism for the same
+// reason). There is no runtime fallback, default case, or lint rule standing
+// in for this — the compiler is the sole guarantee. Every CanonicalPauseReason
+// needs an explicit, reviewed entry here — either a real RecoveryAction or a
+// deliberate 'none' — so adding a new reason without deciding its discharge
+// path is a typecheck failure, not a silent omission.
 //
 // Deliberately kept keyed by CanonicalPauseReason rather than re-expressed as
 // a (source, retry_strategy) capability predicate like
