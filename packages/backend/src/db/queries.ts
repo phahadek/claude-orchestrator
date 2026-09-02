@@ -5481,8 +5481,26 @@ export async function getMergeCommitForTask(
 }
 
 /**
+ * Non-💻-Code task types that never produce a branch/PR of their own —
+ * mirrors gateService.ts's isSourceCovered, whose own comment lists these
+ * explicitly as no-PR types. 🔧 Operational is deliberately excluded here:
+ * it's usually PR-less but can carry one (config/backfill work sometimes
+ * goes through a tracked PR), so it gets its own conditional check below
+ * instead of a blanket true.
+ */
+const NO_PR_SOURCE_TYPES: ReadonlySet<string> = new Set([
+  '📐 Design',
+  '🧪 Testing',
+  '📋 Planning',
+  '📝 Docs',
+  '🎨 Assets',
+  '🔎 Investigation',
+]);
+
+/**
  * True when a gate_item_source's task can never produce a resolvable merge
- * commit: a 📐 Design task (no branch/PR ever exists for it), or a
+ * commit: any non-💻-Code type that never produces a branch/PR (see
+ * NO_PR_SOURCE_TYPES, mirroring gateService.ts's isSourceCovered), or a
  * 🔧 Operational task with no pull_requests row at all (config/backfill work
  * done outside the tracked PR/branch flow). Retrying — or escalating —
  * these is pointless: escalationEvidence's "check for a dropped webhook or a
@@ -5495,8 +5513,7 @@ export function isStructurallyUnresolvableSource(
   sourceTaskId: string,
 ): boolean {
   const type = getTaskTypeFromCache(sourceTaskId);
-  if (type === '📐 Design') return true;
-  if (type === '🧪 Testing') return true;
+  if (type && NO_PR_SOURCE_TYPES.has(type)) return true;
   if (type === '🔧 Operational') {
     return !getPRByNotionTaskId(normalizeTaskId(sourceTaskId));
   }

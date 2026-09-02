@@ -478,6 +478,33 @@ describe('reconcileHumanObservationMirrors — unresolved-source mirrors', () =>
     expect(liveMirrorRows('unresolved-source')).toHaveLength(0);
   });
 
+  it.each([
+    ['📋 Planning', 'notion:planning-src'],
+    ['📝 Docs', 'notion:docs-src'],
+    ['🎨 Assets', 'notion:assets-src'],
+    ['🔎 Investigation', 'notion:investigation-src'],
+  ])(
+    'retires a mirror whose backing source is a %s task — it can never produce a merge commit',
+    (type, sourceTaskId) => {
+      const item = makeUnresolvedSourceItem(sourceTaskId);
+      upsertTaskCache(
+        sourceTaskId,
+        JSON.stringify({ type, status: '✅ Done' }),
+      );
+      stageUnresolvedSourceMirror(item);
+      expect(liveMirrorRows('unresolved-source')).toHaveLength(1);
+
+      const result = reconcileHumanObservationMirrors();
+
+      expect(result.retired).toHaveLength(1);
+      expect(liveMirrorRows('unresolved-source')).toHaveLength(0);
+      const row = db
+        .prepare('SELECT disposition_reason FROM staged_intent WHERE id = ?')
+        .get(result.retired[0]) as { disposition_reason: string | null };
+      expect(row.disposition_reason).toMatch(/structurally unresolvable/);
+    },
+  );
+
   it('keeps a mirror live for a genuinely-unresolved 💻 Code source not yet Done', () => {
     const item = makeUnresolvedSourceItem('notion:code-src');
     upsertTaskCache(
