@@ -95,6 +95,35 @@ type RegistryEntry = {
   blocks_merge?: boolean;
 };
 
+// The 7 original exact-match consumers named when this registry's
+// (source, retry_strategy, blocks_merge) capability model was locked, and how
+// each expresses its predicate today. 5 already speak the capability model;
+// 2 still key off a literal CanonicalPauseReason value (tracked for
+// conversion in a sibling task, not this one — this comment only documents
+// current state):
+//   1. classifyStalledPR's early return (github/pollUtils.ts) — still a
+//      literal exact-match: `parsed?.reason === 'analyze_failing'`.
+//   2. handleVerifiedFlakyDisposition's expectedPauseReason check
+//      (mcp/tools/verdictTools.ts) — still a literal exact-match:
+//      `pauseStruct?.reason !== expectedPauseReason`.
+//   3. RECOVERY_ACTION_MAP / deriveRecoveryDescriptor (below, this file) —
+//      capability-shaped but deliberately NOT re-expressed as a
+//      (source, retry_strategy) predicate: it's an exhaustive per-reason
+//      lookup table, keyed by CanonicalPauseReason, because which
+//      RecoveryAction applies doesn't correlate with source (see the comment
+//      on RECOVERY_ACTION_MAP below).
+//   4. isMergeBlockingPause (below, this file) — pure capability predicate:
+//      ORs `blocks_merge !== false` across every live concurrent entry.
+//   5. clearTerminalPRFlags's guard — actually named
+//      RECONCILE_EXHAUSTED_CLEAR_ALLOWED_TRIGGERS (db/queries.ts), not
+//      CAP_CLEAR_ALLOWED_TRIGGERS — exact-matches a *trigger* literal against
+//      a Set, a different axis entirely from pause-reason capability.
+//   6. StalledPRReconciler's retry_strategy === 'manual_action' skip
+//      (orchestration/StalledPRReconciler.ts) — capability predicate via
+//      isManualActionPause (below, this file): ORs
+//      `retry_strategy === 'manual_action'` across every live entry.
+//   7. AutoMerger's merge gate (github/AutoMerger.ts) — capability predicate:
+//      `struct.source === 'ci' && struct.blocks_merge`.
 export const PAUSE_REASON_REGISTRY: Record<
   CanonicalPauseReason,
   RegistryEntry
