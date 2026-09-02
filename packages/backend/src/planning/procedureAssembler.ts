@@ -57,6 +57,7 @@ import { orchestratorMcpToolName } from '../mcp/toolNaming';
 import { logger } from '../logger';
 import { recordEvent } from '../audit/AuditLog';
 import { resolveConfigDir } from '../groom/groomLoad';
+import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import type { GroomLoadResult } from '../groom/groomLoad';
 import type { TaskRegions } from '../groom/codeWorklist';
 import type { TaskDependencyCandidates } from '../orchestration/milestoneDependencyGraph';
@@ -420,7 +421,80 @@ function renderIntentKindInvocations(kinds: readonly string[]): string[] {
  * gate-verify session is an `ops`-typed session and gets the same base
  * profile and the same `session.requestCapability` path.
  */
-export function renderOpsCapabilities(): string[] {
+
+/**
+ * Resolves `projectId` to its declared `.claude-orchestrator.yml`
+ * `ad_hoc_read_command` (see `session/orchestrator-config.ts`). Mirrors
+ * `resolveProjectRecordAccessGuidePath`'s never-throw, log-and-degrade
+ * fallback: an unresolvable project or an undeclared command both resolve
+ * to `''`, which `renderAdHocReadCapability` below treats as "no command
+ * declared" rather than an error.
+ */
+function resolveAdHocReadCommand(projectId: string): string {
+  try {
+    const project = getProjectById(projectId);
+    if (!project?.projectDir) return '';
+    return loadOrchestratorConfig(project.projectDir).ad_hoc_read_command;
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * The ad-hoc-read-capability paragraph — the single shared source for the
+ * "no dedicated MCP read tool" DB-read guidance, consumed by
+ * `renderOpsCapabilities` below and by `gate/gateItemVerifier.ts`'s own
+ * narrow-write-exception doctrine, so the two prose copies never drift (see
+ * the MCP tool-name list for the established precedent of keeping one
+ * source for several consumers).
+ *
+ * Project-resolved rather than hard-coded: a project's sanctioned read-only
+ * ad hoc query command is declared in its own `.claude-orchestrator.yml`
+ * (`ad_hoc_read_command`), never assumed to be this repo's own
+ * `packages/backend/scripts/adhoc-query.ts` — that path only resolves for
+ * the self-hosted project, and naming it unconditionally sends every other
+ * managed project's dispatched session after a file that does not exist in
+ * its checkout. A project that declares no command gets a generic
+ * replacement that still routes to `session.requestCapability` without
+ * naming any script, never an outright omission — omitting the paragraph
+ * would restore the needs-setup abstain it exists to prevent.
+ */
+export function renderAdHocReadCapability(projectId: string): string[] {
+  const command = resolveAdHocReadCommand(projectId);
+  if (!command) {
+    return [
+      'For a DB table with no dedicated MCP read tool and no brokered read above ' +
+        '(e.g. an `ops_journal`-, `gate_item`-, or `deploy_run`-shaped table) — ' +
+        'the case most likely to look unreachable — request the read-only ad hoc ' +
+        'query capability instead of abstaining: call `session.requestCapability` ' +
+        'with `{"payload":{"capability":"<this project\'s own sanctioned ' +
+        'read-only ad hoc query command>","plan":"<what this session will do ' +
+        'with the result>","evidence":"<the exact SELECT/WITH query text and why ' +
+        'it settles this>"}}`. This project has not declared a sanctioned ad hoc ' +
+        'read command, so name the exact read-only command/script this project ' +
+        'sanctions for it in the request. This is the sanctioned route for ' +
+        "exactly this gap: for a claim about DB state, `needs-setup` should mean " +
+        'this specific request is pending, refused, or the tooling is not ' +
+        "installed — never that this class of claim can't be settled at all.",
+    ];
+  }
+  return [
+    'For a DB table with no dedicated MCP read tool and no brokered read above ' +
+      '(e.g. an `ops_journal`-, `gate_item`-, or `deploy_run`-shaped table) — the ' +
+      'case most likely to look unreachable — request the read-only ad hoc query ' +
+      'capability instead of abstaining: call `session.requestCapability` with ' +
+      `\`{"payload":{"capability":"${command}","plan":"<what this session will ` +
+      'do with the result>","evidence":"<the exact SELECT/WITH query text and ' +
+      'why it settles this>"}}`. This runs this project\'s own declared, ' +
+      'sanctioned read-only ad hoc query command, so an operator can approve the ' +
+      'exact query text on sight. This is the sanctioned route for exactly this ' +
+      "gap: for a claim about DB state, `needs-setup` should mean this specific " +
+      'request is pending, refused, or the tooling is not installed — never ' +
+      "that this class of claim can't be settled at all.",
+  ];
+}
+
+export function renderOpsCapabilities(projectId: string): string[] {
   return [
     '## Capabilities',
     '',
@@ -473,21 +547,7 @@ export function renderOpsCapabilities(): string[] {
       '`{"projectId":"<project-id>"}` (optionally narrowed by `taskId` / `eventType` / ' +
       "`since` / `until`) to read this project's audit_log rows.",
     '',
-    'For a DB table with no dedicated MCP read tool and no brokered read above (e.g. ' +
-      '`ops_journal`, `gate_item`, `deploy_run`) — the case most likely to look ' +
-      'unreachable — request the read-only ad hoc query capability instead of ' +
-      'abstaining: call `session.requestCapability` with `{"payload":{"capability":' +
-      '"Bash(npx ts-node packages/backend/scripts/adhoc-query.ts:*)","plan":"<what ' +
-      'this session will do with the result>","evidence":"<the exact SELECT/WITH ' +
-      'query text and why it settles this>"}}`. This runs ' +
-      '`packages/backend/scripts/adhoc-query.ts`, which enforces read-only at two ' +
-      'independent layers — `assertSingleReadOnlyStatement` rejects anything but one ' +
-      '`SELECT`/`WITH` statement before it ever opens a connection, and the ' +
-      'connection itself is opened `readonly: true` at the SQLite driver level — so ' +
-      'an operator can approve the exact query text on sight. This is the sanctioned ' +
-      'route for exactly this gap: for a claim about DB state, `needs-setup` should ' +
-      'mean this specific request is pending, refused, or the tooling is not ' +
-      "installed — never that this class of claim can't be settled at all.",
+    ...renderAdHocReadCapability(projectId),
     '',
     'DO NOT request the resolved / ✅ Done / task-intent-apply transition, or the ' +
       'Write/Edit tools, as a capability — both are never grantable this way, no ' +
@@ -837,7 +897,7 @@ function renderSkeleton(
     '',
     ...(checkoutDir ? [renderCheckoutPathStatement(checkoutDir), ''] : []),
     ...renderProjectRecordAccess(workflow, projectId),
-    ...(workflow === 'ops' ? renderOpsCapabilities() : []),
+    ...(workflow === 'ops' ? renderOpsCapabilities(projectId) : []),
     '## Transport',
     '',
     'Do not call the task backend, Notion, or any raw HTTP client directly. Every ' +

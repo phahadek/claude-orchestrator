@@ -115,6 +115,16 @@ bootstrap_script: ''
 #   requests otherwise park for a human every time.
 # - ops: read:audit-log only — no observed read:session-events demand.
 # design/docs are not seeded: design's demand is low and docs has none.
+# This project's own sanctioned read-only ad hoc DB query command — the
+# capability string a dispatched ops/gate-verify/investigate/deploy-step
+# session requests through session.requestCapability for a DB table with no
+# dedicated MCP read tool. Rendered by
+# packages/backend/src/planning/procedureAssembler.ts#renderAdHocReadCapability
+# into every such session's injected "Capabilities" section. Declared here
+# (rather than a code-level default) so this repo's own behaviour is
+# preserved by configuration, the same as every other managed project.
+ad_hoc_read_command: 'Bash(npx ts-node packages/backend/scripts/adhoc-query.ts:*)'
+
 capability_pre_grants:
   gate-verify:
     - read:audit-log:claude-dashboard

@@ -39,6 +39,7 @@ import {
  */
 export function buildInvestigateProcedure(
   reports: readonly InvestigationReportRow[],
+  projectId: string,
 ): string {
   return [
     '## Session Lifecycle',
@@ -64,7 +65,7 @@ export function buildInvestigateProcedure(
       ...(r.image_path ? [`  - image: ${r.image_path}`] : []),
     ]),
     '',
-    ...renderOpsCapabilities(),
+    ...renderOpsCapabilities(projectId),
     renderHardRulesMarkdown(),
     '## The investigate procedure — five stages',
     '',
@@ -193,6 +194,14 @@ export async function launchInvestigateBatch(
     reports.push(report);
   }
 
+  const batchProjectIds = new Set(reports.map((r) => r.project_id));
+  if (batchProjectIds.size > 1) {
+    throw new Error(
+      `launchInvestigateBatch: batch spans multiple projects (${Array.from(
+        batchProjectIds,
+      ).join(', ')}) — a batch must resolve to a single project`,
+    );
+  }
   const projectId = reports[0].project_id;
   const milestoneId = reports[0].milestone_id;
   const project = getProjectById(projectId);
@@ -214,7 +223,7 @@ export async function launchInvestigateBatch(
     taskKind: 'non_milestone',
     taskId,
     sessionType: 'ops',
-    injectedProcedureContent: buildInvestigateProcedure(reports),
+    injectedProcedureContent: buildInvestigateProcedure(reports, projectId),
   });
 
   setSessionMetadata(sessionId, { reportIds: [...reportIds] });

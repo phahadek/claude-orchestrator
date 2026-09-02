@@ -49,7 +49,7 @@ function makeReport(
 // own canon; see config/procedures.md's two-canon rule).
 describe('buildInvestigateProcedure', () => {
   it("includes the RC skill's five-stage structure", () => {
-    const procedure = buildInvestigateProcedure([makeReport()]);
+    const procedure = buildInvestigateProcedure([makeReport()], 'proj-a');
     expect(procedure).toMatch(/Live-health snapshot/);
     expect(procedure).toMatch(/Reconstruct the symptom, by value/);
     expect(procedure).toMatch(/Root-cause under an evidence law/);
@@ -59,7 +59,7 @@ describe('buildInvestigateProcedure', () => {
   });
 
   it('includes the shared hard-rules content from procedureCore.ts', () => {
-    const procedure = buildInvestigateProcedure([makeReport()]);
+    const procedure = buildInvestigateProcedure([makeReport()], 'proj-a');
     expect(procedure).toContain(renderHardRulesMarkdown());
   });
 
@@ -72,7 +72,7 @@ describe('buildInvestigateProcedure', () => {
         evidence_text: 'the trace',
       }),
     ];
-    const procedure = buildInvestigateProcedure(reports);
+    const procedure = buildInvestigateProcedure(reports, 'proj-a');
     expect(procedure).toContain('id: r-1');
     expect(procedure).toContain('first symptom');
     expect(procedure).toContain('id: r-2');
@@ -88,7 +88,7 @@ describe('buildInvestigateProcedure', () => {
       }),
       makeReport({ id: 'r-2' }),
     ];
-    const procedure = buildInvestigateProcedure(reports);
+    const procedure = buildInvestigateProcedure(reports, 'proj-a');
     expect(procedure).toContain(
       'image: /data/investigation-report-images/r-1.png',
     );
@@ -98,20 +98,20 @@ describe('buildInvestigateProcedure', () => {
   });
 
   it('directs findings to a task.create staged intent, never a filed-task edit', () => {
-    const procedure = buildInvestigateProcedure([makeReport()]);
+    const procedure = buildInvestigateProcedure([makeReport()], 'proj-a');
     expect(procedure).toMatch(/task\.create/);
     expect(procedure).toMatch(/Never edit an already-filed task/);
   });
 
   it('names the mutation boundary — never a managed PR or session worktree/git write', () => {
-    const procedure = buildInvestigateProcedure([makeReport()]);
+    const procedure = buildInvestigateProcedure([makeReport()], 'proj-a');
     expect(procedure).toMatch(
       /never mutate another session's git, worktree, or PR/i,
     );
   });
 
   it('tells the session to end the turn with no tool call when nothing is actionable, not to stage a note', () => {
-    const procedure = buildInvestigateProcedure([makeReport()]);
+    const procedure = buildInvestigateProcedure([makeReport()], 'proj-a');
     expect(procedure).toMatch(/do not stage anything for it/i);
     expect(procedure).toMatch(
       /end the turn having called no tool for that report/i,
@@ -122,7 +122,7 @@ describe('buildInvestigateProcedure', () => {
   });
 
   it('does not reference planning.noOp or any other unregistered tool for the no-finding case', () => {
-    const procedure = buildInvestigateProcedure([makeReport()]);
+    const procedure = buildInvestigateProcedure([makeReport()], 'proj-a');
     const fileSection = procedure.slice(procedure.indexOf('### File'));
     expect(fileSection).not.toMatch(/planning\.noOp/);
     expect(fileSection).not.toMatch(/planning_noOp/);
@@ -195,6 +195,55 @@ describe('launchInvestigateBatch', () => {
     await expect(
       launchInvestigateBatch(sessionManager as never, []),
     ).rejects.toThrow(/non-empty/);
+    expect(sessionManager.start).not.toHaveBeenCalled();
+  });
+
+  it('injects the single project id shared by every report in the batch into the procedure', async () => {
+    const reportA = insertReport({
+      projectId: 'proj-a',
+      milestoneId: 'milestone-1',
+      title: 'symptom A',
+      symptomText: 'symptom A text',
+      createdAt: new Date(0).toISOString(),
+    });
+    const reportB = insertReport({
+      projectId: 'proj-a',
+      milestoneId: 'milestone-1',
+      title: 'symptom B',
+      symptomText: 'symptom B text',
+      createdAt: new Date(0).toISOString(),
+    });
+    const sessionManager = makeSessionManager();
+
+    await launchInvestigateBatch(sessionManager as never, [
+      reportA.id,
+      reportB.id,
+    ]);
+
+    const [, , options] = sessionManager.start.mock.calls[0];
+    expect(options.projectId).toBe('proj-a');
+  });
+
+  it('rejects a batch spanning more than one project rather than silently applying the first report\'s project to all of it', async () => {
+    const reportA = insertReport({
+      projectId: 'proj-a',
+      milestoneId: 'milestone-1',
+      title: 'symptom A',
+      symptomText: 'symptom A text',
+      createdAt: new Date(0).toISOString(),
+    });
+    const reportB = insertReport({
+      projectId: 'proj-b',
+      milestoneId: 'milestone-1',
+      title: 'symptom B',
+      symptomText: 'symptom B text',
+      createdAt: new Date(0).toISOString(),
+    });
+    const sessionManager = makeSessionManager();
+
+    await expect(
+      launchInvestigateBatch(sessionManager as never, [reportA.id, reportB.id]),
+    ).rejects.toThrow(/multiple projects/);
     expect(sessionManager.start).not.toHaveBeenCalled();
   });
 });
