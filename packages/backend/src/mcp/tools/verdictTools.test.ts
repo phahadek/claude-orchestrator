@@ -427,7 +427,7 @@ describe('flaky.confirm', () => {
     await close();
   });
 
-  it('refuses gate "ci"/"f2" with an actionable, distinguishable message when the PR is not paused on ci_failing (e.g. a pre-review verify failure that never actuates)', async () => {
+  it('refuses gate "ci"/"f2" with an actionable, distinguishable message when the PR is not paused on an automatic ci-source pause (e.g. a pre-review verify failure that never actuates)', async () => {
     vi.mocked(getPRBySessionId).mockReturnValue({
       pr_number: 7,
       repo: 'owner/repo',
@@ -448,14 +448,15 @@ describe('flaky.confirm', () => {
     });
     expect(result.isError).toBe(true);
     const error = resultOf(result as never).error as string;
-    expect(error).toContain('ci_failing');
+    expect(error).toContain('"ci"');
+    expect(error).toContain('current: none');
     expect(error).not.toContain('cross-SHA flakiness bar');
     expect(error).not.toContain('is in this session');
     expect(session.recordVerifiedFlakyDisposition).not.toHaveBeenCalled();
     await close();
   });
 
-  it('refuses gate "analyze" with an actionable message when the PR is not paused on analyze_failing', async () => {
+  it('refuses gate "analyze" with an actionable message when the PR is not paused on an automatic analyze-source pause', async () => {
     vi.mocked(getPRBySessionId).mockReturnValue({
       pr_number: 7,
       repo: 'owner/repo',
@@ -470,7 +471,37 @@ describe('flaky.confirm', () => {
       arguments: { gate: 'analyze', reason: 'unrelated static-analysis flake' },
     });
     expect(result.isError).toBe(true);
-    expect(resultOf(result as never).error).toContain('analyze_failing');
+    const error = resultOf(result as never).error as string;
+    expect(error).toContain('"analyze"');
+    expect(error).toContain('current: ci_failing');
+    expect(session.recordVerifiedFlakyDisposition).not.toHaveBeenCalled();
+    await close();
+  });
+
+  it('refuses gate "ci" when the PR is paused on ci_billing_blocked — same source but manual_action, not automatically dischargeable', async () => {
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      pr_number: 7,
+      repo: 'owner/repo',
+      created_at: '2026-08-01T00:00:00.000Z',
+      base_branch: 'dev',
+      pause_reason: serializePauseReason(
+        pauseReasonFromCanonical('ci_billing_blocked'),
+      ),
+    } as never);
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session);
+    const result = await client.callTool({
+      name: 'flaky.confirm',
+      arguments: {
+        gate: 'ci',
+        reason: 'seems flaky',
+        testId: TEST_ID,
+        testName: TEST_NAME,
+      },
+    });
+    expect(result.isError).toBe(true);
+    const error = resultOf(result as never).error as string;
+    expect(error).toContain('current: ci_billing_blocked');
     expect(session.recordVerifiedFlakyDisposition).not.toHaveBeenCalled();
     await close();
   });

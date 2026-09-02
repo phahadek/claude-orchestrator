@@ -1,5 +1,8 @@
 import type { PullRequestRow } from '../db/types';
-import { parsePauseReason } from '../db/pauseReason';
+import {
+  findAutomaticGateRecoveryEntry,
+  parsePauseReasonSet,
+} from '../db/pauseReason';
 
 export type StalledPRKind =
   | 'incomplete_verdict'
@@ -110,7 +113,7 @@ export function classifyStalledPR(
 
   if (!pr.head_sha) return null;
 
-  const parsed = parsePauseReason(pr.pause_reason);
+  const pauseEntries = parsePauseReasonSet(pr.pause_reason);
   const verdict = parseVerdict(pr.review_result);
 
   const isDeadImplementingSession =
@@ -146,8 +149,12 @@ export function classifyStalledPR(
     return { kind: 'conflict_dead_session' };
   }
 
-  // Analyze-gate failure: parked with analyze_failing and no pending push
-  if (parsed?.reason === 'analyze_failing' && !pr.pending_push) {
+  // Analyze-gate failure: parked on a live, automatically-recoverable
+  // 'analyze' pause (analyze_failing today) and no pending push
+  if (
+    findAutomaticGateRecoveryEntry(pauseEntries, 'analyze') &&
+    !pr.pending_push
+  ) {
     return { kind: 'analyze_failing' };
   }
 
