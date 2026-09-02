@@ -97,15 +97,12 @@ type RegistryEntry = {
 
 // The 7 original exact-match consumers named when this registry's
 // (source, retry_strategy, blocks_merge) capability model was locked, and how
-// each expresses its predicate today. 5 already speak the capability model;
-// 2 still key off a literal CanonicalPauseReason value (tracked for
-// conversion in a sibling task, not this one — this comment only documents
-// current state):
-//   1. classifyStalledPR's early return (github/pollUtils.ts) — still a
-//      literal exact-match: `parsed?.reason === 'analyze_failing'`.
-//   2. handleVerifiedFlakyDisposition's expectedPauseReason check
-//      (mcp/tools/verdictTools.ts) — still a literal exact-match:
-//      `pauseStruct?.reason !== expectedPauseReason`.
+// each expresses its predicate today. All 7 now speak the capability model:
+//   1. classifyStalledPR's early return (github/pollUtils.ts) — capability
+//      predicate via findAutomaticGateRecoveryEntry(pauseEntries, 'analyze').
+//   2. handleVerifiedFlakyDisposition's recovery-entry check
+//      (mcp/tools/verdictTools.ts) — capability predicate via
+//      findAutomaticGateRecoveryEntry(pauseEntries, gateSource).
 //   3. RECOVERY_ACTION_MAP / deriveRecoveryDescriptor (below, this file) —
 //      capability-shaped but deliberately NOT re-expressed as a
 //      (source, retry_strategy) predicate: it's an exhaustive per-reason

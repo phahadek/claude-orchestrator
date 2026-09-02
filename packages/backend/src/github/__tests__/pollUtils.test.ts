@@ -7,6 +7,10 @@
 import { describe, it, expect } from 'vitest';
 import { classifyStalledPR } from '../pollUtils';
 import type { PullRequestRow } from '../../db/types';
+import {
+  pauseReasonFromCanonical,
+  serializePauseReason,
+} from '../../db/pauseReason';
 
 function makePR(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
   return {
@@ -83,6 +87,41 @@ describe('classifyStalledPR — gate_failed', () => {
     });
 
     expect(classifyStalledPR(pr, null)?.kind).not.toBe('gate_failed');
+  });
+});
+
+describe('classifyStalledPR — analyze_failing', () => {
+  it('classifies a PR paused on analyze_failing (source: analyze, automatic) with no pending push as analyze_failing', () => {
+    const pr = makePR({
+      pause_reason: serializePauseReason(
+        pauseReasonFromCanonical('analyze_failing'),
+      ),
+      pending_push: 0,
+    });
+
+    expect(classifyStalledPR(pr, null)).toEqual({ kind: 'analyze_failing' });
+  });
+
+  it('does not classify as analyze_failing when a pending push is queued', () => {
+    const pr = makePR({
+      pause_reason: serializePauseReason(
+        pauseReasonFromCanonical('analyze_failing'),
+      ),
+      pending_push: 1,
+    });
+
+    expect(classifyStalledPR(pr, null)?.kind).not.toBe('analyze_failing');
+  });
+
+  it('does not classify a manual_action pause sharing no source-only overlap (max_reviews) as analyze_failing', () => {
+    const pr = makePR({
+      pause_reason: serializePauseReason(
+        pauseReasonFromCanonical('max_reviews'),
+      ),
+      pending_push: 0,
+    });
+
+    expect(classifyStalledPR(pr, null)?.kind).not.toBe('analyze_failing');
   });
 });
 

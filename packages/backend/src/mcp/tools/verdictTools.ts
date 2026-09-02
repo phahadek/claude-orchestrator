@@ -23,7 +23,11 @@ import {
 } from '../../session/test-runner';
 import { getChangedFiles } from '../../session/autofix-runner';
 import { typedGetSetting } from '../../config/settings';
-import { parsePauseReason } from '../../db/pauseReason';
+import {
+  findAutomaticGateRecoveryEntry,
+  parsePauseReasonSet,
+  type PauseSource,
+} from '../../db/pauseReason';
 
 /** Per-connection context a verdict-delivery tool call is scoped to. */
 export interface VerdictToolContext {
@@ -246,20 +250,26 @@ export function registerVerdictTools(
         }
 
         // The backend only ever actuates a disposition when the PR is
-        // currently paused on the exact reason the gate it names would set
-        // (PRMergeWatcher.handleVerifiedFlakyDisposition's exact-match
-        // check) — e.g. a pre-review verify failure that never wrote
-        // ci_failing, or a disposition arriving after the PR already moved
-        // on. Refusing here up front means a session never gets a false
-        // "ok" for a confirmation that would be silently discarded, and
-        // means no flake-corpus/recovery accounting records a disposition
-        // that never actuates.
-        const expectedPauseReason =
-          args.gate === 'analyze' ? 'analyze_failing' : 'ci_failing';
-        const pauseStruct = parsePauseReason(pr.pause_reason ?? null);
-        if (pauseStruct?.reason !== expectedPauseReason) {
+        // currently paused on a live entry whose source matches the gate it
+        // names and whose retry_strategy is 'automatic' — mirroring
+        // PRMergeWatcher.handleVerifiedFlakyDisposition's own
+        // findAutomaticGateRecoveryEntry check — e.g. a pre-review verify
+        // failure that never wrote ci_failing, or a disposition arriving
+        // after the PR already moved on. Refusing here up front means a
+        // session never gets a false "ok" for a confirmation that would be
+        // silently discarded, and means no flake-corpus/recovery accounting
+        // records a disposition that never actuates.
+        const gateSource: PauseSource =
+          args.gate === 'analyze' ? 'analyze' : 'ci';
+        const pauseEntries = parsePauseReasonSet(pr.pause_reason ?? null);
+        const matchedEntry = findAutomaticGateRecoveryEntry(
+          pauseEntries,
+          gateSource,
+        );
+        if (!matchedEntry) {
+          const current = pauseEntries.map((e) => e.reason).join(', ');
           return invalid(
-            `this PR is not currently paused on "${expectedPauseReason}" (actual: ${pauseStruct?.reason ?? 'none'}) — a gate "${args.gate}" confirmation would not actuate a re-run against this PR's current state. Wait for this gate to fail on the current commit before confirming, or check whether it already recovered.`,
+            `this PR is not currently paused on an automatically-recoverable "${gateSource}" pause (current: ${current || 'none'}) — a gate "${args.gate}" confirmation would not actuate a re-run against this PR's current state. Wait for this gate to fail on the current commit before confirming, or check whether it already recovered.`,
           );
         }
 

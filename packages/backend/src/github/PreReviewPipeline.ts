@@ -356,8 +356,9 @@ export class PreReviewPipeline {
       // Mirrors buildAnalyzeStage's pauseReason below: without this, a
       // pre-review verify failure never writes pull_requests.pause_reason,
       // so a gate:'ci' flaky.confirm disposition against it can never match
-      // PRMergeWatcher.handleVerifiedFlakyDisposition's exact-match gate and
-      // silently never actuates a re-run.
+      // PRMergeWatcher.handleVerifiedFlakyDisposition's capability-based
+      // (source + retry_strategy) recovery check and silently never
+      // actuates a re-run.
       pauseReason: 'ci_failing',
       formatFailure: (detail, { conflicted, baseBranch }) =>
         formatCIFailureFeedback({
