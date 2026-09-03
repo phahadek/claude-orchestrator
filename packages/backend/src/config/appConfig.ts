@@ -15,6 +15,12 @@ import {
 let cached: OrchestratorConfig | null = null;
 let cachedProvenance: ConfigProvenance | null = null;
 let sourceOverride: ConfigSource | null = null;
+// Set once by testSetupDb.ts (a vitest setupFile) before any test module's
+// db.ts import runs. _resetAppConfigCache() restores to this instead of to
+// null so that the 23 call sites across 4 test files that reset the cache
+// mid-suite can never re-open the DataDirConfigSource branch and pick up a
+// config.json a prior test in the same worker left in the scratch data dir.
+let defaultTestSource: ConfigSource | null = null;
 
 /** Every effective-config field, in the shape reported by the provenance surface. */
 const ALL_FIELDS: Array<{
@@ -259,9 +265,22 @@ export function _setConfigSourceForTesting(src: ConfigSource): void {
   cachedProvenance = null;
 }
 
+/**
+ * Installs the baseline config source for the test process — for use by the
+ * vitest setupFile only. _resetAppConfigCache() restores to this source
+ * (instead of clearing to null) so config resolution can never fall through
+ * to a real on-disk config.json once this has been installed.
+ */
+export function _setDefaultTestConfigSource(src: ConfigSource): void {
+  defaultTestSource = src;
+  sourceOverride = src;
+  cached = null;
+  cachedProvenance = null;
+}
+
 /** Reset cached state — for unit tests only. */
 export function _resetAppConfigCache(): void {
   cached = null;
   cachedProvenance = null;
-  sourceOverride = null;
+  sourceOverride = defaultTestSource;
 }
