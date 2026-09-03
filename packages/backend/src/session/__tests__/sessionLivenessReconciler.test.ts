@@ -20,7 +20,7 @@ vi.mock('../../audit/AuditLog', () => ({
 }));
 
 vi.mock('../../logger', () => ({
-  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
 import { db } from '../../db/db.js';
@@ -295,7 +295,11 @@ describe('reconcileSessionLiveness', () => {
   it('does not record a reconciled-count audit event when nothing was reconciled, only the per-sweep summary', () => {
     seedSession({ sessionId: 'still-alive', status: 'running' });
 
-    reconcileSessionLiveness({ isProcessAlive: () => true, nowFn: () => NOW });
+    reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => true,
+      nowFn: () => NOW,
+    });
 
     expect(recordEvent).not.toHaveBeenCalledWith(
       expect.objectContaining({
