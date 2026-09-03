@@ -114,7 +114,11 @@ let sampleSeq = 0;
 function insertSample(
   testId: string,
   durationMs: number,
-  opts: { concurrentRunCount: number; oomKilled?: boolean },
+  opts: {
+    concurrentRunCount: number;
+    oomKilled?: boolean;
+    foreignConcurrentRunCount?: number | null;
+  },
 ): void {
   const runId = `perf-run-${testId}-${sampleSeq++}`;
   insertTestRequestRun(runId, 'proj-1', `perf-hash-${runId}`, null, Date.now());
@@ -132,6 +136,7 @@ function insertSample(
     opts.concurrentRunCount,
     opts.oomKilled ?? false,
     false,
+    opts.foreignConcurrentRunCount,
   );
 }
 
@@ -140,7 +145,11 @@ function insertOutcomeSample(
   testId: string,
   outcome: 'passed' | 'failed',
   durationMs: number,
-  opts: { concurrentRunCount: number; oomKilled?: boolean },
+  opts: {
+    concurrentRunCount: number;
+    oomKilled?: boolean;
+    foreignConcurrentRunCount?: number | null;
+  },
 ): void {
   const runId = `flip-run-${testId}-${sampleSeq++}`;
   insertTestRequestRun(runId, 'proj-1', `flip-hash-${runId}`, null, Date.now());
@@ -151,6 +160,7 @@ function insertOutcomeSample(
     opts.concurrentRunCount,
     opts.oomKilled ?? false,
     false,
+    opts.foreignConcurrentRunCount,
   );
 }
 
@@ -1009,6 +1019,83 @@ describe('concurrent_run_count', () => {
       expect(count).toBeLessThanOrEqual(1);
     }
     expect(Math.max(...counts)).toBe(1);
+  });
+});
+
+describe('foreign_concurrent_run_count', () => {
+  it('records 0 for both counts on a run with no peers at all', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    await runProjectTestRequest(baseSpec({ contentHash: 'hash-foreign-solo' }));
+
+    const row = db
+      .prepare(
+        `SELECT concurrent_run_count, foreign_concurrent_run_count FROM test_request_runs WHERE content_hash = ?`,
+      )
+      .get('hash-foreign-solo') as {
+      concurrent_run_count: number;
+      foreign_concurrent_run_count: number;
+    };
+    expect(row.concurrent_run_count).toBe(0);
+    expect(row.foreign_concurrent_run_count).toBe(0);
+  });
+
+  it("stamps the other project's inUse() as the foreign count while concurrent_run_count stays the same-project peer count", async () => {
+    insertProject({
+      id: 'proj-2',
+      name: 'proj-2',
+      project_dir: '/tmp/proj-2',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+
+    const resolvers: Array<(v: { passed: boolean; output: string }) => void> =
+      [];
+    mockRunTestCommands.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+
+    const p1 = runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-foreign-1' }),
+    );
+    const p2 = runProjectTestRequest(
+      baseSpec({ projectId: 'proj-2', contentHash: 'hash-foreign-2' }),
+    );
+
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
+    );
+    resolvers.forEach((resolve) => resolve({ passed: true, output: 'ok' }));
+    await Promise.all([p1, p2]);
+
+    const row1 = db
+      .prepare(
+        `SELECT concurrent_run_count, foreign_concurrent_run_count FROM test_request_runs WHERE content_hash = ?`,
+      )
+      .get('hash-foreign-1') as {
+      concurrent_run_count: number;
+      foreign_concurrent_run_count: number;
+    };
+    const row2 = db
+      .prepare(
+        `SELECT concurrent_run_count, foreign_concurrent_run_count FROM test_request_runs WHERE content_hash = ?`,
+      )
+      .get('hash-foreign-2') as {
+      concurrent_run_count: number;
+      foreign_concurrent_run_count: number;
+    };
+
+    // Same project, no peer of its own — concurrent_run_count stays 0 for
+    // both, since the other run lives on a different project's semaphore.
+    expect(row1.concurrent_run_count).toBe(0);
+    expect(row2.concurrent_run_count).toBe(0);
+    // Each run's foreign count is exactly the other project's inUse().
+    expect(row1.foreign_concurrent_run_count).toBe(1);
+    expect(row2.foreign_concurrent_run_count).toBe(1);
   });
 });
 
@@ -2637,6 +2724,30 @@ describe('test_perf_baselines digest', () => {
     const flag = computeTestFlipRateFlag(testId, 10, 1);
     expect(flag.sampleCount).toBe(2);
     expect(flag.transitionCount).toBe(0); // both retained samples are 'passed'
+  });
+
+  it('appends no sample when foreign_concurrent_run_count is non-zero, and does append when both counts are zero and oom_killed is false', () => {
+    const testId = 'digest-excludes-foreign';
+    insertSample(testId, 100, {
+      concurrentRunCount: 0,
+      foreignConcurrentRunCount: 1,
+    }); // excluded — foreign peer
+    insertSample(testId, 200, {
+      concurrentRunCount: 0,
+      foreignConcurrentRunCount: 0,
+    }); // valid — no peer of either kind
+
+    expect(listRecentValidTestDurations(testId, 10)).toEqual([200]);
+  });
+
+  it('treats a NULL foreign_concurrent_run_count as zero — a pre-migration row still appends', () => {
+    const testId = 'digest-null-foreign-treated-as-zero';
+    insertSample(testId, 150, {
+      concurrentRunCount: 0,
+      foreignConcurrentRunCount: null,
+    });
+
+    expect(listRecentValidTestDurations(testId, 10)).toEqual([150]);
   });
 
   it('matches the transition count a raw-row scan over the same synthetic sequence would produce, including a run that alternates pass/fail every run', () => {

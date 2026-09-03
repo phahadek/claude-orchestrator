@@ -1242,6 +1242,8 @@ export interface TestRequestRunRow {
    * dependency, and for rows predating this column.
    */
   base_sha: string | null;
+  /** Host-wide peer occupancy at admission — sum of every OTHER project's semaphore inUse(), captured alongside concurrent_run_count. Null for pre-existing rows; treated as 0 by the digest validity predicate. */
+  foreign_concurrent_run_count: number | null;
 }
 
 // ─── dependency_cache_entries ───────────────────────────────────────────────
