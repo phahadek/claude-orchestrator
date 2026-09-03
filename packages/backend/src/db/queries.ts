@@ -9199,7 +9199,9 @@ export function listQueuedTestRequestRuns(): TestRequestRunRow[] {
  * verify/tests pre-review stage apart from real session silence (a polimarket
  * full suite run can take 10-21 minutes, well past session_inert_threshold_seconds).
  */
-export function hasQueuedOrRunningTestRunForSession(sessionId: string): boolean {
+export function hasQueuedOrRunningTestRunForSession(
+  sessionId: string,
+): boolean {
   const row = db
     .prepare<[string], { cnt: number }>(
       `SELECT COUNT(*) AS cnt FROM test_request_runs
