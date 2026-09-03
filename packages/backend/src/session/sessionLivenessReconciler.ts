@@ -53,6 +53,29 @@ const LIVENESS_RECONCILE_SETTLE_MS = 2 * 60_000;
  */
 const BACKEND_BOOT_MS = Date.now();
 
+/**
+ * Cap on how many idle-process-absent session ids ride along in the
+ * per-sweep summary event's payload — beyond this the id list is omitted
+ * (the count alone still carries the observation) even on a sweep whose
+ * count changed, so a large idle population spike doesn't balloon the
+ * payload the same way the old per-session rows did.
+ */
+const IDLE_PROCESS_ABSENT_ID_LIST_CAP = 20;
+
+/**
+ * Previous sweep's idle_process_absent_count, keyed by population — lets
+ * runLivenessSweep omit the id list on a sweep whose count is unchanged
+ * from the last one (see session_liveness_sweep_completed below), without
+ * re-deriving that from the audit log itself. Module-level because sweeps
+ * run periodically in the same backend process; tests that care about the
+ * omission behavior call __resetLivenessSweepSummaryStateForTests first.
+ */
+const previousIdleProcessAbsentCounts = new Map<string, number>();
+
+export function __resetLivenessSweepSummaryStateForTests(): void {
+  previousIdleProcessAbsentCounts.clear();
+}
+
 export interface SessionLivenessReconcilerDeps {
   /** Overridable for tests; defaults to the real `ps`-backed check. */
   isProcessAlive?: (sessionId: string) => boolean;
@@ -172,6 +195,7 @@ function runLivenessSweep(
   let alive = 0;
   const reconciled: string[] = [];
   const terminalizedViaCompletion: string[] = [];
+  const idleProcessAbsentIds: string[] = [];
 
   if (now - bootTimeMs < LIVENESS_RECONCILE_SETTLE_MS) {
     // Backend hasn't been up long enough for the in-memory session/process
@@ -226,18 +250,16 @@ function runLivenessSweep(
       // Process absence is the expected steady state for a parked idle row
       // (and any other non-'running' status) — not a contradiction, so it
       // authorizes no live-population drain either. Leave the row exactly
-      // as it is and record the observation for visibility;
-      // OrphanedTaskSweeper's nudge-then-surface-to-operator path is the
-      // correct owner of any abandonment judgment from here.
-      recordEvent({
-        event_type: 'session_liveness_idle_process_absent',
-        actor_type: 'system',
-        payload: {
-          session_id: row.session_id,
-          status: row.status,
-          idle_elapsed_ms: now - lastActivity,
-        },
-      });
+      // as it is; the observation is logged at debug level per-session and
+      // rolled into the single session_liveness_sweep_completed event below
+      // rather than an audit row per idle session (that fired for
+      // essentially the whole idle population every sweep — see the
+      // governing task). OrphanedTaskSweeper's nudge-then-surface-to-operator
+      // path is the correct owner of any abandonment judgment from here.
+      logger.debug(
+        `[sessionLivenessReconciler] session ${row.session_id.slice(0, 8)} (status=${row.status}) has no live OS process — idle steady state, idle_elapsed_ms=${now - lastActivity}`,
+      );
+      idleProcessAbsentIds.push(row.session_id);
       continue;
     }
 
@@ -285,6 +307,24 @@ function runLivenessSweep(
       `[sessionLivenessReconciler] reconciled ${reconciled.length} ${population} session(s) with no live OS process`,
     );
   }
+
+  const idleProcessAbsentCount = idleProcessAbsentIds.length;
+  const previousCount = previousIdleProcessAbsentCounts.get(population);
+  const countChanged = previousCount !== idleProcessAbsentCount;
+  const includeIdList =
+    countChanged && idleProcessAbsentCount <= IDLE_PROCESS_ABSENT_ID_LIST_CAP;
+  recordEvent({
+    event_type: 'session_liveness_sweep_completed',
+    actor_type: 'system',
+    payload: {
+      population,
+      examined,
+      alive,
+      idle_process_absent_count: idleProcessAbsentCount,
+      ...(includeIdList ? { session_ids: idleProcessAbsentIds } : {}),
+    },
+  });
+  previousIdleProcessAbsentCounts.set(population, idleProcessAbsentCount);
 
   return {
     reconciled: [...reconciled, ...terminalizedViaCompletion],
