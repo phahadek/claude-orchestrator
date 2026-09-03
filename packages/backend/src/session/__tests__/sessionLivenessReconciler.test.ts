@@ -152,7 +152,9 @@ describe('reconcileSessionLiveness', () => {
       nowFn: () => NOW,
     });
 
-    const summaryCalls = (recordEvent as ReturnType<typeof vi.fn>).mock.calls.filter(
+    const summaryCalls = (
+      recordEvent as ReturnType<typeof vi.fn>
+    ).mock.calls.filter(
       ([event]) => event.event_type === 'session_liveness_sweep_completed',
     );
     expect(summaryCalls).toHaveLength(1);
