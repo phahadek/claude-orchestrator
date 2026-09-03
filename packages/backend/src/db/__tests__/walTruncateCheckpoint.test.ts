@@ -23,6 +23,8 @@ describe('runWalTruncateCheckpoint', () => {
     return { db, file };
   }
 
+  // Opens a real file-backed WAL sqlite db under a fresh tmpdir; not
+  // millisecond-bounded under disk contention.
   it('checkpoints and truncates the WAL, reporting sizes and the busy/log/checkpointed triple', () => {
     const { db, file } = openFileBackedWalDb();
     try {
@@ -40,8 +42,10 @@ describe('runWalTruncateCheckpoint', () => {
     } finally {
       db.close();
     }
-  });
+  }, 10000);
 
+  // Opens a real file-backed WAL sqlite db under a fresh tmpdir; not
+  // millisecond-bounded under disk contention.
   it('reports busy=1 without throwing when the checkpoint pragma reports a blocked truncate', () => {
     const { db, file } = openFileBackedWalDb();
     try {
@@ -65,7 +69,7 @@ describe('runWalTruncateCheckpoint', () => {
     } finally {
       db.close();
     }
-  });
+  }, 10000);
 
   it('returns zeroed sizes for an in-memory database without touching the filesystem', () => {
     const db = new Database(':memory:');

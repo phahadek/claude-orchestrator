@@ -61,6 +61,9 @@ async function setupTestRepo(): Promise<{
 }
 
 describe('runAutofix()', () => {
+  // Fixture performs a real bare git init, clone, config writes, a commit,
+  // and a push before the test body even starts; not millisecond-bounded
+  // under process-spawn contention.
   it('commit message ends with [skip ci]', async () => {
     const { worktreeDir, cleanup } = await setupTestRepo();
     try {
@@ -76,5 +79,5 @@ describe('runAutofix()', () => {
     } finally {
       cleanup();
     }
-  });
+  }, 15000);
 });

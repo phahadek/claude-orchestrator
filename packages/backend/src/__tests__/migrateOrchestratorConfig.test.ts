@@ -141,6 +141,8 @@ describe('migrate-orchestrator-config', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
+    // Shells out via spawnSync to run the migration script as a real
+    // subprocess; not millisecond-bounded under process-spawn contention.
     it('dry-run writes nothing and deletes nothing', async () => {
       // Set up a fake project dir with .claude/orchestrator.json
       const projectDir = path.join(tmpDir, 'fake-project');
@@ -185,6 +187,6 @@ describe('migrate-orchestrator-config', () => {
       expect(fs.existsSync(jsonPath)).toBe(true);
       expect(result.stdout).toContain('[DRY-RUN]');
       expect(result.stdout).toContain('WOULD MIGRATE Test Project');
-    });
+    }, 10000);
   });
 });
