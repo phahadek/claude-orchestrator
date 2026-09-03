@@ -483,6 +483,130 @@ describe('GET /api/tasks/active', () => {
   });
 });
 
+// ── GET /api/tasks/active?shape= ──────────────────────────────────────────────
+
+describe('GET /api/tasks/active — shape param', () => {
+  function makeRichAggregate(
+    taskId: string,
+    notionStatus: string,
+  ): TaskAggregateRow {
+    return makeAggregate(taskId, notionStatus, {
+      code_session_id: `session-${taskId}`,
+      code_session_status: 'done',
+      code_session_started_at: 1000,
+      code_session_ended_at: 2000,
+      code_session_input_tokens: 111,
+      code_session_output_tokens: 222,
+      code_session_last_event_payload: JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'wrapping up' }] },
+      }),
+      pr_number: 42,
+      pr_url: 'https://github.com/org/repo/pull/42',
+      pr_title: 'Some PR title',
+      pr_head_branch: 'feature/x',
+      pr_base_branch: 'dev',
+      pr_state: 'closed',
+      pr_draft: 0,
+      pr_merge_state: 'clean',
+      review_session_id: `review-${taskId}`,
+      review_session_status: 'done',
+      review_session_input_tokens: 33,
+      review_session_output_tokens: 44,
+      pr_review_result: JSON.stringify({
+        verdict: 'approve',
+        summary: 'looks good',
+      }),
+      pr_review_iteration: 1,
+      pr_pause_reason: JSON.stringify({
+        reason: 'max_reviews',
+        detail: 'hit review cap',
+      }),
+      depth_review_session_id: `depth-${taskId}`,
+      depth_review_session_status: 'done',
+      depth_review_verdict: 'pass',
+    } as Partial<TaskAggregateRow>);
+  }
+
+  beforeEach(() => {
+    vi.mocked(queries.getTaskCache).mockReturnValue({
+      cache_key: 'board:board-1',
+      raw_json: JSON.stringify([
+        { id: 'task-done', status: '✅ Done', dependsOn: [] },
+        { id: 'task-in-progress', status: '🔄 In Progress', dependsOn: [] },
+      ]),
+      fetched_at: Date.now(),
+    } as never);
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeRichAggregate('task-done', '✅ Done'),
+      makeRichAggregate('task-in-progress', '🔄 In Progress'),
+    ]);
+  });
+
+  it('shape=summary omits/nulls heavy nested fields for a ✅ Done task, while a non-Done task keeps full fidelity', async () => {
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1&shape=summary',
+    );
+    expect(res.status).toBe(200);
+
+    const done = res.body.tasks.find(
+      (t: { taskId: string }) => t.taskId === 'task-done',
+    );
+    const inProgress = res.body.tasks.find(
+      (t: { taskId: string }) => t.taskId === 'task-in-progress',
+    );
+    expect(done).toBeDefined();
+    expect(inProgress).toBeDefined();
+
+    // Done task: heavy fields trimmed
+    expect(done.pr.prNumber).toBe(42);
+    expect(done.pr.title).toBeUndefined();
+    expect(done.pr.headBranch).toBeUndefined();
+    expect(done.review).toBeNull();
+    expect(done.depthReview).toBeNull();
+    expect(done.pauseDetail == null).toBe(true);
+    expect(done.recoveryDescriptor).toBeUndefined();
+    expect(done.totalTokens).toBeUndefined();
+    expect(done.codeSession.sessionId).toBe('session-task-done');
+    expect(done.codeSession.status).toBeUndefined();
+    expect(done.codeSession.lastMessage).toBeUndefined();
+
+    // Non-Done task: full fidelity preserved
+    expect(inProgress.pr.prNumber).toBe(42);
+    expect(inProgress.pr.title).toBe('Some PR title');
+    expect(inProgress.pr.headBranch).toBe('feature/x');
+    expect(inProgress.review).not.toBeNull();
+    expect(inProgress.review.summary).toBe('looks good');
+    expect(inProgress.depthReview).not.toBeNull();
+    expect(inProgress.depthReview.verdict).toBe('pass');
+    expect(inProgress.totalTokens).toEqual({ input: 144, output: 266 });
+    expect(inProgress.codeSession.status).toBe('done');
+    expect(inProgress.codeSession.lastMessage).toBe('wrapping up');
+  });
+
+  it('shape=full (and no shape param) is byte-for-byte unchanged from today\'s response shape', async () => {
+    const [noParamRes, explicitFullRes] = await Promise.all([
+      supertest(buildApp()).get('/api/tasks/active?projectId=proj-1'),
+      supertest(buildApp()).get(
+        '/api/tasks/active?projectId=proj-1&shape=full',
+      ),
+    ]);
+    expect(noParamRes.status).toBe(200);
+    expect(explicitFullRes.status).toBe(200);
+    expect(noParamRes.text).toBe(explicitFullRes.text);
+
+    const done = noParamRes.body.tasks.find(
+      (t: { taskId: string }) => t.taskId === 'task-done',
+    );
+    expect(done.pr.title).toBe('Some PR title');
+    expect(done.review.summary).toBe('looks good');
+    expect(done.depthReview.verdict).toBe('pass');
+    expect(done.totalTokens).toEqual({ input: 144, output: 266 });
+    expect(done.codeSession.status).toBe('done');
+    expect(done.codeSession.lastMessage).toBe('wrapping up');
+  });
+});
+
 // ── GET /api/tasks/non-milestone — resolver back-fill ────────────────────────
 
 describe('GET /api/tasks/non-milestone', () => {
