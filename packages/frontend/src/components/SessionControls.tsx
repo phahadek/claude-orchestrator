@@ -77,7 +77,7 @@ export function SessionControls({
   const isActive =
     session.status === 'running' || session.status === 'needs_permission';
   const isIdle = session.status === 'idle';
-  const canKill = isActive || isIdle;
+  const canKill = isActive || (isIdle && !session.archived);
 
   function handleKill() {
     if (confirm('Kill this session? It will have 15 seconds to wrap up.')) {
