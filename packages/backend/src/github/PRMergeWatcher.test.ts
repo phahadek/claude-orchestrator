@@ -4948,6 +4948,54 @@ describe('PRMergeWatcher.handlePushDetected() — post-gate-failure enqueue', ()
     expect(vi.mocked(setPendingPush)).not.toHaveBeenCalled();
   });
 
+  it('push after autofix_failed twice while a job is already queued (not yet in flight) → both calls delegate to enqueueReview, which coalesces the duplicate', async () => {
+    // isReviewInFlight only reflects jobs that are actively executing — a
+    // job sitting queued-but-not-started (e.g. waiting on concurrency) still
+    // reports false. handlePushDetected must not enqueue directly on that
+    // false reading; it delegates every call to ReviewOrchestrator.enqueueReview,
+    // which owns the "already queued" dedup (see ReviewOrchestrator.admitJob).
+    const pr = makePRRow({
+      review_session_id: null,
+      review_result: JSON.stringify({
+        verdict: 'autofix_failed',
+        summary: 'lint failed',
+        dimensions: [],
+      }),
+      head_sha: 'sha-fix',
+      last_reviewed_sha: 'sha-old',
+      review_iteration: 0,
+    });
+    vi.mocked(getSession).mockReturnValue({ task_url: '' } as any);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      contextUrl: '',
+    } as any);
+
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    vi.mocked(
+      reviewOrchestrator.isReviewInFlight as ReturnType<typeof vi.fn>,
+    ).mockReturnValue(false);
+    vi.mocked(reviewOrchestrator.enqueueReview as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(false);
+
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.handlePushDetected(pr);
+    await watcher.handlePushDetected(pr);
+
+    expect(
+      vi.mocked(reviewOrchestrator.enqueueReview as ReturnType<typeof vi.fn>),
+    ).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(setPendingPush)).not.toHaveBeenCalled();
+  });
+
   it('push after autofix_failed with review in flight → falls back to setPendingPush', async () => {
     const pr = makePRRow({
       review_session_id: null,

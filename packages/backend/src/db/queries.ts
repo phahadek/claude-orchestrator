@@ -3025,6 +3025,7 @@ export function upsertPullRequest(
     | 'review_session_id'
     | 'review_iteration'
     | 'last_reviewed_sha'
+    | 'last_signalled_head_sha'
     | 'node_id'
     | 'mergeable'
     | 'merge_state'
@@ -3049,6 +3050,7 @@ export function upsertPullRequest(
     review_session_id?: string | null;
     review_iteration?: number;
     last_reviewed_sha?: string | null;
+    last_signalled_head_sha?: string | null;
     node_id?: string | null;
     mergeable?: number | null;
     merge_state?: string | null;
@@ -3160,6 +3162,24 @@ export function setLastReviewedSha(
     WHERE pr_number = @pr_number AND repo = @repo
   `,
   ).run({ pr_number: prNumber, repo, last_reviewed_sha: sha });
+}
+
+export function setLastSignalledHeadSha(
+  prNumber: number,
+  repo: string,
+  sha: string | null,
+): void {
+  db.prepare<{
+    pr_number: number;
+    repo: string;
+    last_signalled_head_sha: string | null;
+  }>(
+    `
+    UPDATE pull_requests
+    SET last_signalled_head_sha = @last_signalled_head_sha
+    WHERE pr_number = @pr_number AND repo = @repo
+  `,
+  ).run({ pr_number: prNumber, repo, last_signalled_head_sha: sha });
 }
 
 export function setHeadSha(

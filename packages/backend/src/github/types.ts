@@ -161,6 +161,8 @@ export interface ReviewJob {
   sessionId?: string;
   worktreePath?: string;
   projectId?: string;
+  /** Head SHA at enqueue time (read from pull_requests.head_sha) — used to admit/coalesce duplicate jobs. */
+  headSha?: string | null;
 }
 
 export interface ParsedDispositionItem {

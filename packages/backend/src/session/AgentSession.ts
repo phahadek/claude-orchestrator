@@ -29,6 +29,7 @@ import {
   getPRByReviewSessionId,
   isRepoConfigured,
   setHeadSha,
+  setLastSignalledHeadSha,
   setPauseReason,
   setSessionPauseReason,
   insertPauseInterval,
@@ -470,10 +471,6 @@ export class AgentSession extends EventEmitter {
    *  Used as a loop guard: if the PR's HEAD equals this SHA, the check is skipped
    *  so we don't re-revert our own revert commit. */
   private lastFilePollutionRevertSha: string | null = null;
-  /** Local HEAD SHA at the time push_detected was last emitted. The turn-end
-   *  trigger skips push_detected when HEAD has not advanced since the last emission,
-   *  preventing redundant re-review cycles on read-only or chat-only turns. */
-  private lastSignalledHeadSha: string | null = null;
   /** Tracks message IDs whose <pr-body> marker has already been processed (deduplicate streaming chunks). */
   private readonly processedPRBodyMessageIds = new Set<string>();
   /** Last-recorded verdict per key, serialized — MCP verdict tools dedup a
@@ -1679,7 +1676,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         }
         if (
           currentHeadSha === null ||
-          currentHeadSha !== this.lastSignalledHeadSha
+          currentHeadSha !== pr.last_signalled_head_sha
         ) {
           sessionLog(
             this.sessionId,
@@ -2519,6 +2516,31 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     const prNumber = prShape.number ?? parseInt(repoMatch[2], 10);
     const now = new Date().toISOString();
 
+    // A resumed session constructs a fresh AgentSession, so prDetectedLive
+    // starts false even though pull_requests already has a row for this
+    // session's PR (the earlier session instance already emitted pr_opened
+    // for it). Re-detecting the same PR here must not re-emit pr_opened —
+    // that would re-enqueue a review job for an already-tracked PR on every
+    // resume. Audit-only signal instead.
+    const existingPR = getPRBySessionId(this.sessionId);
+    if (
+      existingPR &&
+      existingPR.pr_number === prNumber &&
+      existingPR.repo === repo
+    ) {
+      this.prUrl = prUrl;
+      this.prDetectedLive = true;
+      recordEvent({
+        event_type: 'pr_detected_again',
+        actor_type: 'ai',
+        actor_id: this.sessionId,
+        project_id: this.projectId || null,
+        task_id: this.taskId || null,
+        payload: { pr_number: prNumber, repo, pr_url: prUrl },
+      });
+      return;
+    }
+
     this.prUrl = prUrl;
     this.prDetectedLive = true;
 
@@ -2834,22 +2856,26 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       }
     }
 
-    // Record the HEAD SHA at emission time so the turn-end gate can skip
-    // redundant push_detected signals when no new commits were made.
-    if (this.worktreePath) {
+    this.emit('push_detected', { sessionId: this.sessionId });
+    const pr = getPRBySessionId(this.sessionId);
+
+    // Persist the HEAD SHA at emission time so the turn-end gate can skip
+    // redundant push_detected signals when no new commits were made — stored
+    // on the PR row (not an instance field) so a resumed session, which
+    // starts with fresh in-memory state, still sees the last signalled head.
+    if (pr && this.worktreePath) {
       try {
-        this.lastSignalledHeadSha = execSync('git rev-parse HEAD', {
+        const headSha = execSync('git rev-parse HEAD', {
           cwd: this.worktreePath,
         })
           .toString()
           .trim();
+        setLastSignalledHeadSha(pr.pr_number, pr.repo, headSha);
       } catch {
-        // non-fatal — leave lastSignalledHeadSha unchanged
+        // non-fatal — leave last_signalled_head_sha unchanged
       }
     }
 
-    this.emit('push_detected', { sessionId: this.sessionId });
-    const pr = getPRBySessionId(this.sessionId);
     if (pr) {
       this.broadcast({
         type: 'push_detected',

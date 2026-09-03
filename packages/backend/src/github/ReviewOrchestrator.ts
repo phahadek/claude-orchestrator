@@ -115,6 +115,14 @@ export class ReviewOrchestrator {
   /** Start timestamps (ms) for in-flight reviews keyed by "prNumber:repo" — used by stall detector. */
   private inFlightStartTimes = new Map<string, number>();
   /**
+   * Head SHA the currently in-flight job for each "prNumber:repo" key was
+   * enqueued with — set only by the drain() call site, which has a real
+   * ReviewJob to read headSha from. Used by admitJob() to tell a genuinely
+   * new push (different head) apart from a duplicate enqueue for the same
+   * head that raced in while the first job was still executing.
+   */
+  private inFlightHeadShas = new Map<string, string | null | undefined>();
+  /**
    * Reference counts backing inFlightPRKeys/inFlightStartTimes — three
    * independent call sites (drain/executeReview, runAutofixPipeline,
    * runTestPipeline) can hold the same PR key concurrently (e.g. a
@@ -289,11 +297,77 @@ export class ReviewOrchestrator {
       );
       return;
     }
+    if (!this.admitJob(job)) return;
     logger.info(
       `[ReviewOrchestrator] pr_opened received for PR #${job.prNumber} (${job.repo}) — queueing (queue depth before: ${this.queue.length})`,
     );
     this.queue.push(job);
     void this.drain();
+  }
+
+  /**
+   * Shared admission gate for onPrOpened and enqueueReview: drops a job that
+   * duplicates one already queued for the same PR, or one that duplicates a
+   * job currently in flight for the same head SHA — the two conditions
+   * observed producing stacked review runs for the same PR (see task
+   * "Single-flight the review pipeline per PR"). Populates job.headSha from
+   * the PR row when the caller didn't already supply it, so the same-head
+   * comparison has something to compare against.
+   */
+  private admitJob(job: ReviewJob): boolean {
+    const key = `${job.prNumber}:${job.repo}`;
+    if (job.headSha === undefined) {
+      const prRow = getPRByNumber(job.prNumber, job.repo);
+      job.headSha = prRow?.head_sha ?? null;
+    }
+
+    const alreadyQueued = this.queue.some((q) => this.prKey(q) === key);
+    if (alreadyQueued) {
+      logger.info(
+        `[ReviewOrchestrator] coalescing pr_opened/enqueueReview for PR #${job.prNumber} (${job.repo}) — already queued`,
+      );
+      recordEvent({
+        event_type: 'review_job_coalesced',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: null,
+        task_id: job.taskId || null,
+        payload: {
+          pr_number: job.prNumber,
+          repo: job.repo,
+          reason: 'already_queued',
+          head_sha: job.headSha ?? null,
+        },
+      });
+      return false;
+    }
+
+    const inFlightHeadSha = this.inFlightHeadShas.get(key);
+    if (
+      this.inFlightPRKeys.has(key) &&
+      job.headSha != null &&
+      inFlightHeadSha === job.headSha
+    ) {
+      logger.info(
+        `[ReviewOrchestrator] coalescing pr_opened/enqueueReview for PR #${job.prNumber} (${job.repo}) — in flight for the same head ${job.headSha}`,
+      );
+      recordEvent({
+        event_type: 'review_job_coalesced',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: null,
+        task_id: job.taskId || null,
+        payload: {
+          pr_number: job.prNumber,
+          repo: job.repo,
+          reason: 'in_flight_same_head',
+          head_sha: job.headSha,
+        },
+      });
+      return false;
+    }
+
+    return true;
   }
 
   private onMessage(msg: ServerMessage): void {
@@ -346,12 +420,13 @@ export class ReviewOrchestrator {
   }
 
   /** Marks `key` in-flight, ref-counted across overlapping holders (see inFlightRefCounts). */
-  private acquireInFlight(key: string): void {
+  private acquireInFlight(key: string, headSha?: string | null): void {
     const count = this.inFlightRefCounts.get(key) ?? 0;
     this.inFlightRefCounts.set(key, count + 1);
     if (count === 0) {
       this.inFlightPRKeys.add(key);
       this.inFlightStartTimes.set(key, Date.now());
+      this.inFlightHeadShas.set(key, headSha);
     }
   }
 
@@ -361,6 +436,7 @@ export class ReviewOrchestrator {
     if (count <= 1) {
       this.inFlightRefCounts.delete(key);
       this.inFlightPRKeys.delete(key);
+      this.inFlightHeadShas.delete(key);
       this.inFlightStartTimes.delete(key);
     } else {
       this.inFlightRefCounts.set(key, count - 1);
@@ -389,7 +465,10 @@ export class ReviewOrchestrator {
 
       this.running++;
       if (key !== null) {
-        this.acquireInFlight(key);
+        this.acquireInFlight(
+          key,
+          job.type === 'local_branch' ? undefined : (job as ReviewJob).headSha,
+        );
       }
 
       if (job.type === 'local_branch') {
@@ -585,6 +664,7 @@ export class ReviewOrchestrator {
   enqueueReview(job: ReviewJob): boolean {
     if (!this.enabled) return false;
     if (!job.taskId) return false;
+    if (!this.admitJob(job)) return false;
     logger.info(
       `[ReviewOrchestrator] enqueueReview for PR #${job.prNumber} (${job.repo}) — queueing (queue depth before: ${this.queue.length})`,
     );
