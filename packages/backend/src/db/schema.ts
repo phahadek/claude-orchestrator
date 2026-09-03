@@ -413,6 +413,7 @@ export function runMigrations(target: Database.Database): void {
       review_iteration             INTEGER NOT NULL DEFAULT 0,
       head_sha                     TEXT,
       last_reviewed_sha            TEXT,
+      last_signalled_head_sha      TEXT,
       node_id                      TEXT,
       mergeable                    INTEGER,
       merge_state                  TEXT,
@@ -3332,6 +3333,20 @@ export function runMigrations(target: Database.Database): void {
   try {
     target.exec(
       `ALTER TABLE test_request_runs ADD COLUMN foreign_concurrent_run_count INTEGER`,
+    );
+  } catch {
+    /* already exists */
+  }
+
+  // last_signalled_head_sha: durable counterpart to AgentSession's
+  // in-memory lastSignalledHeadSha instance field — a resumed session
+  // constructs a fresh AgentSession with that field null, so without a
+  // persisted copy an unchanged head gets re-signalled as push_detected
+  // on every resume. Read/written by AgentSession's result handler
+  // instead of the instance field.
+  try {
+    target.exec(
+      `ALTER TABLE pull_requests ADD COLUMN last_signalled_head_sha TEXT`,
     );
   } catch {
     /* already exists */

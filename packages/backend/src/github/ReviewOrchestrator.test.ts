@@ -4616,7 +4616,12 @@ describe('ReviewOrchestrator — concurrent drain pool', () => {
     } as unknown as PRReviewService;
 
     const sm = makeMockSessionManager();
-    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    // Two genuinely distinct pushes (different head SHAs) for the same PR —
+    // the admission gate only coalesces same-PR/same-head duplicates, so
+    // these two must both queue and then serialize via prKey blocking.
+    vi.mocked(getPRByNumber)
+      .mockReturnValueOnce({ ...basePRRow, head_sha: 'sha-abc' } as any)
+      .mockReturnValueOnce({ ...basePRRow, head_sha: 'sha-def' } as any);
     runtimeSettings.auto_review_concurrency = 20;
     new ReviewOrchestrator(rs, sm as any, true);
 
@@ -4632,6 +4637,62 @@ describe('ReviewOrchestrator — concurrent drain pool', () => {
     resolveFirst();
     await new Promise((r) => setTimeout(r, 30));
     expect(started).toEqual(['first', 'second']);
+  });
+
+  it('coalesces two onPrOpened calls for the same PR and head within one drain cycle', async () => {
+    const started: number[] = [];
+    let resolveFirst!: () => void;
+    const firstDone = new Promise<void>((r) => {
+      resolveFirst = r;
+    });
+
+    const rs = {
+      reviewPR: vi.fn().mockImplementationOnce(async () => {
+        started.push(1);
+        await firstDone;
+        return {
+          prNumber: 1,
+          repo: 'owner/repo',
+          verdict: 'approved',
+          dimensions: [],
+          summary: 'ok',
+          reviewedAt: '',
+        };
+      }),
+      sendReReview: vi.fn(),
+      reReviewPR: vi.fn(),
+    } as unknown as PRReviewService;
+
+    const sm = makeMockSessionManager();
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    runtimeSettings.auto_review_concurrency = 20;
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    // Two pr_opened calls for the same PR and the same head SHA, emitted
+    // before drain() has a chance to run (synchronous back-to-back emits) —
+    // simulates SessionManager forwarding pr_opened multiple times for a
+    // resumed session that re-detects the same PR.
+    sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
+    sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
+
+    await new Promise((r) => setTimeout(r, 30));
+
+    // Only one review ever ran — the duplicate was coalesced, not queued.
+    expect(started).toEqual([1]);
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'review_job_coalesced',
+        payload: expect.objectContaining({
+          pr_number: 1,
+          repo: 'owner/repo',
+          reason: 'already_queued',
+        }),
+      }),
+    );
+
+    resolveFirst();
+    await new Promise((r) => setTimeout(r, 10));
   });
 
   it('runtimeSettings.auto_review_concurrency=N runs exactly N jobs concurrently', async () => {

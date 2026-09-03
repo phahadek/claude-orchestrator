@@ -368,6 +368,8 @@ export interface PullRequestRow {
   review_iteration: number;
   head_sha: string | null;
   last_reviewed_sha: string | null;
+  /** Durable counterpart of AgentSession's in-memory lastSignalledHeadSha — see schema.ts migration. */
+  last_signalled_head_sha: string | null;
   node_id: string | null; // GitHub GraphQL global ID
   mergeable: number | null; // 0 | 1 | NULL (SQLite boolean, NULL = unknown)
   /**

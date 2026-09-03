@@ -46,6 +46,7 @@ vi.mock('../../db/queries', () =>
     setSessionMetadata: vi.fn(),
     getPRBySessionId: vi.fn().mockReturnValue(null),
     setHeadSha: vi.fn(),
+    setLastSignalledHeadSha: vi.fn(),
     setPauseReason: vi.fn(),
     insertPauseInterval: vi.fn(),
     setSessionPauseReason: vi.fn(),
@@ -120,7 +121,8 @@ vi.mock('../../utils/eventFilters', () => ({
 
 import { execSync } from 'child_process';
 import { AgentSession, isPreReviewBlocked } from '../AgentSession';
-import { getPRBySessionId } from '../../db/queries';
+import { getPRBySessionId, setLastSignalledHeadSha } from '../../db/queries';
+import { logger } from '../../logger';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -200,6 +202,27 @@ const BLOCKED_PR = {
   review_result: null,
   base_branch: 'dev',
 };
+
+/**
+ * A mutable PR row plus a wired setLastSignalledHeadSha mock that mutates it —
+ * simulates the real DB round-trip (persist on emission, read back on the
+ * next call) instead of AgentSession's old in-memory instance field, which a
+ * fresh (resumed) AgentSession would never see.
+ */
+function makeMutablePR(overrides: Record<string, unknown> = {}) {
+  const pr: Record<string, unknown> = {
+    ...BLOCKED_PR,
+    last_signalled_head_sha: null,
+    ...overrides,
+  };
+  vi.mocked(getPRBySessionId).mockReturnValue(pr as any);
+  vi.mocked(setLastSignalledHeadSha).mockImplementation(
+    (_prNumber: number, _repo: string, sha: string | null) => {
+      pr.last_signalled_head_sha = sha;
+    },
+  );
+  return pr;
+}
 
 function mockCleanWorktreeAt(sha: string) {
   vi.mocked(execSync).mockImplementation((cmd: string) => {
@@ -333,16 +356,16 @@ describe('turn-complete push signal for pre-review blocked PRs (no review_sessio
 describe('no duplicate push_detected when both the immediate and turn-complete paths fire', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(getPRBySessionId).mockReturnValue(BLOCKED_PR as any);
     mockCleanWorktreeAt(HEAD_SHA);
   });
 
-  it('dedupes via lastSignalledHeadSha when the immediate push detection already signalled this HEAD', () => {
+  it('dedupes via the persisted last_signalled_head_sha when the immediate push detection already signalled this HEAD', () => {
+    makeMutablePR();
     const session = makeSession();
     const pushDetectedEvents: unknown[] = [];
     session.on('push_detected', (e: unknown) => pushDetectedEvents.push(e));
 
-    // Immediate path fires first (embedded tool_result), recording lastSignalledHeadSha.
+    // Immediate path fires first (embedded tool_result), persisting last_signalled_head_sha.
     emitToolUse(session, 'git push origin feature/foo', 'toolu_3', 'msg_3');
     emitEmbeddedUserToolResult(session, 'toolu_3', 'Everything up-to-date');
 
@@ -350,5 +373,50 @@ describe('no duplicate push_detected when both the immediate and turn-complete p
     emitResult(session);
 
     expect(pushDetectedEvents).toHaveLength(1);
+  });
+});
+
+// ── Persisted last_signalled_head_sha survives a resume (fresh AgentSession) ──
+
+describe('turn-complete push signal reads the persisted last_signalled_head_sha, not an instance field', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCleanWorktreeAt(HEAD_SHA);
+  });
+
+  it('a freshly constructed AgentSession (simulating a resume) whose worktree HEAD already equals the persisted last-signalled head does not emit push_detected on result', () => {
+    // The PR row already carries last_signalled_head_sha = HEAD_SHA from a
+    // prior session instance's emission — a resumed session constructs a
+    // brand-new AgentSession with no in-memory memory of that, so this can
+    // only pass if the skip decision reads the persisted DB value.
+    makeMutablePR({ last_signalled_head_sha: HEAD_SHA });
+    const infoSpy = vi.spyOn(logger, 'info');
+
+    const session = makeSession();
+    const pushDetectedEvents: unknown[] = [];
+    session.on('push_detected', (e: unknown) => pushDetectedEvents.push(e));
+
+    emitResult(session);
+
+    expect(pushDetectedEvents).toHaveLength(0);
+    expect(
+      infoSpy.mock.calls.some((call) =>
+        call.some(
+          (arg) => typeof arg === 'string' && arg.includes('skipping push_detected'),
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it('a genuine new commit (HEAD differs from the persisted head) still emits push_detected exactly once and updates the persisted head', () => {
+    const pr = makeMutablePR({ last_signalled_head_sha: 'old-sha-0000000' });
+    const session = makeSession();
+    const pushDetectedEvents: unknown[] = [];
+    session.on('push_detected', (e: unknown) => pushDetectedEvents.push(e));
+
+    emitResult(session);
+
+    expect(pushDetectedEvents).toHaveLength(1);
+    expect(pr.last_signalled_head_sha).toBe(HEAD_SHA);
   });
 });
