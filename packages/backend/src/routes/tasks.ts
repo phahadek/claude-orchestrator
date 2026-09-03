@@ -455,6 +455,31 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
   };
 }
 
+/**
+ * Trims heavy nested fields from a ✅ Done task's TaskView for shape=summary
+ * responses — the Milestones view (MilestoneView -> TaskList's Done section
+ * via CompactTaskCard) never renders PR/review/session detail for Done tasks,
+ * only prNumber + sessionId for linking out. Non-Done tasks are returned
+ * unchanged: TaskCard (the code-task renderer used for every other status)
+ * has no status branch and needs the full shape regardless of view.
+ */
+function toSummaryShape(view: TaskView): TaskView {
+  if (view.displayStatus !== 'done') return view;
+  const trimmed: Record<string, unknown> = {
+    ...view,
+    pauseDetail: null,
+    codeSession: view.codeSession
+      ? { sessionId: view.codeSession.sessionId }
+      : null,
+    pr: view.pr ? { prNumber: view.pr.prNumber } : null,
+    review: null,
+    depthReview: null,
+  };
+  delete trimmed.totalTokens;
+  delete trimmed.recoveryDescriptor;
+  return trimmed as unknown as TaskView;
+}
+
 const TOOL_MAX = 80;
 
 function extractToolArg(name: string, input: Record<string, unknown>): string {
@@ -814,8 +839,12 @@ export function createTasksRouter(
         Date.now() - boardCacheRow.fetched_at >
         runtimeSettings.task_cache_refresh_interval_ms * 2;
 
+      const shape = req.query.shape === 'summary' ? 'summary' : 'full';
+      const responseTasks =
+        shape === 'summary' ? views.map(toSummaryShape) : views;
+
       const response: TasksActiveResponse = {
-        tasks: views,
+        tasks: responseTasks,
         lastRefreshedAt: boardCacheRow.fetched_at,
         stale,
         coldCache: false,
