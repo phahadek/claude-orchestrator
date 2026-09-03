@@ -402,7 +402,8 @@ describe('turn-complete push signal reads the persisted last_signalled_head_sha,
     expect(
       infoSpy.mock.calls.some((call) =>
         call.some(
-          (arg) => typeof arg === 'string' && arg.includes('skipping push_detected'),
+          (arg) =>
+            typeof arg === 'string' && arg.includes('skipping push_detected'),
         ),
       ),
     ).toBe(true);
