@@ -1211,15 +1211,18 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     // error/killed) session via --resume, which is exactly the "resurrect a
     // finished session to deliver a bogus verdict" failure mode this guards
     // against. A terminal session with a changed head gets a fresh review
-    // session instead of a follow-up.
+    // session instead of a follow-up. A missing DB row is NOT treated as
+    // terminal here — unlike reviewPR()'s resumability check, this only acts
+    // on an explicit terminal status so it doesn't change behavior for a
+    // session that sendOrResume can still legitimately reach.
     const existingSession = getSession(pr.review_session_id);
     const isSessionTerminal =
-      !existingSession ||
+      existingSession != null &&
       ['done', 'error', 'killed'].includes(existingSession.status);
     if (isSessionTerminal) {
       logger.warn(
         `[PRReviewService] reReviewPR PR #${prNumber}: review session ${pr.review_session_id} is terminal ` +
-          `(${existingSession ? `status=${existingSession.status}` : 'no DB row'}) — launching fresh review session instead of a follow-up.`,
+          `(status=${existingSession.status}) — launching fresh review session instead of a follow-up.`,
       );
       clearReviewSessionId(prNumber, repo);
       const diffSource = new GitHubDiffSource(this.github, repo, prNumber);
