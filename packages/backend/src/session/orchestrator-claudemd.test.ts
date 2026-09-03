@@ -46,7 +46,9 @@ describe('buildOrchestratorClaudeMd', () => {
     expect(result).toContain('## Summary');
     expect(result).toContain('## Notion Task');
     expect(result).toContain('## Automated Tests');
-    expect(result).toContain('## Files Changed');
+    // '## Files Changed' duplicates GitHub's own Files-changed tab and is
+    // opt-in only — see the `prBodySections` config-driven test below.
+    expect(result).not.toContain('## Files Changed');
 
     // Section 6: Branch rules
     expect(result).toContain('## Branch Rules');
@@ -86,6 +88,29 @@ describe('buildOrchestratorClaudeMd', () => {
     expect(result).toContain(
       'If a PR was already opened another way (e.g. you ran `gh pr create` directly), that is fine and does not need to be undone',
     );
+  });
+
+  it('renders a custom prBodySections list, including an opted-in ## Files Changed', () => {
+    const result = buildOrchestratorClaudeMd({
+      ...defaultParams,
+      prBodySections: ['## Summary', '## Automated Tests', '## Files Changed'],
+    });
+    const template = result.slice(
+      result.indexOf('## PR Format Standards'),
+      result.indexOf('## Branch Rules'),
+    );
+    expect(template).toContain('## Summary');
+    expect(template).toContain('## Automated Tests');
+    expect(template).toContain('## Files Changed');
+    expect(template).not.toContain('## Notion Task');
+  });
+
+  it('renders a project-custom section header with a generic placeholder hint', () => {
+    const result = buildOrchestratorClaudeMd({
+      ...defaultParams,
+      prBodySections: ['## Summary', '## Deployment Notes'],
+    });
+    expect(result).toContain('## Deployment Notes\n<content for this section>');
   });
 
   it('Forbidden Actions forbid closing/reopening the session own PR', () => {

@@ -607,6 +607,59 @@ describe('<pr-body> marker — validation failure path', () => {
       expect.stringContaining('## Summary'),
     );
   });
+
+  it('re-prompt names exactly the missing sections, with no fixed cardinality claim', async () => {
+    vi.mocked(validatePRBody).mockReturnValue({
+      valid: false,
+      missingSections: ['## Summary', '## Automated Tests'],
+      oversizedSections: [],
+    });
+
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    const runner = (
+      session as unknown as {
+        runner: { sendMessage: ReturnType<typeof vi.fn> };
+      }
+    ).runner;
+
+    emitAssistantWithMarker(session, 'incomplete body', 'msg_bad_2');
+    await new Promise((r) => setImmediate(r));
+
+    const [message] = runner.sendMessage.mock.calls[0] as [string];
+    expect(message).toContain('## Summary');
+    expect(message).toContain('## Automated Tests');
+    expect(message).not.toContain('## Notion Task');
+    expect(message).not.toContain('## Files Changed');
+    // No restated fixed-cardinality claim ("all four/three sections") —
+    // the message is derived purely from missingSections.
+    expect(message).not.toMatch(/all (two|three|four|\d+) sections/i);
+  });
+
+  it('re-prompt scales to a three-missing-section config with no hardcoded count', async () => {
+    vi.mocked(validatePRBody).mockReturnValue({
+      valid: false,
+      missingSections: ['## Summary', '## Automated Tests', '## Deployment Notes'],
+      oversizedSections: [],
+    });
+
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    const runner = (
+      session as unknown as {
+        runner: { sendMessage: ReturnType<typeof vi.fn> };
+      }
+    ).runner;
+
+    emitAssistantWithMarker(session, 'incomplete body', 'msg_bad_3');
+    await new Promise((r) => setImmediate(r));
+
+    const [message] = runner.sendMessage.mock.calls[0] as [string];
+    expect(message).toContain('## Summary');
+    expect(message).toContain('## Automated Tests');
+    expect(message).toContain('## Deployment Notes');
+    expect(message).not.toMatch(/all (two|three|four|\d+) sections/i);
+  });
 });
 
 describe('<pr-body> marker — idempotent update path', () => {
