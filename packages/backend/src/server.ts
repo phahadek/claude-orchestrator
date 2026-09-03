@@ -5,7 +5,12 @@ import http from 'http';
 import path from 'path';
 import os from 'os';
 import { runMigrations } from './db/schema';
-import { db, dbPath, runWalTruncateCheckpointOffMainThread } from './db/db';
+import {
+  db,
+  dbPath,
+  logDatabaseBootSummary,
+  runWalTruncateCheckpointOffMainThread,
+} from './db/db';
 import { SessionManager } from './session/SessionManager';
 import { handleMessage, setWsRouterRefreshFn } from './ws/router';
 import { setTaskWriteRefreshFn } from './tasks/TaskWriteCommands';
@@ -176,6 +181,7 @@ import {
 } from './session/sessionCgroup';
 
 runMigrations(db);
+logDatabaseBootSummary();
 loadRuntimeSettingsFromDb();
 setupSessionCgroup();
 importProjectsFromEnv(process.env.PROJECTS);
