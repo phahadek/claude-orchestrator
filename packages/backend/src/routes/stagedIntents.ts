@@ -1619,6 +1619,17 @@ export interface StagedIntent {
    * blocked — see the group reject route).
    */
   groupSessionIncomplete?: boolean | null;
+  /**
+   * When this group is blocked by a live member's incomplete owning session
+   * rather than by its own members, the id of the *other* group that owns
+   * the actual blocking (needs_revision/pending_verification) row — so the
+   * decision surface can name and target the real blocker. Null when this
+   * group's own members are the blocker, or when the blocking row has no
+   * group of its own. Always null for an ungrouped intent.
+   */
+  blockingGroupId?: string | null;
+  /** The blocked-member count of `blockingGroupId`, or null when that's null. */
+  blockingGroupBlockedMemberCount?: number | null;
 }
 
 /**
@@ -1677,10 +1688,7 @@ let stagedIntentPlanningOrchestrator: PlanningOrchestrator | undefined;
 interface RowToApiCache {
   sessionComplete: Map<string, boolean>;
   groupKind: Map<string, 'groom' | 'investigation' | 'other'>;
-  groupBlockedSignals: Map<
-    string,
-    { blocked: boolean; blockedMemberCount: number; sessionIncomplete: boolean }
-  >;
+  groupBlockedSignals: Map<string, GroupBlockedSignals>;
 }
 
 function createRowToApiCache(): RowToApiCache {
@@ -1715,6 +1723,24 @@ function getGroupKindCached(
   return result;
 }
 
+interface GroupBlockedSignals {
+  blocked: boolean;
+  blockedMemberCount: number;
+  sessionIncomplete: boolean;
+  /**
+   * When this group's own blockedMemberCount is 0 but a live member's
+   * owning session is incomplete because of a *different* group's blocked
+   * row, the id of that other group — so the surface can name and target
+   * the real blocker instead of this (innocent) group. Null when this
+   * group's own members are the blocker, or when the session-incomplete
+   * leg's blocking row has no group of its own (ungrouped — nothing to
+   * name or target).
+   */
+  blockingGroupId: string | null;
+  /** The blocked-member count of `blockingGroupId`, or null when that's null. */
+  blockingGroupBlockedMemberCount: number | null;
+}
+
 /**
  * Mirrors commitGroupIntents' non-committability predicate for display: a
  * group is blocked when any member (any state, any visibility) sits in
@@ -1730,30 +1756,55 @@ function computeGroupBlockedSignals(
   groupId: string,
   sessionManager: SessionManager | undefined,
   cache?: RowToApiCache,
-): {
-  blocked: boolean;
-  blockedMemberCount: number;
-  sessionIncomplete: boolean;
-} {
+): GroupBlockedSignals {
   const cached = cache?.groupBlockedSignals.get(groupId);
   if (cached) return cached;
   const allMembers = listStagedIntentsByGroup(groupId);
   const blockedMemberCount = allMembers.filter(
     (r) => r.state === 'needs_revision' || r.state === 'pending_verification',
   ).length;
-  const sessionIncomplete = allMembers
-    .filter((r) => ACTIVE_STATES.includes(r.state))
-    .some(
-      (r) =>
-        !!r.session_id &&
-        !(cache
-          ? getSessionCompleteCached(r.session_id, sessionManager, cache)
-          : resolveSessionCompleteForDisplay(r.session_id, sessionManager)),
-    );
-  const result = {
+  const activeMembers = allMembers.filter((r) => ACTIVE_STATES.includes(r.state));
+  const sessionIncomplete = activeMembers.some(
+    (r) =>
+      !!r.session_id &&
+      !(cache
+        ? getSessionCompleteCached(r.session_id, sessionManager, cache)
+        : resolveSessionCompleteForDisplay(r.session_id, sessionManager)),
+  );
+  let blockingGroupId: string | null = null;
+  let blockingGroupBlockedMemberCount: number | null = null;
+  if (blockedMemberCount === 0 && sessionIncomplete) {
+    for (const r of activeMembers) {
+      if (!r.session_id) continue;
+      const complete = cache
+        ? getSessionCompleteCached(r.session_id, sessionManager, cache)
+        : resolveSessionCompleteForDisplay(r.session_id, sessionManager);
+      if (complete) continue;
+      const blockerRow = listStagedIntentsBySession(r.session_id).find(
+        (sr) =>
+          (sr.state === 'needs_revision' ||
+            sr.state === 'pending_verification') &&
+          !!sr.group_id &&
+          sr.group_id !== groupId,
+      );
+      if (blockerRow) {
+        blockingGroupId = blockerRow.group_id!;
+        blockingGroupBlockedMemberCount = listStagedIntentsByGroup(
+          blockingGroupId,
+        ).filter(
+          (m) =>
+            m.state === 'needs_revision' || m.state === 'pending_verification',
+        ).length;
+        break;
+      }
+    }
+  }
+  const result: GroupBlockedSignals = {
     blocked: blockedMemberCount > 0 || sessionIncomplete,
     blockedMemberCount,
     sessionIncomplete,
+    blockingGroupId,
+    blockingGroupBlockedMemberCount,
   };
   cache?.groupBlockedSignals.set(groupId, result);
   return result;
@@ -1837,12 +1888,17 @@ function rowToApi(
             groupBlocked: signals.blocked,
             groupBlockedMemberCount: signals.blockedMemberCount,
             groupSessionIncomplete: signals.sessionIncomplete,
+            blockingGroupId: signals.blockingGroupId,
+            blockingGroupBlockedMemberCount:
+              signals.blockingGroupBlockedMemberCount,
           };
         })()
       : {
           groupBlocked: null,
           groupBlockedMemberCount: null,
           groupSessionIncomplete: null,
+          blockingGroupId: null,
+          blockingGroupBlockedMemberCount: null,
         }),
   };
 }
