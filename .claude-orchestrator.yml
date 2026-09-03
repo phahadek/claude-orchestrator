@@ -84,7 +84,12 @@ analyze_timeout_sec: 180
 analyze_max_rss_mb: 2048
 
 # Extra Bash tool permission patterns merged with the base allowed-tools set.
-allowed_tools: []
+# gitleaks: the `analyze` list above runs `gitleaks dir .` — config load now
+# reconciles verify/autofix/analyze binaries against this list (plus the base
+# allowlist) and fails loudly on a gap, so this entry must stay in sync with
+# the analyze command above.
+allowed_tools:
+  - 'Bash(gitleaks:*)'
 
 # Extra Bash rule text injected into the session-facing CLAUDE.md.
 bash_rules: []

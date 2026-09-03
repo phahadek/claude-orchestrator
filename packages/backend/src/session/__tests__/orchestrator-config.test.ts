@@ -1171,6 +1171,107 @@ describe('isSanctionedAutoApproveCapability', () => {
   );
 });
 
+describe('loadOrchestratorConfig: verify/autofix/analyze vs allowed_tools reconciliation', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-config-reconcile-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function writeConfig(yamlText: string): void {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      yamlText,
+      'utf-8',
+    );
+  }
+
+  it('throws naming the binary and command when a verify command is not covered by allowed_tools or the base allowlist', () => {
+    writeConfig(
+      ['verify:', '  - golangci-lint run', 'allowed_tools:', '  - Bash(go:*)'].join(
+        '\n',
+      ),
+    );
+
+    expect(() => loadOrchestratorConfig(tmpDir)).toThrowError(
+      /golangci-lint run.*golangci-lint|golangci-lint.*golangci-lint run/s,
+    );
+  });
+
+  it('loads cleanly when all verify binaries are covered by allowed_tools', () => {
+    writeConfig(
+      [
+        'verify:',
+        '  - golangci-lint run',
+        '  - go build ./...',
+        'allowed_tools:',
+        '  - Bash(golangci-lint:*)',
+      ].join('\n'),
+    );
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.verify).toEqual(['golangci-lint run', 'go build ./...']);
+  });
+
+  it('resolves a leading environment-variable assignment to the correct binary', () => {
+    writeConfig(
+      [
+        'verify:',
+        '  - CI=1 golangci-lint run',
+        'allowed_tools:',
+        '  - Bash(golangci-lint:*)',
+      ].join('\n'),
+    );
+
+    expect(() => loadOrchestratorConfig(tmpDir)).not.toThrow();
+  });
+
+  it('fails on an env-assignment-prefixed command when the resolved binary is still uncovered', () => {
+    writeConfig(['verify:', '  - CI=1 golangci-lint run'].join('\n'));
+
+    expect(() => loadOrchestratorConfig(tmpDir)).toThrowError(/golangci-lint/);
+  });
+
+  it('applies the same check to autofix', () => {
+    writeConfig(['autofix:', '  - golangci-lint run --fix'].join('\n'));
+
+    expect(() => loadOrchestratorConfig(tmpDir)).toThrowError(/golangci-lint/);
+  });
+
+  it('applies the same check to analyze, including the object-entry shape', () => {
+    writeConfig(
+      [
+        'analyze:',
+        '  - command: golangci-lint run',
+        '    trigger_paths:',
+        '      - "**/*.go"',
+      ].join('\n'),
+    );
+
+    expect(() => loadOrchestratorConfig(tmpDir)).toThrowError(/golangci-lint/);
+  });
+
+  it('passes when a binary is covered by the base allowlist alone, with no project allowed_tools', () => {
+    writeConfig(['verify:', '  - git status'].join('\n'));
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.verify).toEqual(['git status']);
+  });
+
+  it('loads cleanly when no verify/autofix/analyze commands are declared', () => {
+    writeConfig(['allowed_tools:', '  - Bash(dotnet:*)'].join('\n'));
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.verify).toEqual([]);
+    expect(config.autofix).toEqual([]);
+    expect(config.analyze).toEqual([]);
+  });
+});
+
 describe('isDeclaredWriteAutoApprove', () => {
   it('is true for a capability that exact-matches a non-Prod-Mutating declared entry', () => {
     expect(
