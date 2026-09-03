@@ -1,7 +1,11 @@
 import { resolveTestScratchDataDir } from './testScratchDataDir';
 import { EnvFileConfigSource } from './config/EnvFileConfigSource';
 import { _setDefaultTestConfigSource } from './config/appConfig';
-import type { ConfigSource, DeepPartial, OrchestratorConfig } from './config/types';
+import type {
+  ConfigSource,
+  DeepPartial,
+  OrchestratorConfig,
+} from './config/types';
 
 // Vitest setupFile — runs before any test file's module graph is evaluated.
 // Forces every test process onto an in-memory database, regardless of what

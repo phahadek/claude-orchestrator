@@ -7,7 +7,11 @@ import {
   _setConfigSourceForTesting,
 } from '../config/appConfig';
 import { getDataDir } from '../config/dataDir';
-import type { ConfigSource, DeepPartial, OrchestratorConfig } from '../config/types';
+import type {
+  ConfigSource,
+  DeepPartial,
+  OrchestratorConfig,
+} from '../config/types';
 
 // This suite exercises the real testSetupDb.ts setupFile's installed
 // default source (it runs before any test file, including this one) —
