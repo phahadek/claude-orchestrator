@@ -1175,13 +1175,21 @@ export type TestRunKind = 'full' | 'scoped';
  * run's cgroup — the "no live subprocess" guarantee could not be confirmed.
  * Distinct from every other reason here since it describes a failure of
  * teardown itself, not of the test run it was tearing down.
+ *
+ * 'interrupted_queued' is recoverInterruptedTestRequestRuns' boot-sweep
+ * reason for a row that was still `queued` — never dequeued, so its test
+ * commands never started — when the backend restarted. Distinct from
+ * 'execution_failed', which the same sweep uses for a `running` row that had
+ * actually started executing: collapsing the two loses whether the
+ * interruption happened before or during execution.
  */
 export type TestRequestFailureReason =
   | 'timeout'
   | 'oom_killed'
   | 'execution_failed'
   | 'teardown_failed'
-  | 'generic';
+  | 'generic'
+  | 'interrupted_queued';
 
 /**
  * Explicit identity a caller states about the run it's originating —
