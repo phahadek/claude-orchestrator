@@ -234,6 +234,37 @@ function getProjectSemaphore(projectId: string): Semaphore {
   return sem;
 }
 
+/**
+ * Sum of every OTHER project's semaphore inUse() — the host-wide peer count
+ * that projectSemaphores' per-project keying otherwise hides entirely (see
+ * this module's doc comment). Unlike concurrentRunCount, no "- 1" here: this
+ * run's own occupancy lives on its own project's semaphore, never on another
+ * project's, so every entry counted here is a genuine foreign peer.
+ */
+function getForeignConcurrentRunCount(projectId: string): number {
+  let total = 0;
+  for (const [otherProjectId, sem] of projectSemaphores) {
+    if (otherProjectId === projectId) continue;
+    total += sem.inUse();
+  }
+  return total;
+}
+
+/**
+ * Test-only: clears every cached per-project semaphore. projectSemaphores is
+ * deliberately process-lifetime state in production (a project's occupancy
+ * must persist across runs), but that means a single test elsewhere in the
+ * suite that intentionally never resolves its mocked run (to exercise queued
+ * state) leaves a permanently nonzero inUse() on that project's semaphore —
+ * invisible to concurrent_run_count (which only ever reads its own project's
+ * semaphore) but silently poisoning every later test's
+ * getForeignConcurrentRunCount, which sums across all of them. Call from a
+ * suite's beforeEach to isolate tests from each other.
+ */
+export function __resetProjectSemaphoresForTest(): void {
+  projectSemaphores.clear();
+}
+
 interface InFlightEntry {
   runId: string;
   contentHash: string;
@@ -529,8 +560,20 @@ async function executeTestRequestRun(
   // validity predicate consumers filter on (listRecentValidTestDurations,
   // computeTestFlipRateFlag).
   const concurrentRunCount = semaphore.inUse() - 1;
+  // Host-wide peer occupancy: every OTHER project's semaphore, at the same
+  // instant — a same-project count of 0 can still mean the host was busy
+  // running a different project's suite, which is exactly the contention
+  // concurrent_run_count cannot see (projectSemaphores is keyed per project).
+  const foreignConcurrentRunCount = getForeignConcurrentRunCount(
+    spec.projectId,
+  );
   try {
-    markTestRequestRunRunning(runId, startedAt, concurrentRunCount);
+    markTestRequestRunRunning(
+      runId,
+      startedAt,
+      concurrentRunCount,
+      foreignConcurrentRunCount,
+    );
     broadcastRunStatus({
       runId,
       projectId: spec.projectId,
@@ -646,6 +689,7 @@ async function executeTestRequestRun(
       producer: spec.producer,
       run_kind: spec.runKind ?? 'full',
       base_sha: spec.baseSha ?? null,
+      foreign_concurrent_run_count: foreignConcurrentRunCount,
     });
     return { ...result, runId };
   } catch (err) {
@@ -771,6 +815,7 @@ export function ingestTestRunResults(run: TestRequestRunRow): void {
     run.concurrent_run_count ?? null,
     !!run.oom_killed,
     !!parsed.incomplete,
+    run.foreign_concurrent_run_count ?? null,
   );
 
   const touchedTestIds = tests.map((t) => t.test_id);

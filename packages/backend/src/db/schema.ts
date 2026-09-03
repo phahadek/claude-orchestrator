@@ -3320,6 +3320,22 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // foreign_concurrent_run_count: host-wide peer occupancy at run-start time —
+  // the sum of inUse() across every OTHER project's semaphore (see
+  // getForeignConcurrentRunCount in orchestration/testRequestLane.ts) — kept
+  // as its own column rather than folded into concurrent_run_count, which
+  // existing rows and readers depend on meaning same-project peers only. NULL
+  // on rows predating this column (and on the placeholder insert before a
+  // queued run acquires its permit); the digest validity predicate
+  // (recordTestPerfDigestSample) treats NULL the same as 0.
+  try {
+    target.exec(
+      `ALTER TABLE test_request_runs ADD COLUMN foreign_concurrent_run_count INTEGER`,
+    );
+  } catch {
+    /* already exists */
+  }
 }
 
 // ─── test_run_results → test_perf_baselines digest backfill ────────────────

@@ -46,6 +46,7 @@ function insertSample(opts: {
   concurrentRunCount?: number;
   oomKilled?: boolean;
   createdAt: number;
+  foreignConcurrentRunCount?: number | null;
 }): void {
   insertRun();
   recordTestPerfDigestSample(
@@ -57,6 +58,8 @@ function insertSample(opts: {
     opts.concurrentRunCount ?? 0,
     opts.oomKilled ?? false,
     opts.createdAt,
+    undefined,
+    opts.foreignConcurrentRunCount,
   );
 }
 
@@ -120,6 +123,28 @@ describe('computeTestFlipRateFlag', () => {
     expect(flag.sampleCount).toBe(2);
     expect(flag.transitionCount).toBe(0);
     expect(flag.flagged).toBe(false);
+  });
+
+  it('never counts a sample with a nonzero foreign_concurrent_run_count as a window slot, and treats a NULL foreign count as zero', () => {
+    insertSample({ testId: 'test-foreign', outcome: 'passed', createdAt: 0 });
+    insertSample({
+      testId: 'test-foreign',
+      outcome: 'failed',
+      foreignConcurrentRunCount: 1,
+      createdAt: 1,
+    });
+    insertSample({
+      testId: 'test-foreign',
+      outcome: 'failed',
+      foreignConcurrentRunCount: null,
+      createdAt: 2,
+    });
+
+    const flag = computeTestFlipRateFlag('test-foreign', 20, 2);
+    // The foreign-contended sample never occupies a slot; the NULL-foreign
+    // sample (a pre-migration row) is treated as 0 and does occupy one.
+    expect(flag.sampleCount).toBe(2);
+    expect(flag.transitionCount).toBe(1);
   });
 
   it('clears once a fresh window recomputation drops the transition count back below K', () => {

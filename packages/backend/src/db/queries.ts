@@ -9094,10 +9094,11 @@ export function markTestRequestRunRunning(
   id: string,
   startedAt: number,
   concurrentRunCount: number | null,
+  foreignConcurrentRunCount: number | null,
 ): void {
   db.prepare(
-    `UPDATE test_request_runs SET state = 'running', started_at = ?, concurrent_run_count = ? WHERE id = ?`,
-  ).run(startedAt, concurrentRunCount, id);
+    `UPDATE test_request_runs SET state = 'running', started_at = ?, concurrent_run_count = ?, foreign_concurrent_run_count = ? WHERE id = ?`,
+  ).run(startedAt, concurrentRunCount, foreignConcurrentRunCount, id);
 }
 
 export function completeTestRequestRun(
@@ -9142,7 +9143,7 @@ export function updateTestRequestRunState(
   );
 }
 
-const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha`;
+const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha, foreign_concurrent_run_count`;
 
 /** Every run still `running` — used by the boot-time crash-recovery sweep. */
 export function listRunningTestRequestRuns(): TestRequestRunRow[] {
@@ -10024,8 +10025,14 @@ export function recordTestPerfDigestSample(
   oomKilled: boolean,
   sequencedAt: number,
   markers?: string[],
+  foreignConcurrentRunCount?: number | null,
 ): void {
-  if (concurrentRunCount !== 0 || oomKilled) return;
+  if (
+    concurrentRunCount !== 0 ||
+    oomKilled ||
+    (foreignConcurrentRunCount ?? 0) !== 0
+  )
+    return;
 
   _stmtGetTestPerfDigest ??= db.prepare<{ test_id: string }>(
     `SELECT recent_outcomes, recent_durations FROM test_perf_baselines WHERE test_id = @test_id`,
@@ -10103,6 +10110,7 @@ export function ingestTestRunResultsTx(
   concurrentRunCount: number | null,
   oomKilled: boolean,
   incomplete: boolean,
+  foreignConcurrentRunCount?: number | null,
 ): TestOutcomeCounts {
   const counts: TestOutcomeCounts = {
     passed: 0,
@@ -10152,6 +10160,7 @@ export function ingestTestRunResultsTx(
         oomKilled,
         baseSequence + index,
         t.markers,
+        foreignConcurrentRunCount,
       );
     });
   });
