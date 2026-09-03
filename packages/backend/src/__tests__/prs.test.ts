@@ -1797,6 +1797,56 @@ describe('POST /api/prs/:owner/:repo/:prNumber/approve', () => {
     expect(res.status).toBe(200);
     expect(vi.mocked(notionClient.updateStatus)).not.toHaveBeenCalled();
   });
+
+  it('records a manual_review_override audit event carrying the prior verdict when a real AI verdict existed', async () => {
+    const priorReview = {
+      prNumber: 42,
+      repo: 'owner/repo',
+      verdict: 'needs_changes',
+      dimensions: [
+        {
+          name: 'scope',
+          verdict: 'needs_changes',
+          notes: 'Unrelated file bundled in and undisclosed.',
+        },
+      ],
+      summary: 'Verdict: needs_changes',
+      reviewedAt: '2026-09-02T13:18:36Z',
+    };
+    const prWithPriorReview: PullRequestRow = {
+      ...mockPRRow,
+      review_result: JSON.stringify(priorReview),
+      review_iteration: 2,
+    };
+    vi.mocked(queries.getPRByNumber).mockReturnValue(prWithPriorReview);
+    const res = await supertest(buildApp()).post(
+      '/api/prs/owner/repo/42/approve',
+    );
+    expect(res.status).toBe(200);
+    expect(vi.mocked(auditLog.recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'manual_review_override',
+        payload: expect.objectContaining({
+          pr_number: 42,
+          repo: 'owner/repo',
+          prior_verdict: 'needs_changes',
+          prior_dimensions: priorReview.dimensions,
+          prior_review_iteration: 2,
+        }),
+      }),
+    );
+  });
+
+  it('does not record a manual_review_override event for a fresh PR with no prior verdict', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow); // review_result: null
+    const res = await supertest(buildApp()).post(
+      '/api/prs/owner/repo/42/approve',
+    );
+    expect(res.status).toBe(200);
+    expect(vi.mocked(auditLog.recordEvent)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'manual_review_override' }),
+    );
+  });
 });
 
 // ── AC: Break 2 — review endpoint calls prReviewService.reviewPR() ──────────

@@ -874,6 +874,26 @@ export function createPrsRouter(
         res.status(404).json({ error: `PR #${prNumber} not found` });
         return;
       }
+      const priorReview = prRow.review_result
+        ? (JSON.parse(prRow.review_result) as PRReviewResult)
+        : null;
+      if (priorReview && (priorReview.dimensions?.length ?? 0) > 0) {
+        recordEvent({
+          event_type: 'manual_review_override',
+          actor_type: 'human',
+          actor_id: null,
+          project_id: getProjectByGithubRepo(repo)?.id ?? null,
+          task_id: prRow.task_id,
+          payload: {
+            pr_number: prNumber,
+            repo,
+            prior_verdict: priorReview.verdict,
+            prior_dimensions: priorReview.dimensions,
+            prior_review_iteration: prRow.review_iteration,
+          },
+        });
+      }
+
       const result: PRReviewResult = {
         prNumber,
         repo,
