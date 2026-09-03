@@ -91,47 +91,59 @@ describe('adhoc-query — read-only enforcement and execution', () => {
     ).toThrow(AdhocQueryValidationError);
   });
 
-  it('opens the connection read-only and fails a write attempt at the driver level', () => {
-    dbFile = makeFixtureDb(1);
-    const db = openReadOnlyDb(dbFile);
-    try {
-      expect(() =>
-        db.prepare("INSERT INTO items (name) VALUES ('nope')").run(),
-      ).toThrow(/readonly/i);
-    } finally {
-      db.close();
-    }
-  }, // Creates a real file-backed sqlite db on disk (os.tmpdir()); not
+  // Creates a real file-backed sqlite db on disk (os.tmpdir()); not
   // millisecond-bounded under disk contention.
-  10000);
+  it(
+    'opens the connection read-only and fails a write attempt at the driver level',
+    () => {
+      dbFile = makeFixtureDb(1);
+      const db = openReadOnlyDb(dbFile);
+      try {
+        expect(() =>
+          db.prepare("INSERT INTO items (name) VALUES ('nope')").run(),
+        ).toThrow(/readonly/i);
+      } finally {
+        db.close();
+      }
+    },
+    10000,
+  );
 
-  it('runs a valid SELECT end to end via executeAdhocQuery', () => {
-    dbFile = makeFixtureDb(3);
-    const result = executeAdhocQuery('SELECT id, name FROM items', dbFile);
-    expect(result.rowCount).toBe(3);
-    expect(result.truncated).toBe(false);
-    expect(result.rows).toHaveLength(3);
-  }, // Creates a real file-backed sqlite db on disk (os.tmpdir()); not
+  // Creates a real file-backed sqlite db on disk (os.tmpdir()); not
   // millisecond-bounded under disk contention.
-  10000);
+  it(
+    'runs a valid SELECT end to end via executeAdhocQuery',
+    () => {
+      dbFile = makeFixtureDb(3);
+      const result = executeAdhocQuery('SELECT id, name FROM items', dbFile);
+      expect(result.rowCount).toBe(3);
+      expect(result.truncated).toBe(false);
+      expect(result.rows).toHaveLength(3);
+    },
+    10000,
+  );
 
-  it('caps and marks truncated output for a query that would otherwise return an oversized result', () => {
-    dbFile = makeFixtureDb(ADHOC_QUERY_ROW_CAP + 50);
-    const db = openReadOnlyDb(dbFile);
-    try {
-      const result = runReadOnlyQuery(db, 'SELECT id, name FROM items');
-      expect(result.rowCount).toBe(ADHOC_QUERY_ROW_CAP);
-      expect(result.truncated).toBe(true);
+  // Creates a real file-backed sqlite db on disk (os.tmpdir()) with a larger
+  // row count; not millisecond-bounded under disk contention.
+  it(
+    'caps and marks truncated output for a query that would otherwise return an oversized result',
+    () => {
+      dbFile = makeFixtureDb(ADHOC_QUERY_ROW_CAP + 50);
+      const db = openReadOnlyDb(dbFile);
+      try {
+        const result = runReadOnlyQuery(db, 'SELECT id, name FROM items');
+        expect(result.rowCount).toBe(ADHOC_QUERY_ROW_CAP);
+        expect(result.truncated).toBe(true);
 
-      const json = formatAdhocQueryOutput(result, 500);
-      const parsed = JSON.parse(json);
-      expect(parsed.truncated).toBe(true);
-      expect(parsed.rows.length).toBeLessThan(ADHOC_QUERY_ROW_CAP);
-      expect(json.length).toBeLessThanOrEqual(500 * 4);
-    } finally {
-      db.close();
-    }
-  }, // Creates a real file-backed sqlite db on disk (os.tmpdir()) with a
-  // larger row count; not millisecond-bounded under disk contention.
-  10000);
+        const json = formatAdhocQueryOutput(result, 500);
+        const parsed = JSON.parse(json);
+        expect(parsed.truncated).toBe(true);
+        expect(parsed.rows.length).toBeLessThan(ADHOC_QUERY_ROW_CAP);
+        expect(json.length).toBeLessThanOrEqual(500 * 4);
+      } finally {
+        db.close();
+      }
+    },
+    10000,
+  );
 });
