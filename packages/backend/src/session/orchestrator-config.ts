@@ -321,7 +321,7 @@ const COMMAND_WRAPPER_TOKENS = new Set([
  * good enough for the prefix shapes gate commands actually use. Returns ''
  * for an empty/whitespace-only command.
  */
-export function extractCommandBinary(command: string): string {
+function extractCommandBinary(command: string): string {
   const tokens = command.trim().split(/\s+/).filter(Boolean);
   let i = 0;
   while (i < tokens.length) {
