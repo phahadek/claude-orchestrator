@@ -267,7 +267,7 @@ describe('CliSessionRunner.run — post-result grace timeout', () => {
     expect(killSpy).not.toHaveBeenCalled();
   });
 
-  it('does not force-kill a later turn that goes quiet after a new turn starts (init event resets the latch)', async () => {
+  it('does not force-kill a later turn that goes quiet after a new turn starts (system/init event resets the latch)', async () => {
     const runner = new CliSessionRunner(SESSION_ID);
     const events: Record<string, unknown>[] = [];
     const runPromise = runner.run('hello', undefined, defaultOptions, (event) =>
@@ -283,9 +283,16 @@ describe('CliSessionRunner.run — post-result grace timeout', () => {
     );
     await vi.advanceTimersByTimeAsync(0);
 
-    // A new turn starts in the same process: the CLI emits an `init` event
-    // before doing any real work.
-    lastProc!.stdout.push(JSON.stringify({ type: 'init' }) + '\n');
+    // A new turn starts in the same process: the CLI emits its new-turn
+    // marker as {type:'system', subtype:'init', ...} — not a bare
+    // {type:'init'} — before doing any real work.
+    lastProc!.stdout.push(
+      JSON.stringify({
+        type: 'system',
+        subtype: 'init',
+        session_id: SESSION_ID,
+      }) + '\n',
+    );
     await vi.advanceTimersByTimeAsync(0);
 
     // The new turn then goes quiet for well over the grace window — e.g.
@@ -294,6 +301,70 @@ describe('CliSessionRunner.run — post-result grace timeout', () => {
     // turn's result event no longer describes this process's state.
     await vi.advanceTimersByTimeAsync(RESULT_EVENT_EXIT_GRACE_MS * 2);
     expect(killSpy).not.toHaveBeenCalled();
+
+    lastProc!.stdout.push(null);
+    lastProc!.emit('exit', 0);
+    const exitCode = await runPromise;
+    expect(exitCode).toBe(0);
+  });
+
+  it('does not force-kill mid-turn when a background subagent completion is followed by a real system/init and further tool_use activity (replays session b49dda4b)', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    const events: Record<string, unknown>[] = [];
+    const runPromise = runner.run('hello', undefined, defaultOptions, (event) =>
+      events.push(event),
+    );
+    await Promise.resolve();
+    expect(lastProc).not.toBeNull();
+
+    // Prior turn ends with a terminal result event.
+    lastProc!.stdout.push(
+      JSON.stringify({
+        type: 'result',
+        is_error: false,
+        stop_reason: 'end_turn',
+      }) + '\n',
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // A background subagent's task_notification completion arrives, then
+    // background_tasks_changed reports the task list empty again — this
+    // alone must not be mistaken for the new-turn reset.
+    lastProc!.stdout.push(
+      JSON.stringify({ type: 'task_notification', task: 'done' }) + '\n',
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    lastProc!.stdout.push(
+      JSON.stringify({
+        type: 'system',
+        subtype: 'background_tasks_changed',
+        tasks: [],
+      }) + '\n',
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The CLI then starts a real new turn, emitting its system/init marker.
+    lastProc!.stdout.push(
+      JSON.stringify({
+        type: 'system',
+        subtype: 'init',
+        session_id: SESSION_ID,
+      }) + '\n',
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Followed by real work (a tool_use) before going quiet.
+    lastProc!.stdout.push(
+      JSON.stringify({ type: 'assistant', message: { tool_use: 'Bash' } }) +
+        '\n',
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // 20s of silence afterwards — well past the 15s grace window — must
+    // not force-kill the still-live process.
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(lastProc!.exitCode).toBeNull();
 
     lastProc!.stdout.push(null);
     lastProc!.emit('exit', 0);
