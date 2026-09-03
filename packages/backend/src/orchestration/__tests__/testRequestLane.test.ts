@@ -52,6 +52,7 @@ import {
   ingestTestRunResults,
   sweepTestRunResultsExtraction,
   computeTestPerfBaseline,
+  __resetProjectSemaphoresForTest,
 } from '../testRequestLane';
 import {
   insertTestRequestRun,
@@ -95,6 +96,7 @@ beforeEach(() => {
   db.prepare('DELETE FROM test_request_runs').run();
   db.prepare('DELETE FROM test_perf_baselines').run();
   db.prepare('DELETE FROM projects').run();
+  __resetProjectSemaphoresForTest();
 });
 
 let sampleSeq = 0;

@@ -250,6 +250,21 @@ function getForeignConcurrentRunCount(projectId: string): number {
   return total;
 }
 
+/**
+ * Test-only: clears every cached per-project semaphore. projectSemaphores is
+ * deliberately process-lifetime state in production (a project's occupancy
+ * must persist across runs), but that means a single test elsewhere in the
+ * suite that intentionally never resolves its mocked run (to exercise queued
+ * state) leaves a permanently nonzero inUse() on that project's semaphore —
+ * invisible to concurrent_run_count (which only ever reads its own project's
+ * semaphore) but silently poisoning every later test's
+ * getForeignConcurrentRunCount, which sums across all of them. Call from a
+ * suite's beforeEach to isolate tests from each other.
+ */
+export function __resetProjectSemaphoresForTest(): void {
+  projectSemaphores.clear();
+}
+
 interface InFlightEntry {
   runId: string;
   contentHash: string;
