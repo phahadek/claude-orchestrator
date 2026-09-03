@@ -287,8 +287,11 @@ describe('CliSessionRunner.run — post-result grace timeout', () => {
     // marker as {type:'system', subtype:'init', ...} — not a bare
     // {type:'init'} — before doing any real work.
     lastProc!.stdout.push(
-      JSON.stringify({ type: 'system', subtype: 'init', session_id: SESSION_ID }) +
-        '\n',
+      JSON.stringify({
+        type: 'system',
+        subtype: 'init',
+        session_id: SESSION_ID,
+      }) + '\n',
     );
     await vi.advanceTimersByTimeAsync(0);
 
@@ -316,8 +319,11 @@ describe('CliSessionRunner.run — post-result grace timeout', () => {
 
     // Prior turn ends with a terminal result event.
     lastProc!.stdout.push(
-      JSON.stringify({ type: 'result', is_error: false, stop_reason: 'end_turn' }) +
-        '\n',
+      JSON.stringify({
+        type: 'result',
+        is_error: false,
+        stop_reason: 'end_turn',
+      }) + '\n',
     );
     await vi.advanceTimersByTimeAsync(0);
 
@@ -339,14 +345,18 @@ describe('CliSessionRunner.run — post-result grace timeout', () => {
 
     // The CLI then starts a real new turn, emitting its system/init marker.
     lastProc!.stdout.push(
-      JSON.stringify({ type: 'system', subtype: 'init', session_id: SESSION_ID }) +
-        '\n',
+      JSON.stringify({
+        type: 'system',
+        subtype: 'init',
+        session_id: SESSION_ID,
+      }) + '\n',
     );
     await vi.advanceTimersByTimeAsync(0);
 
     // Followed by real work (a tool_use) before going quiet.
     lastProc!.stdout.push(
-      JSON.stringify({ type: 'assistant', message: { tool_use: 'Bash' } }) + '\n',
+      JSON.stringify({ type: 'assistant', message: { tool_use: 'Bash' } }) +
+        '\n',
     );
     await vi.advanceTimersByTimeAsync(0);
 
