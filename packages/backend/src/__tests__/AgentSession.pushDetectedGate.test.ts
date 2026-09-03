@@ -55,6 +55,7 @@ vi.mock('../db/queries', () =>
     setSessionTags: vi.fn(),
     resetTaskCrashCount: vi.fn(),
     setHeadSha: vi.fn(),
+    setLastSignalledHeadSha: vi.fn(),
     getPRBySessionId: vi.fn(() => null),
     getPRByNotionTaskId: vi.fn(() => null),
     getPRByNumber: vi.fn(() => null),
@@ -81,8 +82,28 @@ vi.mock('../session/sessionRecovery', () => ({
 
 import { AgentSession } from '../session/AgentSession';
 import { execSync } from 'child_process';
-import { getPRBySessionId } from '../db/queries';
+import { getPRBySessionId, setLastSignalledHeadSha } from '../db/queries';
 import type { TaskBackend } from '../tasks/TaskBackend';
+
+/**
+ * Wires getPRBySessionId/setLastSignalledHeadSha to a shared mutable PR row
+ * so persisting last_signalled_head_sha (the durable replacement for
+ * AgentSession's old in-memory instance field) is visible on the next
+ * getPRBySessionId() call within the same test, matching a real DB round-trip.
+ */
+function mockMutablePR(pr: Record<string, unknown>) {
+  const row: Record<string, unknown> = {
+    last_signalled_head_sha: null,
+    ...pr,
+  };
+  vi.mocked(getPRBySessionId).mockReturnValue(row as any);
+  vi.mocked(setLastSignalledHeadSha).mockImplementation(
+    (_prNumber: number, _repo: string, sha: string | null) => {
+      row.last_signalled_head_sha = sha;
+    },
+  );
+  return row;
+}
 
 function fakeTaskBackend(): TaskBackend {
   return {
@@ -133,11 +154,11 @@ describe('AgentSession — push_detected SHA gate', () => {
     const SHA = 'aabbcc1122334455aabbcc1122334455aabbcc11';
     mockHeadSha(SHA);
 
-    vi.mocked(getPRBySessionId).mockReturnValue({
+    mockMutablePR({
       pr_number: 10,
       repo: 'org/repo',
       review_session_id: 'review-sess-1',
-    } as any);
+    });
 
     const session = new AgentSession(
       'gate-session-1',
@@ -184,11 +205,11 @@ describe('AgentSession — push_detected SHA gate', () => {
       return Buffer.from('');
     });
 
-    vi.mocked(getPRBySessionId).mockReturnValue({
+    mockMutablePR({
       pr_number: 20,
       repo: 'org/repo',
       review_session_id: 'review-sess-2',
-    } as any);
+    });
 
     const session = new AgentSession(
       'gate-session-2',
@@ -224,13 +245,13 @@ describe('AgentSession — push_detected SHA gate', () => {
     mockHeadSha(SHA);
 
     // Before PR creation: no review_session_id
-    vi.mocked(getPRBySessionId).mockReturnValueOnce(null);
+    vi.mocked(getPRBySessionId).mockReturnValueOnce(null as any);
     // After PR creation: review_session_id is set (first time)
-    vi.mocked(getPRBySessionId).mockReturnValue({
+    mockMutablePR({
       pr_number: 30,
       repo: 'org/repo',
       review_session_id: 'review-sess-3',
-    } as any);
+    });
 
     const session = new AgentSession(
       'gate-session-3',
