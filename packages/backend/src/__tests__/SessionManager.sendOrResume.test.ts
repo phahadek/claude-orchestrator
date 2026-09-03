@@ -542,6 +542,61 @@ describe('sendOrResume() terminal session: session_action_failed broadcast', () 
   });
 });
 
+// ── Archived refusal defers rather than discards ────────────────────────────
+
+describe('sendOrResume() archived-session refusal: deferred, not discarded', () => {
+  // Dedicated session id — other describe blocks in this file reuse
+  // SESSION_ID for their own sendOrResume calls (some of which now also
+  // enqueue an inbox row via the same terminal-guard change), and this file
+  // shares one real in-memory DB across all its tests without resetting the
+  // inbox table between them. A private id keeps this test's row counts
+  // exact regardless of execution order.
+  const ARCHIVED_REFUSAL_SESSION_ID = 'dddddddd-1111-2222-3333-444444444444';
+
+  it('a poke refused for archival is enqueued, then delivered once the session is unarchived and poked again', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      ...IDLE_SESSION_ROW,
+      session_id: ARCHIVED_REFUSAL_SESSION_ID,
+      archived: 1,
+      archive_kind: 'operator',
+    } as never);
+
+    const sm = new SessionManager();
+    const refusedResult = await sm.sendOrResume(
+      ARCHIVED_REFUSAL_SESSION_ID,
+      'operator poke text',
+    );
+
+    expect(refusedResult).toBeNull();
+    const pendingAfterRefusal = queries.listUndeliveredInboxItems(
+      ARCHIVED_REFUSAL_SESSION_ID,
+    );
+    expect(pendingAfterRefusal).toHaveLength(1);
+    expect(pendingAfterRefusal[0].payload).toBe('operator poke text');
+    expect(pendingAfterRefusal[0].delivered_at).toBeNull();
+
+    // Operator unarchives the session — a later poke must respawn and
+    // deliver the queued text instead of it staying lost.
+    vi.mocked(queries.getSession).mockReturnValue({
+      ...IDLE_SESSION_ROW,
+      session_id: ARCHIVED_REFUSAL_SESSION_ID,
+      archived: 0,
+      archive_kind: null,
+    } as never);
+
+    const resumedResult = await sm.sendOrResume(
+      ARCHIVED_REFUSAL_SESSION_ID,
+      'follow-up poke',
+    );
+
+    expect(resumedResult).toBe(ARCHIVED_REFUSAL_SESSION_ID);
+    const pendingAfterResume = queries.listUndeliveredInboxItems(
+      ARCHIVED_REFUSAL_SESSION_ID,
+    );
+    expect(pendingAfterResume).toHaveLength(0);
+  });
+});
+
 // ── Prune + reattach ─────────────────────────────────────────────────────────
 
 describe('sendOrResume() prune + reattach', () => {

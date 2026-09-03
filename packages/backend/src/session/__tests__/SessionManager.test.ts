@@ -164,6 +164,7 @@ vi.mock('../../db/queries', () =>
     enqueueFeedbackItem: vi.fn(),
     listUndeliveredInboxItems: vi.fn().mockReturnValue([]),
     markInboxItemsDelivered: vi.fn(),
+    markInboxItemsDropped: vi.fn(),
     insertCompletingSignal: vi.fn(),
     // A canned resume_exhausted row so deriveSessionStatus (a real,
     // unmocked function) derives 'error' from flagResumeFailure's write —
@@ -290,6 +291,8 @@ import {
   markSessionSuperseded,
   listUndeliveredInboxItems,
   markInboxItemsDelivered,
+  markInboxItemsDropped,
+  enqueueFeedbackItem,
   setSessionPauseReason,
   getTaskCache,
   insertCompletingSignal,
@@ -539,7 +542,7 @@ describe('sendOrResume — dead session path', () => {
     },
   );
 
-  it('refuses to respawn an idle-but-archived session without allowTerminal — no AgentSession constructed', async () => {
+  it('refuses to respawn an idle-but-archived session without allowTerminal — no AgentSession constructed, but the text is enqueued rather than lost', async () => {
     vi.mocked(getSession).mockReturnValue({
       ...makeDeadRow(),
       status: 'idle',
@@ -550,6 +553,11 @@ describe('sendOrResume — dead session path', () => {
 
     expect(result).toBeNull();
     expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueFeedbackItem)).toHaveBeenCalledWith(
+      SESSION_ID,
+      'operator:message',
+      'feedback',
+    );
   });
 
   it('with allowTerminal, resumes an idle-but-archived session — recovery paths still work', async () => {
@@ -745,7 +753,7 @@ describe('enqueueFeedback — terminal session behavior', () => {
     expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith(['item-1']);
   });
 
-  it('dispositioning an intent whose session is idle-but-archived marks the inbox item delivered and spawns no process, even with attemptTerminalResume defaulted to true', async () => {
+  it('dispositioning an intent whose session is idle-but-archived marks the inbox item dropped (not delivered) and spawns no process, even with attemptTerminalResume defaulted to true', async () => {
     vi.mocked(getSession).mockReturnValue({
       ...makeDeadRow(),
       status: 'idle',
@@ -761,7 +769,8 @@ describe('enqueueFeedback — terminal session behavior', () => {
 
     expect(sendOrResumeSpy).not.toHaveBeenCalled();
     expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
-    expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith(['item-1']);
+    expect(vi.mocked(markInboxItemsDropped)).toHaveBeenCalledWith(['item-1']);
+    expect(vi.mocked(markInboxItemsDelivered)).not.toHaveBeenCalled();
   });
 });
 

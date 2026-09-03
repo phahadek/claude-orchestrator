@@ -71,6 +71,7 @@ const inboxItemsBySession = new Map<
   Array<{ id: number; source: string; payload: string }>
 >();
 let nextInboxId = 1;
+const droppedInboxIds = new Set<number>();
 
 function seedInbox(
   sessionId: string,
@@ -120,6 +121,15 @@ vi.mock('../db/queries', () => ({
     })),
   ),
   markInboxItemsDelivered: vi.fn((ids: number[]) => {
+    for (const [sessionId, items] of inboxItemsBySession.entries()) {
+      inboxItemsBySession.set(
+        sessionId,
+        items.filter((i) => !ids.includes(i.id)),
+      );
+    }
+  }),
+  markInboxItemsDropped: vi.fn((ids: number[]) => {
+    for (const id of ids) droppedInboxIds.add(id);
     for (const [sessionId, items] of inboxItemsBySession.entries()) {
       inboxItemsBySession.set(
         sessionId,
@@ -259,6 +269,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   inboxItemsBySession.clear();
   nextInboxId = 1;
+  droppedInboxIds.clear();
 });
 
 describe('SessionManager.enqueueFeedback()', () => {
@@ -466,6 +477,27 @@ describe('SessionManager.enqueueFeedback()', () => {
       'feedback_undelivered_terminal',
     );
     expect(queries.markInboxItemsDelivered).toHaveBeenCalled();
+  });
+
+  it('archived session: discards the item as dropped rather than delivered, and never attempts a resume', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-archived',
+      status: 'idle',
+      archived: 1,
+    } as never);
+
+    const sm = new SessionManager();
+    const sendSpy = vi.spyOn(sm, 'sendOrResume');
+
+    await sm.enqueueFeedback('sess-archived', 'ci-failure', 'stale failure');
+
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(queries.markInboxItemsDelivered).not.toHaveBeenCalled();
+    expect(queries.markInboxItemsDropped).toHaveBeenCalled();
+    expect(droppedInboxIds.size).toBe(1);
+    expect(queries.listUndeliveredInboxItems('sess-archived')).toHaveLength(
+      0,
+    );
   });
 
   it('unknown session: enqueues only, no crash', async () => {

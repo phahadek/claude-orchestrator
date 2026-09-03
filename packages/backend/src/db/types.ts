@@ -1133,6 +1133,7 @@ export interface FeedbackInboxRow {
   payload: string;
   enqueued_at: number;
   delivered_at: number | null;
+  dropped_at: number | null;
 }
 
 // ─── test_request_runs ──────────────────────────────────────────────────────

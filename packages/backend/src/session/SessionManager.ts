@@ -106,6 +106,7 @@ import {
   listNonTerminalSessionsWithUndeliveredInboxItems,
   listUndeliveredInboxItems,
   markInboxItemsDelivered,
+  markInboxItemsDropped,
   enqueueFeedbackItem,
   addGrantedCapability,
   removeGrantedCapability,
@@ -5020,7 +5021,17 @@ export class SessionManager extends EventEmitter {
       .join('\n\n');
 
     if (isTerminal && (isArchived || !opts.attemptTerminalResume)) {
-      markInboxItemsDelivered(items.map((i) => i.id));
+      // Archived: the item is discarded outright — dropped_at distinguishes
+      // this from an actual delivery (see the enqueue-before-guard task).
+      // Non-archived terminal without attemptTerminalResume: unchanged
+      // pre-existing behavior — still marked delivered, since that caller
+      // (attemptTerminalResume: false) is treating this as "recorded, not
+      // resent" rather than "discarded".
+      if (isArchived) {
+        markInboxItemsDropped(items.map((i) => i.id));
+      } else {
+        markInboxItemsDelivered(items.map((i) => i.id));
+      }
       return;
     }
 
@@ -5288,12 +5299,24 @@ export class SessionManager extends EventEmitter {
       logger.warn(
         `[SessionManager] sendOrResume: refusing to respawn terminal session ${sessionId} (status=${row.status}, archived=${row.archived}, archive_kind=${row.archive_kind ?? 'null'})`,
       );
+      // Persist before refusing so the operator's text is deferred rather than
+      // discarded — the undelivered-item replay machinery
+      // (listUndeliveredInboxItems, folded in by resolveRespawnDelivery) flushes
+      // it for free on a later unarchive/respawn. Skipped when the caller's
+      // text is already durable as inbox rows (persistTextOnDefer: false).
+      if (opts.persistTextOnDefer !== false) {
+        enqueueFeedbackItem(sessionId, 'operator:message', text);
+      }
+      const isArchivedRefusal =
+        row.archived === 1 && row.archive_kind !== 'machine_park';
       this.emit('message', {
         type: 'session_action_failed',
         sessionId,
         action: 'send_message',
         reason: 'terminal_session',
-        detail: `Session is in terminal state: ${row.status}`,
+        detail: isArchivedRefusal
+          ? `Session is archived and cannot be resumed.`
+          : `Session is in terminal state: ${row.status}`,
       } satisfies ServerMessage);
       return null;
     }

@@ -120,7 +120,7 @@ vi.mock('../logger.js', () => ({
 
 import os from 'os';
 import { SessionManager } from './SessionManager';
-import { getSession } from '../db/queries';
+import { getSession, listUndeliveredInboxItems } from '../db/queries';
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
@@ -304,5 +304,55 @@ describe('SessionManager.sendOrResume — null sentinel on non-resumable session
     const result = await sm.sendOrResume('done-parked-id', 'hello');
 
     expect(result).toBeNull();
+  });
+
+  it('enqueues the operator text before refusing an archived, non-machine-parked session — a refusal is a deferral, not a discard', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      status: 'idle',
+      archived: 1,
+      archive_kind: 'operator',
+    } as any);
+
+    const sm = new SessionManager();
+    const result = await sm.sendOrResume(
+      'refused-archived-id',
+      'operator poke text',
+    );
+
+    expect(result).toBeNull();
+    const items = await listUndeliveredInboxItems('refused-archived-id');
+    expect(items).toHaveLength(1);
+    expect(items[0].payload).toBe('operator poke text');
+    expect(items[0].source).toBe('operator:message');
+    expect(items[0].delivered_at).toBeNull();
+    expect(items[0].dropped_at).toBeNull();
+  });
+
+  it('the refusal detail names archival as the reason instead of echoing a non-terminal status', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      status: 'idle',
+      archived: 1,
+      archive_kind: 'operator',
+    } as any);
+
+    const sm = new SessionManager();
+    const emitSpy = vi.spyOn(sm, 'emit');
+
+    await sm.sendOrResume('refused-detail-id', 'hello');
+
+    expect(emitSpy).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        type: 'session_action_failed',
+        reason: 'terminal_session',
+        detail: expect.stringContaining('archived'),
+      }),
+    );
+    expect(emitSpy).not.toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        detail: expect.stringContaining('idle'),
+      }),
+    );
   });
 });
