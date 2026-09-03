@@ -597,6 +597,38 @@ describe('checkBaseBranchHealth', () => {
     expect(outcome).not.toBe('timed-out');
   });
 
+  it('classifies a boot-swept interrupted_queued row identically to an execution_failed row — same outcome and nextAction', () => {
+    const base: TestRequestRunRow = {
+      id: 'run-interrupted',
+      project_id: 'proj-1',
+      content_hash: 'hash-interrupted',
+      session_id: null,
+      state: 'failed',
+      output:
+        '[testRequestLane] backend restarted while queued — run never began executing',
+      requested_at: null,
+      started_at: 0,
+      finished_at: null,
+      structured_result: null,
+      failure_reason: 'interrupted_queued',
+      concurrent_run_count: null,
+      oom_killed: 0,
+      test_report_acquisition_attempted: null,
+      run_origin: 'base_health_probe',
+    };
+    const executionFailed: TestRequestRunRow = {
+      ...base,
+      id: 'run-execution-failed',
+      failure_reason: 'execution_failed',
+    };
+
+    const interruptedQueuedResult = classifyTestRunOutcome(base);
+    const executionFailedResult = classifyTestRunOutcome(executionFailed);
+
+    expect(interruptedQueuedResult.outcome).toBe('execution-failed');
+    expect(interruptedQueuedResult).toEqual(executionFailedResult);
+  });
+
   it('classifies a queued row (durably recorded at admission, before its permit is acquired) as "queued"', () => {
     const queuedRun: TestRequestRunRow = {
       id: 'run-queued',
@@ -1195,5 +1227,16 @@ describe('classifyRun suite-size floor', () => {
     const crashed = seedFailedRun('run-crashed');
     expect(classifyRun(crashed)).toBe('total_fail');
     expect(classifyRun(truncated)).not.toBe(classifyRun(crashed));
+  });
+
+  it('classifies an interrupted_queued run identically to an execution_failed run — a restart-swept queued row does not route into total_fail remediation filing any differently than the existing execution_failed sweep does', () => {
+    const executionFailed = seedFailedRun('run-execution-failed', {
+      failure_reason: 'execution_failed',
+    });
+    const interruptedQueued = seedFailedRun('run-interrupted-queued', {
+      failure_reason: 'interrupted_queued',
+    });
+
+    expect(classifyRun(interruptedQueued)).toBe(classifyRun(executionFailed));
   });
 });

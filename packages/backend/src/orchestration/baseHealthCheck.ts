@@ -309,7 +309,10 @@ export function classifyTestRunOutcome(
     outcome = 'running';
   } else if (run.state === 'passed') {
     outcome = run.run_kind === 'scoped' ? 'passed-scoped' : 'passed';
-  } else if (run.failure_reason === 'execution_failed') {
+  } else if (
+    run.failure_reason === 'execution_failed' ||
+    run.failure_reason === 'interrupted_queued'
+  ) {
     outcome = 'execution-failed';
   } else if (run.oom_killed || run.failure_reason === 'oom_killed') {
     outcome = 'crashed-oom';

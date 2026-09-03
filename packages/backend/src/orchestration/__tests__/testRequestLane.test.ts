@@ -49,6 +49,7 @@ import {
   runProjectTestRequest,
   admitTestRequest,
   recoverInterruptedTestRequestRuns,
+  setTestRequestLaneBroadcast,
   ingestTestRunResults,
   sweepTestRunResultsExtraction,
   computeTestPerfBaseline,
@@ -895,20 +896,62 @@ describe('runProjectTestRequest — the lane never fails fast', () => {
 });
 
 describe('recoverInterruptedTestRequestRuns', () => {
-  it('marks a leftover running row as failed', () => {
+  it('marks a leftover running row as failed with failure_reason execution_failed and its existing output string, and invokes clearSupersededStructuredResults + broadcastRunStatus', () => {
     insertTestRequestRun('run-1', 'proj-1', 'hash-x', null, Date.now());
+    // A superseded sibling row so clearSupersededStructuredResults' effect
+    // (clearing an already-extracted older row's structured_result for the
+    // same key) is observable.
+    insertTestRequestRun(
+      'run-1-older',
+      'proj-1',
+      'hash-x',
+      null,
+      Date.now() - 1,
+    );
+    completeTestRequestRun(
+      'run-1-older',
+      'passed',
+      'ok',
+      null,
+      '{"suites":[]}',
+    );
+    ingestTestRunResultsTx('run-1-older', 'proj-1', [], 1, false, false, null);
     expect(listRunningTestRequestRuns()).toHaveLength(1);
 
+    const broadcasts: Array<{ runId: string; status: string }> = [];
+    setTestRequestLaneBroadcast((msg) => {
+      if (msg.type === 'test_request_run_status') {
+        broadcasts.push({ runId: msg.runId, status: msg.status });
+      }
+    });
+
     recoverInterruptedTestRequestRuns();
+    setTestRequestLaneBroadcast(() => {});
 
     expect(listRunningTestRequestRuns()).toHaveLength(0);
     const row = db
-      .prepare(`SELECT state FROM test_request_runs WHERE id = ?`)
-      .get('run-1') as { state: string };
+      .prepare(
+        `SELECT state, failure_reason, output FROM test_request_runs WHERE id = ?`,
+      )
+      .get('run-1') as {
+      state: string;
+      failure_reason: string;
+      output: string;
+    };
     expect(row.state).toBe('failed');
+    expect(row.failure_reason).toBe('execution_failed');
+    expect(row.output).toBe(
+      '[testRequestLane] backend restarted mid-run — treated as failed',
+    );
+    expect(broadcasts.some((b) => b.runId === 'run-1')).toBe(true);
+
+    const olderRow = db
+      .prepare(`SELECT structured_result FROM test_request_runs WHERE id = ?`)
+      .get('run-1-older') as { structured_result: string | null };
+    expect(olderRow.structured_result).toBeNull();
   });
 
-  it('marks a leftover queued row as failed, matching the running-row behavior', () => {
+  it('marks a leftover queued row as failed with failure_reason interrupted_queued and an output stating it never began executing, and invokes broadcastRunStatus', () => {
     insertTestRequestRun(
       'run-queued-1',
       'proj-1',
@@ -925,12 +968,67 @@ describe('recoverInterruptedTestRequestRuns', () => {
       .get('run-queued-1') as { state: string };
     expect(before.state).toBe('queued');
 
+    const broadcasts: Array<{ runId: string; status: string }> = [];
+    setTestRequestLaneBroadcast((msg) => {
+      if (msg.type === 'test_request_run_status') {
+        broadcasts.push({ runId: msg.runId, status: msg.status });
+      }
+    });
+
     recoverInterruptedTestRequestRuns();
+    setTestRequestLaneBroadcast(() => {});
 
     const after = db
-      .prepare(`SELECT state FROM test_request_runs WHERE id = ?`)
-      .get('run-queued-1') as { state: string };
+      .prepare(
+        `SELECT state, failure_reason, output FROM test_request_runs WHERE id = ?`,
+      )
+      .get('run-queued-1') as {
+      state: string;
+      failure_reason: string;
+      output: string;
+    };
     expect(after.state).toBe('failed');
+    expect(after.failure_reason).toBe('interrupted_queued');
+    expect(after.output).toContain('never began executing');
+    expect(broadcasts.some((b) => b.runId === 'run-queued-1')).toBe(true);
+  });
+
+  it('gives a running row and a queued row swept together different failure_reason values', () => {
+    insertTestRequestRun(
+      'run-mixed-running',
+      'proj-1',
+      'hash-mixed-a',
+      null,
+      Date.now(),
+    );
+    insertTestRequestRun(
+      'run-mixed-queued',
+      'proj-1',
+      'hash-mixed-b',
+      null,
+      Date.now(),
+      null,
+      null,
+      'session_request',
+      'queued',
+    );
+
+    recoverInterruptedTestRequestRuns();
+
+    const rows = db
+      .prepare(
+        `SELECT id, failure_reason FROM test_request_runs WHERE id IN (?, ?)`,
+      )
+      .all('run-mixed-running', 'run-mixed-queued') as Array<{
+      id: string;
+      failure_reason: string;
+    }>;
+    const reasons = Object.fromEntries(
+      rows.map((r) => [r.id, r.failure_reason]),
+    );
+    expect(reasons['run-mixed-running']).toBe('execution_failed');
+    expect(reasons['run-mixed-queued']).toBe('interrupted_queued');
+    expect(reasons['run-mixed-running']).not.toBe(reasons['run-mixed-queued']);
   });
 });
 

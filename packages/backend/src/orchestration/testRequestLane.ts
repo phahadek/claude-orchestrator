@@ -723,42 +723,66 @@ async function executeTestRequestRun(
  * increment at stage time, so this does not grant a free retry against the
  * escalation budget.
  *
- * Deliberately boot-only: "every row still 'running' is stale" is only
- * true immediately after the process starts, when nothing could have
- * legitimately begun executing yet. Do not call this from a periodic,
- * mid-uptime sweep — a genuinely in-flight run's row would get force-failed
- * out from under its still-executing subprocess. See
+ * A 'queued' row is exactly as stranded as a 'running' one: its waiter lived
+ * only in the crashed process's in-memory Semaphore, so it can never acquire
+ * a permit on its own — but it never dequeued, so its test commands never
+ * started. It is marked `failed` with failure_reason 'interrupted_queued'
+ * rather than 'execution_failed', so the durable record still distinguishes
+ * "was executing when the backend restarted" from "was merely waiting for a
+ * concurrency slot" — collapsing the two into one output/reason made the two
+ * cases indistinguishable after the fact (started_at is populated on a
+ * queued row too, so it can't stand in for "began executing" either).
+ *
+ * Deliberately boot-only: "every row still 'running'/'queued' is stale" is
+ * only true immediately after the process starts, when nothing could have
+ * legitimately begun executing (or still be waiting to) yet. Do not call
+ * this from a periodic, mid-uptime sweep — a genuinely in-flight run's row
+ * would get force-failed out from under its still-executing subprocess, and
+ * a genuinely queued row out from under its still-live waiter. See
  * SessionManager.reapMainCgroupOrphans's doc comment for why the periodic
  * main/ orphan sweep does not call this.
  */
 export function recoverInterruptedTestRequestRuns(): void {
-  // A 'queued' row is exactly as stranded as a 'running' one: its waiter
-  // lived only in the crashed process's in-memory Semaphore, so it can never
-  // acquire a permit on its own — mark it failed rather than leaving it
-  // silently queued forever.
-  const stranded = [
-    ...listRunningTestRequestRuns(),
-    ...listQueuedTestRequestRuns(),
+  const sweeps: Array<{
+    runs: TestRequestRunRow[];
+    failureReason: TestRequestFailureReason;
+    output: string;
+  }> = [
+    {
+      runs: listRunningTestRequestRuns(),
+      failureReason: 'execution_failed',
+      output: '[testRequestLane] backend restarted mid-run — treated as failed',
+    },
+    {
+      runs: listQueuedTestRequestRuns(),
+      failureReason: 'interrupted_queued',
+      output:
+        '[testRequestLane] backend restarted while queued — run never began executing',
+    },
   ];
-  for (const run of stranded) {
-    logger.warn(
-      `[testRequestLane] recovering interrupted run ${run.id} (project ${run.project_id}) as failed`,
-    );
-    const output =
-      '[testRequestLane] backend restarted mid-run — treated as failed';
-    completeTestRequestRun(run.id, 'failed', output, 'execution_failed');
-    clearSupersededStructuredResults(run.project_id, run.content_hash, run.id);
-    broadcastRunStatus({
-      runId: run.id,
-      projectId: run.project_id,
-      contentHash: run.content_hash,
-      status: 'failed-with-cause',
-      output,
-      sessionId: run.session_id,
-      requestedAt: run.requested_at ?? undefined,
-      startedAt: run.started_at,
-      finishedAt: Date.now(),
-    });
+  for (const { runs, failureReason, output } of sweeps) {
+    for (const run of runs) {
+      logger.warn(
+        `[testRequestLane] recovering interrupted run ${run.id} (project ${run.project_id}) as failed (${failureReason})`,
+      );
+      completeTestRequestRun(run.id, 'failed', output, failureReason);
+      clearSupersededStructuredResults(
+        run.project_id,
+        run.content_hash,
+        run.id,
+      );
+      broadcastRunStatus({
+        runId: run.id,
+        projectId: run.project_id,
+        contentHash: run.content_hash,
+        status: 'failed-with-cause',
+        output,
+        sessionId: run.session_id,
+        requestedAt: run.requested_at ?? undefined,
+        startedAt: run.started_at,
+        finishedAt: Date.now(),
+      });
+    }
   }
 }
 
