@@ -4,11 +4,16 @@ import path from 'path';
 import { Worker } from 'worker_threads';
 import { getOrchestratorConfig } from '../config/appConfig';
 import { getDataDir } from '../config/dataDir';
-import { resolveDbPath } from '../config/resolveDbPath';
+import { resolveDbPath, resolveLegacyDbCandidates } from '../config/resolveDbPath';
 import { logger } from '../logger';
 import { assertDatabaseSchema } from './assertDatabaseSchema';
 
 const _configDbPath = getOrchestratorConfig().db.path || './dashboard.db';
+// packages/backend/src/db/db.ts -> up two -> packages/backend, whether
+// running from src (ts-node) or the mirrored dist/ layout — the pre-2.0.0
+// CWD a `npm run dev` launched from within the backend package would have
+// resolved a relative db.path against.
+const backendPackageRoot = path.resolve(__dirname, '..', '..');
 // Resolved against the data directory, never process.cwd() — a CWD-relative
 // path is set by whatever launched the process (e.g. a systemd drop-in), not
 // by the operator, and silently pointed a production install at an empty
@@ -200,7 +205,12 @@ export function runWalTruncateCheckpointOffMainThread(
   });
 }
 
-assertDatabaseSchema(db, dbPath, dbFileExistedBeforeOpen);
+const legacyCandidatePaths = resolveLegacyDbCandidates(
+  _configDbPath,
+  backendPackageRoot,
+).filter((candidate) => candidate !== dbPath);
+
+assertDatabaseSchema(db, dbPath, dbFileExistedBeforeOpen, legacyCandidatePaths);
 
 // Run migrations immediately so prepared statements in queries.ts compile at import time.
 db.exec(`
@@ -499,3 +509,33 @@ try {
     logger.warn('[db] auto_vacuum enablement failed (non-fatal):', err);
   }
 })();
+
+// The resolved absolute path plus a row-count snapshot of the core tables —
+// the one fact that would have made the legacy-db-left-behind failure mode
+// self-diagnosing in seconds instead of a manual hunt through path
+// resolution code. Call once migrations have run, so these tables are
+// guaranteed to exist.
+const BOOT_SUMMARY_TABLES = [
+  'sessions',
+  'projects',
+  'pull_requests',
+  'session_events',
+];
+
+export function logDatabaseBootSummary(): void {
+  const counts: Record<string, number> = {};
+  for (const table of BOOT_SUMMARY_TABLES) {
+    try {
+      const row = db.prepare(`SELECT COUNT(*) as c FROM ${table}`).get() as
+        | { c: number }
+        | undefined;
+      counts[table] = row?.c ?? 0;
+    } catch {
+      counts[table] = -1;
+    }
+  }
+  const countsSummary = Object.entries(counts)
+    .map(([table, count]) => `${table}=${count}`)
+    .join(' ');
+  logger.info(`[db] resolved path="${dbPath}" ${countsSummary}`);
+}
