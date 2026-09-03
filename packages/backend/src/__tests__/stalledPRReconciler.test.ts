@@ -33,6 +33,7 @@ vi.mock('../db/queries.js', () => ({
   setStalledRetryBaseExhausted: vi.fn(),
   resetStalledPRRetryCountForBaseRecovery: vi.fn(),
   setReconcileExhausted: vi.fn(),
+  hasQueuedOrRunningTestRunForSession: vi.fn(() => false),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -70,6 +71,7 @@ import {
   getSessionLastActivityMs,
   setStalledRetryBaseExhausted,
   setReconcileExhausted,
+  hasQueuedOrRunningTestRunForSession,
 } from '../db/queries.js';
 import {
   recordEvent,
@@ -990,6 +992,82 @@ describe('StalledPRReconciler', () => {
     expect(
       messages.find((m) => m.type === 'pr_stalled_escalated'),
     ).toBeUndefined();
+  });
+
+  it('does not classify session_inert or relaunch the fixer for a PR at verify stage for 20 min while its own pre-review pipeline is in flight', async () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'approved' }),
+      head_sha: 'sha1',
+      last_reviewed_sha: 'sha1',
+      review_session_id: null,
+      pending_push: 0,
+      pause_reason: null,
+      pre_review_stage: 'verify',
+      session_id: 'session-1',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+    vi.mocked(getSessionLastActivityMs).mockReturnValue(
+      Date.now() - 20 * 60 * 1000,
+    );
+    vi.mocked(typedGetSetting).mockImplementation((key: string) => {
+      if (key === 'session_inert_threshold_seconds') return 600;
+      return 5;
+    });
+
+    const { fn: broadcast } = makeBroadcast();
+    const ro = makeReviewOrchestrator(true); // verify pipeline still running
+    const sm = makeSessionManager();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+    reconciler.setSessionManager(sm as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(sm.relaunchFixerForPR).not.toHaveBeenCalled();
+    expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
+    expect(
+      vi
+        .mocked(recordEvent)
+        .mock.calls.filter(
+          (c) => (c[0] as any).event_type === 'stalled_pr_reconcile_attempt',
+        ),
+    ).toHaveLength(0);
+  });
+
+  it('does not classify session_inert for a PR at tests stage past the inert threshold when its session has a queued/running test run', async () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'approved' }),
+      head_sha: 'sha1',
+      last_reviewed_sha: 'sha1',
+      review_session_id: null,
+      pending_push: 0,
+      pause_reason: null,
+      pre_review_stage: 'tests',
+      session_id: 'session-1',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+    vi.mocked(getSessionLastActivityMs).mockReturnValue(
+      Date.now() - 20 * 60 * 1000,
+    );
+    vi.mocked(typedGetSetting).mockImplementation((key: string) => {
+      if (key === 'session_inert_threshold_seconds') return 600;
+      return 5;
+    });
+    vi.mocked(hasQueuedOrRunningTestRunForSession).mockReturnValue(true);
+
+    const { fn: broadcast } = makeBroadcast();
+    const ro = makeReviewOrchestrator(false); // isReviewInFlight false — relies on the test-run signal
+    const sm = makeSessionManager();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+    reconciler.setSessionManager(sm as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(sm.relaunchFixerForPR).not.toHaveBeenCalled();
+    expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
+
+    vi.mocked(hasQueuedOrRunningTestRunForSession).mockReturnValue(false);
   });
 
   it('skips analyze_failing PR with pending_push (push flow handles it)', async () => {
