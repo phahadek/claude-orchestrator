@@ -50,12 +50,6 @@ interface TaskAxis {
   blocking: TaskAxisBlockingItem[];
 }
 
-interface GateAxisBlockingItem {
-  id: string;
-  text: string;
-  state: string;
-}
-
 interface GateAxis {
   status: 'green' | 'blocked';
   blockingCount: number;
@@ -65,7 +59,6 @@ interface GateAxis {
   bespokeCount: number;
   /** Per-state item totals (open/runnable/pass/fail/deferred/etc), independent of the blocking filter — sums to the milestone's full gate-item count. */
   counts: Record<string, number>;
-  blocking: GateAxisBlockingItem[];
 }
 
 interface SeedAxisBlockingItem {
@@ -190,11 +183,6 @@ export function getMilestoneConvergence(
     parkedCount: gateReadiness.parked.length,
     bespokeCount: gateReadiness.bespokeStates.length,
     counts: gateReadiness.counts,
-    blocking: gateReadiness.blocking.map((b) => ({
-      id: b.id,
-      text: b.text,
-      state: b.state,
-    })),
   };
 
   const seedReadiness = getSeedReadiness(projectId, key);
