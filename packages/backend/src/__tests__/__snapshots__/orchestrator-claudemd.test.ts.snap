@@ -1,0 +1,839 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`buildOrchestratorClaudeMd — taskBackend wording > github backend > matches snapshot 1`] = `
+"# Orchestrator Rules (DO NOT OVERRIDE)
+
+> ⚠️ Injected by the orchestrator — takes priority over all project instructions. Do not remove or override.
+
+---
+
+## Task Assignment
+
+- **Task**: test-task
+- **GitHub issue**: https://notion.so/test-task
+- **Project context**: https://notion.so/project
+
+---
+
+## Lifecycle
+
+> ⚠️ **Your task is pre-assigned (see Task Assignment above). Never browse the task board or self-assign a different task. If you have no remaining work because it's already satisfied elsewhere, call \`planning.noOp\` (task id + resolving commit/PR) instead of stopping silently — a silent stop re-dispatches the task forever.**
+
+1. Fetch the GitHub issue via the gh CLI. Retrieve only the pre-assigned task above — do NOT browse the board to pick up additional work.
+2. Verify your branch: \`git branch --show-current\` → \`feature/<task-name>\`.
+3. Implement the task per the acceptance criteria.
+4. Pass the pre-PR gate (see Pre-PR Gate section below).
+5. Open a draft PR targeting \`dev\` using the required body template.
+6. **Stop and wait.** The dashboard sends review feedback as follow-up messages.
+   Address findings by pushing additional commits, then wait again.
+
+---
+
+## Nudges
+
+A nudge is an unsolicited orchestrator message about your open PR — a merge-conflict, "base branch moved", or stalled-merge notice. Act on what it names, ahead of the "stop and wait" default above, which covers the gap between review passes, not a flagged change. Compliance isn't checked; act because it's true.
+
+Keep your PR mergeable against \`dev\` for its whole life, not just through the Pre-PR Gate — rebase and push once you learn it's needed.
+
+The supervisor's "Pause your work" message isn't a nudge in this sense: stopping is what it asks, so stopping is full compliance.
+
+---
+
+## Flaky / Transient CI or F2 Gate Failures
+
+When a CI check or the F2 orchestrator-run test gate fails on your PR, do not assume it's flaky and do not push an empty commit to force a re-run — that does not re-drive anything. Default to treating the failure as real and fixing it.
+
+Test commands are blocked at the permission layer — always via \`mcp__orchestrator__test_request\`, never directly (result lands in your feedback inbox next turn). Do not re-run the suite to establish flakiness — the backend already holds a cross-SHA outcome corpus and adjudicates against it. Call \`mcp__orchestrator__flaky_confirm\` once with what you observed, instead of pushing a commit:
+
+- \`gate\`: \`"ci"\`, \`"f2"\`, or \`"analyze"\` — whichever gate failed.
+- \`reason\`: one line naming what you observed and why it's unrelated to your diff.
+- \`testId\` / \`testName\`: required for \`"ci"\`/\`"f2"\` — identifies the failing test so the backend can check it against the corpus and your diff.
+
+The backend refuses (naming why) unless the test clears the corpus and its file isn't in your diff. On success it re-runs the gate on the same commit and re-drives the merge loop on a pass — bounded, so exhaustion parks the PR for a human rather than looping.
+
+---
+
+## Responding to Review Comments
+
+When a follow-up message delivers review feedback tied to specific GitHub review comments (each comment has a \`comment_id\`), after you've addressed them — by pushing a commit, or by deciding a comment doesn't need a code change — call the \`mcp__orchestrator__review_disposition\` tool once per \`comment_id\` to report the outcome:
+
+- \`comment_id\` is the numeric GitHub review comment ID from the feedback message — not the PR number.
+- \`disposition\` is one of:
+  - \`"addressed"\` — you changed code (or confirmed existing behavior already satisfies the comment) and pushed a commit.
+  - \`"wont_fix"\` — you deliberately did not change anything; the comment is valid but out of scope for a fix here, or you disagree with it.
+  - \`"out_of_scope"\` — the comment asks for something beyond this task's scope (scope creep, unrelated refactor, etc.).
+- \`reason\` is required for every call — a one-line explanation a human reviewer can read without opening the diff.
+- Call it once per routed review comment you were given, not just the ones you changed code for. The orchestrator replies to and resolves each comment's thread on GitHub based on these calls — a comment with no call stays open and unresolved.
+
+---
+
+## Status Ownership
+
+**Do NOT update GitHub issue status.**
+**Do NOT call any GitHub API to change task status.**
+The orchestrator backend handles all status transitions (In Progress → In Review → Done).
+
+---
+
+## Efficiency Rules
+
+Running in \`--print\` mode — optimize for speed and token efficiency:
+
+- **Do NOT use TodoWrite.** No one sees the todo list. Track your progress internally.
+- **Do NOT use Agent subagents for exploration.** Use Glob and Grep directly.
+- **Minimize tool calls.** Batch reads; don't re-read files you just wrote or edited.
+- **Prefer Edit over Write** for existing files; never re-emit unchanged file bodies.
+- **Commit messages:** one sentence summaries. **PR body \`## Summary\` section:** 1-3 sentences — see PR Format Standards below for the full required section list.
+- **Never cat \`tasks/*.output\` files** — use the TaskOutput tool instead.
+
+---
+
+## Context Efficiency
+
+- **Grep first, then read the slice** — locate with Grep, then Read with \`offset\`/\`limit\` for only the region you need.
+- **Scope every Grep** — supply \`path\`/\`glob\` and a specific pattern; avoid repo-wide matches.
+- **Don't re-read after editing** — the Edit result already reflects the change.
+- **Reference modules: read the relevant region only**, not the whole file.
+
+---
+
+## PR Format Standards
+
+- **Title**: \`feat: <task-name>\` — no scope prefix, no milestone tags.
+- **How to create the PR**: emit the body inside \`<pr-body>…</pr-body>\` in your final message — this is the sanctioned path. Do NOT use the MCP \`mcp__github__create_pull_request\` tool. If a PR was already opened another way (e.g. you ran \`gh pr create\` directly), that is fine and does not need to be undone — the orchestrator detects and tracks it too; just re-emit the \`<pr-body>\` marker if the body still needs to match the template below.
+- **Required body sections**:
+
+\`\`\`
+## Summary
+<1-3 sentences: what changed and why>
+
+## GitHub Issue
+<link to the task page>
+
+## Automated Tests
+<list tests added/modified, or "No test changes">
+\`\`\`
+
+---
+
+## Branch Rules
+
+- Branch name: \`feature/<task-name>\`
+- Never commit directly to \`dev\` or \`main\`
+- Never merge your own PR
+- One task per session — no scope creep
+
+---
+
+## Commit Attribution
+
+Every commit **must** include this trailer:
+
+\`\`\`
+AI-Authored-By: <model> (session: <session-id>)
+\`\`\`
+
+---
+
+## Pre-PR Gate
+
+Run in order — all must pass before opening the PR:
+
+1. Rebase onto \`dev\` and resolve any conflicts. If this branch was already pushed, update the remote with \`git push --force-with-lease origin <your feature branch>\` — a bare \`git push\` will be rejected after a rebase.
+2. No local verify step configured — CI is the gate.
+3. Stage only your implementation files for commit.
+
+Tests are blocked at the permission layer, not part of this gate — run via \`test_request\`.
+
+---
+
+## Forbidden Actions
+
+- Never push directly to \`main\`
+- Never bare force push (\`git push --force\`)
+- Never force-push \`main\`, \`dev\`, or any branch outside this worktree's own feature branch
+- \`git push --force-with-lease origin <your feature branch>\` **is allowed** — use it to update your own PR branch after a rebase (see Pre-PR Gate)
+- Never delete branches that live outside this worktree
+- Never run \`git reset --hard\` on the main repository directory
+- Never skip pre-commit hooks (\`--no-verify\`)
+- Use \`git add <specific files>\` instead of \`git add .\` — review staged files before committing.
+- Never run \`gh pr close\` or \`gh pr reopen\`, and never close or recreate your own PR to "redo" it — the orchestrator tracks whatever PR is currently open. If it was opened the wrong way, leave it open; just re-emit the \`<pr-body>\` marker if the body needs updating.
+
+---
+
+## Git Isolation
+
+> **Your worktree directory is \`/worktrees/abc123\`.**
+> This is your \`cwd\`. All commands run here. Never navigate to or operate on any parent directory.
+
+- Never use \`git -C <path>\` pointing outside this worktree
+- Never use \`--work-tree\` or \`--git-dir\` flags pointing outside this worktree
+- Never run \`git checkout\` or \`git switch\` targeting a branch in the main repo directory
+
+---
+
+## Filesystem Isolation (Personal Mode)
+
+> ⚠️ **No sandbox** — isolation is prompt-level only. Writes outside the worktree corrupt the developer's environment.
+
+All file writes **must stay inside** \`/worktrees/abc123\`. Never write to the project root, \`/tmp/\`, or \`$HOME\`. For scratch files use \`.claude/scratch/\` in your worktree.
+
+---
+
+## Manual Verification Gate
+
+Manual/runtime verification is owned by the milestone's Manual Verification Gate, not
+by you. Do NOT run, attempt, or simulate manual/runtime tests to satisfy acceptance
+criteria. Your task carries no manual-verification section by default — its absence
+does NOT mean "go run something"; it means the gate already owns it. Ship only what
+the automated acceptance criteria require.
+
+---
+
+## Bash Rules (Permission System)
+
+Bash is authorized by **first-token** prefix matching. Violations cause **silent denial**.
+
+**Rule 1 — One command per Bash call.**
+Never chain with \`&&\`, \`;\`, or \`||\`. Split into separate Bash calls.
+
+**Rule 2 — Never prefix with \`cd path &&\`.** You're already in the worktree; run commands directly.
+
+**Rule 3 — No heredoc subshells in git commit.**
+Use repeated \`-m\` flags instead: \`git commit -m "subject" -m "body"\` — git concatenates them.
+
+**Rule 4 — Do not write to \`/tmp/\` or paths outside the worktree.**
+Use the Write tool; never use \`cat >\`, \`printf >\`, or \`echo >\` redirects.
+
+**Rule 5 — Use \`npx\` instead of bare tool names.**
+\`tsc\` → \`npx tsc\`. Bare commands may not be on PATH."
+`;
+
+exports[`buildOrchestratorClaudeMd — taskBackend wording > jira backend > matches snapshot 1`] = `
+"# Orchestrator Rules (DO NOT OVERRIDE)
+
+> ⚠️ Injected by the orchestrator — takes priority over all project instructions. Do not remove or override.
+
+---
+
+## Task Assignment
+
+- **Task**: test-task
+- **Jira issue**: https://notion.so/test-task
+- **Project context**: https://notion.so/project
+
+---
+
+## Lifecycle
+
+> ⚠️ **Your task is pre-assigned (see Task Assignment above). Never browse the task board or self-assign a different task. If you have no remaining work because it's already satisfied elsewhere, call \`planning.noOp\` (task id + resolving commit/PR) instead of stopping silently — a silent stop re-dispatches the task forever.**
+
+1. Fetch the Jira issue. Retrieve only the pre-assigned task above — do NOT browse the board to pick up additional work.
+2. Verify your branch: \`git branch --show-current\` → \`feature/<task-name>\`.
+3. Implement the task per the acceptance criteria.
+4. Pass the pre-PR gate (see Pre-PR Gate section below).
+5. Open a draft PR targeting \`dev\` using the required body template.
+6. **Stop and wait.** The dashboard sends review feedback as follow-up messages.
+   Address findings by pushing additional commits, then wait again.
+
+---
+
+## Nudges
+
+A nudge is an unsolicited orchestrator message about your open PR — a merge-conflict, "base branch moved", or stalled-merge notice. Act on what it names, ahead of the "stop and wait" default above, which covers the gap between review passes, not a flagged change. Compliance isn't checked; act because it's true.
+
+Keep your PR mergeable against \`dev\` for its whole life, not just through the Pre-PR Gate — rebase and push once you learn it's needed.
+
+The supervisor's "Pause your work" message isn't a nudge in this sense: stopping is what it asks, so stopping is full compliance.
+
+---
+
+## Flaky / Transient CI or F2 Gate Failures
+
+When a CI check or the F2 orchestrator-run test gate fails on your PR, do not assume it's flaky and do not push an empty commit to force a re-run — that does not re-drive anything. Default to treating the failure as real and fixing it.
+
+Test commands are blocked at the permission layer — always via \`mcp__orchestrator__test_request\`, never directly (result lands in your feedback inbox next turn). Do not re-run the suite to establish flakiness — the backend already holds a cross-SHA outcome corpus and adjudicates against it. Call \`mcp__orchestrator__flaky_confirm\` once with what you observed, instead of pushing a commit:
+
+- \`gate\`: \`"ci"\`, \`"f2"\`, or \`"analyze"\` — whichever gate failed.
+- \`reason\`: one line naming what you observed and why it's unrelated to your diff.
+- \`testId\` / \`testName\`: required for \`"ci"\`/\`"f2"\` — identifies the failing test so the backend can check it against the corpus and your diff.
+
+The backend refuses (naming why) unless the test clears the corpus and its file isn't in your diff. On success it re-runs the gate on the same commit and re-drives the merge loop on a pass — bounded, so exhaustion parks the PR for a human rather than looping.
+
+---
+
+## Responding to Review Comments
+
+When a follow-up message delivers review feedback tied to specific GitHub review comments (each comment has a \`comment_id\`), after you've addressed them — by pushing a commit, or by deciding a comment doesn't need a code change — call the \`mcp__orchestrator__review_disposition\` tool once per \`comment_id\` to report the outcome:
+
+- \`comment_id\` is the numeric GitHub review comment ID from the feedback message — not the PR number.
+- \`disposition\` is one of:
+  - \`"addressed"\` — you changed code (or confirmed existing behavior already satisfies the comment) and pushed a commit.
+  - \`"wont_fix"\` — you deliberately did not change anything; the comment is valid but out of scope for a fix here, or you disagree with it.
+  - \`"out_of_scope"\` — the comment asks for something beyond this task's scope (scope creep, unrelated refactor, etc.).
+- \`reason\` is required for every call — a one-line explanation a human reviewer can read without opening the diff.
+- Call it once per routed review comment you were given, not just the ones you changed code for. The orchestrator replies to and resolves each comment's thread on GitHub based on these calls — a comment with no call stays open and unresolved.
+
+---
+
+## Status Ownership
+
+**Do NOT update Jira issue status.**
+**Do NOT call any Jira API to change task status.**
+The orchestrator backend handles all status transitions (In Progress → In Review → Done).
+
+---
+
+## Efficiency Rules
+
+Running in \`--print\` mode — optimize for speed and token efficiency:
+
+- **Do NOT use TodoWrite.** No one sees the todo list. Track your progress internally.
+- **Do NOT use Agent subagents for exploration.** Use Glob and Grep directly.
+- **Minimize tool calls.** Batch reads; don't re-read files you just wrote or edited.
+- **Prefer Edit over Write** for existing files; never re-emit unchanged file bodies.
+- **Commit messages:** one sentence summaries. **PR body \`## Summary\` section:** 1-3 sentences — see PR Format Standards below for the full required section list.
+- **Never cat \`tasks/*.output\` files** — use the TaskOutput tool instead.
+
+---
+
+## Context Efficiency
+
+- **Grep first, then read the slice** — locate with Grep, then Read with \`offset\`/\`limit\` for only the region you need.
+- **Scope every Grep** — supply \`path\`/\`glob\` and a specific pattern; avoid repo-wide matches.
+- **Don't re-read after editing** — the Edit result already reflects the change.
+- **Reference modules: read the relevant region only**, not the whole file.
+
+---
+
+## PR Format Standards
+
+- **Title**: \`feat: <task-name>\` — no scope prefix, no milestone tags.
+- **How to create the PR**: emit the body inside \`<pr-body>…</pr-body>\` in your final message — this is the sanctioned path. Do NOT use the MCP \`mcp__github__create_pull_request\` tool. If a PR was already opened another way (e.g. you ran \`gh pr create\` directly), that is fine and does not need to be undone — the orchestrator detects and tracks it too; just re-emit the \`<pr-body>\` marker if the body still needs to match the template below.
+- **Required body sections**:
+
+\`\`\`
+## Summary
+<1-3 sentences: what changed and why>
+
+## Jira Issue
+<link to the task page>
+
+## Automated Tests
+<list tests added/modified, or "No test changes">
+\`\`\`
+
+---
+
+## Branch Rules
+
+- Branch name: \`feature/<task-name>\`
+- Never commit directly to \`dev\` or \`main\`
+- Never merge your own PR
+- One task per session — no scope creep
+
+---
+
+## Commit Attribution
+
+Every commit **must** include this trailer:
+
+\`\`\`
+AI-Authored-By: <model> (session: <session-id>)
+\`\`\`
+
+---
+
+## Pre-PR Gate
+
+Run in order — all must pass before opening the PR:
+
+1. Rebase onto \`dev\` and resolve any conflicts. If this branch was already pushed, update the remote with \`git push --force-with-lease origin <your feature branch>\` — a bare \`git push\` will be rejected after a rebase.
+2. No local verify step configured — CI is the gate.
+3. Stage only your implementation files for commit.
+
+Tests are blocked at the permission layer, not part of this gate — run via \`test_request\`.
+
+---
+
+## Forbidden Actions
+
+- Never push directly to \`main\`
+- Never bare force push (\`git push --force\`)
+- Never force-push \`main\`, \`dev\`, or any branch outside this worktree's own feature branch
+- \`git push --force-with-lease origin <your feature branch>\` **is allowed** — use it to update your own PR branch after a rebase (see Pre-PR Gate)
+- Never delete branches that live outside this worktree
+- Never run \`git reset --hard\` on the main repository directory
+- Never skip pre-commit hooks (\`--no-verify\`)
+- Use \`git add <specific files>\` instead of \`git add .\` — review staged files before committing.
+- Never run \`gh pr close\` or \`gh pr reopen\`, and never close or recreate your own PR to "redo" it — the orchestrator tracks whatever PR is currently open. If it was opened the wrong way, leave it open; just re-emit the \`<pr-body>\` marker if the body needs updating.
+
+---
+
+## Git Isolation
+
+> **Your worktree directory is \`/worktrees/abc123\`.**
+> This is your \`cwd\`. All commands run here. Never navigate to or operate on any parent directory.
+
+- Never use \`git -C <path>\` pointing outside this worktree
+- Never use \`--work-tree\` or \`--git-dir\` flags pointing outside this worktree
+- Never run \`git checkout\` or \`git switch\` targeting a branch in the main repo directory
+
+---
+
+## Filesystem Isolation (Personal Mode)
+
+> ⚠️ **No sandbox** — isolation is prompt-level only. Writes outside the worktree corrupt the developer's environment.
+
+All file writes **must stay inside** \`/worktrees/abc123\`. Never write to the project root, \`/tmp/\`, or \`$HOME\`. For scratch files use \`.claude/scratch/\` in your worktree.
+
+---
+
+## Manual Verification Gate
+
+Manual/runtime verification is owned by the milestone's Manual Verification Gate, not
+by you. Do NOT run, attempt, or simulate manual/runtime tests to satisfy acceptance
+criteria. Your task carries no manual-verification section by default — its absence
+does NOT mean "go run something"; it means the gate already owns it. Ship only what
+the automated acceptance criteria require.
+
+---
+
+## Bash Rules (Permission System)
+
+Bash is authorized by **first-token** prefix matching. Violations cause **silent denial**.
+
+**Rule 1 — One command per Bash call.**
+Never chain with \`&&\`, \`;\`, or \`||\`. Split into separate Bash calls.
+
+**Rule 2 — Never prefix with \`cd path &&\`.** You're already in the worktree; run commands directly.
+
+**Rule 3 — No heredoc subshells in git commit.**
+Use repeated \`-m\` flags instead: \`git commit -m "subject" -m "body"\` — git concatenates them.
+
+**Rule 4 — Do not write to \`/tmp/\` or paths outside the worktree.**
+Use the Write tool; never use \`cat >\`, \`printf >\`, or \`echo >\` redirects.
+
+**Rule 5 — Use \`npx\` instead of bare tool names.**
+\`tsc\` → \`npx tsc\`. Bare commands may not be on PATH."
+`;
+
+exports[`buildOrchestratorClaudeMd — taskBackend wording > local backend > matches snapshot 1`] = `
+"# Orchestrator Rules (DO NOT OVERRIDE)
+
+> ⚠️ Injected by the orchestrator — takes priority over all project instructions. Do not remove or override.
+
+---
+
+## Task Assignment
+
+- **Task**: test-task
+- **Task**: https://notion.so/test-task
+- **Project context**: https://notion.so/project
+
+---
+
+## Lifecycle
+
+> ⚠️ **Your task is pre-assigned (see Task Assignment above). Never browse the task board or self-assign a different task. If you have no remaining work because it's already satisfied elsewhere, call \`planning.noOp\` (task id + resolving commit/PR) instead of stopping silently — a silent stop re-dispatches the task forever.**
+
+> ⚠️ **YAML task source**: Task context is in \`tasks.yaml\` in the project root. Skip the remote fetch step.
+
+1. Read \`tasks.yaml\` for task context (skip remote fetch).
+2. Verify your branch: \`git branch --show-current\` → \`feature/<task-name>\`.
+3. Implement the task per the acceptance criteria.
+4. Pass the pre-PR gate (see Pre-PR Gate section below).
+5. Open a draft PR targeting \`dev\` using the required body template.
+6. **Stop and wait.** The dashboard sends review feedback as follow-up messages.
+   Address findings by pushing additional commits, then wait again.
+
+---
+
+## Nudges
+
+A nudge is an unsolicited orchestrator message about your open PR — a merge-conflict, "base branch moved", or stalled-merge notice. Act on what it names, ahead of the "stop and wait" default above, which covers the gap between review passes, not a flagged change. Compliance isn't checked; act because it's true.
+
+Keep your PR mergeable against \`dev\` for its whole life, not just through the Pre-PR Gate — rebase and push once you learn it's needed.
+
+The supervisor's "Pause your work" message isn't a nudge in this sense: stopping is what it asks, so stopping is full compliance.
+
+---
+
+## Flaky / Transient CI or F2 Gate Failures
+
+When a CI check or the F2 orchestrator-run test gate fails on your PR, do not assume it's flaky and do not push an empty commit to force a re-run — that does not re-drive anything. Default to treating the failure as real and fixing it.
+
+Test commands are blocked at the permission layer — always via \`mcp__orchestrator__test_request\`, never directly (result lands in your feedback inbox next turn). Do not re-run the suite to establish flakiness — the backend already holds a cross-SHA outcome corpus and adjudicates against it. Call \`mcp__orchestrator__flaky_confirm\` once with what you observed, instead of pushing a commit:
+
+- \`gate\`: \`"ci"\`, \`"f2"\`, or \`"analyze"\` — whichever gate failed.
+- \`reason\`: one line naming what you observed and why it's unrelated to your diff.
+- \`testId\` / \`testName\`: required for \`"ci"\`/\`"f2"\` — identifies the failing test so the backend can check it against the corpus and your diff.
+
+The backend refuses (naming why) unless the test clears the corpus and its file isn't in your diff. On success it re-runs the gate on the same commit and re-drives the merge loop on a pass — bounded, so exhaustion parks the PR for a human rather than looping.
+
+---
+
+## Responding to Review Comments
+
+When a follow-up message delivers review feedback tied to specific GitHub review comments (each comment has a \`comment_id\`), after you've addressed them — by pushing a commit, or by deciding a comment doesn't need a code change — call the \`mcp__orchestrator__review_disposition\` tool once per \`comment_id\` to report the outcome:
+
+- \`comment_id\` is the numeric GitHub review comment ID from the feedback message — not the PR number.
+- \`disposition\` is one of:
+  - \`"addressed"\` — you changed code (or confirmed existing behavior already satisfies the comment) and pushed a commit.
+  - \`"wont_fix"\` — you deliberately did not change anything; the comment is valid but out of scope for a fix here, or you disagree with it.
+  - \`"out_of_scope"\` — the comment asks for something beyond this task's scope (scope creep, unrelated refactor, etc.).
+- \`reason\` is required for every call — a one-line explanation a human reviewer can read without opening the diff.
+- Call it once per routed review comment you were given, not just the ones you changed code for. The orchestrator replies to and resolves each comment's thread on GitHub based on these calls — a comment with no call stays open and unresolved.
+
+---
+
+## Status Ownership
+
+**Do NOT update Task status.**
+**Do NOT call any task source to change task status.**
+The orchestrator backend handles all status transitions (In Progress → In Review → Done).
+
+---
+
+## Efficiency Rules
+
+Running in \`--print\` mode — optimize for speed and token efficiency:
+
+- **Do NOT use TodoWrite.** No one sees the todo list. Track your progress internally.
+- **Do NOT use Agent subagents for exploration.** Use Glob and Grep directly.
+- **Minimize tool calls.** Batch reads; don't re-read files you just wrote or edited.
+- **Prefer Edit over Write** for existing files; never re-emit unchanged file bodies.
+- **Commit messages:** one sentence summaries. **PR body \`## Summary\` section:** 1-3 sentences — see PR Format Standards below for the full required section list.
+- **Never cat \`tasks/*.output\` files** — use the TaskOutput tool instead.
+
+---
+
+## Context Efficiency
+
+- **Grep first, then read the slice** — locate with Grep, then Read with \`offset\`/\`limit\` for only the region you need.
+- **Scope every Grep** — supply \`path\`/\`glob\` and a specific pattern; avoid repo-wide matches.
+- **Don't re-read after editing** — the Edit result already reflects the change.
+- **Reference modules: read the relevant region only**, not the whole file.
+
+---
+
+## PR Format Standards
+
+- **Title**: \`feat: <task-name>\` — no scope prefix, no milestone tags.
+- **How to create the PR**: emit the body inside \`<pr-body>…</pr-body>\` in your final message — this is the sanctioned path. Do NOT use the MCP \`mcp__github__create_pull_request\` tool. If a PR was already opened another way (e.g. you ran \`gh pr create\` directly), that is fine and does not need to be undone — the orchestrator detects and tracks it too; just re-emit the \`<pr-body>\` marker if the body still needs to match the template below.
+- **Required body sections**:
+
+\`\`\`
+## Summary
+<1-3 sentences: what changed and why>
+
+## Task
+Record the originating ticket: its key (e.g. \`ENG-8641\`) and its browse URL (e.g. https://yourcompany.atlassian.net/browse/ENG-8641).
+
+## Automated Tests
+<list tests added/modified, or "No test changes">
+\`\`\`
+
+---
+
+## Branch Rules
+
+- Branch name: \`feature/<task-name>\`
+- Never commit directly to \`dev\` or \`main\`
+- Never merge your own PR
+- One task per session — no scope creep
+
+---
+
+## Commit Attribution
+
+Every commit **must** include this trailer:
+
+\`\`\`
+AI-Authored-By: <model> (session: <session-id>)
+\`\`\`
+
+---
+
+## Pre-PR Gate
+
+Run in order — all must pass before opening the PR:
+
+1. Rebase onto \`dev\` and resolve any conflicts. If this branch was already pushed, update the remote with \`git push --force-with-lease origin <your feature branch>\` — a bare \`git push\` will be rejected after a rebase.
+2. No local verify step configured — CI is the gate.
+3. Stage only your implementation files for commit.
+
+Tests are blocked at the permission layer, not part of this gate — run via \`test_request\`.
+
+---
+
+## Forbidden Actions
+
+- Never push directly to \`main\`
+- Never bare force push (\`git push --force\`)
+- Never force-push \`main\`, \`dev\`, or any branch outside this worktree's own feature branch
+- \`git push --force-with-lease origin <your feature branch>\` **is allowed** — use it to update your own PR branch after a rebase (see Pre-PR Gate)
+- Never delete branches that live outside this worktree
+- Never run \`git reset --hard\` on the main repository directory
+- Never skip pre-commit hooks (\`--no-verify\`)
+- Use \`git add <specific files>\` instead of \`git add .\` — review staged files before committing.
+- Never run \`gh pr close\` or \`gh pr reopen\`, and never close or recreate your own PR to "redo" it — the orchestrator tracks whatever PR is currently open. If it was opened the wrong way, leave it open; just re-emit the \`<pr-body>\` marker if the body needs updating.
+
+---
+
+## Git Isolation
+
+> **Your worktree directory is \`/worktrees/abc123\`.**
+> This is your \`cwd\`. All commands run here. Never navigate to or operate on any parent directory.
+
+- Never use \`git -C <path>\` pointing outside this worktree
+- Never use \`--work-tree\` or \`--git-dir\` flags pointing outside this worktree
+- Never run \`git checkout\` or \`git switch\` targeting a branch in the main repo directory
+
+---
+
+## Filesystem Isolation (Personal Mode)
+
+> ⚠️ **No sandbox** — isolation is prompt-level only. Writes outside the worktree corrupt the developer's environment.
+
+All file writes **must stay inside** \`/worktrees/abc123\`. Never write to the project root, \`/tmp/\`, or \`$HOME\`. For scratch files use \`.claude/scratch/\` in your worktree.
+
+---
+
+## Manual Verification Gate
+
+Manual/runtime verification is owned by the milestone's Manual Verification Gate, not
+by you. Do NOT run, attempt, or simulate manual/runtime tests to satisfy acceptance
+criteria. Your task carries no manual-verification section by default — its absence
+does NOT mean "go run something"; it means the gate already owns it. Ship only what
+the automated acceptance criteria require.
+
+---
+
+## Bash Rules (Permission System)
+
+Bash is authorized by **first-token** prefix matching. Violations cause **silent denial**.
+
+**Rule 1 — One command per Bash call.**
+Never chain with \`&&\`, \`;\`, or \`||\`. Split into separate Bash calls.
+
+**Rule 2 — Never prefix with \`cd path &&\`.** You're already in the worktree; run commands directly.
+
+**Rule 3 — No heredoc subshells in git commit.**
+Use repeated \`-m\` flags instead: \`git commit -m "subject" -m "body"\` — git concatenates them.
+
+**Rule 4 — Do not write to \`/tmp/\` or paths outside the worktree.**
+Use the Write tool; never use \`cat >\`, \`printf >\`, or \`echo >\` redirects.
+
+**Rule 5 — Use \`npx\` instead of bare tool names.**
+\`tsc\` → \`npx tsc\`. Bare commands may not be on PATH."
+`;
+
+exports[`buildOrchestratorClaudeMd — taskBackend wording > notion backend (default) > matches snapshot 1`] = `
+"# Orchestrator Rules (DO NOT OVERRIDE)
+
+> ⚠️ Injected by the orchestrator — takes priority over all project instructions. Do not remove or override.
+
+---
+
+## Task Assignment
+
+- **Task**: test-task
+- **Notion task**: https://notion.so/test-task
+- **Project context**: https://notion.so/project
+
+---
+
+## Lifecycle
+
+> ⚠️ **Your task is pre-assigned (see Task Assignment above). Never browse the task board or self-assign a different task. If you have no remaining work because it's already satisfied elsewhere, call \`planning.noOp\` (task id + resolving commit/PR) instead of stopping silently — a silent stop re-dispatches the task forever.**
+
+1. Fetch the Notion task page and project context page. Retrieve only the pre-assigned task above — do NOT browse the board to pick up additional work.
+2. Verify your branch: \`git branch --show-current\` → \`feature/<task-name>\`.
+3. Implement the task per the acceptance criteria.
+4. Pass the pre-PR gate (see Pre-PR Gate section below).
+5. Open a draft PR targeting \`dev\` using the required body template.
+6. **Stop and wait.** The dashboard sends review feedback as follow-up messages.
+   Address findings by pushing additional commits, then wait again.
+
+---
+
+## Nudges
+
+A nudge is an unsolicited orchestrator message about your open PR — a merge-conflict, "base branch moved", or stalled-merge notice. Act on what it names, ahead of the "stop and wait" default above, which covers the gap between review passes, not a flagged change. Compliance isn't checked; act because it's true.
+
+Keep your PR mergeable against \`dev\` for its whole life, not just through the Pre-PR Gate — rebase and push once you learn it's needed.
+
+The supervisor's "Pause your work" message isn't a nudge in this sense: stopping is what it asks, so stopping is full compliance.
+
+---
+
+## Flaky / Transient CI or F2 Gate Failures
+
+When a CI check or the F2 orchestrator-run test gate fails on your PR, do not assume it's flaky and do not push an empty commit to force a re-run — that does not re-drive anything. Default to treating the failure as real and fixing it.
+
+Test commands are blocked at the permission layer — always via \`mcp__orchestrator__test_request\`, never directly (result lands in your feedback inbox next turn). Do not re-run the suite to establish flakiness — the backend already holds a cross-SHA outcome corpus and adjudicates against it. Call \`mcp__orchestrator__flaky_confirm\` once with what you observed, instead of pushing a commit:
+
+- \`gate\`: \`"ci"\`, \`"f2"\`, or \`"analyze"\` — whichever gate failed.
+- \`reason\`: one line naming what you observed and why it's unrelated to your diff.
+- \`testId\` / \`testName\`: required for \`"ci"\`/\`"f2"\` — identifies the failing test so the backend can check it against the corpus and your diff.
+
+The backend refuses (naming why) unless the test clears the corpus and its file isn't in your diff. On success it re-runs the gate on the same commit and re-drives the merge loop on a pass — bounded, so exhaustion parks the PR for a human rather than looping.
+
+---
+
+## Responding to Review Comments
+
+When a follow-up message delivers review feedback tied to specific GitHub review comments (each comment has a \`comment_id\`), after you've addressed them — by pushing a commit, or by deciding a comment doesn't need a code change — call the \`mcp__orchestrator__review_disposition\` tool once per \`comment_id\` to report the outcome:
+
+- \`comment_id\` is the numeric GitHub review comment ID from the feedback message — not the PR number.
+- \`disposition\` is one of:
+  - \`"addressed"\` — you changed code (or confirmed existing behavior already satisfies the comment) and pushed a commit.
+  - \`"wont_fix"\` — you deliberately did not change anything; the comment is valid but out of scope for a fix here, or you disagree with it.
+  - \`"out_of_scope"\` — the comment asks for something beyond this task's scope (scope creep, unrelated refactor, etc.).
+- \`reason\` is required for every call — a one-line explanation a human reviewer can read without opening the diff.
+- Call it once per routed review comment you were given, not just the ones you changed code for. The orchestrator replies to and resolves each comment's thread on GitHub based on these calls — a comment with no call stays open and unresolved.
+
+---
+
+## Status Ownership
+
+**Do NOT update Notion task status.**
+**Do NOT call any Notion API to change task status.**
+The orchestrator backend handles all status transitions (In Progress → In Review → Done).
+
+---
+
+## Efficiency Rules
+
+Running in \`--print\` mode — optimize for speed and token efficiency:
+
+- **Do NOT use TodoWrite.** No one sees the todo list. Track your progress internally.
+- **Do NOT use Agent subagents for exploration.** Use Glob and Grep directly.
+- **Minimize tool calls.** Batch reads; don't re-read files you just wrote or edited.
+- **Prefer Edit over Write** for existing files; never re-emit unchanged file bodies.
+- **Commit messages:** one sentence summaries. **PR body \`## Summary\` section:** 1-3 sentences — see PR Format Standards below for the full required section list.
+- **Never cat \`tasks/*.output\` files** — use the TaskOutput tool instead.
+
+---
+
+## Context Efficiency
+
+- **Grep first, then read the slice** — locate with Grep, then Read with \`offset\`/\`limit\` for only the region you need.
+- **Scope every Grep** — supply \`path\`/\`glob\` and a specific pattern; avoid repo-wide matches.
+- **Don't re-read after editing** — the Edit result already reflects the change.
+- **Reference modules: read the relevant region only**, not the whole file.
+
+---
+
+## PR Format Standards
+
+- **Title**: \`feat: <task-name>\` — no scope prefix, no milestone tags.
+- **How to create the PR**: emit the body inside \`<pr-body>…</pr-body>\` in your final message — this is the sanctioned path. Do NOT use the MCP \`mcp__github__create_pull_request\` tool. If a PR was already opened another way (e.g. you ran \`gh pr create\` directly), that is fine and does not need to be undone — the orchestrator detects and tracks it too; just re-emit the \`<pr-body>\` marker if the body still needs to match the template below.
+- **Required body sections**:
+
+\`\`\`
+## Summary
+<1-3 sentences: what changed and why>
+
+## Notion Task
+<link to the task page>
+
+## Automated Tests
+<list tests added/modified, or "No test changes">
+\`\`\`
+
+---
+
+## Branch Rules
+
+- Branch name: \`feature/<task-name>\`
+- Never commit directly to \`dev\` or \`main\`
+- Never merge your own PR
+- One task per session — no scope creep
+
+---
+
+## Commit Attribution
+
+Every commit **must** include this trailer:
+
+\`\`\`
+AI-Authored-By: <model> (session: <session-id>)
+\`\`\`
+
+---
+
+## Pre-PR Gate
+
+Run in order — all must pass before opening the PR:
+
+1. Rebase onto \`dev\` and resolve any conflicts. If this branch was already pushed, update the remote with \`git push --force-with-lease origin <your feature branch>\` — a bare \`git push\` will be rejected after a rebase.
+2. No local verify step configured — CI is the gate.
+3. Stage only your implementation files for commit.
+
+Tests are blocked at the permission layer, not part of this gate — run via \`test_request\`.
+
+---
+
+## Forbidden Actions
+
+- Never push directly to \`main\`
+- Never bare force push (\`git push --force\`)
+- Never force-push \`main\`, \`dev\`, or any branch outside this worktree's own feature branch
+- \`git push --force-with-lease origin <your feature branch>\` **is allowed** — use it to update your own PR branch after a rebase (see Pre-PR Gate)
+- Never delete branches that live outside this worktree
+- Never run \`git reset --hard\` on the main repository directory
+- Never skip pre-commit hooks (\`--no-verify\`)
+- Use \`git add <specific files>\` instead of \`git add .\` — review staged files before committing.
+- Never run \`gh pr close\` or \`gh pr reopen\`, and never close or recreate your own PR to "redo" it — the orchestrator tracks whatever PR is currently open. If it was opened the wrong way, leave it open; just re-emit the \`<pr-body>\` marker if the body needs updating.
+
+---
+
+## Git Isolation
+
+> **Your worktree directory is \`/worktrees/abc123\`.**
+> This is your \`cwd\`. All commands run here. Never navigate to or operate on any parent directory.
+
+- Never use \`git -C <path>\` pointing outside this worktree
+- Never use \`--work-tree\` or \`--git-dir\` flags pointing outside this worktree
+- Never run \`git checkout\` or \`git switch\` targeting a branch in the main repo directory
+
+---
+
+## Filesystem Isolation (Personal Mode)
+
+> ⚠️ **No sandbox** — isolation is prompt-level only. Writes outside the worktree corrupt the developer's environment.
+
+All file writes **must stay inside** \`/worktrees/abc123\`. Never write to the project root, \`/tmp/\`, or \`$HOME\`. For scratch files use \`.claude/scratch/\` in your worktree.
+
+---
+
+## Manual Verification Gate
+
+Manual/runtime verification is owned by the milestone's Manual Verification Gate, not
+by you. Do NOT run, attempt, or simulate manual/runtime tests to satisfy acceptance
+criteria. Your task carries no manual-verification section by default — its absence
+does NOT mean "go run something"; it means the gate already owns it. Ship only what
+the automated acceptance criteria require.
+
+---
+
+## Bash Rules (Permission System)
+
+Bash is authorized by **first-token** prefix matching. Violations cause **silent denial**.
+
+**Rule 1 — One command per Bash call.**
+Never chain with \`&&\`, \`;\`, or \`||\`. Split into separate Bash calls.
+
+**Rule 2 — Never prefix with \`cd path &&\`.** You're already in the worktree; run commands directly.
+
+**Rule 3 — No heredoc subshells in git commit.**
+Use repeated \`-m\` flags instead: \`git commit -m "subject" -m "body"\` — git concatenates them.
+
+**Rule 4 — Do not write to \`/tmp/\` or paths outside the worktree.**
+Use the Write tool; never use \`cat >\`, \`printf >\`, or \`echo >\` redirects.
+
+**Rule 5 — Use \`npx\` instead of bare tool names.**
+\`tsc\` → \`npx tsc\`. Bare commands may not be on PATH."
+`;
