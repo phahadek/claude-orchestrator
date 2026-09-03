@@ -531,7 +531,7 @@ export class PRReviewService {
       current?.last_reviewed_sha === headSha &&
       current.review_result
     ) {
-      let stored: Partial<PRReviewResult> | null = null;
+      let stored: Partial<PRReviewResult> | null;
       try {
         stored = JSON.parse(current.review_result) as Partial<PRReviewResult>;
       } catch {
