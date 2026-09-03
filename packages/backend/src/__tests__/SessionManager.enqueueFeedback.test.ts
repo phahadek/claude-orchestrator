@@ -495,9 +495,7 @@ describe('SessionManager.enqueueFeedback()', () => {
     expect(queries.markInboxItemsDelivered).not.toHaveBeenCalled();
     expect(queries.markInboxItemsDropped).toHaveBeenCalled();
     expect(droppedInboxIds.size).toBe(1);
-    expect(queries.listUndeliveredInboxItems('sess-archived')).toHaveLength(
-      0,
-    );
+    expect(queries.listUndeliveredInboxItems('sess-archived')).toHaveLength(0);
   });
 
   it('unknown session: enqueues only, no crash', async () => {
