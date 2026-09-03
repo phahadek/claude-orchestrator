@@ -72,7 +72,10 @@ class CheckoutRWLock {
    * the time `new Promise(...)` returns, `grant()` has already run if it was
    * going to run synchronously at all.
    */
-  acquireWrite(): { promise: Promise<() => void>; syncTracker: { granted: boolean } } {
+  acquireWrite(): {
+    promise: Promise<() => void>;
+    syncTracker: { granted: boolean };
+  } {
     const syncTracker = { granted: false };
     const promise = new Promise<() => void>((resolve) => {
       this.queue.push({

@@ -1463,7 +1463,9 @@ async function flush(): Promise<void> {
 describe('DeployOrchestrator: install-deps checkout lock events', () => {
   it('records lock_wait_started and lock_acquired when install-deps is contended by a held checkout lock', async () => {
     const dir = '/tmp/checkout-lock-events-contended';
-    const playbook = playbookWith([step({ id: 'install-deps', kind: 'shell' })]);
+    const playbook = playbookWith([
+      step({ id: 'install-deps', kind: 'shell' }),
+    ]);
     const deps = makeDeps(playbook);
     const orchestrator = new DeployOrchestrator('proj', dir, deps);
 
@@ -1504,7 +1506,9 @@ describe('DeployOrchestrator: install-deps checkout lock events', () => {
 
   it('records only lock_acquired for an uncontended install-deps step', async () => {
     const dir = '/tmp/checkout-lock-events-uncontended';
-    const playbook = playbookWith([step({ id: 'install-deps', kind: 'shell' })]);
+    const playbook = playbookWith([
+      step({ id: 'install-deps', kind: 'shell' }),
+    ]);
     const deps = makeDeps(playbook);
     const orchestrator = new DeployOrchestrator('proj', dir, deps);
 
@@ -1527,7 +1531,9 @@ describe('DeployOrchestrator: install-deps checkout lock events', () => {
     mockLoadOrchestratorConfig.mockReturnValue({
       bootstrap_script: './scripts/bootstrap.sh',
     });
-    const playbook = playbookWith([step({ id: 'install-deps', kind: 'shell' })]);
+    const playbook = playbookWith([
+      step({ id: 'install-deps', kind: 'shell' }),
+    ]);
     const deps = makeDeps(playbook);
     const orchestrator = new DeployOrchestrator('proj', dir, deps);
 
