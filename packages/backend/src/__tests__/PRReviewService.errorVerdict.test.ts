@@ -542,7 +542,11 @@ describe('PRReviewService verdict idempotency per head SHA', () => {
     );
 
     const workItem: WorkItem = { type: 'pr', prNumber: 42, repo: 'owner/repo' };
-    const resultPromise = reviewService.reviewPR(workItem, diffSource, 'proj-1');
+    const resultPromise = reviewService.reviewPR(
+      workItem,
+      diffSource,
+      'proj-1',
+    );
 
     await new Promise((r) => setTimeout(r, 20));
 
@@ -616,7 +620,11 @@ describe('PRReviewService verdict idempotency per head SHA', () => {
     );
 
     const workItem: WorkItem = { type: 'pr', prNumber: 42, repo: 'owner/repo' };
-    const resultPromise = reviewService.reviewPR(workItem, diffSource, 'proj-1');
+    const resultPromise = reviewService.reviewPR(
+      workItem,
+      diffSource,
+      'proj-1',
+    );
 
     await new Promise((r) => setTimeout(r, 20));
 
@@ -641,7 +649,9 @@ describe('PRReviewService verdict idempotency per head SHA', () => {
       expect.stringContaining('needs_changes'),
     );
     expect(auditLog.recordEvent).not.toHaveBeenCalledWith(
-      expect.objectContaining({ event_type: 'review_verdict_overwrite_suppressed' }),
+      expect.objectContaining({
+        event_type: 'review_verdict_overwrite_suppressed',
+      }),
     );
   });
 });
