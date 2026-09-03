@@ -141,50 +141,56 @@ describe('migrate-orchestrator-config', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
-    it('dry-run writes nothing and deletes nothing', async () => {
-      // Set up a fake project dir with .claude/orchestrator.json
-      const projectDir = path.join(tmpDir, 'fake-project');
-      fs.mkdirSync(path.join(projectDir, '.claude'), { recursive: true });
-      const jsonPath = path.join(projectDir, '.claude', 'orchestrator.json');
-      const yamlPath = path.join(projectDir, '.claude-orchestrator.yml');
-      fs.writeFileSync(
-        jsonPath,
-        JSON.stringify({
-          allowedTools: ['Bash(npm:*)'],
-          prGate: { typeCheck: 'npx tsc --noEmit' },
-        }),
-      );
+    it(
+      'dry-run writes nothing and deletes nothing',
+      async () => {
+        // Set up a fake project dir with .claude/orchestrator.json
+        const projectDir = path.join(tmpDir, 'fake-project');
+        fs.mkdirSync(path.join(projectDir, '.claude'), { recursive: true });
+        const jsonPath = path.join(projectDir, '.claude', 'orchestrator.json');
+        const yamlPath = path.join(projectDir, '.claude-orchestrator.yml');
+        fs.writeFileSync(
+          jsonPath,
+          JSON.stringify({
+            allowedTools: ['Bash(npm:*)'],
+            prGate: { typeCheck: 'npx tsc --noEmit' },
+          }),
+        );
 
-      // Create a minimal SQLite DB with this one project
-      const Database = (await import('better-sqlite3')).default;
-      const db = new Database(dbPath);
-      db.exec(
-        'CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, project_dir TEXT)',
-      );
-      db.prepare(
-        'INSERT INTO projects (id, name, project_dir) VALUES (?, ?, ?)',
-      ).run('test', 'Test Project', projectDir);
-      db.close();
+        // Create a minimal SQLite DB with this one project
+        const Database = (await import('better-sqlite3')).default;
+        const db = new Database(dbPath);
+        db.exec(
+          'CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, project_dir TEXT)',
+        );
+        db.prepare(
+          'INSERT INTO projects (id, name, project_dir) VALUES (?, ?, ?)',
+        ).run('test', 'Test Project', projectDir);
+        db.close();
 
-      // Invoke the script via child_process
-      const { spawnSync } = await import('child_process');
-      const repoRoot = path.resolve(__dirname, '..', '..', '..', '..');
-      const result = spawnSync(
-        'node',
-        [
-          path.join(repoRoot, 'scripts', 'migrate-orchestrator-config.mjs'),
-          '--db',
-          dbPath,
-          '--dry-run',
-        ],
-        { encoding: 'utf-8' },
-      );
+        // Invoke the script via child_process
+        const { spawnSync } = await import('child_process');
+        const repoRoot = path.resolve(__dirname, '..', '..', '..', '..');
+        const result = spawnSync(
+          'node',
+          [
+            path.join(repoRoot, 'scripts', 'migrate-orchestrator-config.mjs'),
+            '--db',
+            dbPath,
+            '--dry-run',
+          ],
+          { encoding: 'utf-8' },
+        );
 
-      expect(result.status).toBe(0);
-      expect(fs.existsSync(yamlPath)).toBe(false);
-      expect(fs.existsSync(jsonPath)).toBe(true);
-      expect(result.stdout).toContain('[DRY-RUN]');
-      expect(result.stdout).toContain('WOULD MIGRATE Test Project');
-    });
+        expect(result.status).toBe(0);
+        expect(fs.existsSync(yamlPath)).toBe(false);
+        expect(fs.existsSync(jsonPath)).toBe(true);
+        expect(result.stdout).toContain('[DRY-RUN]');
+        expect(result.stdout).toContain('WOULD MIGRATE Test Project');
+      },
+      // Shells out via spawnSync to run the migration script as a real
+      // subprocess; not millisecond-bounded under process-spawn contention.
+      10000,
+    );
   });
 });

@@ -61,20 +61,27 @@ async function setupTestRepo(): Promise<{
 }
 
 describe('runAutofix()', () => {
-  it('commit message ends with [skip ci]', async () => {
-    const { worktreeDir, cleanup } = await setupTestRepo();
-    try {
-      const autofixCmd = `node -e "require('fs').writeFileSync('autofix_output.txt', 'done')"`;
+  it(
+    'commit message ends with [skip ci]',
+    async () => {
+      const { worktreeDir, cleanup } = await setupTestRepo();
+      try {
+        const autofixCmd = `node -e "require('fs').writeFileSync('autofix_output.txt', 'done')"`;
 
-      await runAutofix(worktreeDir, worktreeDir, [autofixCmd], () => {});
+        await runAutofix(worktreeDir, worktreeDir, [autofixCmd], () => {});
 
-      const commitMsg = await git(
-        ['log', '--format=%s', '--grep=apply autofix', '-1'],
-        worktreeDir,
-      );
-      expect(commitMsg).toMatch(/\[skip ci\]$/);
-    } finally {
-      cleanup();
-    }
-  });
+        const commitMsg = await git(
+          ['log', '--format=%s', '--grep=apply autofix', '-1'],
+          worktreeDir,
+        );
+        expect(commitMsg).toMatch(/\[skip ci\]$/);
+      } finally {
+        cleanup();
+      }
+    },
+    // Fixture performs a real bare git init, clone, config writes, a commit
+    // and a push before the test body even starts; not millisecond-bounded
+    // under process-spawn contention.
+    15000,
+  );
 });
