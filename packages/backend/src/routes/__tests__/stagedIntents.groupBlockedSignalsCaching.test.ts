@@ -209,7 +209,9 @@ describe('GET /api/staged-intents?milestone= — group signal caching', () => {
       .query({ projectId: 'proj-1', milestone: 'M13' });
 
     expect(res.status).toBe(200);
-    const own = res.body.intents.find((i: { id: string }) => i.id === 'own-member');
+    const own = res.body.intents.find(
+      (i: { id: string }) => i.id === 'own-member',
+    );
     expect(own.groupBlocked).toBe(true);
     expect(own.groupBlockedMemberCount).toBe(0);
     expect(own.groupSessionIncomplete).toBe(true);

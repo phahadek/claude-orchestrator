@@ -1763,7 +1763,9 @@ function computeGroupBlockedSignals(
   const blockedMemberCount = allMembers.filter(
     (r) => r.state === 'needs_revision' || r.state === 'pending_verification',
   ).length;
-  const activeMembers = allMembers.filter((r) => ACTIVE_STATES.includes(r.state));
+  const activeMembers = allMembers.filter((r) =>
+    ACTIVE_STATES.includes(r.state),
+  );
   const sessionIncomplete = activeMembers.some(
     (r) =>
       !!r.session_id &&

@@ -276,9 +276,7 @@ describe('GroupCard recovery affordance', () => {
     );
 
     expect(
-      screen
-        .getByRole('button', { name: /Approve/i })
-        .hasAttribute('disabled'),
+      screen.getByRole('button', { name: /Approve/i }).hasAttribute('disabled'),
     ).toBe(true);
   });
 });
