@@ -1,4 +1,7 @@
 import { resolveTestScratchDataDir } from './testScratchDataDir';
+import { EnvFileConfigSource } from './config/EnvFileConfigSource';
+import { _setDefaultTestConfigSource } from './config/appConfig';
+import type { ConfigSource, DeepPartial, OrchestratorConfig } from './config/types';
 
 // Vitest setupFile — runs before any test file's module graph is evaluated.
 // Forces every test process onto an in-memory database, regardless of what
@@ -21,6 +24,29 @@ process.env.DB_PATH = ':memory:';
 // directory always lands under packages/backend/ regardless of where
 // vitest was invoked from — see testScratchDataDir.ts and .gitignore.
 process.env.XDG_DATA_HOME = resolveTestScratchDataDir(process.pid);
+
+// appConfig.ts's resolve() prefers a data-dir config.json over DB_PATH
+// whenever one exists (see DataDirConfigSource, above). A test calling
+// writeOrchestratorConfig() writes exactly that file into this worker's
+// scratch XDG_DATA_HOME, so every later test file in the same worker would
+// otherwise resolve db.path from that leftover file instead of from
+// DB_PATH. Pin config resolution to an in-memory source up front — read
+// everything else the normal legacy way (env), but always report db.path
+// as ':memory:' regardless of what's on disk or in DB_PATH. Installed via
+// _setDefaultTestConfigSource so _resetAppConfigCache() (called by several
+// test files) restores to this instead of falling back to the data-dir
+// branch.
+class InMemoryTestConfigSource implements ConfigSource {
+  read(): OrchestratorConfig {
+    const config = new EnvFileConfigSource().read();
+    config.db.path = ':memory:';
+    return config;
+  }
+  write(_partial: DeepPartial<OrchestratorConfig>): void {
+    throw new Error('InMemoryTestConfigSource is read-only.');
+  }
+}
+_setDefaultTestConfigSource(new InMemoryTestConfigSource());
 
 // Dynamic imports (not static ones) so this module's DB_PATH assignment above
 // runs before db.ts opens its connection — a static `import` would be
