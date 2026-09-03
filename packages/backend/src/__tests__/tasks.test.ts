@@ -584,7 +584,7 @@ describe('GET /api/tasks/active — shape param', () => {
     expect(inProgress.codeSession.lastMessage).toBe('wrapping up');
   });
 
-  it('shape=full (and no shape param) is byte-for-byte unchanged from today\'s response shape', async () => {
+  it("shape=full (and no shape param) is byte-for-byte unchanged from today's response shape", async () => {
     const [noParamRes, explicitFullRes] = await Promise.all([
       supertest(buildApp()).get('/api/tasks/active?projectId=proj-1'),
       supertest(buildApp()).get(
