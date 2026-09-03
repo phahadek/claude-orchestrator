@@ -49,6 +49,7 @@ import {
   getStagedIntent,
   insertSession,
 } from '../../db/queries';
+import type { StagedIntentState } from '../../db/types';
 import { createStagedIntentsRouter, stageIntent } from '../stagedIntents';
 
 function makeApp() {
@@ -97,7 +98,7 @@ function insertRow(opts: {
   groupId: string | null;
   taskId: string;
   kind?: string;
-  state: 'staged' | 'approved' | 'needs_revision' | 'pending_verification';
+  state: StagedIntentState;
   dispositionReason?: string | null;
   sessionId?: string | null;
 }) {
@@ -416,5 +417,140 @@ describe('apply-time failure still records the underlying failure as the reason'
     expect(row.disposition_reason).not.toContain(
       'it must be recovered or resolved before this group can commit',
     );
+  });
+});
+
+describe('one decision group per task per grooming pass', () => {
+  it('rejects a stage for a task with an open group under a different group_id, naming the existing group id', () => {
+    stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-mismatch', dependsOn: [] },
+      'proj-blocked-recovery',
+      'g-mismatch-1',
+      'sess-mismatch',
+    );
+
+    expect(() =>
+      stageIntent(
+        'task.updateBody',
+        { taskId: 't-mismatch', sections: { summary: 'x' } },
+        'proj-blocked-recovery',
+        'g-mismatch-2',
+        'sess-mismatch',
+      ),
+    ).toThrow(/g-mismatch-1/);
+  });
+
+  it('accepts a stage under the task\'s existing open group id', () => {
+    stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-same', dependsOn: [] },
+      'proj-blocked-recovery',
+      'g-same',
+      'sess-same',
+    );
+
+    const second = stageIntent(
+      'task.updateBody',
+      { taskId: 't-same', sections: { summary: 'y' } },
+      'proj-blocked-recovery',
+      'g-same',
+      'sess-same',
+    );
+
+    expect(second.groupId).toBe('g-same');
+  });
+
+  it('rejects a stage under a group_id already owned by a different session', () => {
+    stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-owner-a', dependsOn: [] },
+      'proj-blocked-recovery',
+      'g-owned',
+      'sess-owner-a',
+    );
+
+    expect(() =>
+      stageIntent(
+        'task.setDependsOn',
+        { taskId: 't-owner-b', dependsOn: [] },
+        'proj-blocked-recovery',
+        'g-owned',
+        'sess-owner-b',
+      ),
+    ).toThrow(/sess-owner-a/);
+  });
+
+  it('accepts any well-formed new group_id for a task with no open group', () => {
+    const row = stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-fresh', dependsOn: [] },
+      'proj-blocked-recovery',
+      'g-fresh',
+      'sess-fresh',
+    );
+
+    expect(row.groupId).toBe('g-fresh');
+  });
+
+  it('accepts a new group_id once the task\'s previous group is fully terminal', () => {
+    insertRow({
+      id: 'term-1',
+      groupId: 'g-old-terminal',
+      taskId: 't-terminal',
+      state: 'committed',
+    });
+
+    const row = stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-terminal', dependsOn: [] },
+      'proj-blocked-recovery',
+      'g-new-terminal',
+      'sess-terminal',
+    );
+
+    expect(row.groupId).toBe('g-new-terminal');
+  });
+
+  it('still allows a re-staging supersede inside the session\'s own existing group', () => {
+    const first = stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-resupersede', dependsOn: [] },
+      'proj-blocked-recovery',
+      'g-resupersede',
+      'sess-resupersede',
+    );
+
+    const second = stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-resupersede', dependsOn: ['some-other-task'] },
+      'proj-blocked-recovery',
+      'g-resupersede',
+      'sess-resupersede',
+    );
+
+    expect(second.id).not.toBe(first.id);
+    expect(second.groupId).toBe('g-resupersede');
+  });
+
+  it('leaves the existing ungrouped-body-edit rejection unchanged', () => {
+    seedPlanningSession('sess-groom-unchanged', 't-groom-open');
+    stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-groom-open', dependsOn: [] },
+      'proj-blocked-recovery',
+      'g-groom-open',
+      'sess-groom-unchanged',
+    );
+
+    expect(() =>
+      stageIntent(
+        'task.updateBody',
+        { taskId: 't-groom-open', sections: { summary: 'z' } },
+        'proj-blocked-recovery',
+        null,
+        'sess-groom-unchanged',
+      ),
+    ).toThrow(/decision group/);
   });
 });

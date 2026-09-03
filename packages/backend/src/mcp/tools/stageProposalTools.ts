@@ -188,7 +188,7 @@ export function registerStageProposalTools(
     {
       title: 'Stage a task body rewrite',
       description:
-        'Stages a task.updateBody intent carrying the structured TaskBodySections map (Summary, Dependencies, Context, Acceptance criteria, Files/Notion pages affected) — never free markdown. From a groom session: if this task already has an open decision group, pass that same groupId — a groom body edit is rejected when staged ungrouped once a group is open for the task.',
+        'Stages a task.updateBody intent carrying the structured TaskBodySections map (Summary, Dependencies, Context, Acceptance criteria, Files/Notion pages affected) — never free markdown. From a groom session: if this task already has an open decision group, pass that same groupId — a groom body edit is rejected when staged ungrouped once a group is open for the task, and staging under a different groupId for that task is rejected too, naming the existing one to retry against.',
       inputSchema: envelope({
         taskId: z.string(),
         sections: taskBodySectionsSchema,
@@ -202,7 +202,7 @@ export function registerStageProposalTools(
     {
       title: 'Stage a targeted task body-section patch',
       description:
-        'Stages a task.patchBodySection intent — append/replace/remove against one heading-bounded section of a task body, without rewriting the rest of the page. append auto-creates the section; replace requires the section and the exact find text to already exist; remove on an absent section is a no-op. From a groom session: if this task already has an open decision group, pass that same groupId — a groom body edit is rejected when staged ungrouped once a group is open for the task.',
+        'Stages a task.patchBodySection intent — append/replace/remove against one heading-bounded section of a task body, without rewriting the rest of the page. append auto-creates the section; replace requires the section and the exact find text to already exist; remove on an absent section is a no-op. From a groom session: if this task already has an open decision group, pass that same groupId — a groom body edit is rejected when staged ungrouped once a group is open for the task, and staging under a different groupId for that task is rejected too, naming the existing one to retry against.',
       inputSchema: {
         payload: patchBodySectionPayloadSchema,
         ...intentEnvelopeShape,

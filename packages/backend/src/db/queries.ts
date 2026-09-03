@@ -12071,6 +12071,71 @@ export function listStagedIntentsByGroup(groupId: string): StagedIntentRow[] {
   }) as StagedIntentRow[];
 }
 
+/**
+ * States that count as "this task's decision group is still open" — the same
+ * set a blocked-member recovery pass or a group commit guard cares about.
+ * `committed`/`rejected`/`superseded`/`withdrawn` are terminal: once every
+ * member of a task's prior group lands there, that task has no open group and
+ * a fresh groupId is free to be chosen for the next grooming pass.
+ */
+export const OPEN_DECISION_GROUP_STATES: readonly StagedIntentState[] = [
+  'staged',
+  'approved',
+  'needs_revision',
+  'pending_verification',
+];
+
+let _stmtFindOpenGroupForTask: Database.Statement | null = null;
+
+/**
+ * The group_id (and its owning session_id) of this task's already-open
+ * decision group, if any — used at stage time to enforce one decision group
+ * per task per grooming pass rather than trusting a session-authored
+ * group_id. `taskId` is expected already normalized (stageIntent only ever
+ * calls this off a task_id that went through
+ * validateAndNormalizeTaskReferences), so an exact match against the
+ * persisted column is sufficient.
+ */
+export function findOpenGroupForTask(
+  taskId: string,
+): { groupId: string; sessionId: string | null } | null {
+  _stmtFindOpenGroupForTask ??= db.prepare<unknown[]>(
+    `SELECT group_id, session_id FROM staged_intent
+     WHERE task_id = ?
+       AND group_id IS NOT NULL
+       AND state IN (${OPEN_DECISION_GROUP_STATES.map(() => '?').join(', ')})
+     ORDER BY created_at ASC
+     LIMIT 1`,
+  );
+  const row = _stmtFindOpenGroupForTask.get(
+    taskId,
+    ...OPEN_DECISION_GROUP_STATES,
+  ) as { group_id: string; session_id: string | null } | undefined;
+  return row ? { groupId: row.group_id, sessionId: row.session_id } : null;
+}
+
+let _stmtFindOpenGroupOwnerSessions: Database.Statement | null = null;
+
+/**
+ * Every distinct session_id currently holding a live (open-state) member of
+ * `groupId` — used at stage time to reject a session staging into a groupId
+ * some other session already opened, so two sessions can never merge their
+ * proposals into one group by coincidence of a shared free-text id.
+ */
+export function findOpenGroupOwnerSessions(groupId: string): string[] {
+  _stmtFindOpenGroupOwnerSessions ??= db.prepare<unknown[]>(
+    `SELECT DISTINCT session_id FROM staged_intent
+     WHERE group_id = ?
+       AND session_id IS NOT NULL
+       AND state IN (${OPEN_DECISION_GROUP_STATES.map(() => '?').join(', ')})`,
+  );
+  const rows = _stmtFindOpenGroupOwnerSessions.all(
+    groupId,
+    ...OPEN_DECISION_GROUP_STATES,
+  ) as { session_id: string }[];
+  return rows.map((r) => r.session_id);
+}
+
 let _stmtListActiveBodyPatchIntentsForTask: Database.Statement | null = null;
 
 /**
