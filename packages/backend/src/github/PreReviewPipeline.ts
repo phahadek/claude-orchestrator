@@ -531,7 +531,7 @@ export class PreReviewPipeline {
         const contentHash = await computeWholeTreeContentHash(ctx.worktreePath);
         if (
           contentHash &&
-          getLatestTestRequestRun(ctx.project.id, contentHash)
+          getLatestTestRequestRun(ctx.project.id, contentHash, 'full')
         ) {
           logger.info(
             `[PreReviewPipeline] tests content-cache hit PR #${ctx.prNumber} SHA ${ctx.headSha.slice(0, 7)} — skipping`,
