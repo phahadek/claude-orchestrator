@@ -318,7 +318,11 @@ describe('reconcileSessionLiveness', () => {
   it('does not record a reconciled audit event when nothing was reconciled (only the per-sweep summary)', () => {
     seedSession({ sessionId: 'still-alive', status: 'running' });
 
-    reconcileSessionLiveness({ isProcessAlive: () => true, nowFn: () => NOW });
+    reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => true,
+      nowFn: () => NOW,
+    });
 
     expect(recordEvent).not.toHaveBeenCalledWith(
       expect.objectContaining({
