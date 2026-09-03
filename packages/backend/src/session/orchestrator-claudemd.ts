@@ -182,10 +182,10 @@ function renderPrBodySectionsBlock(
  * a fixed base plus a per-section allowance generous enough to cover any
  * known or custom section's header + hint line.
  */
-const SIZE_BUDGET_BASE_CHARS = 9300;
-const SIZE_BUDGET_PER_SECTION_CHARS = 160;
-const SIZE_BUDGET_BASE_WORDS = 1560;
-const SIZE_BUDGET_PER_SECTION_WORDS = 25;
+const SIZE_BUDGET_BASE_CHARS = 9600;
+const SIZE_BUDGET_PER_SECTION_CHARS = 100;
+const SIZE_BUDGET_BASE_WORDS = 1600;
+const SIZE_BUDGET_PER_SECTION_WORDS = 10;
 
 export function computeSizeBudget(sections: readonly string[]): {
   maxChars: number;
