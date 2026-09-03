@@ -16,7 +16,7 @@ import {
   getMergedPRForTask,
   getMergedLocalBranchForTaskId,
 } from '../db/queries';
-import type { OpsPrIntentPayload } from '../db/types';
+import type { OpsPrIntentPayload, PullRequestRow } from '../db/types';
 import {
   getReservationForTaskDirSuffix,
   getReservationByNumber,
@@ -507,6 +507,99 @@ export class PRReviewService {
     return this.taskBackendOverride ?? getTaskBackend(projectId);
   }
 
+  /**
+   * Idempotent verdict persistence, keyed per head SHA. A stored verdict is
+   * "complete" (approved/needs_changes) for a given head; a fresh verdict for
+   * that SAME head that comes back incomplete (e.g. a waitForVerdict timeout
+   * firing against a session that already delivered its verdict via the
+   * review.verdict tool) must not overwrite it — the complete verdict is kept
+   * and the attempted overwrite is only recorded to the audit log. A verdict
+   * for a DIFFERENT head always persists normally, complete or not — the
+   * idempotency guard is per head, not global.
+   */
+  private persistVerdict(
+    prNumber: number,
+    repo: string,
+    headSha: string | null,
+    finalResult: PRReviewResult,
+    taskId?: string | null,
+  ): { result: PRReviewResult; suppressed: boolean } {
+    const current = getPRByNumber(prNumber, repo);
+    if (
+      finalResult.verdict === 'incomplete' &&
+      headSha != null &&
+      current?.last_reviewed_sha === headSha &&
+      current.review_result
+    ) {
+      let stored: Partial<PRReviewResult> | null;
+      try {
+        stored = JSON.parse(current.review_result) as Partial<PRReviewResult>;
+      } catch {
+        stored = null;
+      }
+      const priorVerdict = stored?.verdict;
+      if (priorVerdict === 'approved' || priorVerdict === 'needs_changes') {
+        recordEvent({
+          event_type: 'review_verdict_overwrite_suppressed',
+          actor_type: 'system',
+          actor_id: null,
+          task_id: current.task_id ?? taskId ?? null,
+          payload: {
+            pr_number: prNumber,
+            repo,
+            head_sha: headSha,
+            suppressed_verdict: finalResult.verdict,
+            kept_verdict: priorVerdict,
+          },
+        });
+        return {
+          result: {
+            prNumber,
+            repo,
+            verdict: priorVerdict as PRReviewResult['verdict'],
+            dimensions: (stored?.dimensions as ReviewDimension[]) ?? [],
+            summary: stored?.summary ?? '',
+            reviewedAt: current.review_at ?? new Date().toISOString(),
+            ...(stored?.manualItemsForHuman &&
+            stored.manualItemsForHuman.length > 0
+              ? { manualItemsForHuman: stored.manualItemsForHuman }
+              : {}),
+          },
+          suppressed: true,
+        };
+      }
+    }
+    setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
+    setLastReviewedSha(prNumber, repo, headSha);
+    return { result: finalResult, suppressed: false };
+  }
+
+  /** Parses a PR row's stored review_result into a PRReviewResult, or null if absent/unparseable. */
+  private storedResultOrNull(
+    prNumber: number,
+    repo: string,
+    prRow: PullRequestRow,
+  ): PRReviewResult | null {
+    if (!prRow.review_result) return null;
+    try {
+      const stored = JSON.parse(prRow.review_result) as Partial<PRReviewResult>;
+      if (!stored.verdict) return null;
+      return {
+        prNumber,
+        repo,
+        verdict: stored.verdict,
+        dimensions: (stored.dimensions as ReviewDimension[]) ?? [],
+        summary: stored.summary ?? '',
+        reviewedAt: prRow.review_at ?? new Date().toISOString(),
+        ...(stored.manualItemsForHuman && stored.manualItemsForHuman.length > 0
+          ? { manualItemsForHuman: stored.manualItemsForHuman }
+          : {}),
+      };
+    } catch {
+      return null;
+    }
+  }
+
   async reviewPR(
     workItem: WorkItem,
     diffSource: DiffSource,
@@ -539,10 +632,13 @@ export class PRReviewService {
         this.sessionManager.isAlive(existingReviewSessionId)
       ) {
         // Register listener BEFORE sending to avoid missing a fast verdict.
+        const abortController = new AbortController();
         const verdictPromise = this.waitForVerdict(
           existingReviewSessionId,
           prNumber,
           repo,
+          this.verdictTimeoutMs,
+          abortController.signal,
         );
         const prData = await this.withFetchRetry(
           () => this.github.fetchPR(repo, prNumber),
@@ -572,7 +668,7 @@ export class PRReviewService {
         );
         if (!delivered) {
           logger.warn(
-            `[PRReviewService] follow-up not confirmed delivered to review session ${existingReviewSessionId} for PR #${prNumber}`,
+            `[PRReviewService] follow-up not confirmed delivered to review session ${existingReviewSessionId} for PR #${prNumber} — abandoning wait and falling back`,
           );
           recordEvent({
             event_type: 'session_nudge_delivery_failed',
@@ -585,6 +681,27 @@ export class PRReviewService {
               reason: 'pr_review_followup',
             },
           });
+          // The target session cannot be relied on to ever produce a
+          // verdict — do not burn the full VERDICT_TIMEOUT_MS waiting on it.
+          abortController.abort();
+          clearReviewSessionId(prNumber, repo);
+          if (prData.headSha && prData.headSha === prRow.last_reviewed_sha) {
+            const stored = this.storedResultOrNull(prNumber, repo, prRow);
+            if (
+              stored &&
+              (stored.verdict === 'approved' ||
+                stored.verdict === 'needs_changes')
+            ) {
+              return stored;
+            }
+          }
+          return this.reviewPR(
+            workItem,
+            diffSource,
+            projectId,
+            projectContextUrl,
+            sleep,
+          );
         }
         const aiResult = await verdictPromise;
         const taskBodyForMigrationCheck = await this.fetchTaskBodyBestEffort(
@@ -604,18 +721,24 @@ export class PRReviewService {
           prRow.task_id,
         );
         // Persist immediately after parse — before any side effects (GitHub/Notion).
-        setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
-        setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
-        if (finalResult.verdict === 'approved') {
+        const { result: persistedResult1, suppressed: suppressed1 } =
+          this.persistVerdict(
+            prNumber,
+            repo,
+            prData.headSha ?? null,
+            finalResult,
+            prRow.task_id,
+          );
+        if (!suppressed1 && persistedResult1.verdict === 'approved') {
           await this.handleApprovedVerdict(
             prNumber,
             repo,
             prRow.task_id,
             projectId,
-            finalResult.manualItemsForHuman,
+            persistedResult1.manualItemsForHuman,
           );
         }
-        return finalResult;
+        return persistedResult1;
       }
 
       const prData = await this.withFetchRetry(
@@ -690,18 +813,24 @@ export class PRReviewService {
             prRow.task_id,
           );
           // Persist immediately after parse — before any side effects (GitHub/Notion).
-          setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
-          setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
-          if (finalResult.verdict === 'approved') {
+          const { result: persistedResult2, suppressed: suppressed2 } =
+            this.persistVerdict(
+              prNumber,
+              repo,
+              prData.headSha ?? null,
+              finalResult,
+              prRow.task_id,
+            );
+          if (!suppressed2 && persistedResult2.verdict === 'approved') {
             await this.handleApprovedVerdict(
               prNumber,
               repo,
               prRow.task_id,
               projectId,
-              finalResult.manualItemsForHuman,
+              persistedResult2.manualItemsForHuman,
             );
           }
-          return finalResult;
+          return persistedResult2;
         }
         // Defensive: sendOrResume rejected despite appearing resumable — treat as stale.
         logger.warn(
@@ -769,17 +898,24 @@ export class PRReviewService {
       // Persist immediately after parse — before any side effects (GitHub/Notion).
       // setLastReviewedSha was already called above the verdictPromise await for
       // the race-window guard; the verdict write here is the critical safety net.
-      setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
-      if (finalResult.verdict === 'approved') {
+      const { result: persistedResult3, suppressed: suppressed3 } =
+        this.persistVerdict(
+          prNumber,
+          repo,
+          prData.headSha ?? null,
+          finalResult,
+          prRow.task_id,
+        );
+      if (!suppressed3 && persistedResult3.verdict === 'approved') {
         await this.handleApprovedVerdict(
           prNumber,
           repo,
           prRow.task_id,
           projectId,
-          finalResult.manualItemsForHuman,
+          persistedResult3.manualItemsForHuman,
         );
       }
-      return finalResult;
+      return persistedResult3;
     } catch (e: unknown) {
       if (e instanceof FetchRetryExhaustedError) {
         this.sessionManager.emit('message', {
@@ -1006,6 +1142,29 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     projectContextUrl: string = this.defaultProjectContextUrl,
   ): Promise<PRReviewResult> {
     const pr = getPRByNumber(prNumber, repo);
+    if (pr && (pr.state === 'merged' || pr.state === 'closed')) {
+      logger.info(
+        `[PRReviewService] reReviewPR PR #${prNumber}: state=${pr.state} — skipping re-review`,
+      );
+      recordEvent({
+        event_type: 're_review_skipped_pr_terminal',
+        actor_type: 'system',
+        actor_id: null,
+        task_id: pr.task_id ?? null,
+        payload: { pr_number: prNumber, repo, state: pr.state },
+      });
+      const stored = this.storedResultOrNull(prNumber, repo, pr);
+      return (
+        stored ?? {
+          prNumber,
+          repo,
+          verdict: 'incomplete',
+          dimensions: [],
+          summary: `PR is ${pr.state} — re-review skipped.`,
+          reviewedAt: new Date().toISOString(),
+        }
+      );
+    }
     if (!pr?.review_session_id) {
       // No paired review session — fall back to fresh review
       const diffSource = new GitHubDiffSource(this.github, repo, prNumber);
@@ -1045,6 +1204,31 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
         summary: stored?.summary ?? '(no new commits — re-review skipped)',
         reviewedAt: new Date().toISOString(),
       };
+    }
+
+    // The target review session's status must be checked before attempting
+    // to reach it: sendOrResume() will happily reopen a terminal (done/
+    // error/killed) session via --resume, which is exactly the "resurrect a
+    // finished session to deliver a bogus verdict" failure mode this guards
+    // against. A terminal session with a changed head gets a fresh review
+    // session instead of a follow-up.
+    const existingSession = getSession(pr.review_session_id);
+    const isSessionTerminal =
+      !existingSession ||
+      ['done', 'error', 'killed'].includes(existingSession.status);
+    if (isSessionTerminal) {
+      logger.warn(
+        `[PRReviewService] reReviewPR PR #${prNumber}: review session ${pr.review_session_id} is terminal ` +
+          `(${existingSession ? `status=${existingSession.status}` : 'no DB row'}) — launching fresh review session instead of a follow-up.`,
+      );
+      clearReviewSessionId(prNumber, repo);
+      const diffSource = new GitHubDiffSource(this.github, repo, prNumber);
+      return this.reviewPR(
+        { type: 'pr', prNumber, repo },
+        diffSource,
+        projectId,
+        projectContextUrl,
+      );
     }
 
     const branches =
@@ -1139,18 +1323,24 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       taskBodyForMigrationCheck,
       pr.task_id,
     );
-    setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
-    setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
-    if (finalResult.verdict === 'approved') {
+    const { result: persistedResult4, suppressed: suppressed4 } =
+      this.persistVerdict(
+        prNumber,
+        repo,
+        prData.headSha ?? null,
+        finalResult,
+        pr.task_id,
+      );
+    if (!suppressed4 && persistedResult4.verdict === 'approved') {
       await this.handleApprovedVerdict(
         prNumber,
         repo,
         pr.task_id,
         projectId,
-        finalResult.manualItemsForHuman,
+        persistedResult4.manualItemsForHuman,
       );
     }
-    return finalResult;
+    return persistedResult4;
   }
 
   /**
@@ -1162,11 +1352,19 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
    * message, so a session that never calls the tool still resolves.
    * Falls back to parseReviewResult over stored events if session_ended fires first.
    */
+  /**
+   * signal: when provided and aborted, tears down listeners/timer immediately
+   * without resolving — used by callers that discover mid-wait (e.g. a failed
+   * follow-up send) that the target session can never produce a verdict, so
+   * the caller can fall back on its own terms instead of burning the full
+   * VERDICT_TIMEOUT_MS.
+   */
   private waitForVerdict(
     sessionId: string,
     prNumber: number,
     repo: string,
     timeoutMs: number = this.verdictTimeoutMs,
+    signal?: AbortSignal,
   ): Promise<PRReviewResult> {
     return new Promise<PRReviewResult>((resolve) => {
       let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
@@ -1178,7 +1376,21 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
           clearTimeout(timeoutHandle);
           timeoutHandle = null;
         }
+        signal?.removeEventListener('abort', onAbort);
       };
+
+      const onAbort = () => {
+        cleanup();
+        // No resolve() — the promise is intentionally left pending; the
+        // aborting caller does not await it.
+      };
+      if (signal) {
+        if (signal.aborted) {
+          onAbort();
+          return;
+        }
+        signal.addEventListener('abort', onAbort);
+      }
 
       const verdictHandler = (payload: ReviewVerdictRecordedPayload) => {
         if (payload.sessionId !== sessionId) return;
