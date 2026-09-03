@@ -35,9 +35,7 @@ describe('resolveLegacyDbCandidates', () => {
       backendPackageRoot,
     );
     expect(candidates).toContain(path.join(process.cwd(), 'dashboard.db'));
-    expect(candidates).toContain(
-      path.join(backendPackageRoot, 'dashboard.db'),
-    );
+    expect(candidates).toContain(path.join(backendPackageRoot, 'dashboard.db'));
   });
 
   it('returns no candidates for an absolute path', () => {

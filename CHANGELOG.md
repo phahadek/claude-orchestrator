@@ -54,6 +54,7 @@ All notable changes to Claude Orchestrator are documented here.
   - Windows: `%APPDATA%\ClaudeOrchestrator\dashboard.db`
 
   Alternatively, set `db.path` to an absolute path pointing directly at the existing file — an absolute path is never affected by this change. Note that `config.json` takes precedence over `.env`, so a `db.path` fix applied only to `.env` will silently have no effect if `config.json` already sets it.
+
 - The gate-verify adjudication layer was retired: `gate.verify` is now staged as a normal intent and disposed by the operator on the standard decision surface, instead of through a separate adjudication path.
 
 ### Added

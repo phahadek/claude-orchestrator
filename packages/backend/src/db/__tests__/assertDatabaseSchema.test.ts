@@ -31,9 +31,7 @@ describe('assertDatabaseSchema', () => {
       const legacyDb = new Database(legacyPath);
       legacyDb.exec(`CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)`);
       legacyDb.exec(`CREATE TABLE sessions (session_id TEXT PRIMARY KEY)`);
-      legacyDb
-        .prepare(`INSERT INTO sessions (session_id) VALUES ('s1')`)
-        .run();
+      legacyDb.prepare(`INSERT INTO sessions (session_id) VALUES ('s1')`).run();
       legacyDb.close();
 
       const newPath = path.join(dir, 'dashboard.db');

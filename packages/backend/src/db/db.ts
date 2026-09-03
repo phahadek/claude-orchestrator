@@ -4,7 +4,10 @@ import path from 'path';
 import { Worker } from 'worker_threads';
 import { getOrchestratorConfig } from '../config/appConfig';
 import { getDataDir } from '../config/dataDir';
-import { resolveDbPath, resolveLegacyDbCandidates } from '../config/resolveDbPath';
+import {
+  resolveDbPath,
+  resolveLegacyDbCandidates,
+} from '../config/resolveDbPath';
 import { logger } from '../logger';
 import { assertDatabaseSchema } from './assertDatabaseSchema';
 
