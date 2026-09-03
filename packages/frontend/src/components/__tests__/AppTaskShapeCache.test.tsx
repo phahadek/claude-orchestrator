@@ -1,4 +1,10 @@
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import {
+  render,
+  screen,
+  waitFor,
+  fireEvent,
+  act,
+} from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../../hooks/useWebSocket', () => ({
@@ -166,7 +172,9 @@ describe('App — per-shape taskViews cache', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Tasks' }));
 
     // No new /api/tasks/active requests should have been issued
-    expect(activeTaskCalls(fetchMock).length).toBe(callCountAfterBothShapesCached);
+    expect(activeTaskCalls(fetchMock).length).toBe(
+      callCountAfterBothShapesCached,
+    );
   });
 
   it('discards an out-of-order (stale) shape response instead of overwriting the newer cached response', async () => {

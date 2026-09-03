@@ -671,7 +671,13 @@ export default function App() {
       .catch(() => {
         setTaskViewsLoading(false);
       });
-  }, [activeProjectId, activeBoardId, tasksReady, taskListRefreshTrigger, topView]);
+  }, [
+    activeProjectId,
+    activeBoardId,
+    tasksReady,
+    taskListRefreshTrigger,
+    topView,
+  ]);
 
   // Merge a single task update in-place so TaskDetail sees live changes without a full re-fetch
   useEffect(() => {
