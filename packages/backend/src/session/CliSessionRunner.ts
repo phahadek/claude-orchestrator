@@ -392,7 +392,11 @@ export class CliSessionRunner implements ISessionRunner {
           ? (event.tasks as unknown[]).length
           : 0;
       }
-      if (resultEventSeen && event.type === 'init') {
+      if (
+        resultEventSeen &&
+        event.type === 'system' &&
+        event.subtype === 'init'
+      ) {
         // A new turn has started in the same process — the previous
         // turn's result event no longer describes the process's current
         // state.
