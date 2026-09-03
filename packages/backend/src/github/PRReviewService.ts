@@ -434,6 +434,19 @@ you MUST:
 - Never fail the verdict solely because manual verification items are not demonstrated in the PR.
 - List them verbatim in the "manualItemsForHuman" array so downstream tooling can surface them to a human.
 
+## Per-criterion evidence bar for "Diff vs Acceptance Criteria"
+
+For each automated acceptance criterion (excluding manual verification items handled
+above), the PR must show falsification-style evidence, not just a claim that it works:
+- The specific command run to check it (e.g. a test file/name or script invocation).
+- The observed output of that command (pass/fail result, not a paraphrase).
+- An explicit non-vacuous confirmation: the test actually executed (not skipped or
+  filtered out), and it fails without the change and passes with it — a test that
+  trivially passes regardless of the change (e.g. an empty assertion, a test that
+  never ran, or one skipped/excluded from the run) does not count as evidence.
+Fail this dimension for any criterion lacking this command+output+non-vacuous-confirmation
+evidence, even if the surrounding diff otherwise looks plausible.
+
 Evaluate the PR across exactly these 4 dimensions and respond with this JSON schema:
 {
   "verdict": "approved" | "needs_changes" | "incomplete",
