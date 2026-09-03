@@ -499,6 +499,47 @@ describe('InvestigationReportSection — screenshot paste intake', () => {
   });
 });
 
+describe('InvestigationReportSection — explicit file attach', () => {
+  it('stages an image selected via the attach control and includes it on submit', async () => {
+    vi.spyOn(reportsApi, 'list').mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+    });
+    const draft = makeReport({
+      id: 'r-with-attached-image',
+      title: 'New symptom',
+      state: 'draft',
+      image_path: '/data/investigation-report-images/r-with-attached-image.png',
+    });
+    const committed = { ...draft, state: 'committed' as const };
+    const createSpy = vi.spyOn(reportsApi, 'create').mockResolvedValue(draft);
+    vi.spyOn(reportsApi, 'commit').mockResolvedValue(committed);
+
+    render(<InvestigationReportSection projectId="proj-1" milestone="M1" />);
+
+    await screen.findByTestId('investigation-report-section');
+    fireEvent.click(screen.getByTestId('report-start-draft'));
+    fireEvent.change(screen.getByTestId('report-draft-title'), {
+      target: { value: 'New symptom' },
+    });
+
+    const fileInput = screen.getByTestId('report-draft-attach-input');
+    const file = new File(['fake-png-bytes'], 'screenshot.png', {
+      type: 'image/png',
+    });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await screen.findByTestId('report-draft-image-preview');
+
+    fireEvent.click(screen.getByTestId('report-draft-submit'));
+
+    await waitFor(() => expect(createSpy).toHaveBeenCalledTimes(1));
+    const call = createSpy.mock.calls[0][0];
+    expect(call.image).toMatch(/^data:image\/png;base64,/);
+  });
+});
+
 describe('InvestigationReportSection — Ctrl+Enter shortcut', () => {
   it('files the report when pressing Ctrl+Enter in the title input', async () => {
     vi.spyOn(reportsApi, 'list').mockResolvedValue({

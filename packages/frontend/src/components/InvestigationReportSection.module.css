@@ -156,6 +156,37 @@
   font-size: 0.75rem;
 }
 
+.attachRow {
+  display: flex;
+}
+
+.attachFileInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.attachButton {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  padding: 4px 8px;
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+.attachButton:hover {
+  border-color: #89b4fa;
+}
+
 .draftImagePreview {
   display: flex;
   flex-direction: column;

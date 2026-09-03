@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ClipboardEvent, KeyboardEvent } from 'react';
+import type { ChangeEvent, ClipboardEvent, KeyboardEvent } from 'react';
 import type {
   InvestigationReport,
   InvestigationReportState,
@@ -156,6 +156,14 @@ export function InvestigationReportSection({
     setCreateError(null);
   };
 
+  const loadDraftImageFile = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') setDraftImage(reader.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleSymptomPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
     const items = e.clipboardData?.items;
     if (!items) return;
@@ -165,14 +173,16 @@ export function InvestigationReportSection({
       const file = item.getAsFile();
       if (!file) continue;
       e.preventDefault();
-      const reader = new FileReader();
-      reader.onload = () => {
-        if (typeof reader.result === 'string') setDraftImage(reader.result);
-      };
-      reader.readAsDataURL(file);
+      loadDraftImageFile(file);
       return;
     }
     // No image item present — fall through to the browser's normal text paste.
+  };
+
+  const handleAttachFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) loadDraftImageFile(file);
+    e.target.value = '';
   };
 
   const submitDraft = () => {
@@ -431,6 +441,22 @@ export function InvestigationReportSection({
             onPaste={handleSymptomPaste}
             data-testid="report-draft-symptom"
           />
+          <div className={styles.attachRow}>
+            <input
+              type="file"
+              accept="image/*"
+              className={styles.attachFileInput}
+              onChange={handleAttachFileChange}
+              data-testid="report-draft-attach-input"
+              id="report-draft-attach-input"
+            />
+            <label
+              htmlFor="report-draft-attach-input"
+              className={styles.attachButton}
+            >
+              Attach image
+            </label>
+          </div>
           {draftImage && (
             <div
               className={styles.draftImagePreview}
