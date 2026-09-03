@@ -304,7 +304,13 @@ function isValidAnalyzeEntry(v: unknown): v is AnalyzeCommand {
  * them to the token that must actually be reachable through allowed_tools.
  */
 const ENV_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
-const COMMAND_WRAPPER_TOKENS = new Set(['env', 'time', 'nice', 'nohup', 'exec']);
+const COMMAND_WRAPPER_TOKENS = new Set([
+  'env',
+  'time',
+  'nice',
+  'nohup',
+  'exec',
+]);
 
 /**
  * Resolves a gate command string (a `verify`/`autofix`/`analyze` entry) down
@@ -362,7 +368,10 @@ function reachableBashBinaries(entries: string[]): Set<string> {
  * rejected as out of scope here — see the task notes; this is hard-fail only.
  */
 function reconcileGateCommandsWithAllowedTools(cfg: OrchestratorConfig): void {
-  const reachable = reachableBashBinaries([...ALLOWED_TOOLS, ...cfg.allowed_tools]);
+  const reachable = reachableBashBinaries([
+    ...ALLOWED_TOOLS,
+    ...cfg.allowed_tools,
+  ]);
   const groups: { field: string; commands: string[] }[] = [
     { field: 'verify', commands: cfg.verify },
     { field: 'autofix', commands: cfg.autofix },

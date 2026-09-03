@@ -1192,9 +1192,12 @@ describe('loadOrchestratorConfig: verify/autofix/analyze vs allowed_tools reconc
 
   it('throws naming the binary and command when a verify command is not covered by allowed_tools or the base allowlist', () => {
     writeConfig(
-      ['verify:', '  - golangci-lint run', 'allowed_tools:', '  - Bash(go:*)'].join(
-        '\n',
-      ),
+      [
+        'verify:',
+        '  - golangci-lint run',
+        'allowed_tools:',
+        '  - Bash(go:*)',
+      ].join('\n'),
     );
 
     expect(() => loadOrchestratorConfig(tmpDir)).toThrowError(
