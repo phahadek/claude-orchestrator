@@ -901,8 +901,20 @@ describe('recoverInterruptedTestRequestRuns', () => {
     // A superseded sibling row so clearSupersededStructuredResults' effect
     // (clearing an already-extracted older row's structured_result for the
     // same key) is observable.
-    insertTestRequestRun('run-1-older', 'proj-1', 'hash-x', null, Date.now() - 1);
-    completeTestRequestRun('run-1-older', 'passed', 'ok', null, '{"suites":[]}');
+    insertTestRequestRun(
+      'run-1-older',
+      'proj-1',
+      'hash-x',
+      null,
+      Date.now() - 1,
+    );
+    completeTestRequestRun(
+      'run-1-older',
+      'passed',
+      'ok',
+      null,
+      '{"suites":[]}',
+    );
     ingestTestRunResultsTx('run-1-older', 'proj-1', [], 1, false, false, null);
     expect(listRunningTestRequestRuns()).toHaveLength(1);
 
@@ -982,7 +994,13 @@ describe('recoverInterruptedTestRequestRuns', () => {
   });
 
   it('gives a running row and a queued row swept together different failure_reason values', () => {
-    insertTestRequestRun('run-mixed-running', 'proj-1', 'hash-mixed-a', null, Date.now());
+    insertTestRequestRun(
+      'run-mixed-running',
+      'proj-1',
+      'hash-mixed-a',
+      null,
+      Date.now(),
+    );
     insertTestRequestRun(
       'run-mixed-queued',
       'proj-1',
@@ -1005,7 +1023,9 @@ describe('recoverInterruptedTestRequestRuns', () => {
       id: string;
       failure_reason: string;
     }>;
-    const reasons = Object.fromEntries(rows.map((r) => [r.id, r.failure_reason]));
+    const reasons = Object.fromEntries(
+      rows.map((r) => [r.id, r.failure_reason]),
+    );
     expect(reasons['run-mixed-running']).toBe('execution_failed');
     expect(reasons['run-mixed-queued']).toBe('interrupted_queued');
     expect(reasons['run-mixed-running']).not.toBe(reasons['run-mixed-queued']);

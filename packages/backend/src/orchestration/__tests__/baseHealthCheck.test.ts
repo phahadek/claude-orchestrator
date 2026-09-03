@@ -604,7 +604,8 @@ describe('checkBaseBranchHealth', () => {
       content_hash: 'hash-interrupted',
       session_id: null,
       state: 'failed',
-      output: '[testRequestLane] backend restarted while queued — run never began executing',
+      output:
+        '[testRequestLane] backend restarted while queued — run never began executing',
       requested_at: null,
       started_at: 0,
       finished_at: null,
