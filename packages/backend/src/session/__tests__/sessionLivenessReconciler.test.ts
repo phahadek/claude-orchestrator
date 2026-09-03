@@ -38,6 +38,7 @@ import {
   reconcileSessionLiveness,
   reconcileNonPlanningSessionLiveness,
   reconcileOrphanProcesses,
+  __resetLivenessSweepSummaryStateForTests,
 } from '../sessionLivenessReconciler';
 import { updateSessionWorktreePath } from '../../db/queries';
 import type { ClaudeSessionProcess } from '../processLiveness';
@@ -53,6 +54,7 @@ beforeEach(() => {
   db.prepare('DELETE FROM session_events').run();
   vi.clearAllMocks();
   runtimeSettings.session_mode = 'cli';
+  __resetLivenessSweepSummaryStateForTests();
 });
 
 function seedSession(opts: {
@@ -139,8 +141,10 @@ describe('reconcileSessionLiveness', () => {
     expect(row.terminal_completion_reason).toBeNull();
   });
 
-  it('records a non-terminal observability event (session_id + elapsed idle time) for a dead-process idle row, instead of terminalizing it', () => {
-    seedSession({ sessionId: 'idle-observed', status: 'idle' });
+  it('writes exactly one summary audit row for a sweep over 10 idle rows with no live process, not ten', () => {
+    for (let i = 0; i < 10; i++) {
+      seedSession({ sessionId: `idle-observed-${i}`, status: 'idle' });
+    }
 
     reconcileSessionLiveness({
       bootTimeMs: BOOT_LONG_AGO,
@@ -148,15 +152,52 @@ describe('reconcileSessionLiveness', () => {
       nowFn: () => NOW,
     });
 
-    expect(recordEvent).toHaveBeenCalledWith(
+    const summaryCalls = (recordEvent as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([event]) => event.event_type === 'session_liveness_sweep_completed',
+    );
+    expect(summaryCalls).toHaveLength(1);
+    expect(summaryCalls[0][0]).toEqual(
       expect.objectContaining({
-        event_type: 'session_liveness_idle_process_absent',
+        event_type: 'session_liveness_sweep_completed',
         payload: expect.objectContaining({
-          session_id: 'idle-observed',
-          idle_elapsed_ms: expect.any(Number),
+          population: 'planning',
+          examined: 10,
+          alive: 0,
+          idle_process_absent_count: 10,
         }),
       }),
     );
+  });
+
+  it('omits the idle session id list from the second of two consecutive sweeps over an unchanged idle population', () => {
+    for (let i = 0; i < 3; i++) {
+      seedSession({ sessionId: `idle-stable-${i}`, status: 'idle' });
+    }
+
+    reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    });
+    const firstSummary = (recordEvent as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([event]) => event.event_type === 'session_liveness_sweep_completed',
+    )?.[0];
+    expect(firstSummary.payload.session_ids).toEqual(
+      expect.arrayContaining(['idle-stable-0', 'idle-stable-1', 'idle-stable-2']),
+    );
+
+    vi.clearAllMocks();
+
+    reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    });
+    const secondSummary = (recordEvent as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([event]) => event.event_type === 'session_liveness_sweep_completed',
+    )?.[0];
+    expect(secondSummary.payload.idle_process_absent_count).toBe(3);
+    expect(secondSummary.payload.session_ids).toBeUndefined();
   });
 
   it('does not record the planning liveness-reconciled audit event when only idle rows were observed (nothing terminalized)', () => {
@@ -251,12 +292,26 @@ describe('reconcileSessionLiveness', () => {
     );
   });
 
-  it('does not record an audit event when nothing was reconciled', () => {
+  it('does not record a reconciled-count audit event when nothing was reconciled, only the per-sweep summary', () => {
     seedSession({ sessionId: 'still-alive', status: 'running' });
 
     reconcileSessionLiveness({ isProcessAlive: () => true, nowFn: () => NOW });
 
-    expect(recordEvent).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'planning_sessions_liveness_reconciled',
+      }),
+    );
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'session_liveness_sweep_completed',
+        payload: expect.objectContaining({
+          examined: 1,
+          alive: 1,
+          idle_process_absent_count: 0,
+        }),
+      }),
+    );
   });
 
   it('skips a just-created row that has not yet cleared the process-race grace floor', () => {

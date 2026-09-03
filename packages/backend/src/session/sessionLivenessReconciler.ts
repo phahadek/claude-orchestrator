@@ -53,6 +53,28 @@ const LIVENESS_RECONCILE_SETTLE_MS = 2 * 60_000;
  */
 const BACKEND_BOOT_MS = Date.now();
 
+/**
+ * Cap on how many session ids the per-sweep summary event carries — beyond
+ * this the id list stops being useful for a human skimming the audit log
+ * and just bloats the row.
+ */
+const IDLE_PROCESS_ABSENT_ID_LIST_CAP = 20;
+
+/**
+ * Last sweep's idle_process_absent_count per population, kept in memory so
+ * a sweep can tell whether the population changed since the previous one —
+ * the summary event only carries the id list when it did (or resets on
+ * backend restart, which is fine: the first post-restart sweep is exactly
+ * when a fresh id list is most useful).
+ */
+const lastIdleProcessAbsentCount: Partial<Record<'planning' | 'non-planning', number>> = {};
+
+/** Test-only: clears the cross-sweep dedup memory so tests don't leak state into each other. */
+export function __resetLivenessSweepSummaryStateForTests(): void {
+  delete lastIdleProcessAbsentCount.planning;
+  delete lastIdleProcessAbsentCount['non-planning'];
+}
+
 export interface SessionLivenessReconcilerDeps {
   /** Overridable for tests; defaults to the real `ps`-backed check. */
   isProcessAlive?: (sessionId: string) => boolean;
@@ -172,6 +194,7 @@ function runLivenessSweep(
   let alive = 0;
   const reconciled: string[] = [];
   const terminalizedViaCompletion: string[] = [];
+  const idleProcessAbsentSessionIds: string[] = [];
 
   if (now - bootTimeMs < LIVENESS_RECONCILE_SETTLE_MS) {
     // Backend hasn't been up long enough for the in-memory session/process
@@ -228,16 +251,14 @@ function runLivenessSweep(
       // authorizes no live-population drain either. Leave the row exactly
       // as it is and record the observation for visibility;
       // OrphanedTaskSweeper's nudge-then-surface-to-operator path is the
-      // correct owner of any abandonment judgment from here.
-      recordEvent({
-        event_type: 'session_liveness_idle_process_absent',
-        actor_type: 'system',
-        payload: {
-          session_id: row.session_id,
-          status: row.status,
-          idle_elapsed_ms: now - lastActivity,
-        },
-      });
+      // correct owner of any abandonment judgment from here. Process
+      // absence is the steady state for essentially the whole idle
+      // population on every sweep, so this is logged rather than written to
+      // the audit log per-row (see the per-sweep summary event below).
+      idleProcessAbsentSessionIds.push(row.session_id);
+      logger.debug(
+        `[sessionLivenessReconciler] session ${row.session_id.slice(0, 8)} (status=${row.status}) has no live OS process — idle steady state, no action taken (idle_elapsed_ms=${now - lastActivity})`,
+      );
       continue;
     }
 
@@ -267,6 +288,33 @@ function runLivenessSweep(
       `[sessionLivenessReconciler] session ${row.session_id.slice(0, 8)} (status=${row.status}) has no live OS process — archived out of the live population (status left untouched)`,
     );
   }
+
+  const idleProcessAbsentCount = idleProcessAbsentSessionIds.length;
+  const countChangedSincePreviousSweep =
+    lastIdleProcessAbsentCount[population] !== idleProcessAbsentCount;
+  recordEvent({
+    event_type: 'session_liveness_sweep_completed',
+    actor_type: 'system',
+    payload: {
+      population,
+      examined,
+      alive,
+      idle_process_absent_count: idleProcessAbsentCount,
+      // Only carried when the count changed since the previous sweep — an
+      // unchanged population is re-observed every sweep by design (see
+      // the debug log above), so repeating its id list would just
+      // reproduce the row-per-idle-session bloat this event replaces.
+      ...(countChangedSincePreviousSweep
+        ? {
+            session_ids: idleProcessAbsentSessionIds.slice(
+              0,
+              IDLE_PROCESS_ABSENT_ID_LIST_CAP,
+            ),
+          }
+        : {}),
+    },
+  });
+  lastIdleProcessAbsentCount[population] = idleProcessAbsentCount;
 
   if (reconciled.length > 0) {
     recordEvent({
