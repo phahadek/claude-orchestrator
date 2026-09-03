@@ -18,6 +18,7 @@ import {
   linkPRTaskAndSession,
   setPendingPush,
   getSessionLastActivityMs,
+  hasQueuedOrRunningTestRunForSession,
   setStalledRetryBaseExhausted,
   resetStalledPRRetryCountForBaseRecovery,
   setReconcileExhausted,
@@ -267,6 +268,16 @@ export class StalledPRReconciler {
         this.reviewOrchestrator?.isReviewInFlight(pr.pr_number, pr.repo) ??
         false;
 
+      // Second-layer suppression for the same "pipeline legitimately still
+      // running" case as isPreReviewPipelineInFlight, scoped to the
+      // verify/tests stages where a polimarket full suite run can take
+      // 10-21 minutes — see classifyStalledPR's session_inert branch.
+      const hasQueuedOrRunningTestRun =
+        pr.session_id &&
+        (pr.pre_review_stage === 'verify' || pr.pre_review_stage === 'tests')
+          ? hasQueuedOrRunningTestRunForSession(pr.session_id)
+          : false;
+
       const stalled = classifyStalledPR(
         effectivePr,
         reviewSessionStatus,
@@ -277,6 +288,7 @@ export class StalledPRReconciler {
         isBusyInFlightToolCall,
         isAwaitingOperatorDecision,
         isPreReviewPipelineInFlight,
+        hasQueuedOrRunningTestRun,
       );
       if (!stalled) continue;
 

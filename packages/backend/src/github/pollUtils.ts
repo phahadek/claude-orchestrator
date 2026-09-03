@@ -102,6 +102,7 @@ export function classifyStalledPR(
   sessionBusyInFlightToolCall = false,
   isAwaitingOperatorDecision = false,
   isPreReviewPipelineInFlight = false,
+  hasQueuedOrRunningTestRun = false,
 ): { kind: StalledPRKind } | null {
   // The docs execution flow's never-auto-merged gate: an open, un-merged
   // human_merge_only PR waits indefinitely for a human to merge it — that is
@@ -227,11 +228,26 @@ export function classifyStalledPR(
   // tool_result is indistinguishable from real inertness by session_events
   // recency alone, so the classifier also needs the pending-tool-use +
   // live-process signal to tell them apart.
+  //
+  // Also suppressed while this PR's own pre-review pipeline is in flight
+  // (isPreReviewPipelineInFlight) — a verify/tests run can legitimately take
+  // 10-21 minutes, well past session_inert_threshold_seconds (default 600s),
+  // during which the implementing session is correctly silent. As a second
+  // layer for the same case — e.g. a stage transition raced the in-memory
+  // isReviewInFlight check — hasQueuedOrRunningTestRun (resolved by the
+  // caller via hasQueuedOrRunningTestRunForSession) suppresses it too when
+  // pre_review_stage is 'verify' or 'tests' and the PR's session has a
+  // test_request_runs row still queued/running.
   if (
     lastActivityAgeMs !== null &&
     lastActivityAgeMs > inertThresholdMs &&
     !sessionBusyInFlightToolCall &&
-    !isAwaitingOperatorDecision
+    !isAwaitingOperatorDecision &&
+    !isPreReviewPipelineInFlight &&
+    !(
+      (pr.pre_review_stage === 'verify' || pr.pre_review_stage === 'tests') &&
+      hasQueuedOrRunningTestRun
+    )
   ) {
     return { kind: 'session_inert' };
   }

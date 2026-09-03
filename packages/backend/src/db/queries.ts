@@ -9194,6 +9194,24 @@ export function listQueuedTestRequestRuns(): TestRequestRunRow[] {
 }
 
 /**
+ * True when the given session has a test_request_runs row still `queued` or
+ * `running` — used by StalledPRReconciler to tell a legitimately long-running
+ * verify/tests pre-review stage apart from real session silence (a polimarket
+ * full suite run can take 10-21 minutes, well past session_inert_threshold_seconds).
+ */
+export function hasQueuedOrRunningTestRunForSession(
+  sessionId: string,
+): boolean {
+  const row = db
+    .prepare<[string], { cnt: number }>(
+      `SELECT COUNT(*) AS cnt FROM test_request_runs
+       WHERE session_id = ? AND state IN ('queued', 'running')`,
+    )
+    .get(sessionId);
+  return (row?.cnt ?? 0) > 0;
+}
+
+/**
  * Every non-running run with a structured_result but no extracted
  * test_run_results rows yet — the boot-time re-derivation sweep's work list
  * (see ingestTestRunResults in testRequestLane.ts). Catches both a crash

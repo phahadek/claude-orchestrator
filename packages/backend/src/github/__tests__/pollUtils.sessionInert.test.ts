@@ -224,6 +224,143 @@ describe('classifyStalledPR — session_inert', () => {
     ).toEqual({ kind: 'session_inert' });
   });
 
+  it('does not classify session_inert when the PR own pre-review pipeline is in flight, even at 30 min silence', () => {
+    const pr = makePR({
+      review_result: null,
+      pending_push: 0,
+      pre_review_stage: 'tests',
+    });
+
+    const THIRTY_MIN_MS = 30 * 60 * 1000;
+
+    expect(
+      classifyStalledPR(
+        pr,
+        'done',
+        'running',
+        false,
+        THIRTY_MIN_MS,
+        TEN_MIN_MS,
+        false,
+        false,
+        true,
+      ),
+    ).toBeNull();
+  });
+
+  it('does not classify session_inert when pre_review_stage is tests and a test run is queued/running for the session', () => {
+    const pr = makePR({
+      review_result: null,
+      pending_push: 0,
+      pre_review_stage: 'tests',
+    });
+
+    expect(
+      classifyStalledPR(
+        pr,
+        'done',
+        'running',
+        false,
+        TEN_MIN_MS + 1,
+        TEN_MIN_MS,
+        false,
+        false,
+        false,
+        true,
+      ),
+    ).toBeNull();
+  });
+
+  it('does not classify session_inert when pre_review_stage is verify and a test run is queued/running for the session', () => {
+    const pr = makePR({
+      review_result: null,
+      pending_push: 0,
+      pre_review_stage: 'verify',
+    });
+
+    expect(
+      classifyStalledPR(
+        pr,
+        'done',
+        'running',
+        false,
+        TEN_MIN_MS + 1,
+        TEN_MIN_MS,
+        false,
+        false,
+        false,
+        true,
+      ),
+    ).toBeNull();
+  });
+
+  it('still classifies session_inert when no pipeline is in flight and no test run is queued/running', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'approved' }),
+    });
+
+    expect(
+      classifyStalledPR(
+        pr,
+        'done',
+        'running',
+        false,
+        TEN_MIN_MS + 1,
+        TEN_MIN_MS,
+        false,
+        false,
+        false,
+        false,
+      ),
+    ).toEqual({ kind: 'session_inert' });
+  });
+
+  it('still classifies session_inert when pre_review_stage is tests but no test run is queued/running for the session', () => {
+    const pr = makePR({
+      review_result: null,
+      pending_push: 0,
+      pre_review_stage: 'tests',
+    });
+
+    expect(
+      classifyStalledPR(
+        pr,
+        'done',
+        'running',
+        false,
+        TEN_MIN_MS + 1,
+        TEN_MIN_MS,
+        false,
+        false,
+        false,
+        false,
+      ),
+    ).toEqual({ kind: 'session_inert' });
+  });
+
+  it('pre_review_interrupted is unaffected by hasQueuedOrRunningTestRun — no verdict, no pending push, no review session, pipeline not in flight', () => {
+    const pr = makePR({
+      review_result: null,
+      pending_push: 0,
+      review_session_id: null,
+    });
+
+    expect(
+      classifyStalledPR(
+        pr,
+        null,
+        'idle',
+        false,
+        TEN_MIN_MS + 1,
+        TEN_MIN_MS,
+        false,
+        false,
+        false,
+        false,
+      ),
+    ).toEqual({ kind: 'pre_review_interrupted' });
+  });
+
   describe('pre-existing kinds still win over session_inert (activity age past threshold on every fixture)', () => {
     it('conflict_dead_session', () => {
       const pr = makePR({
