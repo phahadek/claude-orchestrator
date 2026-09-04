@@ -1487,7 +1487,11 @@ function sweepGroomBodyEditsIntoGroup(
  * group id so the staging session can retry against it.
  */
 export class TaskGroupMismatchError extends Error {
-  constructor(taskId: string, existingGroupId: string, suppliedGroupId: string) {
+  constructor(
+    taskId: string,
+    existingGroupId: string,
+    suppliedGroupId: string,
+  ) {
     super(
       `[stagedIntents] task "${taskId}" already has an open decision group ("${existingGroupId}"), but this ` +
         `stage supplied a different groupId ("${suppliedGroupId}") — a task's grooming pass stays in one ` +

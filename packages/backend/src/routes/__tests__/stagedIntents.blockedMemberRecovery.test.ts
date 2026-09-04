@@ -441,7 +441,7 @@ describe('one decision group per task per grooming pass', () => {
     ).toThrow(/g-mismatch-1/);
   });
 
-  it('accepts a stage under the task\'s existing open group id', () => {
+  it("accepts a stage under the task's existing open group id", () => {
     stageIntent(
       'task.setDependsOn',
       { taskId: 't-same', dependsOn: [] },
@@ -493,7 +493,7 @@ describe('one decision group per task per grooming pass', () => {
     expect(row.groupId).toBe('g-fresh');
   });
 
-  it('accepts a new group_id once the task\'s previous group is fully terminal', () => {
+  it("accepts a new group_id once the task's previous group is fully terminal", () => {
     insertRow({
       id: 'term-1',
       groupId: 'g-old-terminal',
@@ -512,7 +512,7 @@ describe('one decision group per task per grooming pass', () => {
     expect(row.groupId).toBe('g-new-terminal');
   });
 
-  it('still allows a re-staging supersede inside the session\'s own existing group', () => {
+  it("still allows a re-staging supersede inside the session's own existing group", () => {
     const first = stageIntent(
       'task.setDependsOn',
       { taskId: 't-resupersede', dependsOn: [] },
