@@ -76,9 +76,7 @@ describe('PATCH /api/milestones/:milestoneId', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.milestoneBranching).toBeNull();
-    expect(
-      getMilestoneById('ms-branching-1')?.milestone_branching,
-    ).toBeNull();
+    expect(getMilestoneById('ms-branching-1')?.milestone_branching).toBeNull();
   });
 
   it('rejects an invalid value', async () => {
