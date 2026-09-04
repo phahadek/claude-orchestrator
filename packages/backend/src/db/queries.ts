@@ -12168,7 +12168,11 @@ export function isSessionComplete(
   const session = getStmtGetSession().get({ session_id: sessionId }) as
     | Session
     | undefined;
-  if (!session || TERMINAL_SESSION_STATUSES.has(session.status) || session.archived) {
+  if (
+    !session ||
+    TERMINAL_SESSION_STATUSES.has(session.status) ||
+    session.archived
+  ) {
     return true;
   }
   if (hasBlockedStagedIntentForSession(sessionId, groupId)) return false;
