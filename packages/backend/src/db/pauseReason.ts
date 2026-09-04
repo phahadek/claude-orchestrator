@@ -62,7 +62,8 @@ export type CanonicalPauseReason =
   | 'mcp_unreachable_exhausted'
   | 'verdict_routing_failed'
   | 'base_attributable_test_excluded'
-  | 'migration_reservation_overtaken';
+  | 'migration_reservation_overtaken'
+  | 'orchestrator_mcp_connect_failed';
 
 export interface PauseReasonStruct {
   reason: CanonicalPauseReason;
@@ -472,6 +473,26 @@ export const PAUSE_REASON_REGISTRY: Record<
     retry_strategy: 'automatic',
     blocks_merge: false,
   },
+  // A coding session's own CLI init event reported the orchestrator MCP
+  // server as not connected (see AgentSession.handleRawEvent's init
+  // branch) — every mcp__orchestrator__* tool, including test_request, is
+  // unavailable for the session's whole life, so it has no route to test
+  // its own work before opening a PR. Distinct from mcp_unreachable_exhausted
+  // (SessionManager.reconcileMcpUnreachableSessions' bounded-respawn-budget
+  // escalation, fired only after several failed respawn attempts): this
+  // fires immediately off the CLI's own authoritative per-server status,
+  // before that grace-window/respawn machinery has had a chance to act.
+  // Deliberately recoverable+automatic rather than needs_attention — the
+  // same reconciler already treats this session as live and unreachable and
+  // will respawn it in place, escalating to mcp_unreachable_exhausted itself
+  // if the bounded respawn budget runs out. Also distinct from stalled_idle:
+  // that reason means the session went quiet, this one means the session is
+  // running but cannot test.
+  orchestrator_mcp_connect_failed: {
+    source: 'session',
+    severity: 'recoverable',
+    retry_strategy: 'automatic',
+  },
 };
 
 // ── Recovery descriptor ──────────────────────────────────────────────────────
@@ -582,6 +603,7 @@ const RECOVERY_ACTION_MAP: Record<
   mcp_unreachable_exhausted: 'none', // an operator has to decide whether to keep retrying by hand or abandon the session
   verdict_routing_failed: 'none', // no session to nudge; permanent operator-action-required pause
   base_attributable_test_excluded: 'none', // advisory-only: the pill clears itself once a subsequent run is clean or newly attributable
+  orchestrator_mcp_connect_failed: 'none', // recoverable+automatic: reconcileMcpUnreachableSessions' bounded respawn already covers this session; it self-clears on reconnect or escalates to mcp_unreachable_exhausted on its own
 };
 
 const RECOVERY_LABELS: Record<RecoveryAction, string> = {

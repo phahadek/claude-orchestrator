@@ -251,6 +251,30 @@ export function isMcpUnreachable(params: {
   return params.nowMs - params.lastSpawnMs >= params.graceMs;
 }
 
+/**
+ * Reads the CLI's authoritative per-server connection status off an init
+ * event's `mcp_servers` array (e.g. `{ name: 'orchestrator', status:
+ * 'connected' }`) and returns the orchestrator server's reported status, or
+ * undefined if the array is absent, malformed, or has no orchestrator entry.
+ * Pure predicate, exported for unit testing; deliberately tolerant of any
+ * shape mismatch — a session must never throw or spuriously pause on a
+ * malformed payload.
+ */
+export function getOrchestratorMcpStatus(
+  event: Record<string, unknown>,
+): string | undefined {
+  const servers = event.mcp_servers;
+  if (!Array.isArray(servers)) return undefined;
+  for (const entry of servers) {
+    if (!entry || typeof entry !== 'object') continue;
+    const { name, status } = entry as Record<string, unknown>;
+    if (name === 'orchestrator' && typeof status === 'string') {
+      return status;
+    }
+  }
+  return undefined;
+}
+
 export interface GitHubPRShape {
   number?: number;
   html_url?: string;
@@ -1188,6 +1212,43 @@ The full task spec and all rules are in your system prompt. Begin implementing d
   }
 
   /**
+   * A coding session's init event reported the orchestrator MCP server as
+   * not connected — every mcp__orchestrator__* tool, including
+   * test_request, is unavailable for the session's whole life, so it has no
+   * route to test its own work before opening a PR. Records the distinct
+   * orchestrator_mcp_connect_failed pause reason (recoverable+automatic —
+   * see pauseReason.ts) rather than letting the turn continue toward a PR
+   * with no way to have run tests. Does not kill or otherwise interrupt the
+   * running process: SessionManager.reconcileMcpUnreachableSessions already
+   * treats this session as live-and-unreachable and drives the bounded
+   * in-place respawn independently of this pause reason.
+   */
+  private pauseForOrchestratorMcpConnectFailure(status: string): void {
+    try {
+      setSessionPauseReason(this.sessionId, 'orchestrator_mcp_connect_failed');
+    } catch {
+      // Best-effort — DB may be unavailable or mocked without this function.
+    }
+    try {
+      insertPauseInterval(this.sessionId, 'orchestrator_mcp_connect_failed');
+    } catch {
+      // Best-effort — DB may be unavailable or mocked without this function.
+    }
+    recordEvent({
+      event_type: 'session_orchestrator_mcp_connect_failed',
+      actor_type: 'system',
+      actor_id: this.sessionId,
+      project_id: null,
+      task_id: this.taskId ?? null,
+      payload: { sessionId: this.sessionId, server: 'orchestrator', status },
+    });
+    sessionLog(
+      this.sessionId,
+      `orchestrator MCP server reported status="${status}" at init — paused (orchestrator_mcp_connect_failed)`,
+    );
+  }
+
+  /**
    * Return true if the session's last DB event is an error event whose payload
    * contains a transient Anthropic API error type (api_error = 500,
    * overloaded_error = 529). These are the only error types we should retry.
@@ -1469,6 +1530,14 @@ The full task spec and all rules are in your system prompt. Begin implementing d
 
     if (rawType === 'system' && (event.subtype as string) === 'init') {
       sessionLog(this.sessionId, `INIT permissionMode=${event.permissionMode}`);
+      const orchestratorMcpStatus = getOrchestratorMcpStatus(event);
+      if (
+        orchestratorMcpStatus !== undefined &&
+        orchestratorMcpStatus !== 'connected' &&
+        isCodeSession(this.sessionType)
+      ) {
+        this.pauseForOrchestratorMcpConnectFailure(orchestratorMcpStatus);
+      }
     }
 
     if (
