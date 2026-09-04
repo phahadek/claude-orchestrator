@@ -63,7 +63,7 @@ const SettingsSchema = z.object({
   // Absolute write-bandwidth ceiling (bytes/sec) written to io.max's wbps=
   // field for the sessions/ and tests/ cgroup leaves — the block device is
   // resolved at write time from the host filesystem, see sessionCgroup.ts's
-  // resolveBlockDevice. 0 disables the cap (io.max is left unwritten).
+  // resolveBlockDevice. 0 disables the cap (io.max is reset to wbps=max).
   test_run_io_max_wbps: z.coerce.number().int().min(0),
   // Proportional io.weight for the same leaves, against cgroup-v2's
   // default of 100 for every other cgroup on the host — deliberately below

@@ -35,6 +35,7 @@ vi.mock('../../audit/AuditLog', () => ({
 }));
 
 import fs from 'fs';
+import { runtimeSettings } from '../../config';
 import { logger } from '../../logger';
 import { recordEvent } from '../../audit/AuditLog';
 import { getTestRequestRunById, getSession } from '../../db/queries';
@@ -373,6 +374,26 @@ describe('reapplySessionCgroupLimits', () => {
     expect(writtenPaths).toContain(
       '/sys/fs/cgroup/orchestrator.service/sessions/memory.max',
     );
+  });
+
+  it('resets io.max to wbps=max (rather than skipping the write) when the ceiling setting is toggled to 0', () => {
+    _setSessionsPathForTesting('/sys/fs/cgroup/orchestrator.service/sessions');
+    _setIoControllerAvailableForTesting(true);
+    vi.spyOn(fs, 'statSync').mockReturnValue({ dev: 64512n } as any);
+    const writeSpy = vi
+      .spyOn(fs, 'writeFileSync')
+      .mockImplementation(() => undefined);
+    const original = runtimeSettings.test_run_io_max_wbps;
+    runtimeSettings.test_run_io_max_wbps = 0;
+    try {
+      reapplySessionCgroupLimits();
+    } finally {
+      runtimeSettings.test_run_io_max_wbps = original;
+    }
+    const ioMaxCall = writeSpy.mock.calls.find(
+      (c) => c[0] === '/sys/fs/cgroup/orchestrator.service/sessions/io.max',
+    );
+    expect(ioMaxCall?.[1]).toBe('252:0 wbps=max');
   });
 
   it('tolerates io.max/io.weight write failures without throwing or blocking memory limits', () => {

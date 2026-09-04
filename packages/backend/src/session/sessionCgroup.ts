@@ -50,7 +50,7 @@ export interface SessionCgroupLimits {
 export interface SessionCgroupIoLimits {
   /** "major:minor" device string, or null when device resolution failed. */
   device: string | null;
-  /** Write-bandwidth ceiling in bytes/sec; 0 means disabled (io.max unwritten). */
+  /** Write-bandwidth ceiling in bytes/sec; 0 means disabled (io.max reset to wbps=max). */
   maxWbpsBytes: number;
   /** io.weight value. */
   weight: number;
@@ -175,10 +175,16 @@ function writeLimitsTo(dir: string, limits: SessionCgroupLimits): void {
 function writeIoLimitsTo(dir: string, io: SessionCgroupIoLimits): void {
   if (!ioControllerAvailable) return;
   try {
-    if (io.device && io.maxWbpsBytes > 0) {
+    if (io.device) {
+      // maxWbpsBytes === 0 means "disabled" — write the device's own reset
+      // line (wbps=max) rather than skipping the write, so toggling the
+      // setting back to 0 at runtime actually clears a previously-applied
+      // ceiling instead of leaving it in force in the kernel.
       fs.writeFileSync(
         path.join(dir, 'io.max'),
-        formatIoMaxLine(io.device, io.maxWbpsBytes),
+        io.maxWbpsBytes > 0
+          ? formatIoMaxLine(io.device, io.maxWbpsBytes)
+          : `${io.device} wbps=max`,
       );
     }
     fs.writeFileSync(path.join(dir, 'io.weight'), String(io.weight));
