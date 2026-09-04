@@ -177,7 +177,7 @@ export async function filterBaseAttributableFailures(
       passed: false,
       excludedTests: [],
       flakyExcludedTests: [],
-      remainingTests: [],
+      remainingTests: getFailingTestIdsForRun(run.id),
       baseRun: null,
     };
   }
@@ -493,11 +493,24 @@ export function renderBaseAttributableFilterDigest(
   }
 
   if (result.outcome === 'unknown') {
-    return (
-      '**Test results:** base health unavailable — no confirmed result exists yet for the ' +
-      "current base branch content, so this run's failures cannot be attributed to your " +
-      'changes or blamed on you. Not counted against your test-request budget.'
-    );
+    if (result.remainingTests.length === 0) {
+      return (
+        '**Test results:** base health unavailable — no confirmed result exists yet for the ' +
+        "current base branch content, so this run's failures cannot be attributed to your " +
+        'changes or blamed on you. Not counted against your test-request budget.'
+      );
+    }
+    const lines = [
+      `**Test results:** ${result.remainingTests.length} failed — base health unavailable, ` +
+        'no confirmed result exists yet for the current base branch content, so these failures ' +
+        'may include pre-existing base breakage and are not counted against your test-request budget.',
+      '',
+      '**Failing tests:**',
+    ];
+    for (const t of result.remainingTests) {
+      lines.push(`- \`${t.test_id}\` — ${t.name}`);
+    }
+    return lines.join('\n') + guardBlockedSection();
   }
 
   if (result.outcome === 'filtered_pass') {

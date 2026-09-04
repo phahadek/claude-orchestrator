@@ -247,4 +247,31 @@ describe('triggerTestRequestExecution — unknown base-health outcome', () => {
     expect(payload.output).not.toBe('some tests failed');
     expect(payload.passed).toBe(false);
   });
+
+  it("lists the run's own failing tests in the digest when the filter result carries them under the unknown outcome", async () => {
+    setUpSession('sess-1');
+    const intent = stageTestRequest('sess-1') as StagedIntent;
+    const runId = 'run-unknown-4';
+    seedRawFailedRun(runId);
+    mockAdmission(runId);
+    mockFilterBaseAttributableFailures.mockResolvedValue({
+      outcome: 'unknown',
+      passed: false,
+      excludedTests: [],
+      flakyExcludedTests: [],
+      remainingTests: [{ test_id: 'suite.testA', name: 'testA' }],
+    });
+
+    const sessionManager = makeSessionManager();
+    await triggerTestRequestExecution(intent, sessionManager);
+
+    const [, , payloadJson] = (
+      sessionManager.enqueueFeedback as ReturnType<typeof vi.fn>
+    ).mock.calls[0];
+    const payload = JSON.parse(payloadJson as string);
+    expect(payload.output).toMatch(/base health.*unavailable/i);
+    expect(payload.output).toContain('suite.testA');
+    expect(payload.output).toMatch(/not counted against your test-request budget/i);
+    expect(payload.passed).toBe(false);
+  });
 });

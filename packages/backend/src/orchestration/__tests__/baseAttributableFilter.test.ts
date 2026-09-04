@@ -361,7 +361,7 @@ describe('filterBaseAttributableFailures', () => {
     expect(mockRecordAndMaybeFileBaseHealthRemediation).not.toHaveBeenCalled();
   });
 
-  it('reports a distinct unknown outcome — not unfiltered — when no usable base-health probe exists', async () => {
+  it('reports a distinct unknown outcome — not unfiltered — when no usable base-health probe exists, preserving the run\'s own failing tests', async () => {
     mockCheckBaseBranchHealth.mockResolvedValue({
       outcome: 'unknown',
       projectId: 'proj-1',
@@ -370,6 +370,9 @@ describe('filterBaseAttributableFailures', () => {
       run: null,
       unknownReason: 'no test commands configured',
     });
+    mockGetFailingTestIdsForRun.mockReturnValue([
+      { test_id: 'suite.testA', name: 'testA' },
+    ]);
 
     const result = await filterBaseAttributableFailures(
       PROJECT,
@@ -380,8 +383,34 @@ describe('filterBaseAttributableFailures', () => {
     expect(result.outcome).toBe('unknown');
     expect(result.outcome).not.toBe('unfiltered');
     expect(result.passed).toBe(false);
-    expect(result.remainingTests).toEqual([]);
+    expect(result.remainingTests).toEqual([
+      { test_id: 'suite.testA', name: 'testA' },
+    ]);
     expect(mockRecordAndMaybeFileBaseHealthRemediation).not.toHaveBeenCalled();
+  });
+
+  it('renders a zero-failure unknown outcome without claiming any failures', async () => {
+    mockCheckBaseBranchHealth.mockResolvedValue({
+      outcome: 'unknown',
+      projectId: 'proj-1',
+      contentHash: null,
+      cacheHit: false,
+      run: null,
+      unknownReason: 'no test commands configured',
+    });
+    mockGetFailingTestIdsForRun.mockReturnValue([]);
+
+    const result = await filterBaseAttributableFailures(
+      PROJECT,
+      makeRun(),
+      'task-1',
+    );
+
+    expect(result.remainingTests).toEqual([]);
+    const digest = renderBaseAttributableFilterDigest(result);
+    expect(digest).not.toMatch(/Failing tests:/i);
+    expect(digest).toMatch(/base health.*unavailable/i);
+    expect(digest).toMatch(/not counted against your test-request budget/i);
   });
 
   it("reproduces the observed regression shape: a session-failing set identical to the base tree's, with no usable probe for the current base hash, is not reported as an unattributed self-inflicted failure", async () => {
@@ -413,10 +442,16 @@ describe('filterBaseAttributableFailures', () => {
     expect(result.outcome).toBe('unknown');
     expect(result.outcome).not.toBe('unfiltered');
     expect(result.passed).toBe(false);
+    expect(result.remainingTests).toHaveLength(8);
+    expect(result.remainingTests).toContainEqual({
+      test_id: 'suite.test0',
+      name: 'test0',
+    });
 
     const digest = renderBaseAttributableFilterDigest(result);
     expect(digest).toMatch(/base health.*unavailable/i);
-    expect(digest).toMatch(/cannot be attributed to your/i);
+    expect(digest).toMatch(/not counted against your test-request budget/i);
+    expect(digest).toMatch(/suite\.test0/);
   });
 
   it('leaves a passed run untouched without consulting base health', async () => {
@@ -654,5 +689,23 @@ describe('renderBaseAttributableFilterDigest', () => {
     expect(digest).toMatch(/base health.*unavailable/i);
     expect(digest).toMatch(/cannot be attributed to your/i);
     expect(digest).toContain('Not counted against your test-request budget');
+  });
+
+  it('names the failing tests and still states base health is unconfirmed when the unknown outcome carries remaining failures', () => {
+    const digest = renderBaseAttributableFilterDigest({
+      outcome: 'unknown',
+      passed: false,
+      excludedTests: [],
+      flakyExcludedTests: [],
+      remainingTests: [
+        { test_id: 'suite.testA', name: 'testA' },
+        { test_id: 'suite.testB', name: 'testB' },
+      ],
+    });
+
+    expect(digest).toMatch(/base health.*unavailable/i);
+    expect(digest).toMatch(/not counted against your test-request budget/i);
+    expect(digest).toContain('suite.testA');
+    expect(digest).toContain('suite.testB');
   });
 });
