@@ -1,10 +1,11 @@
-import { spawn } from 'child_process';
+import { spawn, execFileSync } from 'child_process';
 import { randomUUID } from 'crypto';
 import {
   readFileSync,
   readdirSync,
   statSync,
   unlinkSync,
+  writeFileSync,
   type Dirent,
 } from 'fs';
 import path from 'path';
@@ -871,5 +872,251 @@ export function collectStructuredTestResult(
     totals,
     durationMsTotal,
     ...(matchedFiles.length < expectedReportCount ? { incomplete: true } : {}),
+  };
+}
+
+// ─── Mechanical stash/revert check ─────────────────────────────────────────
+// A PR reviewer's "this test is non-vacuous" claim (see PRReviewService's
+// evidence-bar rubric) is self-reported. This section independently proves
+// it: revert the diff's implementation files (keeping the new/modified test
+// file as-is), confirm the test suite fails, restore the implementation
+// files, and confirm it passes — plus flags a "pass" that never actually
+// executed an assertion (0 collected, or fully skipped).
+
+/** Matches common test-file naming conventions (vitest/jest .test./.spec., __tests__ dirs, pytest test_*.py/*_test.py). */
+const TEST_FILE_RE =
+  /(^|\/)(__tests__\/.+|[^/]*\.(test|spec)\.[jt]sx?|test_[^/]+\.py|[^/]+_test\.py)$/;
+
+/** Exported for unit testing and reuse by callers that need to pre-filter a diff's changed files. */
+export function isLikelyTestFile(relPath: string): boolean {
+  return TEST_FILE_RE.test(relPath);
+}
+
+export interface StashRevertCheckOptions {
+  worktreePath: string;
+  /** Files changed by the diff under check, relative to worktreePath (e.g. from `git diff --name-only`). */
+  changedFiles: string[];
+  /** Git ref the diff is relative to — the "before" state implementation files are reverted to. */
+  baseRef: string;
+  testCommands: string[];
+  reportGlob: string;
+  timeoutSec?: number;
+  maxRssMb?: number;
+}
+
+export type StashRevertCheckVerdict =
+  | 'confirmed'
+  | 'no_test_files_changed'
+  | 'no_implementation_files_changed'
+  | 'test_did_not_fail_without_diff'
+  | 'test_did_not_pass_with_diff'
+  | 'vacuous_result'
+  | 'error';
+
+export interface StashRevertRunOutcome {
+  passed: boolean;
+  structuredResult: StructuredTestResult | null;
+}
+
+export interface StashRevertCheckResult {
+  verdict: StashRevertCheckVerdict;
+  detail: string;
+  withoutDiff?: StashRevertRunOutcome;
+  withDiff?: StashRevertRunOutcome;
+}
+
+/**
+ * True when a structured result exists but executed zero assertions overall
+ * (nothing ran, or every collected test was skipped) — a "pass" that proves
+ * nothing, the failure mode the design doc's Open Question 2 calls out
+ * (0 executed assertions / all-skipped). A null result (no report collected
+ * at all) is treated as vacuous too, since there's then no evidence the
+ * suite ran.
+ */
+export function isVacuousResult(result: StructuredTestResult | null): boolean {
+  if (!result) return true;
+  const executed = result.totals.passed + result.totals.failed + result.totals.errors;
+  return executed === 0;
+}
+
+interface ImplementationFileSnapshot {
+  relPath: string;
+  absPath: string;
+  /** Working-tree bytes before the revert; null when the file has no on-disk content (e.g. already deleted). */
+  currentContent: Buffer | null;
+}
+
+/** Reads `relPath`'s content as of `ref` via `git show`, or null when the file doesn't exist at that ref. */
+function readFileAtRef(
+  worktreePath: string,
+  ref: string,
+  relPath: string,
+): Buffer | null {
+  try {
+    return execFileSync('git', ['show', `${ref}:${relPath}`], {
+      cwd: worktreePath,
+      maxBuffer: 50 * 1024 * 1024,
+    });
+  } catch {
+    return null;
+  }
+}
+
+function writeOrDelete(absPath: string, content: Buffer | null): void {
+  if (content === null) {
+    try {
+      unlinkSync(absPath);
+    } catch {
+      // already absent
+    }
+  } else {
+    writeFileSync(absPath, content);
+  }
+}
+
+async function runOnce(
+  worktreePath: string,
+  testCommands: string[],
+  reportGlob: string,
+  timeoutSec: number,
+  maxRssMb: number,
+): Promise<StashRevertRunOutcome> {
+  clearReportFiles(worktreePath, reportGlob);
+  const startedAt = Date.now();
+  const result = await runTestCommands(
+    worktreePath,
+    testCommands,
+    timeoutSec,
+    () => {},
+    { maxRssMb, failFast: false, runId: randomUUID() },
+  );
+  const structuredResult = collectStructuredTestResult(
+    worktreePath,
+    reportGlob,
+    testCommands.length,
+    startedAt,
+  );
+  return { passed: result.passed, structuredResult };
+}
+
+/**
+ * Independently verifies a PR's non-vacuous-test claim by mechanically
+ * stashing the diff's implementation files (snapshotting their current
+ * on-disk bytes, then overwriting each with its `baseRef` content — deleted
+ * entirely when the file didn't exist at `baseRef`), confirming the
+ * retained test file(s) then fail, restoring the snapshotted bytes, and
+ * confirming they pass. Restoring from an in-memory snapshot rather than
+ * `git checkout HEAD` matters because the diff under check may still be
+ * uncommitted working-tree state — a `git checkout` restore would silently
+ * discard it instead of bringing it back. Always restores the snapshot
+ * before returning, including on infrastructure failure, so a caller's
+ * worktree is never left mid-revert.
+ *
+ * Returns `no_test_files_changed`/`no_implementation_files_changed` rather
+ * than attempting a check that couldn't be meaningful (no test to run
+ * against a reverted implementation, or nothing to revert).
+ */
+export async function runStashRevertCheck(
+  opts: StashRevertCheckOptions,
+): Promise<StashRevertCheckResult> {
+  const {
+    worktreePath,
+    changedFiles,
+    baseRef,
+    testCommands,
+    reportGlob,
+    timeoutSec = 300,
+    maxRssMb = 0,
+  } = opts;
+
+  const testFiles = changedFiles.filter(isLikelyTestFile);
+  const implementationFiles = changedFiles.filter((f) => !isLikelyTestFile(f));
+
+  if (testFiles.length === 0) {
+    return {
+      verdict: 'no_test_files_changed',
+      detail: 'diff contains no test files to mechanically verify',
+    };
+  }
+  if (implementationFiles.length === 0) {
+    return {
+      verdict: 'no_implementation_files_changed',
+      detail: 'diff contains only test files; nothing to revert against',
+    };
+  }
+
+  const snapshots: ImplementationFileSnapshot[] = implementationFiles.map(
+    (relPath) => {
+      const absPath = path.join(worktreePath, relPath);
+      let currentContent: Buffer | null;
+      try {
+        currentContent = readFileSync(absPath);
+      } catch {
+        currentContent = null;
+      }
+      return { relPath, absPath, currentContent };
+    },
+  );
+
+  for (const s of snapshots) {
+    writeOrDelete(s.absPath, readFileAtRef(worktreePath, baseRef, s.relPath));
+  }
+
+  let withoutDiff: StashRevertRunOutcome;
+  try {
+    withoutDiff = await runOnce(
+      worktreePath,
+      testCommands,
+      reportGlob,
+      timeoutSec,
+      maxRssMb,
+    );
+  } finally {
+    for (const s of snapshots) {
+      writeOrDelete(s.absPath, s.currentContent);
+    }
+  }
+
+  const withDiff = await runOnce(
+    worktreePath,
+    testCommands,
+    reportGlob,
+    timeoutSec,
+    maxRssMb,
+  );
+
+  if (isVacuousResult(withDiff.structuredResult)) {
+    return {
+      verdict: 'vacuous_result',
+      detail:
+        'the test run with the diff restored executed zero assertions (nothing collected, or fully skipped) — cannot confirm it is non-vacuous',
+      withoutDiff,
+      withDiff,
+    };
+  }
+  if (withoutDiff.passed) {
+    return {
+      verdict: 'test_did_not_fail_without_diff',
+      detail:
+        'the test suite still passed with the implementation files reverted — the new/modified test does not depend on this diff',
+      withoutDiff,
+      withDiff,
+    };
+  }
+  if (!withDiff.passed) {
+    return {
+      verdict: 'test_did_not_pass_with_diff',
+      detail:
+        'the test suite failed with the implementation files restored — the diff does not make the new/modified test pass',
+      withoutDiff,
+      withDiff,
+    };
+  }
+  return {
+    verdict: 'confirmed',
+    detail:
+      'the new/modified test fails with the implementation diff reverted and passes with it restored',
+    withoutDiff,
+    withDiff,
   };
 }

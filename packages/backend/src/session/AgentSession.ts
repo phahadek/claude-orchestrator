@@ -4,7 +4,8 @@ import fs from 'fs';
 import path from 'path';
 import { GITHUB_REPO, runtimeSettings, getProjectById } from '../config';
 import { getCorporateMode } from '../config/corporateMode';
-import type { GateItemClassification } from '../db/types';
+import type { GateItemClassification, StructuredTestResult } from '../db/types';
+import { isVacuousResult } from './test-runner';
 import { getOrchestratorConfig } from '../config/appConfig';
 import { mintStageCredential } from '../auth/SessionStageAuth';
 import { routeCredentialFilePath } from '../auth/SessionRouteAuth';
@@ -2189,6 +2190,49 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         `I can't open a PR yet — there's no passing test.request result recorded for the current ` +
           `tree. Please request a test run (test.request) for this tree, wait for it to pass, then ` +
           `re-emit the \`<pr-body>\` marker so I can push and open the PR.`,
+      );
+      return;
+    }
+
+    // The passing run above only proves the process exited 0 — it doesn't
+    // prove any assertion actually executed. A run whose structured JUnit
+    // result collected zero passed/failed/errored cases (nothing ran, or
+    // every case was skipped) is a "pass" that verifies nothing, so it must
+    // not satisfy this gate on its own.
+    const winningRun = fullRun?.state === 'passed' ? fullRun : scopedRun;
+    let winningStructuredResult: StructuredTestResult | null = null;
+    if (winningRun?.structured_result) {
+      try {
+        winningStructuredResult = JSON.parse(
+          winningRun.structured_result,
+        ) as StructuredTestResult;
+      } catch (e) {
+        logger.warn(
+          `[AgentSession] failed to parse structured_result for test-request gate vacuousness check: ${(e as Error).message}`,
+        );
+      }
+    }
+    if (winningStructuredResult && isVacuousResult(winningStructuredResult)) {
+      sessionLog(
+        this.sessionId,
+        'PR creation blocked: the passing test.request run executed zero assertions (nothing collected, or fully skipped)',
+      );
+      recordEvent({
+        event_type: 'pr_creation_failed',
+        actor_type: 'system',
+        actor_id: this.sessionId,
+        project_id: this.projectId || null,
+        task_id: this.taskId || null,
+        payload: {
+          stage: 'test_request_gate',
+          error: 'passing test.request run executed zero assertions (vacuous)',
+        },
+      });
+      this.sendMessage(
+        `I can't open a PR yet — the passing test.request result for the current tree executed zero ` +
+          `assertions (nothing was collected, or every test case was skipped). Please make sure your ` +
+          `new/modified test actually runs and asserts something, request a test run, then re-emit the ` +
+          `\`<pr-body>\` marker so I can push and open the PR.`,
       );
       return;
     }
