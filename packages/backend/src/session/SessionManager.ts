@@ -2506,7 +2506,7 @@ export class SessionManager extends EventEmitter {
             orchConfig.session_rules.length > 0
               ? orchConfig.session_rules
               : undefined,
-          prBodySections: orchConfig.pr_body.sections,
+          prBodySections: orchConfig.pr_body?.sections,
           taskBackend:
             project.taskSource === 'yaml'
               ? 'local'
@@ -3147,7 +3147,7 @@ export class SessionManager extends EventEmitter {
           orchConfig.session_rules.length > 0
             ? orchConfig.session_rules
             : undefined,
-        prBodySections: orchConfig.pr_body.sections,
+        prBodySections: orchConfig.pr_body?.sections,
         taskBackend:
           project.taskSource === 'yaml'
             ? 'local'

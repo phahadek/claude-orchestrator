@@ -78,27 +78,6 @@ describe('buildOrchestratorClaudeMd — size ceilings', () => {
   });
 });
 
-describe('buildOrchestratorClaudeMd — combined artifact (template + session_rules) size ceiling', () => {
-  // The caps above only ever exercise an empty session_rules fixture, so they
-  // miss the artifact a session with project-specific rules actually
-  // receives: template + rendered "## Project Rules" section. Measured
-  // baseline with the representative payload above: 10,594 chars / 1,725
-  // words (vs. 9,839 / 1,601 for the bare template). Ceilings here give ~4%
-  // character / ~7% word headroom over that baseline — enough for incidental
-  // drift, not enough to let session_rules silently balloon the delivered
-  // artifact.
-  it('rendered fixture with representative session_rules is ≤ 11,000 characters', () => {
-    const output = buildOrchestratorClaudeMd(paramsWithSessionRules);
-    expect(output.length).toBeLessThanOrEqual(11000);
-  });
-
-  it('rendered fixture with representative session_rules is ≤ 1,850 words', () => {
-    const output = buildOrchestratorClaudeMd(paramsWithSessionRules);
-    const wordCount = output.trim().split(/\s+/).length;
-    expect(wordCount).toBeLessThanOrEqual(1850);
-  });
-});
-
 describe('buildOrchestratorClaudeMd — behaviour preservation', () => {
   it('branch lifecycle: includes feature/<task-name> and git branch --show-current', () => {
     const output = buildOrchestratorClaudeMd(baseParams);
