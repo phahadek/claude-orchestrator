@@ -111,7 +111,7 @@ Running in \`--print\` mode — optimize for speed and token efficiency:
 <link to the task page>
 
 ## Automated Tests
-<list tests added/modified, or "No test changes">
+<list tests added/modified, or "No test changes — <substantive reason>" — a bare "No test changes" is rejected>
 
 ## Files Changed
 <bulleted list of files with brief description of each change>
@@ -323,7 +323,7 @@ Running in \`--print\` mode — optimize for speed and token efficiency:
 <link to the task page>
 
 ## Automated Tests
-<list tests added/modified, or "No test changes">
+<list tests added/modified, or "No test changes — <substantive reason>" — a bare "No test changes" is rejected>
 
 ## Files Changed
 <bulleted list of files with brief description of each change>
@@ -537,7 +537,7 @@ Running in \`--print\` mode — optimize for speed and token efficiency:
 Record the originating ticket: its key (e.g. \`ENG-8641\`) and its browse URL (e.g. https://yourcompany.atlassian.net/browse/ENG-8641).
 
 ## Automated Tests
-<list tests added/modified, or "No test changes">
+<list tests added/modified, or "No test changes — <substantive reason>" — a bare "No test changes" is rejected>
 
 ## Files Changed
 <bulleted list of files with brief description of each change>
@@ -749,7 +749,7 @@ Running in \`--print\` mode — optimize for speed and token efficiency:
 <link to the task page>
 
 ## Automated Tests
-<list tests added/modified, or "No test changes">
+<list tests added/modified, or "No test changes — <substantive reason>" — a bare "No test changes" is rejected>
 
 ## Files Changed
 <bulleted list of files with brief description of each change>
