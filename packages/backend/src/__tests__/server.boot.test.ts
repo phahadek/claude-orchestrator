@@ -274,10 +274,13 @@ describe('response compression', () => {
     expect(res.body).toEqual(largeBody);
   });
 
-  it('returns identity response with no Content-Encoding when the client sends no Accept-Encoding', async () => {
+  it('returns identity response with no Content-Encoding when the client does not accept gzip', async () => {
+    // supertest's client (superagent) always sends its own Accept-Encoding
+    // header and .unset() cannot remove it, so "no Accept-Encoding" is
+    // exercised as the client explicitly declining compression.
     const res = await request(makeApp())
       .get('/api/large')
-      .unset('Accept-Encoding');
+      .set('Accept-Encoding', 'identity');
 
     expect(res.headers['content-encoding']).toBeUndefined();
     expect(res.body).toEqual(largeBody);
