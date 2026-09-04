@@ -10,6 +10,25 @@ const REQUIRED_SECTIONS = [
   '## Files Changed',
 ] as const;
 
+// "No test changes" or trivial equivalents ("none", "n/a") with nothing else
+// are rejected unless followed by a substantive reason, mirroring groomGate's
+// bare none/n/a gate_contribution rejection.
+const BARE_NO_TEST_CHANGES_RE = /^no test changes\.?$|^(none|n\/a)\.?$/i;
+
+/**
+ * Extract the content of a "## <section>" heading up to the next "## " heading
+ * (or end of body), trimmed.
+ */
+function extractSectionContent(body: string, section: string): string | null {
+  const idx = body.indexOf(section);
+  if (idx === -1) return null;
+  const start = idx + section.length;
+  const rest = body.slice(start);
+  const nextHeadingIdx = rest.search(/\n##\s/);
+  const content = nextHeadingIdx === -1 ? rest : rest.slice(0, nextHeadingIdx);
+  return content.trim();
+}
+
 /**
  * Validate that a PR body contains all required template sections.
  * Accepts "## Task Source" and "## Task" as alternatives to "## Notion Task"
@@ -30,6 +49,13 @@ export function validatePRBody(
         !body.includes('## Task Source') &&
         !body.includes('## Task')
       ) {
+        missingSections.push(section);
+      }
+    } else if (section === '## Automated Tests') {
+      const content = extractSectionContent(body, section);
+      if (content === null) {
+        missingSections.push(section);
+      } else if (BARE_NO_TEST_CHANGES_RE.test(content)) {
         missingSections.push(section);
       }
     } else if (!body.includes(section)) {

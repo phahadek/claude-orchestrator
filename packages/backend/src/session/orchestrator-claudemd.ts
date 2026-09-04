@@ -332,7 +332,7 @@ ${prBodyTaskSectionHeader(taskBackend)}
 ${prBodyTaskSectionContent(taskBackend, jiraBrowseBaseUrl)}
 
 ## Automated Tests
-<list tests added/modified, or "No test changes">
+<list tests added/modified, or "No test changes — <substantive reason>" — a bare "No test changes" is rejected>
 
 ## Files Changed
 <bulleted list of files with brief description of each change>

@@ -87,6 +87,36 @@ describe('validatePRBody()', () => {
     expect(result.valid).toBe(false);
     expect(result.missingSections).toHaveLength(4);
   });
+
+  it('rejects a bare "No test changes" Automated Tests section', () => {
+    const body = VALID_BODY.replace(
+      '## Automated Tests\n- Added unit test for validator\n',
+      '## Automated Tests\nNo test changes\n',
+    );
+    const result = validatePRBody(body);
+    expect(result.valid).toBe(false);
+    expect(result.missingSections).toContain('## Automated Tests');
+  });
+
+  it('rejects trivially equivalent bare Automated Tests content ("none")', () => {
+    const body = VALID_BODY.replace(
+      '## Automated Tests\n- Added unit test for validator\n',
+      '## Automated Tests\nnone\n',
+    );
+    const result = validatePRBody(body);
+    expect(result.valid).toBe(false);
+    expect(result.missingSections).toContain('## Automated Tests');
+  });
+
+  it('accepts "No test changes" followed by a substantive reason', () => {
+    const body = VALID_BODY.replace(
+      '## Automated Tests\n- Added unit test for validator\n',
+      '## Automated Tests\nNo test changes — this is a documentation-only update with no testable behavior.\n',
+    );
+    const result = validatePRBody(body);
+    expect(result.valid).toBe(true);
+    expect(result.missingSections).toHaveLength(0);
+  });
 });
 
 describe('buildValidationComment()', () => {
