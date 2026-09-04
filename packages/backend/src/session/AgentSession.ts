@@ -2198,8 +2198,17 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     // prove any assertion actually executed. A run whose structured JUnit
     // result collected zero passed/failed/errored cases (nothing ran, or
     // every case was skipped) is a "pass" that verifies nothing, so it must
-    // not satisfy this gate on its own.
+    // not satisfy this gate on its own. Only applied when the project
+    // actually attempted JUnit-XML acquisition for this run
+    // (test_report_acquisition_attempted) — a project with no
+    // test_report_glob configured never has a structured_result to check,
+    // and that absence must not be conflated with an attempted-but-empty
+    // acquisition (isVacuousResult(null) === true), or every project
+    // without structured reporting would be permanently blocked here.
     const winningRun = fullRun?.state === 'passed' ? fullRun : scopedRun;
+    const acquisitionAttempted = Boolean(
+      winningRun?.test_report_acquisition_attempted,
+    );
     let winningStructuredResult: StructuredTestResult | null = null;
     if (winningRun?.structured_result) {
       try {
@@ -2212,7 +2221,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         );
       }
     }
-    if (winningStructuredResult && isVacuousResult(winningStructuredResult)) {
+    if (acquisitionAttempted && isVacuousResult(winningStructuredResult)) {
       sessionLog(
         this.sessionId,
         'PR creation blocked: the passing test.request run executed zero assertions (nothing collected, or fully skipped)',
