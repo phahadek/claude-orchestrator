@@ -22,6 +22,7 @@ import {
 import {
   resolveStartingPoint,
   ensureMilestoneBranch,
+  MilestoneBranchDivergedError,
   deriveBranchSlug,
   resolveResumeBranchSlug,
   resolveAvailableBranchSlug,
@@ -115,6 +116,8 @@ import {
   setSessionDeclaredWrites,
   setSessionDocsTargetSurface,
   getSessionDocsTargetSurface,
+  setSessionMilestoneId,
+  getSessionMilestoneId,
   reapStagedIntentsForNeverStagedSession,
   hasStagedIntentForTask,
   hasUndispositionedStagedIntentsForSession,
@@ -1923,6 +1926,14 @@ export class SessionManager extends EventEmitter {
     if (sessionType === 'docs' && docsTargetSurface) {
       setSessionDocsTargetSurface(sessionId, docsTargetSurface);
     }
+    // Captured once, here at spawn, same rationale as declaredWrites above —
+    // sendOrResume needs this at resume time to re-resolve the same
+    // `feature/<milestone-slug>` starting point a fresh launch of this task
+    // would (see resolveStartingPoint), instead of falling back to
+    // flat-mode base-branch resolution for every resumed session.
+    if (options?.milestoneId) {
+      setSessionMilestoneId(sessionId, options.milestoneId);
+    }
 
     recordEvent({
       event_type: 'session_launched',
@@ -2066,6 +2077,15 @@ export class SessionManager extends EventEmitter {
               project.baseBranch,
             );
           } catch (err) {
+            // A diverged local ref must not be cut from silently — rethrow
+            // so the completeStart().catch handler in start() drives the
+            // session to 'error' instead of proceeding with a stale ref.
+            // Every other ensureMilestoneBranch failure (e.g. a transient
+            // fetch-origin-dev network error while creating a brand-new
+            // ref) stays non-fatal, same as before.
+            if (err instanceof MilestoneBranchDivergedError) {
+              throw err;
+            }
             logger.warn(
               `[SessionManager] ensureMilestoneBranch failed (continuing): ${err}`,
             );
@@ -5564,10 +5584,14 @@ export class SessionManager extends EventEmitter {
       return sessionId;
     }
 
-    // Resolve the starting point using dev as the base (no milestoneId available for resumed sessions).
+    // Resolve the starting point from the milestoneId captured at original
+    // spawn time (see setSessionMilestoneId in start()) so a resumed
+    // two_tier session re-resolves the same feature/<milestone-slug>
+    // starting point a fresh launch of this task would, instead of always
+    // degrading to flat-mode base-branch resolution.
     const { startingPoint, milestoneSlug } = resolveStartingPoint(
       project,
-      null,
+      getSessionMilestoneId(sessionId) ?? null,
     );
 
     const isLocalOnly = project.gitMode === 'local-only';
@@ -5576,6 +5600,18 @@ export class SessionManager extends EventEmitter {
         try {
           ensureMilestoneBranch(milestoneSlug, projectDir, project.baseBranch);
         } catch (err) {
+          if (err instanceof MilestoneBranchDivergedError) {
+            // Do not cut the resumed worktree from a local ref we know is
+            // stale/diverged — route through the same poke-retry-then-flag
+            // path used for other hard resume failures (worktree recreation,
+            // missing planning checkout) instead of silently continuing.
+            const detail = `${err.message}`;
+            logger.warn(
+              `[SessionManager] sendOrResume: ${detail} — refusing to cut worktree from stale ref`,
+            );
+            this.handlePokeFailure(row, 'milestone_branch_diverged', detail);
+            return sessionId;
+          }
           logger.warn(
             `[SessionManager] sendOrResume: ensureMilestoneBranch failed (continuing): ${err}`,
           );

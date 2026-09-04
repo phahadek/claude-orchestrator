@@ -2103,6 +2103,42 @@ export function getSessionDocsTargetSurface(
   }
 }
 
+/**
+ * Durable per-session capture of the milestone row id a two_tier-mode
+ * session's starting point was resolved against (see
+ * branchModel.ts#resolveStartingPoint), written once at
+ * SessionManager.start() spawn time and read back at resume time
+ * (SessionManager.ts's sendOrResume) so a resumed session re-resolves the
+ * same `feature/<milestone-slug>` starting point a fresh launch of the same
+ * task would, instead of falling back to flat-mode base-branch resolution.
+ * Backed by the `sessions.metadata` JSON column, same as
+ * setSessionDeclaredWrites above — never re-derived from
+ * milestoneResolver.ts's best-effort task->milestone attribution, which is
+ * not authoritative enough for branch-critical resolution.
+ */
+export function setSessionMilestoneId(
+  sessionId: string,
+  milestoneId: string,
+): void {
+  setSessionMetadata(sessionId, { milestoneId });
+}
+
+/** Reads back the milestone id captured by setSessionMilestoneId. Undefined when never captured (session dispatched before this feature, flat-mode project, or a non-milestone task). */
+export function getSessionMilestoneId(sessionId: string): string | undefined {
+  const row = db
+    .prepare('SELECT metadata FROM sessions WHERE session_id = ?')
+    .get(sessionId) as { metadata: string | null } | undefined;
+  if (!row?.metadata) return undefined;
+  try {
+    const parsed = JSON.parse(row.metadata) as { milestoneId?: unknown };
+    return typeof parsed.milestoneId === 'string'
+      ? parsed.milestoneId
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function setSessionMetadata(
   sessionId: string,
   fields: Record<string, unknown>,

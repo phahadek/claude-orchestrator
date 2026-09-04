@@ -28,6 +28,7 @@ import {
   resolveBranchMode,
   resolveStartingPoint,
   ensureMilestoneBranch,
+  MilestoneBranchDivergedError,
 } from '../session/branchModel.js';
 
 // ── slugify ────────────────────────────────────────────────────────────────────
@@ -184,18 +185,66 @@ describe('ensureMilestoneBranch', () => {
     execSyncMock.mockReset();
   });
 
-  it('no-ops when branch already exists locally', () => {
-    // git rev-parse --verify milestone/<slug> succeeds → branch exists
-    execSyncMock.mockReturnValueOnce('');
+  it('fast-forward-refreshes the local ref from origin when branch already exists locally', () => {
+    // git rev-parse --verify milestone/<slug> succeeds → branch exists locally
+    execSyncMock
+      .mockReturnValueOnce('') // local ref check
+      .mockReturnValueOnce(''); // fast-forward-only fetch
 
     ensureMilestoneBranch('m6-readiness', '/repo');
 
-    // Only one call: the local ref check
-    expect(execSyncMock).toHaveBeenCalledTimes(1);
+    expect(execSyncMock).toHaveBeenCalledTimes(2);
     expect(execSyncMock).toHaveBeenCalledWith(
       'git rev-parse --verify milestone/m6-readiness',
       expect.objectContaining({ cwd: '/repo' }),
     );
+    expect(execSyncMock).toHaveBeenCalledWith(
+      'git fetch origin milestone/m6-readiness:milestone/m6-readiness',
+      expect.objectContaining({ cwd: '/repo' }),
+    );
+  });
+
+  it('throws when the fast-forward-only fetch is rejected as non-fast-forward (diverged local ref) instead of force-overwriting', () => {
+    execSyncMock
+      .mockReturnValueOnce('') // local ref check → exists
+      .mockImplementationOnce(() => {
+        // Real git wording for this exact rejection.
+        throw new Error(
+          ' ! [rejected]        milestone/m6-readiness -> milestone/m6-readiness  (non-fast-forward)\n' +
+            "error: some local refs could not be updated; try running 'git remote prune origin' to remove any old, conflicting branches",
+        );
+      });
+
+    let caught: unknown;
+    try {
+      ensureMilestoneBranch('m6-readiness', '/repo');
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(MilestoneBranchDivergedError);
+    expect((caught as Error).message).toMatch(/fast-forward/);
+
+    // No fallback branch-recreation/push calls after the failed fetch.
+    expect(execSyncMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('tolerates a transient fetch failure (network/DNS/auth) on an existing ref instead of treating it as divergence', () => {
+    execSyncMock
+      .mockReturnValueOnce('') // local ref check → exists
+      .mockImplementationOnce(() => {
+        throw new Error(
+          "fatal: unable to access 'https://origin/repo.git': Could not resolve host: origin",
+        );
+      });
+
+    // Does not throw — a transient fetch failure is non-fatal, same as the
+    // fresh-branch-creation fetch path.
+    expect(() => ensureMilestoneBranch('m6-readiness', '/repo')).not.toThrow();
+
+    // No fallback branch-recreation/push calls — the function simply
+    // returns, proceeding with the existing (possibly slightly stale)
+    // local ref rather than blocking session start/resume.
+    expect(execSyncMock).toHaveBeenCalledTimes(2);
   });
 
   it('creates milestone/<slug> from origin/dev when missing, and pushes', () => {

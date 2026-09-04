@@ -223,17 +223,68 @@ export function resolveStartingPoint(
 }
 
 /**
- * Ensures `milestone/<milestoneSlug>` exists locally and on origin.
- * Creates it from origin/<baseBranch> when missing; no-ops when it already exists.
- * Only called in two_tier mode.
+ * Thrown by `ensureMilestoneBranch` specifically when git's fast-forward-only
+ * semantics reject the refresh of an already-existing local milestone ref
+ * because it has genuinely diverged from origin — never for a merely failed
+ * fetch (network blip, DNS hiccup, transient origin unavailability, auth
+ * failure). Those stay non-fatal, same as the adjacent fresh-branch-creation
+ * fetch path below: a transient infrastructure hiccup must not permanently
+ * block session start/resume, only a real divergence should. Callers must
+ * not treat this the same as ensureMilestoneBranch's other, non-fatal
+ * failure modes — doing so would cut the worktree from the same stale local
+ * ref this feature exists to stop using, silently defeating the fail-closed
+ * guarantee. See SessionManager.ts's two call sites for how each responds,
+ * and isNonFastForwardRejection below for how the two cases are told apart.
+ */
+export class MilestoneBranchDivergedError extends Error {
+  constructor(ref: string, cause: unknown) {
+    super(
+      `Milestone branch ${ref} has diverged from origin — fast-forward-only refresh refused: ${cause}`,
+    );
+    this.name = 'MilestoneBranchDivergedError';
+  }
+}
+
+/**
+ * Distinguishes git's actual non-fast-forward rejection (` ! [rejected] ...
+ * (non-fast-forward)`, the wording git has used for this exact case for
+ * every version in practical use) from every other `git fetch` failure
+ * shape — network unreachable, DNS failure, auth failure, timeout — which
+ * produce unrelated stderr text (`fatal: unable to access`, `Could not
+ * resolve host`, `Authentication failed`, etc.) and must stay non-fatal.
+ * Checks both `stderr` (execSync's real shape) and `message` (a plain
+ * `Error`'s shape, as used in unit tests) so it works against either.
+ */
+function isNonFastForwardRejection(err: unknown): boolean {
+  const e = err as { stderr?: Buffer | string; message?: string };
+  const text = `${e.stderr?.toString() ?? ''}\n${e.message ?? ''}`;
+  return /non-fast-forward|\[rejected\]/i.test(text);
+}
+
+/**
+ * Ensures `milestone/<milestoneSlug>` exists locally and on origin, refreshed
+ * to match origin's tip via a fast-forward-only fetch when it already exists
+ * locally. Every worktree cut for a milestone task must see any sibling PR
+ * already merged into the milestone branch on the remote — a local ref that
+ * merely exists (created by an earlier worktree cut in the same milestone)
+ * is not enough, since without a refresh it silently goes stale for the
+ * lifetime of the milestone. The refspec's `+` is deliberately omitted:
+ * git's own fast-forward-only semantics reject the fetch outright if the
+ * local ref has diverged from origin, rather than force-overwriting local
+ * history or silently leaving it stale — that rejection is surfaced here as
+ * MilestoneBranchDivergedError specifically (see its doc comment for why
+ * callers must not treat it as just another swallow-and-continue failure).
  *
- * Migrates a pre-existing `feature/<milestoneSlug>` branch (the prefix used
- * before milestone branches got their own `milestone/` namespace) the first
- * time it runs post-cutover: when the new-scheme ref is absent both locally
- * and on origin, the legacy ref is probed locally then on origin, and if
- * found, renamed in place (history preserved) rather than left behind as an
- * orphaned branch while a fresh empty `milestone/<slug>` is created next to
- * it. No-ops for a project with no pre-existing legacy branch.
+ * Also migrates a pre-existing `feature/<milestoneSlug>` branch (the prefix
+ * used before milestone branches got their own `milestone/` namespace) the
+ * first time it runs post-cutover: when the new-scheme ref is absent both
+ * locally and on origin, the legacy ref is probed locally then on origin,
+ * and if found, renamed in place (history preserved) rather than left
+ * behind as an orphaned branch while a fresh empty `milestone/<slug>` is
+ * created next to it. No-ops for a project with no pre-existing legacy
+ * branch.
+ *
+ * Only called in two_tier mode.
  */
 export function ensureMilestoneBranch(
   milestoneSlug: string,
@@ -244,14 +295,40 @@ export function ensureMilestoneBranch(
   const legacyRef = `feature/${milestoneSlug}`;
 
   // Check if branch already exists locally.
+  let existsLocally = true;
   try {
     execSync(`git rev-parse --verify ${ref}`, {
       cwd: projectDir,
       stdio: 'pipe',
     });
-    return; // already exists locally
   } catch {
-    // not found locally — fall through
+    existsLocally = false;
+  }
+
+  if (existsLocally) {
+    // Fast-forward-only refresh from origin. A diverged local ref makes git
+    // reject this fetch (non-zero exit) — surfaced as
+    // MilestoneBranchDivergedError specifically so callers fail closed
+    // instead of cutting a worktree from a stale ref. Any other fetch
+    // failure (network blip, DNS hiccup, origin briefly unreachable, auth)
+    // stays non-fatal, same as the fresh-branch-creation fetch below —
+    // proceed with the existing local ref rather than block session
+    // start/resume on a transient infrastructure hiccup.
+    try {
+      execSync(`git fetch origin ${ref}:${ref}`, {
+        cwd: projectDir,
+        timeout: 30_000,
+        stdio: 'pipe',
+      });
+    } catch (err) {
+      if (isNonFastForwardRejection(err)) {
+        throw new MilestoneBranchDivergedError(ref, err);
+      }
+      logger.warn(
+        `[branchModel] ensureMilestoneBranch: fast-forward fetch of ${ref} failed (continuing with existing local ref): ${err}`,
+      );
+    }
+    return;
   }
 
   // Fetch origin to pick up any remote branch and latest base branch.
