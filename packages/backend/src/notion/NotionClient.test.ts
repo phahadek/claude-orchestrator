@@ -29,7 +29,6 @@ import {
 } from './NotionClient';
 import type { NotionBlockPayload } from './NotionClient';
 import { parseTaskId } from '../tasks/taskId';
-import { NotionApiError } from './types';
 import {
   updateTaskCacheStatus,
   getCacheAge,
