@@ -38,6 +38,7 @@ vi.mock('../db/migrationReservation.js', () => ({
 import {
   PRReviewService,
   FetchRetryExhaustedError,
+  FollowUpDeliveryExhaustedError,
   evaluateMigrationRenumberTolerance,
   extractListedMigrationPaths,
   overrideFilesPathsDimension,
@@ -57,6 +58,7 @@ import {
   setPauseReason,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
+import { logger } from '../logger';
 import { getCachedType } from '../tasks/TaskWriteCommands';
 import { getReservationForTaskDirSuffix } from '../db/migrationReservation';
 import type { GitHubClient } from './GitHubClient';
@@ -1633,6 +1635,62 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
       }),
     );
   });
+
+  it('bounds the !delivered fallback instead of recursing without limit when delivery never succeeds and mocks never reflect the cleared session', async () => {
+    // Reproduces the runaway: isAlive() stays true and getPRByNumber() keeps
+    // returning a row with the same review_session_id on every call, exactly
+    // as static vi.fn() mocks do, and send() never confirms delivery. Nothing
+    // in the mocked DB state changes between recursive attempts, so the fix
+    // must bound this via an explicit counter, not by expecting the mocks to
+    // react to clearReviewSessionId().
+    const prRowWithLiveSession = {
+      ...mockPRRow,
+      review_session_id: 'existing-review-session-id',
+    };
+    vi.mocked(getPRByNumber).mockReturnValue(prRowWithLiveSession as any);
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.isAlive as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (mockSM.send as ReturnType<typeof vi.fn>).mockReturnValue(false);
+
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const immediateSleep = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      service.reviewPR(
+        { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+        makeMockDiffSource(),
+        'proj-1',
+        'https://notion.so/ctx',
+        immediateSleep,
+      ),
+    ).rejects.toBeInstanceOf(FollowUpDeliveryExhaustedError);
+
+    const deliveryFailedWarnings = warnSpy.mock.calls.filter(([msg]) =>
+      String(msg).includes('follow-up not confirmed delivered'),
+    );
+    expect(deliveryFailedWarnings.length).toBeGreaterThan(0);
+    expect(deliveryFailedWarnings.length).toBeLessThanOrEqual(5);
+
+    const nudgeFailedEvents = vi
+      .mocked(recordEvent)
+      .mock.calls.filter(
+        ([evt]) => evt.event_type === 'session_nudge_delivery_failed',
+      );
+    expect(nudgeFailedEvents.length).toBeGreaterThan(0);
+    expect(nudgeFailedEvents.length).toBeLessThanOrEqual(5);
+
+    warnSpy.mockRestore();
+  }, 10_000);
 
   it('resumes a dead-but-resumable review session via sendOrResume (Case 2)', async () => {
     const prRowWithDeadSession = {
