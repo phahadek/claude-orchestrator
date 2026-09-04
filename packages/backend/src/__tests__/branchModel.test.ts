@@ -104,14 +104,19 @@ describe('resolveStartingPoint', () => {
   });
 
   it('never collides with a task branch derived from the same slug', () => {
-    mockGetMilestone.mockReturnValue({ id: 'ms-1', name: 'Enterprise Readiness' });
+    mockGetMilestone.mockReturnValue({
+      id: 'ms-1',
+      name: 'Enterprise Readiness',
+    });
     const milestoneResult = resolveStartingPoint(
       { milestoneBranching: 'two_tier' },
       'ms-1',
     );
     const taskBranch = deriveBranchSlug('Enterprise Readiness');
     expect(milestoneResult.startingPoint).not.toBe(taskBranch);
-    expect(milestoneResult.startingPoint).toBe('milestone/enterprise-readiness');
+    expect(milestoneResult.startingPoint).toBe(
+      'milestone/enterprise-readiness',
+    );
     expect(taskBranch).toBe('feature/enterprise-readiness');
   });
 
