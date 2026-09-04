@@ -202,10 +202,7 @@ function makeCodeSession(): AgentSession {
   );
 }
 
-function feedInitEvent(
-  session: AgentSession,
-  mcpServers: unknown,
-): void {
+function feedInitEvent(session: AgentSession, mcpServers: unknown): void {
   (
     session as unknown as {
       handleRawEvent(event: Record<string, unknown>): void;
