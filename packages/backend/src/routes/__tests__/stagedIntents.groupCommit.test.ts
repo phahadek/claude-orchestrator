@@ -3586,12 +3586,14 @@ describe('commitGroupIntents — independent members apply concurrently', () => 
     const MEMBER_COUNT = 4;
     const LATENCY_MS = 150;
     const calls: string[] = [];
+    const callStartTimes: number[] = [];
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
       fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
       updateStatus: vi.fn(),
       setDependsOn: vi.fn(),
       updateBody: vi.fn().mockImplementation(async (taskId: string) => {
+        callStartTimes.push(Date.now());
         await delay(LATENCY_MS, undefined);
         calls.push(taskId);
       }),
@@ -3616,19 +3618,23 @@ describe('commitGroupIntents — independent members apply concurrently', () => 
       memberIds.push(staged.body.id);
     }
 
-    const start = Date.now();
     const commit = await agent
       .post(`/api/staged-intents/group/${groupId}/commit`)
       .send({});
-    const elapsedMs = Date.now() - start;
 
     expect(commit.status).toBe(200);
     expect(commit.body.committed.sort()).toEqual(memberIds.sort());
     expect(calls).toHaveLength(MEMBER_COUNT);
-    // Sequential apply would cost >= MEMBER_COUNT * LATENCY_MS (600ms here);
-    // concurrent apply costs roughly one member's latency. The threshold
-    // sits well under the sequential floor to tolerate scheduling jitter
-    // without being able to pass a still-sequential implementation.
-    expect(elapsedMs).toBeLessThan(MEMBER_COUNT * LATENCY_MS - 100);
+    expect(callStartTimes).toHaveLength(MEMBER_COUNT);
+    // A sequential apply loop would start each member's updateBody() only
+    // after the previous one's full LATENCY_MS round trip resolved, so
+    // consecutive start times would be spread ~LATENCY_MS apart. Concurrent
+    // apply starts every member back-to-back, so the spread between the
+    // first and last start time stays a small fraction of LATENCY_MS. This
+    // spread is immune to host jitter (which shifts every start time by
+    // roughly the same amount) in a way an absolute total-wall-clock bound
+    // is not.
+    const spreadMs = Math.max(...callStartTimes) - Math.min(...callStartTimes);
+    expect(spreadMs).toBeLessThan(LATENCY_MS / 2);
   });
 });

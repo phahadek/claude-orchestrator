@@ -341,8 +341,12 @@ describe('worker-thread rollup dispatch does not block the main event loop', () 
       eval: true,
       workerData: { delayMs },
     });
+    let workerElapsedMs: number | null = null;
     const rollupDone = new Promise<void>((resolve) => {
-      worker.once('message', () => resolve());
+      worker.once('message', () => {
+        workerElapsedMs = Date.now() - start;
+        resolve();
+      });
     });
 
     let timerElapsedMs: number | null = null;
@@ -355,12 +359,17 @@ describe('worker-thread rollup dispatch does not block the main event loop', () 
     });
 
     expect(timerElapsedMs).not.toBeNull();
-    // If the "rollup recompute" ran inline on the main thread, this timer
-    // would have queued behind its 300ms of blocking work. Running it on a
-    // worker thread instead means the timer fires close to its own delay.
-    expect(timerElapsedMs as number).toBeLessThan(delayMs / 2);
 
     await rollupDone;
+    // If the "rollup recompute" ran inline on the main thread, this timer
+    // would have queued behind its 300ms of blocking work and fired no
+    // earlier than the worker's own message. Running it on a worker thread
+    // instead means the timer fires strictly before the worker's blocking
+    // delay is up. This is a pure ordering check — immune to absolute
+    // timing jitter, unlike a fixed millisecond bound on timerElapsedMs.
+    expect(workerElapsedMs).not.toBeNull();
+    expect(timerElapsedMs as number).toBeLessThan(workerElapsedMs as number);
+
     await worker.terminate();
   }, 15000);
 });

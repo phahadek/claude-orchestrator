@@ -1088,9 +1088,6 @@ describe('runBootWorktreeReconciliation — parallelism', () => {
   it('cap 4 completes faster than serial (cap 1) with async-delayed projects', async () => {
     const N = 8;
     const DELAY_MS = 20;
-    const projects = Array.from({ length: N }, (_, i) =>
-      makeProject({ id: `proj-${i}`, projectDir: `/fake/p${i}` }),
-    );
 
     mockedExec.mockImplementation(
       (_cmd: string, _opts: unknown, callback: any) => {
@@ -1104,22 +1101,37 @@ describe('runBootWorktreeReconciliation — parallelism', () => {
     const { runWithConcurrency: realRwc } = await vi.importActual<
       typeof import('../utils/concurrency.js')
     >('../utils/concurrency.js');
-    mockedRunWithConcurrency.mockImplementationOnce(
-      (items: any[], cap: number, fn: (item: any) => Promise<any>) =>
-        realRwc(items, cap, async (item: unknown) => {
-          await new Promise<void>((resolve) => setTimeout(resolve, DELAY_MS));
-          return fn(item);
-        }),
-    );
 
-    const t0 = Date.now();
-    await runBootWorktreeReconciliation({ listProjects: () => projects });
-    const elapsed = Date.now() - t0;
+    async function runWithCap(cap: number, prefix: string): Promise<number> {
+      const projects = Array.from({ length: N }, (_, i) =>
+        makeProject({ id: `${prefix}-${i}`, projectDir: `/fake/${prefix}${i}` }),
+      );
+      mockedRunWithConcurrency.mockImplementationOnce(
+        (items: any[], _cap: number, fn: (item: any) => Promise<any>) =>
+          realRwc(items, cap, async (item: unknown) => {
+            await new Promise<void>((resolve) =>
+              setTimeout(resolve, DELAY_MS),
+            );
+            return fn(item);
+          }),
+      );
+      const t0 = Date.now();
+      await runBootWorktreeReconciliation({ listProjects: () => projects });
+      return Date.now() - t0;
+    }
+
+    // Measure the serial (cap=1) baseline and the concurrent (cap=4) run in
+    // the same test, on the same host, back to back. Comparing the two
+    // relatively (rather than the concurrent run against a fixed absolute
+    // millisecond bound) keeps this immune to host scheduling jitter, since
+    // jitter slows both measurements together.
+    const serialElapsed = await runWithCap(1, 'serial');
+    const concurrentElapsed = await runWithCap(4, 'concurrent');
 
     // With cap=4 and N=8: ceil(8/4) * 20ms = 40ms.
-    // Serial (cap=1) would take 8 * 20ms = 160ms.
-    // Threshold: less than half the serial time gives generous room for CI noise.
-    expect(elapsed).toBeLessThan((N * DELAY_MS) / 2);
+    // Serial (cap=1): 8 * 20ms = 160ms.
+    // Generous margin relative to the measured serial baseline.
+    expect(concurrentElapsed).toBeLessThan(serialElapsed * 0.75);
   });
 });
 
