@@ -2210,18 +2210,29 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       winningRun?.test_report_acquisition_attempted,
     );
     let winningStructuredResult: StructuredTestResult | null = null;
+    let structuredResultParseFailed = false;
     if (winningRun?.structured_result) {
       try {
         winningStructuredResult = JSON.parse(
           winningRun.structured_result,
         ) as StructuredTestResult;
       } catch (e) {
+        // A parse failure means this run's vacuousness is genuinely
+        // unknown, not that it was vacuous — folding it into the vacuous
+        // verdict would block a legitimate passing PR on a misleading
+        // "zero assertions" message. Warn and fall through (fail open),
+        // same as this function's other infra-failure handling above.
+        structuredResultParseFailed = true;
         logger.warn(
           `[AgentSession] failed to parse structured_result for test-request gate vacuousness check: ${(e as Error).message}`,
         );
       }
     }
-    if (acquisitionAttempted && isVacuousResult(winningStructuredResult)) {
+    if (
+      acquisitionAttempted &&
+      !structuredResultParseFailed &&
+      isVacuousResult(winningStructuredResult)
+    ) {
       sessionLog(
         this.sessionId,
         'PR creation blocked: the passing test.request run executed zero assertions (nothing collected, or fully skipped)',
