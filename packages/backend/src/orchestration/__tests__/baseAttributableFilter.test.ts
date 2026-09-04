@@ -361,7 +361,7 @@ describe('filterBaseAttributableFailures', () => {
     expect(mockRecordAndMaybeFileBaseHealthRemediation).not.toHaveBeenCalled();
   });
 
-  it('reports a distinct unknown outcome — not unfiltered — when no usable base-health probe exists, preserving the run\'s own failing tests', async () => {
+  it("reports a distinct unknown outcome — not unfiltered — when no usable base-health probe exists, preserving the run's own failing tests", async () => {
     mockCheckBaseBranchHealth.mockResolvedValue({
       outcome: 'unknown',
       projectId: 'proj-1',

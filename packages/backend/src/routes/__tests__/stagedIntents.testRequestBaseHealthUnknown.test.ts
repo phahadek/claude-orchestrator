@@ -271,7 +271,9 @@ describe('triggerTestRequestExecution — unknown base-health outcome', () => {
     const payload = JSON.parse(payloadJson as string);
     expect(payload.output).toMatch(/base health.*unavailable/i);
     expect(payload.output).toContain('suite.testA');
-    expect(payload.output).toMatch(/not counted against your test-request budget/i);
+    expect(payload.output).toMatch(
+      /not counted against your test-request budget/i,
+    );
     expect(payload.passed).toBe(false);
   });
 });
