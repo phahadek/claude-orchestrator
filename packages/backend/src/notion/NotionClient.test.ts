@@ -1365,6 +1365,7 @@ describe('notionRequest — 429 retry with Retry-After backoff', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 
   it('retries a 429 carrying Retry-After after approximately that delay and returns the retried response', async () => {
@@ -1373,6 +1374,9 @@ describe('notionRequest — 429 retry with Retry-After backoff', () => {
       .mockResolvedValueOnce(jsonRes(SUMMARY_PAGE));
 
     const promise = client.fetchTaskSummary('abc');
+    // Flush the synchronous fetch + rejection handling so the retry's
+    // setTimeout is registered before we advance virtual time toward it.
+    await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(9_000);
     const result = await promise;
 
@@ -1386,6 +1390,7 @@ describe('notionRequest — 429 retry with Retry-After backoff', () => {
       .mockResolvedValueOnce(jsonRes(SUMMARY_PAGE));
 
     const promise = client.fetchTaskSummary('abc');
+    await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(1_000);
     const result = await promise;
 
@@ -1399,6 +1404,7 @@ describe('notionRequest — 429 retry with Retry-After backoff', () => {
       .mockResolvedValueOnce(jsonRes(SUMMARY_PAGE));
 
     const promise = client.fetchTaskSummary('abc');
+    await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(1_000);
     const result = await promise;
 
@@ -1415,7 +1421,7 @@ describe('notionRequest — 429 retry with Retry-After backoff', () => {
       name: 'NotionApiError',
       statusCode: 429,
     });
-    await vi.advanceTimersByTimeAsync(120_000);
+    await vi.runAllTimersAsync();
     await assertion;
 
     // Bounded: a small, finite number of attempts, not an infinite loop.
@@ -1429,6 +1435,7 @@ describe('notionRequest — 429 retry with Retry-After backoff', () => {
       .mockResolvedValueOnce(jsonRes(SUMMARY_PAGE));
 
     const promise = client.fetchTaskSummary('abc');
+    await vi.advanceTimersByTimeAsync(0);
     // Advance well past any sane cap but far short of 999999s.
     await vi.advanceTimersByTimeAsync(60_000);
     const result = await promise;
