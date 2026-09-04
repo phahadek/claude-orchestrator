@@ -597,9 +597,7 @@ describe('Scheduler global concurrency bound', () => {
     // late_job's own boot fire is accepted (running) but blocked on admission.
     await vi.advanceTimersByTimeAsync(1);
 
-    const late = scheduler
-      .status()
-      .find((s) => s.name === 'late_job');
+    const late = scheduler.status().find((s) => s.name === 'late_job');
     expect(late).toMatchObject({ running: false, queued: true });
 
     // Free one slot — late_job should now be admitted and executing.
@@ -607,9 +605,7 @@ describe('Scheduler global concurrency bound', () => {
     release();
     await vi.advanceTimersByTimeAsync(1);
 
-    const lateAfter = scheduler
-      .status()
-      .find((s) => s.name === 'late_job');
+    const lateAfter = scheduler.status().find((s) => s.name === 'late_job');
     expect(lateAfter).toMatchObject({ running: true, queued: false });
 
     resolveLate();
