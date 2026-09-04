@@ -152,6 +152,17 @@ export interface StagedIntent {
    * Recover/Decline affordances, which stay usable while blocked.
    */
   groupSessionIncomplete?: boolean | null;
+  /**
+   * When this group is blocked by a live member's incomplete owning session
+   * rather than by its own members, the id of the *other* group that owns
+   * the actual blocking (needs_revision/pending_verification) row — so the
+   * decision surface can name and target the real blocker. Null when this
+   * group's own members are the blocker, or when the blocking row has no
+   * group of its own. Always null for an ungrouped intent.
+   */
+  blockingGroupId?: string | null;
+  /** The blocked-member count of `blockingGroupId`, or null when that's null. */
+  blockingGroupBlockedMemberCount?: number | null;
 }
 
 /** The two explicit operator-chosen outcomes for a reject disposition. */

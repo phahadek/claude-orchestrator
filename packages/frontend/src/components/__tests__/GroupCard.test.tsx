@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { GroupCard } from '../GroupCard';
 import type { StagedIntent } from '../../api/stagedIntents';
@@ -159,6 +159,125 @@ describe('GroupCard size estimate in collapsed head', () => {
     );
 
     expect(screen.queryByTestId('group-card-size-estimate')).toBeNull();
+  });
+});
+
+describe('GroupCard recovery affordance', () => {
+  it('renders neither the banner nor a control for a committable group', () => {
+    render(<GroupCard {...baseProps()} />);
+
+    expect(screen.queryByTestId('recovery-banner-group-1')).toBeNull();
+  });
+
+  it('renders a blocked-member banner and control exactly as today when this group has a visible blocked member', () => {
+    render(
+      <GroupCard
+        {...baseProps({
+          members: [
+            {
+              intent: makeIntent({ state: 'needs_revision' }),
+              hideActions: true,
+            },
+          ],
+        })}
+      />,
+    );
+
+    const banner = screen.getByTestId('recovery-banner-group-1');
+    expect(banner.textContent).toMatch(/1 blocked member/);
+    expect(screen.getByTestId('recover-group-group-1')).toBeTruthy();
+  });
+
+  it('renders a recovery control for a group with groupBlocked true and zero visible blocked members', () => {
+    const onRecoverGroup = vi.fn();
+    render(
+      <GroupCard
+        {...baseProps({
+          members: [
+            {
+              intent: makeIntent({ groupBlocked: true }),
+              hideActions: true,
+            },
+          ],
+          onRecoverGroup,
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId('recovery-banner-group-1')).toBeTruthy();
+  });
+
+  it('names the blocking group and targets it in the Recover control when the blocker is a sibling group', () => {
+    const onRecoverGroup = vi.fn();
+    render(
+      <GroupCard
+        {...baseProps({
+          members: [
+            {
+              intent: makeIntent({
+                groupBlocked: true,
+                blockingGroupId: 'group-99',
+                blockingGroupBlockedMemberCount: 3,
+              }),
+              hideActions: true,
+            },
+          ],
+          onRecoverGroup,
+        })}
+      />,
+    );
+
+    const banner = screen.getByTestId('recovery-banner-group-1');
+    expect(banner.textContent).toMatch(/Blocked by group group-99/);
+    expect(banner.textContent).toMatch(/3 blocked member/);
+    expect(banner.textContent).not.toMatch(/awaiting session/i);
+
+    fireEvent.click(screen.getByTestId('recover-group-group-99'));
+    expect(onRecoverGroup).toHaveBeenCalledWith('group-99');
+  });
+
+  it('shows a non-actionable message with no control when session-blocked but blockingGroupId is null', () => {
+    render(
+      <GroupCard
+        {...baseProps({
+          members: [
+            {
+              intent: makeIntent({
+                groupBlocked: true,
+                blockingGroupId: null,
+                blockingGroupBlockedMemberCount: null,
+              }),
+              hideActions: true,
+            },
+          ],
+        })}
+      />,
+    );
+
+    const banner = screen.getByTestId('recovery-banner-group-1');
+    expect(banner.textContent).toMatch(
+      /blocked by an unresolved proposal from this session/i,
+    );
+    expect(screen.queryByTestId('recover-group-group-1')).toBeNull();
+  });
+
+  it('keeps Approve disabled for a session-blocked group with zero visible blocked members', () => {
+    render(
+      <GroupCard
+        {...baseProps({
+          members: [
+            {
+              intent: makeIntent({ groupBlocked: true }),
+              hideActions: true,
+            },
+          ],
+        })}
+      />,
+    );
+
+    expect(
+      screen.getByRole('button', { name: /Approve/i }).hasAttribute('disabled'),
+    ).toBe(true);
   });
 });
 

@@ -155,6 +155,101 @@ describe('GET /api/staged-intents?milestone= — group signal caching', () => {
       expect(intent.groupBlocked).toBe(true);
       expect(intent.groupBlockedMemberCount).toBe(1);
       expect(intent.groupSessionIncomplete).toBe(false);
+      expect(intent.blockingGroupId).toBeNull();
+      expect(intent.blockingGroupBlockedMemberCount).toBeNull();
     }
+  });
+
+  it('leaves blockingGroupId null when the group is blocked by its own member', async () => {
+    const groupId = 'group-own';
+    const blockedMember = makeRow({
+      id: 'own-blocked-member',
+      group_id: groupId,
+      milestone: 'M13',
+      state: 'needs_revision',
+    });
+    insertStagedIntent(blockedMember);
+
+    const agent = supertest(makeApp());
+    const res = await agent
+      .get('/api/staged-intents')
+      .query({ projectId: 'proj-1', milestone: 'M13' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.intents).toHaveLength(1);
+    expect(res.body.intents[0].groupBlocked).toBe(true);
+    expect(res.body.intents[0].groupBlockedMemberCount).toBe(1);
+    expect(res.body.intents[0].blockingGroupId).toBeNull();
+    expect(res.body.intents[0].blockingGroupBlockedMemberCount).toBeNull();
+  });
+
+  it('resolves blockingGroupId to a sibling group when the owning session blocks via a different group', async () => {
+    const groupId = 'group-sibling-a';
+    const blockingGroupId = 'group-sibling-b';
+    const sessionId = 'session-cross-group';
+    const ownMember = makeRow({
+      id: 'own-member',
+      group_id: groupId,
+      milestone: 'M13',
+      session_id: sessionId,
+      state: 'staged',
+    });
+    const blockerMember = makeRow({
+      id: 'blocker-member',
+      group_id: blockingGroupId,
+      milestone: 'M13',
+      session_id: sessionId,
+      state: 'needs_revision',
+    });
+    [ownMember, blockerMember].forEach(insertStagedIntent);
+
+    const agent = supertest(makeApp());
+    const res = await agent
+      .get('/api/staged-intents')
+      .query({ projectId: 'proj-1', milestone: 'M13' });
+
+    expect(res.status).toBe(200);
+    const own = res.body.intents.find(
+      (i: { id: string }) => i.id === 'own-member',
+    );
+    expect(own.groupBlocked).toBe(true);
+    expect(own.groupBlockedMemberCount).toBe(0);
+    expect(own.groupSessionIncomplete).toBe(true);
+    expect(own.blockingGroupId).toBe(blockingGroupId);
+    expect(own.blockingGroupBlockedMemberCount).toBe(1);
+  });
+
+  it('leaves blockingGroupId null when the session-blocking row has no group of its own', async () => {
+    const groupId = 'group-ungrouped-blocker';
+    const sessionId = 'session-ungrouped-blocker';
+    const ownMember = makeRow({
+      id: 'own-member-2',
+      group_id: groupId,
+      milestone: 'M13',
+      session_id: sessionId,
+      state: 'staged',
+    });
+    const blockerMember = makeRow({
+      id: 'blocker-member-2',
+      group_id: null,
+      milestone: 'M13',
+      session_id: sessionId,
+      state: 'needs_revision',
+    });
+    [ownMember, blockerMember].forEach(insertStagedIntent);
+
+    const agent = supertest(makeApp());
+    const res = await agent
+      .get('/api/staged-intents')
+      .query({ projectId: 'proj-1', milestone: 'M13' });
+
+    expect(res.status).toBe(200);
+    const own = res.body.intents.find(
+      (i: { id: string }) => i.id === 'own-member-2',
+    );
+    expect(own.groupBlocked).toBe(true);
+    expect(own.groupSessionIncomplete).toBe(true);
+    expect(own.blockingGroupId).toBeNull();
+    expect(own.blockingGroupBlockedMemberCount).toBeNull();
   });
 });
