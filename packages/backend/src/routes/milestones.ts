@@ -9,6 +9,7 @@ import {
   getGateVerifyAutoCommitPolicy,
   listGateVerifyAutoCommitPolicy,
   upsertGateVerifyAutoCommitPolicy,
+  updateMilestone,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { FLOW_IDS, isFlowId } from '../orchestration/flowArm';
@@ -120,6 +121,52 @@ export function createMilestonesRouter(): Router {
       res.json({ milestoneId, flow, armed: getArm(milestoneId, flow) });
     },
   );
+
+  // PATCH /api/milestones/:milestoneId { milestoneBranching }
+  // Sets/clears the per-milestone override consulted ahead of the
+  // project-level milestoneBranching setting in resolveBranchMode's
+  // precedence chain (see branchModel.ts) — lets an operator pilot
+  // two_tier on a single milestone before committing the whole project.
+  router.patch('/milestones/:milestoneId', (req: Request, res: Response) => {
+    const milestoneId = String(req.params.milestoneId);
+    const body = req.body as { milestoneBranching?: unknown };
+    if (!('milestoneBranching' in body)) {
+      res.status(400).json({ error: 'milestoneBranching is required' });
+      return;
+    }
+    if (
+      body.milestoneBranching !== 'two_tier' &&
+      body.milestoneBranching !== 'flat' &&
+      body.milestoneBranching !== null
+    ) {
+      res.status(400).json({
+        error: `milestoneBranching must be 'two_tier', 'flat', or null`,
+      });
+      return;
+    }
+
+    const updated = updateMilestone(milestoneId, {
+      milestone_branching: body.milestoneBranching,
+    });
+    if (!updated) {
+      res.status(404).json({ error: `milestone "${milestoneId}" not found` });
+      return;
+    }
+
+    recordEvent({
+      event_type: 'milestone_branching_changed',
+      actor_type: 'human',
+      payload: {
+        milestone: milestoneId,
+        milestoneBranching: body.milestoneBranching,
+      },
+    });
+
+    res.json({
+      milestoneId,
+      milestoneBranching: updated.milestone_branching,
+    });
+  });
 
   // GET /api/milestones/:milestoneId/auto-commit-policy -> effective
   // per-disposition-class gate.verify auto-commit policy state.

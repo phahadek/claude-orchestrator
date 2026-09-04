@@ -1945,6 +1945,16 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
+  // milestones.milestone_branching: nullable per-milestone override of the
+  // project-level setting of the same name, consulted first in
+  // resolveBranchMode's precedence chain — lets an operator pilot two_tier
+  // on a single milestone before committing the whole project.
+  try {
+    target.exec(`ALTER TABLE milestones ADD COLUMN milestone_branching TEXT`);
+  } catch {
+    /* already exists */
+  }
+
   // stuck_session_timers.suspended: true while notify/pause are cancelled
   // for a code session's PR review (pr_created / push_detected), so that
   // an activity-based reset (session_event) does not re-arm timers a

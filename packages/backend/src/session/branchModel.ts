@@ -171,14 +171,19 @@ export function resolveResumeBranchSlug(
 }
 
 /**
- * Resolves the branching mode for a given project's milestone_branching setting:
- * 1. Explicit 'two_tier' or 'flat' wins.
- * 2. Falls back to two_tier when corporate mode is enabled.
- * 3. Otherwise flat.
+ * Resolves the branching mode given a project's milestone_branching setting
+ * and an optional milestone-level override:
+ * 1. An explicit milestone-level override ('two_tier' or 'flat') wins.
+ * 2. Otherwise an explicit project-level 'two_tier' or 'flat' wins.
+ * 3. Falls back to two_tier when corporate mode is enabled.
+ * 4. Otherwise flat.
  */
 export function resolveBranchMode(
   milestoneBranching: 'two_tier' | 'flat' | null | undefined,
+  milestoneOverride?: 'two_tier' | 'flat' | null | undefined,
 ): BranchMode {
+  if (milestoneOverride === 'two_tier') return 'two_tier';
+  if (milestoneOverride === 'flat') return 'flat';
   if (milestoneBranching === 'two_tier') return 'two_tier';
   if (milestoneBranching === 'flat') return 'flat';
   return getCorporateMode().enabled ? 'two_tier' : 'flat';
@@ -203,13 +208,16 @@ export function resolveStartingPoint(
   },
   milestoneId: string | null,
 ): { startingPoint: string; milestoneSlug: string | null } {
-  const mode = resolveBranchMode(project.milestoneBranching);
-  if (mode === 'two_tier' && milestoneId) {
-    const milestone = ProjectService.getMilestone(milestoneId);
-    if (milestone) {
-      const slug = slugify(milestone.name);
-      return { startingPoint: `milestone/${slug}`, milestoneSlug: slug };
-    }
+  const milestone = milestoneId
+    ? ProjectService.getMilestone(milestoneId)
+    : undefined;
+  const mode = resolveBranchMode(
+    project.milestoneBranching,
+    milestone?.milestoneBranching,
+  );
+  if (mode === 'two_tier' && milestone) {
+    const slug = slugify(milestone.name);
+    return { startingPoint: `milestone/${slug}`, milestoneSlug: slug };
   }
   return { startingPoint: project.baseBranch ?? 'dev', milestoneSlug: null };
 }

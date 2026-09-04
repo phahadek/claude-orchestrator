@@ -39,6 +39,8 @@ export interface ProjectMilestone {
   displayOrder: number;
   /** Set once /milestone-wrap closes out this milestone. Null = active or in-planning. */
   wrappedAt: number | null;
+  /** Nullable per-milestone override of the project's milestoneBranching; null falls through to the project setting. */
+  milestoneBranching: 'two_tier' | 'flat' | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -103,6 +105,7 @@ function rowToMilestone(row: MilestoneRow): ProjectMilestone {
     canonicalShortId: row.canonical_short_id,
     displayOrder: row.display_order,
     wrappedAt: row.wrapped_at,
+    milestoneBranching: row.milestone_branching,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

@@ -5183,14 +5183,15 @@ export function insertMilestone(m: NewMilestoneRow): MilestoneRow {
     db.prepare<NewMilestoneRow>(
       `
     INSERT INTO milestones
-      (id, project_id, name, source_id, canonical_short_id, display_order, wrapped_at, created_at, updated_at)
+      (id, project_id, name, source_id, canonical_short_id, display_order, wrapped_at, milestone_branching, created_at, updated_at)
     VALUES
-      (@id, @project_id, @name, @source_id, @canonical_short_id, @display_order, @wrapped_at, @created_at, @updated_at)
+      (@id, @project_id, @name, @source_id, @canonical_short_id, @display_order, @wrapped_at, @milestone_branching, @created_at, @updated_at)
   `,
     ).run({
       ...m,
       display_order: m.display_order ?? 0,
       wrapped_at: m.wrapped_at ?? null,
+      milestone_branching: m.milestone_branching ?? null,
       created_at: m.created_at ?? now,
       updated_at: m.updated_at ?? now,
     });
@@ -5229,6 +5230,7 @@ export interface MilestonePatch {
   canonical_short_id?: string | null;
   display_order?: number;
   wrapped_at?: number | null;
+  milestone_branching?: 'two_tier' | 'flat' | null;
 }
 
 export function updateMilestone(
@@ -5250,6 +5252,7 @@ export function updateMilestone(
       canonical_short_id: string | null;
       display_order: number;
       wrapped_at: number | null;
+      milestone_branching: 'two_tier' | 'flat' | null;
       updated_at: number;
     }>(
       `
@@ -5259,6 +5262,7 @@ export function updateMilestone(
         canonical_short_id = @canonical_short_id,
         display_order = @display_order,
         wrapped_at = @wrapped_at,
+        milestone_branching = @milestone_branching,
         updated_at = @updated_at
     WHERE id = @id
   `,
@@ -5271,6 +5275,10 @@ export function updateMilestone(
       display_order: patch.display_order ?? existing.display_order,
       wrapped_at:
         patch.wrapped_at !== undefined ? patch.wrapped_at : existing.wrapped_at,
+      milestone_branching:
+        patch.milestone_branching !== undefined
+          ? patch.milestone_branching
+          : existing.milestone_branching,
       updated_at: now,
     });
   } catch (err) {
