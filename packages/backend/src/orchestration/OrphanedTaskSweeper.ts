@@ -212,7 +212,8 @@ export class OrphanedTaskSweeper {
             // Log only on the first occurrence or when the failure reason
             // changes — an unrevertable task otherwise logs identically
             // every tick forever.
-            const isRepeat = this.lastRevertFailureMessage.get(taskId) === message;
+            const isRepeat =
+              this.lastRevertFailureMessage.get(taskId) === message;
             this.lastRevertFailureMessage.set(taskId, message);
             if (!isRepeat) {
               logger.warn(

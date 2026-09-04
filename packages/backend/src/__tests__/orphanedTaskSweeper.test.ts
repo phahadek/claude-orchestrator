@@ -2326,9 +2326,7 @@ describe('OrphanedTaskSweeper', () => {
         resolveBackend: () => makeBackend([]),
       });
 
-      await expect(sweeper.sweepOnce()).rejects.toThrow(
-        'backend unreachable',
-      );
+      await expect(sweeper.sweepOnce()).rejects.toThrow('backend unreachable');
     });
   });
 });
