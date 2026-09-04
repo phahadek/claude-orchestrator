@@ -7920,6 +7920,40 @@ async function precheckGroupCommit(
     };
   }
 
+  // markdownToBlocks (bodyRender.ts) renders a 4-hash markdown heading line
+  // into a heading_4 RenderedBlock, but Notion's Blocks API has no heading_4
+  // type — a PATCH containing one is rejected outright. Refuse the whole
+  // group before any member applies rather than discover this mid-loop.
+  const seenBodyWritingTaskIds = new Set<string>();
+  for (const row of ordered) {
+    if (
+      (row.kind !== 'task.updateBody' && row.kind !== 'task.patchBodySection') ||
+      !ACTIVE_STATES.includes(row.state)
+    ) {
+      continue;
+    }
+    const { taskId } = JSON.parse(row.payload) as
+      | UpdateBodyPayload
+      | PatchBodySectionPayload;
+    if (seenBodyWritingTaskIds.has(taskId)) continue;
+    seenBodyWritingTaskIds.add(taskId);
+    const backend = getTaskBackend(row.project_id);
+    const { body } = await computeProposedBody(backend, groupId, taskId);
+    if (/^####\s+/m.test(body)) {
+      return {
+        status: 409,
+        body: {
+          error:
+            `[stagedIntents] group "${groupId}" cannot commit: intent "${row.id}"'s ` +
+            `rendered proposed body for task "${taskId}" contains a level-4 (####) ` +
+            'markdown heading, which has no corresponding Notion block type — ' +
+            'demote it to ### or shallower before committing',
+          precheck: true,
+        },
+      };
+    }
+  }
+
   for (const row of ordered) {
     if (!isArmingReadyIntent(row)) continue;
     const payload = JSON.parse(row.payload) as SetStatusPayload;
