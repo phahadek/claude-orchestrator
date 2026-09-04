@@ -1069,9 +1069,7 @@ describe('group commit — whole-group precheck (all-or-nothing)', () => {
       },
     });
     expect(staged.status).toBe(201);
-    await agent
-      .post(`/api/staged-intents/${staged.body.id}/approve`)
-      .send({});
+    await agent.post(`/api/staged-intents/${staged.body.id}/approve`).send({});
 
     const commit = await agent
       .post(`/api/staged-intents/group/${groupId}/commit`)
@@ -1108,9 +1106,7 @@ describe('group commit — whole-group precheck (all-or-nothing)', () => {
       payload: { taskId: 't-heading3-ok', sections: sections() },
     });
     expect(staged.status).toBe(201);
-    await agent
-      .post(`/api/staged-intents/${staged.body.id}/approve`)
-      .send({});
+    await agent.post(`/api/staged-intents/${staged.body.id}/approve`).send({});
 
     const commit = await agent
       .post(`/api/staged-intents/group/${groupId}/commit`)

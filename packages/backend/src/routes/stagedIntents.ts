@@ -7927,7 +7927,8 @@ async function precheckGroupCommit(
   const seenBodyWritingTaskIds = new Set<string>();
   for (const row of ordered) {
     if (
-      (row.kind !== 'task.updateBody' && row.kind !== 'task.patchBodySection') ||
+      (row.kind !== 'task.updateBody' &&
+        row.kind !== 'task.patchBodySection') ||
       !ACTIVE_STATES.includes(row.state)
     ) {
       continue;
