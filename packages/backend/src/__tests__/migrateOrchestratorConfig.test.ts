@@ -179,14 +179,33 @@ describe('migrate-orchestrator-config', () => {
           dbPath,
           '--dry-run',
         ],
-        { encoding: 'utf-8' },
+        { encoding: 'utf-8', timeout: 5000, killSignal: 'SIGKILL' },
       );
 
+      expect(result.error).toBeUndefined();
+      expect(result.signal).toBeNull();
       expect(result.status).toBe(0);
       expect(fs.existsSync(yamlPath)).toBe(false);
       expect(fs.existsSync(jsonPath)).toBe(true);
       expect(result.stdout).toContain('[DRY-RUN]');
       expect(result.stdout).toContain('WOULD MIGRATE Test Project');
+      // Secondary net only: a vitest per-test timeout is a timer on the
+      // event loop, and spawnSync blocks that loop for its entire duration,
+      // so this cannot itself interrupt a hung child — the spawnSync-level
+      // timeout/killSignal above is what actually bounds this test.
+    }, 10000);
+
+    it('a child that exceeds the spawnSync timeout is killed and reported as a failure', async () => {
+      const { spawnSync } = await import('child_process');
+      const result = spawnSync('node', ['-e', 'setTimeout(() => {}, 60000)'], {
+        encoding: 'utf-8',
+        timeout: 200,
+        killSignal: 'SIGKILL',
+      });
+
+      expect(result.error).toBeDefined();
+      expect(result.signal).toBe('SIGKILL');
+      expect(result.status).toBeNull();
     }, 10000);
   });
 });
