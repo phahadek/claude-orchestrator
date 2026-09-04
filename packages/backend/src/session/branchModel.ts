@@ -215,14 +215,18 @@ export function resolveStartingPoint(
 }
 
 /**
- * Thrown by `ensureMilestoneBranch` when the fast-forward-only refresh of an
- * already-existing local milestone ref is rejected by git (the local ref has
- * diverged from origin). Callers must not treat this the same as the other,
- * non-fatal failure modes ensureMilestoneBranch already tolerates (e.g. a
- * transient `git fetch` network failure while creating a brand-new ref) —
- * doing so would cut the worktree from the same stale local ref this feature
- * exists to stop using, silently defeating the fail-closed guarantee. See
- * SessionManager.ts's two call sites for how each responds.
+ * Thrown by `ensureMilestoneBranch` specifically when git's fast-forward-only
+ * semantics reject the refresh of an already-existing local milestone ref
+ * because it has genuinely diverged from origin — never for a merely failed
+ * fetch (network blip, DNS hiccup, transient origin unavailability, auth
+ * failure). Those stay non-fatal, same as the adjacent fresh-branch-creation
+ * fetch path below: a transient infrastructure hiccup must not permanently
+ * block session start/resume, only a real divergence should. Callers must
+ * not treat this the same as ensureMilestoneBranch's other, non-fatal
+ * failure modes — doing so would cut the worktree from the same stale local
+ * ref this feature exists to stop using, silently defeating the fail-closed
+ * guarantee. See SessionManager.ts's two call sites for how each responds,
+ * and isNonFastForwardRejection below for how the two cases are told apart.
  */
 export class MilestoneBranchDivergedError extends Error {
   constructor(ref: string, cause: unknown) {
@@ -231,6 +235,22 @@ export class MilestoneBranchDivergedError extends Error {
     );
     this.name = 'MilestoneBranchDivergedError';
   }
+}
+
+/**
+ * Distinguishes git's actual non-fast-forward rejection (` ! [rejected] ...
+ * (non-fast-forward)`, the wording git has used for this exact case for
+ * every version in practical use) from every other `git fetch` failure
+ * shape — network unreachable, DNS failure, auth failure, timeout — which
+ * produce unrelated stderr text (`fatal: unable to access`, `Could not
+ * resolve host`, `Authentication failed`, etc.) and must stay non-fatal.
+ * Checks both `stderr` (execSync's real shape) and `message` (a plain
+ * `Error`'s shape, as used in unit tests) so it works against either.
+ */
+function isNonFastForwardRejection(err: unknown): boolean {
+  const e = err as { stderr?: Buffer | string; message?: string };
+  const text = `${e.stderr?.toString() ?? ''}\n${e.message ?? ''}`;
+  return /non-fast-forward|\[rejected\]/i.test(text);
 }
 
 /**
@@ -280,8 +300,12 @@ export function ensureMilestoneBranch(
   if (existsLocally) {
     // Fast-forward-only refresh from origin. A diverged local ref makes git
     // reject this fetch (non-zero exit) — surfaced as
-    // MilestoneBranchDivergedError rather than swallowed, so callers fail
-    // closed instead of cutting a worktree from a stale ref.
+    // MilestoneBranchDivergedError specifically so callers fail closed
+    // instead of cutting a worktree from a stale ref. Any other fetch
+    // failure (network blip, DNS hiccup, origin briefly unreachable, auth)
+    // stays non-fatal, same as the fresh-branch-creation fetch below —
+    // proceed with the existing local ref rather than block session
+    // start/resume on a transient infrastructure hiccup.
     try {
       execSync(`git fetch origin ${ref}:${ref}`, {
         cwd: projectDir,
@@ -289,7 +313,12 @@ export function ensureMilestoneBranch(
         stdio: 'pipe',
       });
     } catch (err) {
-      throw new MilestoneBranchDivergedError(ref, err);
+      if (isNonFastForwardRejection(err)) {
+        throw new MilestoneBranchDivergedError(ref, err);
+      }
+      logger.warn(
+        `[branchModel] ensureMilestoneBranch: fast-forward fetch of ${ref} failed (continuing with existing local ref): ${err}`,
+      );
     }
     return;
   }

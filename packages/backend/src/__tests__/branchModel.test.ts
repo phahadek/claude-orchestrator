@@ -204,12 +204,16 @@ describe('ensureMilestoneBranch', () => {
     );
   });
 
-  it('throws when the fast-forward-only fetch fails (diverged local ref) instead of force-overwriting', () => {
+  it('throws when the fast-forward-only fetch is rejected as non-fast-forward (diverged local ref) instead of force-overwriting', () => {
     execSyncMock
       .mockReturnValueOnce('') // local ref check → exists
       .mockImplementationOnce(() => {
-        throw new Error('fatal: Not possible to fast-forward, aborting.');
-      }); // fetch rejects the non-fast-forward update
+        // Real git wording for this exact rejection.
+        throw new Error(
+          ' ! [rejected]        milestone/m6-readiness -> milestone/m6-readiness  (non-fast-forward)\n' +
+            "error: some local refs could not be updated; try running 'git remote prune origin' to remove any old, conflicting branches",
+        );
+      });
 
     let caught: unknown;
     try {
@@ -221,6 +225,27 @@ describe('ensureMilestoneBranch', () => {
     expect((caught as Error).message).toMatch(/fast-forward/);
 
     // No fallback branch-recreation/push calls after the failed fetch.
+    expect(execSyncMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('tolerates a transient fetch failure (network/DNS/auth) on an existing ref instead of treating it as divergence', () => {
+    execSyncMock
+      .mockReturnValueOnce('') // local ref check → exists
+      .mockImplementationOnce(() => {
+        throw new Error(
+          "fatal: unable to access 'https://origin/repo.git': Could not resolve host: origin",
+        );
+      });
+
+    // Does not throw — a transient fetch failure is non-fatal, same as the
+    // fresh-branch-creation fetch path.
+    expect(() =>
+      ensureMilestoneBranch('m6-readiness', '/repo'),
+    ).not.toThrow();
+
+    // No fallback branch-recreation/push calls — the function simply
+    // returns, proceeding with the existing (possibly slightly stale)
+    // local ref rather than blocking session start/resume.
     expect(execSyncMock).toHaveBeenCalledTimes(2);
   });
 
