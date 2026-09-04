@@ -396,15 +396,15 @@ describe('renderTaskBody / markdownToBlocks — code-fence language normalisatio
     ['cs', 'c#'],
     ['cpp', 'c++'],
   ])('maps alias %s to Notion spelling %s', (alias, expected) => {
-    expect(
-      codeLanguageFor(['```' + alias, 'line', '```'].join('\n')),
-    ).toBe(expected);
+    expect(codeLanguageFor(['```' + alias, 'line', '```'].join('\n'))).toBe(
+      expected,
+    );
   });
 
   it('falls back to plain text for a language absent from the enum and alias map', () => {
-    expect(
-      codeLanguageFor(['```brainfuck', '+++', '```'].join('\n')),
-    ).toBe('plain text');
+    expect(codeLanguageFor(['```brainfuck', '+++', '```'].join('\n'))).toBe(
+      'plain text',
+    );
   });
 
   it('renders a fence with no language as plain text, unchanged from today', () => {
@@ -423,9 +423,9 @@ describe('renderTaskBody / markdownToBlocks — code-fence language normalisatio
   );
 
   it('is case-insensitive and tolerant of surrounding whitespace', () => {
-    expect(codeLanguageFor(['```  TypeScript  ', 'line', '```'].join('\n'))).toBe(
-      'typescript',
-    );
+    expect(
+      codeLanguageFor(['```  TypeScript  ', 'line', '```'].join('\n')),
+    ).toBe('typescript');
   });
 });
 
