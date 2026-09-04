@@ -3629,6 +3629,18 @@ describe('PRReviewService — manual verification items excluded from verdict', 
     );
     expect(prompt).toContain('manualItemsForHuman');
   });
+
+  it('REVIEW_JSON_SCHEMA_BLOCK prompt requires per-criterion command+output+non-vacuous evidence', () => {
+    const service = makeService();
+    const prompt = service.buildPrompt(mockPR, mockDiff, mockTaskBody);
+
+    expect(prompt).toContain('Per-criterion evidence bar');
+    expect(prompt).toContain('command run to check it');
+    expect(prompt).toContain('observed output');
+    expect(prompt).toContain('non-vacuous confirmation');
+    expect(prompt).toContain('fails without the change and passes with it');
+    expect(prompt).toContain('skipped or');
+  });
 });
 
 // ── PRReviewService — toExternalId URL construction ──────────────────────────
