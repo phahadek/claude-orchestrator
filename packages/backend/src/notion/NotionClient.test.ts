@@ -27,12 +27,14 @@ import {
   NotionPageEditStaleBaseError,
   NotionPageEditUnpatchableTargetError,
 } from './NotionClient';
+import type { NotionBlockPayload } from './NotionClient';
 import { parseTaskId } from '../tasks/taskId';
 import {
   updateTaskCacheStatus,
   getCacheAge,
   getTaskCache,
   getRecentTaskStatusWrite,
+  deleteTaskCacheRow,
 } from '../db/queries';
 
 const source = fs.readFileSync(
@@ -743,6 +745,183 @@ describe('NotionClient.patchBodySection()', () => {
 
     // Only the initial children fetch — no delete calls issued.
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('NotionClient.updateBody()', () => {
+  let client: NotionClient;
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    client = new NotionClient();
+  });
+
+  function okJson(body: unknown) {
+    return { ok: true, json: async () => body };
+  }
+
+  function errJson(status: number, body: unknown) {
+    return { ok: false, status, text: async () => JSON.stringify(body) };
+  }
+
+  const archivedError = {
+    object: 'error',
+    status: 400,
+    code: 'validation_error',
+    message:
+      "Can't edit block that is archived. You must unarchive the block before editing.",
+  };
+
+  it('issues every children-listing request before any delete request', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      okJson({
+        results: [{ id: 'b1' }],
+        has_more: true,
+        next_cursor: 'cursor-2',
+      }),
+    );
+    fetchSpy.mockResolvedValueOnce(
+      okJson({ results: [{ id: 'b2' }], has_more: false, next_cursor: null }),
+    );
+    fetchSpy.mockResolvedValueOnce(okJson({})); // delete b1
+    fetchSpy.mockResolvedValueOnce(okJson({})); // delete b2
+    fetchSpy.mockResolvedValueOnce(okJson({ results: [] })); // append
+
+    await client.updateBody('notion:abc', []);
+
+    const calls = fetchSpy.mock.calls.map(
+      (c) => [c[0] as string, (c[1] as RequestInit).method] as const,
+    );
+    expect(calls[0][0]).toContain('/blocks/abc/children');
+    expect(calls[0][1]).toBe('GET');
+    expect(calls[1][0]).toContain('/blocks/abc/children');
+    expect(calls[1][1]).toBe('GET');
+    expect(calls[2][1]).toBe('DELETE');
+    expect(calls[3][1]).toBe('DELETE');
+  });
+
+  it('deletes every block across multiple pages exactly once, with no id deleted twice', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      okJson({
+        results: [{ id: 'b1' }, { id: 'b2' }],
+        has_more: true,
+        next_cursor: 'cursor-2',
+      }),
+    );
+    fetchSpy.mockResolvedValueOnce(
+      okJson({
+        results: [{ id: 'b3' }],
+        has_more: false,
+        next_cursor: null,
+      }),
+    );
+    fetchSpy.mockResolvedValueOnce(okJson({})); // delete b1
+    fetchSpy.mockResolvedValueOnce(okJson({})); // delete b2
+    fetchSpy.mockResolvedValueOnce(okJson({})); // delete b3
+    fetchSpy.mockResolvedValueOnce(okJson({ results: [] })); // append
+
+    await client.updateBody('notion:abc', []);
+
+    const deleteUrls = fetchSpy.mock.calls
+      .filter((c) => (c[1] as RequestInit).method === 'DELETE')
+      .map((c) => c[0] as string);
+    expect(deleteUrls).toEqual([
+      expect.stringContaining('/blocks/b1'),
+      expect.stringContaining('/blocks/b2'),
+      expect.stringContaining('/blocks/b3'),
+    ]);
+    expect(new Set(deleteUrls).size).toBe(3);
+  });
+
+  it('swallows a DELETE that returns the archived-block validation error and continues', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      okJson({
+        results: [{ id: 'b1' }, { id: 'b2' }],
+        has_more: false,
+        next_cursor: null,
+      }),
+    );
+    fetchSpy.mockResolvedValueOnce(errJson(400, archivedError)); // delete b1 -> already archived
+    fetchSpy.mockResolvedValueOnce(okJson({})); // delete b2
+    fetchSpy.mockResolvedValueOnce(okJson({ results: [] })); // append
+
+    await expect(client.updateBody('notion:abc', [])).resolves.toBeUndefined();
+
+    const deleteUrls = fetchSpy.mock.calls
+      .filter((c) => (c[1] as RequestInit).method === 'DELETE')
+      .map((c) => c[0] as string);
+    expect(deleteUrls).toHaveLength(2);
+  });
+
+  it('treats a DELETE returning 404 as already-gone', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      okJson({ results: [{ id: 'b1' }], has_more: false, next_cursor: null }),
+    );
+    fetchSpy.mockResolvedValueOnce(errJson(404, { message: 'not found' }));
+    fetchSpy.mockResolvedValueOnce(okJson({ results: [] })); // append
+
+    await expect(client.updateBody('notion:abc', [])).resolves.toBeUndefined();
+  });
+
+  it('rethrows a DELETE error that is not archived-already or 404 (e.g. 500)', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      okJson({ results: [{ id: 'b1' }], has_more: false, next_cursor: null }),
+    );
+    fetchSpy.mockResolvedValueOnce(errJson(500, { message: 'server error' }));
+
+    await expect(client.updateBody('notion:abc', [])).rejects.toThrow();
+  });
+
+  it('calling updateBody twice in a row succeeds both times (second call is a no-op delete pass)', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      okJson({ results: [{ id: 'b1' }], has_more: false, next_cursor: null }),
+    );
+    fetchSpy.mockResolvedValueOnce(okJson({})); // delete b1
+    fetchSpy.mockResolvedValueOnce(okJson({ results: [] })); // append
+
+    await client.updateBody('notion:abc', []);
+
+    // Second call: the page is already empty of the old blocks.
+    fetchSpy.mockResolvedValueOnce(
+      okJson({ results: [], has_more: false, next_cursor: null }),
+    );
+    fetchSpy.mockResolvedValueOnce(okJson({ results: [] })); // append
+
+    await expect(client.updateBody('notion:abc', [])).resolves.toBeUndefined();
+  });
+
+  it('chunks the append phase at 100 blocks per request and invalidates the task page cache', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      okJson({ results: [], has_more: false, next_cursor: null }),
+    );
+    const blocks = Array.from({ length: 150 }, (_, i) => ({
+      type: 'paragraph',
+      paragraph: { rich_text: [{ text: { content: `line ${i}` } }] },
+    })) as unknown as NotionBlockPayload[];
+    fetchSpy.mockResolvedValueOnce(okJson({ results: [] })); // append chunk 1
+    fetchSpy.mockResolvedValueOnce(okJson({ results: [] })); // append chunk 2
+
+    await client.updateBody('notion:abc', blocks);
+
+    const appendCalls = fetchSpy.mock.calls.filter((c) =>
+      (c[0] as string).includes('/children'),
+    );
+    // 1 listing call + 2 append chunk calls.
+    expect(appendCalls).toHaveLength(3);
+    const chunk1 = JSON.parse(
+      (appendCalls[1][1] as RequestInit).body as string,
+    );
+    const chunk2 = JSON.parse(
+      (appendCalls[2][1] as RequestInit).body as string,
+    );
+    expect(chunk1.children).toHaveLength(100);
+    expect(chunk2.children).toHaveLength(50);
+
+    expect(deleteTaskCacheRow).toHaveBeenCalledWith(
+      expect.stringContaining('abc'),
+    );
   });
 });
 

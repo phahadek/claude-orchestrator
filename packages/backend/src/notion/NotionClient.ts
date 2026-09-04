@@ -209,6 +209,19 @@ async function notionRequest<T>(
   return res.json() as Promise<T>;
 }
 
+/**
+ * True when a block DELETE failed because the block is already gone: a 404
+ * (block no longer exists) or Notion's "Can't edit block that is archived"
+ * validation error (block was already archived by an earlier delete pass).
+ * Both mean the delete's goal state is already achieved, so callers should
+ * treat them as success rather than throwing.
+ */
+function isAlreadyGoneDeleteError(err: unknown): boolean {
+  if (!(err instanceof NotionApiError)) return false;
+  if (err.statusCode === 404) return true;
+  return err.statusCode === 400 && /archived/i.test(err.message);
+}
+
 // ─── Page mapper ────────────────────────────────────────────────────────────
 
 /**
@@ -991,8 +1004,11 @@ export class NotionClient {
   }
 
   /**
-   * Overwrite the full page body: archives every existing top-level block,
-   * then appends `blocks` (chunked to Notion's 100-block-per-request limit).
+   * Overwrite the full page body: collects every existing top-level block id
+   * (fully paginated before any deletion starts), archives them all, then
+   * appends `blocks` (chunked to Notion's 100-block-per-request limit). The
+   * delete pass is idempotent — a block already archived by an earlier
+   * (possibly partial) run is treated as already deleted, not an error.
    * Invalidates the cached task page so the next fetchTaskPage() re-fetches.
    */
   async updateBody(
@@ -1001,16 +1017,29 @@ export class NotionClient {
   ): Promise<void> {
     const externalId = toExternalId(taskId);
 
+    // Collect every top-level block id up front, across all pages, before
+    // deleting any of them. Deleting archives blocks as we go, so pagination
+    // must not interleave with deletion — a cursor derived from a listing
+    // taken mid-delete can return blocks that were already archived.
+    const blockIds: string[] = [];
     let startCursor: string | undefined;
     do {
       const path = `/blocks/${externalId}/children?page_size=100${startCursor ? `&start_cursor=${startCursor}` : ''}`;
       const resp = await notionRequest<NotionBlocksResponse>('GET', path);
       for (const block of resp.results) {
-        await notionRequest('DELETE', `/blocks/${block.id as string}`);
+        blockIds.push(block.id as string);
       }
       startCursor =
         resp.has_more && resp.next_cursor ? resp.next_cursor : undefined;
     } while (startCursor);
+
+    for (const blockId of blockIds) {
+      try {
+        await notionRequest('DELETE', `/blocks/${blockId}`);
+      } catch (err) {
+        if (!isAlreadyGoneDeleteError(err)) throw err;
+      }
+    }
 
     for (let i = 0; i < blocks.length; i += 100) {
       const chunk = blocks.slice(i, i + 100);
