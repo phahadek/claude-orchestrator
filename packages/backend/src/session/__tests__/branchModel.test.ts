@@ -586,7 +586,7 @@ describe('resolveStartingPoint', () => {
       'm1',
     );
     expect(result).toEqual({
-      startingPoint: `feature/${slugify('Milestone One')}`,
+      startingPoint: `milestone/${slugify('Milestone One')}`,
       milestoneSlug: slugify('Milestone One'),
     });
   });
@@ -631,7 +631,7 @@ describe('resolveStartingPoint', () => {
       'm1',
     );
     expect(result).toEqual({
-      startingPoint: `feature/${slugify('Milestone One')}`,
+      startingPoint: `milestone/${slugify('Milestone One')}`,
       milestoneSlug: slugify('Milestone One'),
     });
   });
