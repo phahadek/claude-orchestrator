@@ -9010,9 +9010,9 @@ export function listUndeliveredInboxItems(
 ): FeedbackInboxRow[] {
   return db
     .prepare(
-      `SELECT id, session_id, source, payload, enqueued_at, delivered_at
+      `SELECT id, session_id, source, payload, enqueued_at, delivered_at, dropped_at
        FROM session_feedback_inbox
-       WHERE session_id = ? AND delivered_at IS NULL
+       WHERE session_id = ? AND delivered_at IS NULL AND dropped_at IS NULL
        ORDER BY enqueued_at ASC`,
     )
     .all(sessionId) as FeedbackInboxRow[];
@@ -9026,10 +9026,26 @@ export function markInboxItemsDelivered(ids: number[]): void {
   ).run(Date.now(), ...ids);
 }
 
+/**
+ * Terminal counterpart to markInboxItemsDelivered for the discard path in
+ * deliverUndeliveredInboxItems — an archived (or otherwise
+ * attemptTerminalResume-ineligible) session's queued item is never going to
+ * reach the agent, so it is stamped dropped_at instead of delivered_at. This
+ * keeps the two outcomes distinguishable by which timestamp column is set,
+ * rather than collapsing "discarded" into "delivered".
+ */
+export function markInboxItemsDropped(ids: number[]): void {
+  if (ids.length === 0) return;
+  const placeholders = ids.map(() => '?').join(', ');
+  db.prepare(
+    `UPDATE session_feedback_inbox SET dropped_at = ? WHERE id IN (${placeholders})`,
+  ).run(Date.now(), ...ids);
+}
+
 export function listSessionsWithUndeliveredInboxItems(): string[] {
   const rows = db
     .prepare(
-      `SELECT DISTINCT session_id FROM session_feedback_inbox WHERE delivered_at IS NULL`,
+      `SELECT DISTINCT session_id FROM session_feedback_inbox WHERE delivered_at IS NULL AND dropped_at IS NULL`,
     )
     .all() as { session_id: string }[];
   return rows.map((r) => r.session_id);
@@ -9051,6 +9067,7 @@ export function listNonTerminalSessionsWithUndeliveredInboxItems(): string[] {
        FROM session_feedback_inbox sfi
        JOIN sessions s ON s.session_id = sfi.session_id
        WHERE sfi.delivered_at IS NULL
+         AND sfi.dropped_at IS NULL
          AND s.archived != 1
          AND s.status NOT IN (${placeholders})`,
     )
@@ -9061,7 +9078,7 @@ export function listNonTerminalSessionsWithUndeliveredInboxItems(): string[] {
 export function countUndeliveredInboxItems(sessionId: string): number {
   const row = db
     .prepare(
-      `SELECT COUNT(*) AS count FROM session_feedback_inbox WHERE session_id = ? AND delivered_at IS NULL`,
+      `SELECT COUNT(*) AS count FROM session_feedback_inbox WHERE session_id = ? AND delivered_at IS NULL AND dropped_at IS NULL`,
     )
     .get(sessionId) as { count: number };
   return row.count;

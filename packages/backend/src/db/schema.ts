@@ -483,7 +483,8 @@ export function runMigrations(target: Database.Database): void {
       source       TEXT    NOT NULL,
       payload      TEXT    NOT NULL,
       enqueued_at  INTEGER NOT NULL,
-      delivered_at INTEGER
+      delivered_at INTEGER,
+      dropped_at   INTEGER
     );
     CREATE INDEX IF NOT EXISTS idx_session_feedback_inbox_session_delivered
       ON session_feedback_inbox(session_id, delivered_at);
@@ -3347,6 +3348,20 @@ export function runMigrations(target: Database.Database): void {
   try {
     target.exec(
       `ALTER TABLE pull_requests ADD COLUMN last_signalled_head_sha TEXT`,
+    );
+  } catch {
+    /* already exists */
+  }
+
+  // dropped_at: mirrors delivered_at's shape but marks an inbox item that
+  // deliverUndeliveredInboxItems discarded for a terminal/archived session
+  // rather than delivered — see the enqueue-before-guard task. Keeping it a
+  // separate column (instead of overloading delivered_at) lets a query
+  // distinguish "delivered" from "discarded" instead of collapsing both into
+  // one ambiguous timestamp.
+  try {
+    target.exec(
+      `ALTER TABLE session_feedback_inbox ADD COLUMN dropped_at INTEGER`,
     );
   } catch {
     /* already exists */
