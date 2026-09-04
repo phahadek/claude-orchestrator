@@ -51,12 +51,30 @@ const defaultSleep = (ms: number): Promise<void> =>
 // promise always resolves before the orchestrator force-clears the slot.
 const VERDICT_TIMEOUT_MS = 25 * 60 * 1000;
 
+// Caps the Case-1 "!delivered" fallback recursion in reviewPR. Bounded by an
+// explicit counter threaded through the recursive call rather than by wall
+// clock, so it also holds when the injected `sleep` resolves instantly (as
+// test doubles do) and the DB/mock state does not change between calls.
+const MAX_FOLLOWUP_DELIVERY_ATTEMPTS = 3;
+
 export class FetchRetryExhaustedError extends Error {
   constructor(public readonly cause: Error) {
     super(
       `Diff fetch failed after ${RETRY_DELAYS.length} retries: ${cause.message}`,
     );
     this.name = 'FetchRetryExhaustedError';
+  }
+}
+
+export class FollowUpDeliveryExhaustedError extends Error {
+  constructor(
+    public readonly prNumber: number,
+    public readonly repo: string,
+  ) {
+    super(
+      `Follow-up delivery to review session failed ${MAX_FOLLOWUP_DELIVERY_ATTEMPTS} times in a row for PR #${prNumber} in ${repo} — giving up.`,
+    );
+    this.name = 'FollowUpDeliveryExhaustedError';
   }
 }
 
@@ -619,6 +637,7 @@ export class PRReviewService {
     projectId: string = this.defaultProjectId,
     projectContextUrl: string = this.defaultProjectContextUrl,
     sleep: (ms: number) => Promise<void> = defaultSleep,
+    followUpDeliveryAttempt: number = 0,
   ): Promise<PRReviewResult> {
     if (workItem.type === 'local_branch') {
       return this.reviewLocalBranch(
@@ -681,7 +700,7 @@ export class PRReviewService {
         );
         if (!delivered) {
           logger.warn(
-            `[PRReviewService] follow-up not confirmed delivered to review session ${existingReviewSessionId} for PR #${prNumber} — abandoning wait and falling back`,
+            `[PRReviewService] follow-up not confirmed delivered to review session ${existingReviewSessionId} for PR #${prNumber} — abandoning wait and falling back (attempt ${followUpDeliveryAttempt + 1}/${MAX_FOLLOWUP_DELIVERY_ATTEMPTS})`,
           );
           recordEvent({
             event_type: 'session_nudge_delivery_failed',
@@ -708,12 +727,19 @@ export class PRReviewService {
               return stored;
             }
           }
+          // Bounded by an explicit counter, not by assuming getPRByNumber /
+          // isAlive reflect the clearReviewSessionId call above on the next
+          // entry — under test they're static mocks and never do.
+          if (followUpDeliveryAttempt + 1 >= MAX_FOLLOWUP_DELIVERY_ATTEMPTS) {
+            throw new FollowUpDeliveryExhaustedError(prNumber, repo);
+          }
           return this.reviewPR(
             workItem,
             diffSource,
             projectId,
             projectContextUrl,
             sleep,
+            followUpDeliveryAttempt + 1,
           );
         }
         const aiResult = await verdictPromise;
@@ -930,7 +956,10 @@ export class PRReviewService {
       }
       return persistedResult3;
     } catch (e: unknown) {
-      if (e instanceof FetchRetryExhaustedError) {
+      if (
+        e instanceof FetchRetryExhaustedError ||
+        e instanceof FollowUpDeliveryExhaustedError
+      ) {
         this.sessionManager.emit('message', {
           type: 'review_failed',
           prNumber,
