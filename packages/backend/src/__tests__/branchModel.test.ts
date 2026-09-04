@@ -239,9 +239,7 @@ describe('ensureMilestoneBranch', () => {
 
     // Does not throw — a transient fetch failure is non-fatal, same as the
     // fresh-branch-creation fetch path.
-    expect(() =>
-      ensureMilestoneBranch('m6-readiness', '/repo'),
-    ).not.toThrow();
+    expect(() => ensureMilestoneBranch('m6-readiness', '/repo')).not.toThrow();
 
     // No fallback branch-recreation/push calls — the function simply
     // returns, proceeding with the existing (possibly slightly stale)
