@@ -175,6 +175,7 @@ import {
   handleUnhandledRejection,
 } from './audit/recordFault';
 import { asyncErrorBoundary } from './routes/asyncHandler';
+import { createResponseCompression } from './middleware/responseCompression';
 import {
   setupSessionCgroup,
   reapTestsCgroupOrphans,
@@ -285,6 +286,7 @@ const app = express();
 // it's already consumed, so the global parser becomes a no-op here.
 app.use('/api/reports', reportImageBodyParser);
 app.use(express.json());
+app.use(createResponseCompression());
 // Readiness surface — public, no token required. Distinguishes a slow boot
 // (migrating / boot_steps_running) from a crashed process; only reachable at
 // all once the listener has bound, which only happens after migrations
