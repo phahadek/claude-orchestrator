@@ -115,6 +115,8 @@ import {
   setSessionDeclaredWrites,
   setSessionDocsTargetSurface,
   getSessionDocsTargetSurface,
+  setSessionMilestoneId,
+  getSessionMilestoneId,
   reapStagedIntentsForNeverStagedSession,
   hasStagedIntentForTask,
   hasUndispositionedStagedIntentsForSession,
@@ -1921,6 +1923,14 @@ export class SessionManager extends EventEmitter {
     // depends on the Target surface, not sessionType alone.
     if (sessionType === 'docs' && docsTargetSurface) {
       setSessionDocsTargetSurface(sessionId, docsTargetSurface);
+    }
+    // Captured once, here at spawn, same rationale as declaredWrites above —
+    // sendOrResume needs this at resume time to re-resolve the same
+    // `feature/<milestone-slug>` starting point a fresh launch of this task
+    // would (see resolveStartingPoint), instead of falling back to
+    // flat-mode base-branch resolution for every resumed session.
+    if (options?.milestoneId) {
+      setSessionMilestoneId(sessionId, options.milestoneId);
     }
 
     recordEvent({
@@ -5563,10 +5573,14 @@ export class SessionManager extends EventEmitter {
       return sessionId;
     }
 
-    // Resolve the starting point using dev as the base (no milestoneId available for resumed sessions).
+    // Resolve the starting point from the milestoneId captured at original
+    // spawn time (see setSessionMilestoneId in start()) so a resumed
+    // two_tier session re-resolves the same feature/<milestone-slug>
+    // starting point a fresh launch of this task would, instead of always
+    // degrading to flat-mode base-branch resolution.
     const { startingPoint, milestoneSlug } = resolveStartingPoint(
       project,
-      null,
+      getSessionMilestoneId(sessionId) ?? null,
     );
 
     const isLocalOnly = project.gitMode === 'local-only';

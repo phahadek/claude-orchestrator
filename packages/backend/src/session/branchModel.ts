@@ -215,17 +215,27 @@ export function resolveStartingPoint(
 }
 
 /**
- * Ensures `milestone/<milestoneSlug>` exists locally and on origin.
- * Creates it from origin/<baseBranch> when missing; no-ops when it already exists.
- * Only called in two_tier mode.
+ * Ensures `milestone/<milestoneSlug>` exists locally and on origin, refreshed
+ * to match origin's tip via a fast-forward-only fetch when it already exists
+ * locally. Every worktree cut for a milestone task must see any sibling PR
+ * already merged into the milestone branch on the remote — a local ref that
+ * merely exists (created by an earlier worktree cut in the same milestone)
+ * is not enough, since without a refresh it silently goes stale for the
+ * lifetime of the milestone. The refspec's `+` is deliberately omitted:
+ * git's own fast-forward-only semantics reject the fetch outright if the
+ * local ref has diverged from origin, rather than force-overwriting local
+ * history or silently leaving it stale.
  *
- * Migrates a pre-existing `feature/<milestoneSlug>` branch (the prefix used
- * before milestone branches got their own `milestone/` namespace) the first
- * time it runs post-cutover: when the new-scheme ref is absent both locally
- * and on origin, the legacy ref is probed locally then on origin, and if
- * found, renamed in place (history preserved) rather than left behind as an
- * orphaned branch while a fresh empty `milestone/<slug>` is created next to
- * it. No-ops for a project with no pre-existing legacy branch.
+ * Also migrates a pre-existing `feature/<milestoneSlug>` branch (the prefix
+ * used before milestone branches got their own `milestone/` namespace) the
+ * first time it runs post-cutover: when the new-scheme ref is absent both
+ * locally and on origin, the legacy ref is probed locally then on origin,
+ * and if found, renamed in place (history preserved) rather than left
+ * behind as an orphaned branch while a fresh empty `milestone/<slug>` is
+ * created next to it. No-ops for a project with no pre-existing legacy
+ * branch.
+ *
+ * Only called in two_tier mode.
  */
 export function ensureMilestoneBranch(
   milestoneSlug: string,
@@ -236,14 +246,26 @@ export function ensureMilestoneBranch(
   const legacyRef = `feature/${milestoneSlug}`;
 
   // Check if branch already exists locally.
+  let existsLocally = true;
   try {
     execSync(`git rev-parse --verify ${ref}`, {
       cwd: projectDir,
       stdio: 'pipe',
     });
-    return; // already exists locally
   } catch {
-    // not found locally — fall through
+    existsLocally = false;
+  }
+
+  if (existsLocally) {
+    // Fast-forward-only refresh from origin. A diverged local ref makes git
+    // reject this fetch (non-zero exit) — propagate rather than swallow, so
+    // callers fail closed instead of cutting a worktree from a stale ref.
+    execSync(`git fetch origin ${ref}:${ref}`, {
+      cwd: projectDir,
+      timeout: 30_000,
+      stdio: 'pipe',
+    });
+    return;
   }
 
   // Fetch origin to pick up any remote branch and latest base branch.

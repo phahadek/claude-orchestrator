@@ -28,6 +28,7 @@ import {
   resolveBranchMode,
   resolveStartingPoint,
   ensureMilestoneBranch,
+  MilestoneBranchDivergedError,
 } from '../session/branchModel.js';
 
 // ── slugify ────────────────────────────────────────────────────────────────────
@@ -184,18 +185,43 @@ describe('ensureMilestoneBranch', () => {
     execSyncMock.mockReset();
   });
 
-  it('no-ops when branch already exists locally', () => {
-    // git rev-parse --verify milestone/<slug> succeeds → branch exists
-    execSyncMock.mockReturnValueOnce('');
+  it('fast-forward-refreshes the local ref from origin when branch already exists locally', () => {
+    // git rev-parse --verify milestone/<slug> succeeds → branch exists locally
+    execSyncMock
+      .mockReturnValueOnce('') // local ref check
+      .mockReturnValueOnce(''); // fast-forward-only fetch
 
     ensureMilestoneBranch('m6-readiness', '/repo');
 
-    // Only one call: the local ref check
-    expect(execSyncMock).toHaveBeenCalledTimes(1);
+    expect(execSyncMock).toHaveBeenCalledTimes(2);
     expect(execSyncMock).toHaveBeenCalledWith(
       'git rev-parse --verify milestone/m6-readiness',
       expect.objectContaining({ cwd: '/repo' }),
     );
+    expect(execSyncMock).toHaveBeenCalledWith(
+      'git fetch origin milestone/m6-readiness:milestone/m6-readiness',
+      expect.objectContaining({ cwd: '/repo' }),
+    );
+  });
+
+  it('throws when the fast-forward-only fetch fails (diverged local ref) instead of force-overwriting', () => {
+    execSyncMock
+      .mockReturnValueOnce('') // local ref check → exists
+      .mockImplementationOnce(() => {
+        throw new Error('fatal: Not possible to fast-forward, aborting.');
+      }); // fetch rejects the non-fast-forward update
+
+    let caught: unknown;
+    try {
+      ensureMilestoneBranch('m6-readiness', '/repo');
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(MilestoneBranchDivergedError);
+    expect((caught as Error).message).toMatch(/fast-forward/);
+
+    // No fallback branch-recreation/push calls after the failed fetch.
+    expect(execSyncMock).toHaveBeenCalledTimes(2);
   });
 
   it('creates milestone/<slug> from origin/dev when missing, and pushes', () => {
