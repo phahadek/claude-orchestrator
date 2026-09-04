@@ -297,22 +297,126 @@ function isValidAnalyzeEntry(v: unknown): v is AnalyzeCommand {
 }
 
 /**
+ * Env-var-assignment prefix (`FOO=bar cmd`) and shell wrapper/builtin
+ * commands (`env FOO=bar cmd`, `time cmd`, `nice cmd`, `nohup cmd`, `exec
+ * cmd`) that precede the actual binary a gate command invokes without being
+ * that binary themselves. Used by `extractCommandBinary` below to skip past
+ * them to the token that must actually be reachable through allowed_tools.
+ */
+const ENV_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
+const COMMAND_WRAPPER_TOKENS = new Set([
+  'env',
+  'time',
+  'nice',
+  'nohup',
+  'exec',
+]);
+
+/**
+ * Resolves a gate command string (a `verify`/`autofix`/`analyze` entry) down
+ * to the leading binary it invokes — skipping any leading environment-variable
+ * assignment(s) (`FOO=bar cmd`) and shell wrapper/builtin tokens (`env`,
+ * `time`, `nice`, `nohup`, `exec`) so e.g. `FOO=1 env BAR=2 golangci-lint run`
+ * resolves to `golangci-lint`, not `FOO=1` or `env`. Not a full shell parser —
+ * good enough for the prefix shapes gate commands actually use. Returns ''
+ * for an empty/whitespace-only command.
+ */
+function extractCommandBinary(command: string): string {
+  const tokens = command.trim().split(/\s+/).filter(Boolean);
+  let i = 0;
+  while (i < tokens.length) {
+    const tok = tokens[i];
+    if (ENV_ASSIGNMENT_RE.test(tok) || COMMAND_WRAPPER_TOKENS.has(tok)) {
+      i++;
+      continue;
+    }
+    break;
+  }
+  return tokens[i] ?? '';
+}
+
+/**
+ * The set of binaries reachable through a list of `Bash(...)` allowed-tools
+ * entries (mixed with non-Bash entries, e.g. `mcp__*`, which are ignored) —
+ * the leading command word of each entry's prefix, stripped of its trailing
+ * `:*` wildcard, e.g. `Bash(golangci-lint:*)` -> `golangci-lint`,
+ * `Bash(git status:*)` -> `git`. Used to check gate-command binaries against
+ * the union of the base allowlist and a project's own allowed_tools.
+ */
+function reachableBashBinaries(entries: string[]): Set<string> {
+  const binaries = new Set<string>();
+  for (const entry of entries) {
+    if (!entry.startsWith('Bash(')) continue;
+    const inner = entry.slice('Bash('.length).replace(/\)$/, '');
+    const prefix = inner.replace(/:\*$/, '').trim();
+    const binary = prefix.split(/\s+/, 1)[0];
+    if (binary) binaries.add(binary);
+  }
+  return binaries;
+}
+
+/**
+ * Fails loudly at config load when a `verify`/`autofix`/`analyze` command
+ * names a binary that is not reachable through the union of the base
+ * `ALLOWED_TOOLS` allowlist and the project's own `allowed_tools` — the
+ * gap that let a downstream project's gate nudge a session to "fix" a lint
+ * failure while granting that session no way to invoke the linter at all
+ * (35 approval-required results before it gave up and guessed). Surfacing
+ * this as a startup error, naming the offending binary and command, turns a
+ * per-PR deadlock discovered weeks later into an immediate, fixable
+ * misconfiguration. Auto-granting the gate's own commands was considered and
+ * rejected as out of scope here — see the task notes; this is hard-fail only.
+ */
+function reconcileGateCommandsWithAllowedTools(cfg: OrchestratorConfig): void {
+  const reachable = reachableBashBinaries([
+    ...ALLOWED_TOOLS,
+    ...cfg.allowed_tools,
+  ]);
+  const groups: { field: string; commands: string[] }[] = [
+    { field: 'verify', commands: cfg.verify },
+    { field: 'autofix', commands: cfg.autofix },
+    {
+      field: 'analyze',
+      commands: cfg.analyze.map((c) => (typeof c === 'string' ? c : c.command)),
+    },
+  ];
+  for (const { field, commands } of groups) {
+    for (const command of commands) {
+      const binary = extractCommandBinary(command);
+      if (!binary || reachable.has(binary)) continue;
+      throw new Error(
+        `[orchestrator-config] ${field} command "${command}" invokes "${binary}", which ` +
+          `is not covered by allowed_tools or the base allowlist. Add a matching ` +
+          `Bash(${binary}:*) entry to allowed_tools in .claude-orchestrator.yml.`,
+      );
+    }
+  }
+}
+
+/**
  * Load per-project orchestrator configuration from `<projectDir>/.claude-orchestrator.yml`.
  * Falls back to empty defaults if the file does not exist or is invalid.
  * The file is read fresh on every call — no server restart needed to pick up changes.
+ *
+ * Throws when a configured `verify`/`autofix`/`analyze` command names a
+ * binary not reachable through allowed_tools (see
+ * `reconcileGateCommandsWithAllowedTools`) — deliberately not swallowed by
+ * the parse try/catch below, since that failure is a real misconfiguration
+ * to surface at load time, not a malformed-YAML case to default past.
  */
 export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
   const configPath = path.join(projectDir, '.claude-orchestrator.yml');
   if (!fs.existsSync(configPath)) {
     return { ...DEFAULTS };
   }
+  let result: OrchestratorConfig;
   try {
     const raw = fs.readFileSync(configPath, 'utf-8');
     const parsed = yaml.load(raw) as Partial<OrchestratorConfig> | null;
     if (!parsed || typeof parsed !== 'object') {
       return { ...DEFAULTS };
     }
-    return {
+    result = {
       autofix: Array.isArray(parsed.autofix)
         ? parsed.autofix
         : DEFAULTS.autofix,
@@ -434,6 +538,8 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
     );
     return { ...DEFAULTS };
   }
+  reconcileGateCommandsWithAllowedTools(result);
+  return result;
 }
 
 /**
