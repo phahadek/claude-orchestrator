@@ -259,10 +259,7 @@ describe('resolveTestRequestExecutionInputs — base-branch scoping', () => {
 
     await routeStageTimeBlock(intent, undefined);
 
-    expect(mockGetChangedFiles).toHaveBeenCalledWith(
-      '/tmp/wt',
-      'release/1.0',
-    );
+    expect(mockGetChangedFiles).toHaveBeenCalledWith('/tmp/wt', 'release/1.0');
   });
 
   it("falls back to the project's base branch when the session has no PR yet (pre-PR / flat-mode)", async () => {
