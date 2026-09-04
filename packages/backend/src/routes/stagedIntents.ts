@@ -785,11 +785,12 @@ class SessionIncompleteError extends Error {
 function assertOwningSessionComplete(
   sessionId: string | null | undefined,
   sessionManager: SessionManager | undefined,
+  groupId?: string | null,
 ): void {
   if (!sessionId) return;
   const turnInFlight =
     sessionManager?.getLiveSession?.(sessionId)?.hasActiveTurn() ?? false;
-  if (!isSessionComplete(sessionId, turnInFlight)) {
+  if (!isSessionComplete(sessionId, turnInFlight, groupId)) {
     throw new SessionIncompleteError(sessionId);
   }
 }
@@ -842,6 +843,7 @@ function isVisibleOnDecisionSurfaceCore(
   sessionId: string | null | undefined,
   isAutoRejected: boolean,
   sessionManager: SessionManager | undefined,
+  groupId?: string | null,
 ): boolean {
   // A test.request is auto-granted mechanically (maybeAutoApproveTestRequest)
   // and never needs an operator — see this function's module-level comment.
@@ -857,7 +859,7 @@ function isVisibleOnDecisionSurfaceCore(
     if (!sessionId) return true;
     const turnInFlight =
       sessionManager?.getLiveSession?.(sessionId)?.hasActiveTurn() ?? false;
-    return isSessionComplete(sessionId, turnInFlight);
+    return isSessionComplete(sessionId, turnInFlight, groupId);
   }
   if (isAutoRejected) {
     if (!sessionId) return true;
@@ -880,6 +882,7 @@ export function isVisibleOnDecisionSurface(
     row.session_id,
     isAutoRejectedNeedsRevision(row),
     sessionManager,
+    row.group_id,
   );
 }
 
@@ -903,6 +906,7 @@ export function isIntentVisibleOnDecisionSurface(
     intent.sessionId,
     isAutoRejected,
     sessionManager,
+    intent.groupId,
   );
 }
 
@@ -1704,11 +1708,17 @@ function getSessionCompleteCached(
   sessionId: string,
   sessionManager: SessionManager | undefined,
   cache: RowToApiCache,
+  groupId?: string | null,
 ): boolean {
-  const cached = cache.sessionComplete.get(sessionId);
+  const key = `${sessionId}::${groupId ?? ''}`;
+  const cached = cache.sessionComplete.get(key);
   if (cached !== undefined) return cached;
-  const result = resolveSessionCompleteForDisplay(sessionId, sessionManager);
-  cache.sessionComplete.set(sessionId, result);
+  const result = resolveSessionCompleteForDisplay(
+    sessionId,
+    sessionManager,
+    groupId,
+  );
+  cache.sessionComplete.set(key, result);
   return result;
 }
 
@@ -1729,13 +1739,13 @@ interface GroupBlockedSignals {
   blockedMemberCount: number;
   sessionIncomplete: boolean;
   /**
-   * When this group's own blockedMemberCount is 0 but a live member's
-   * owning session is incomplete because of a *different* group's blocked
-   * row, the id of that other group — so the surface can name and target
-   * the real blocker instead of this (innocent) group. Null when this
-   * group's own members are the blocker, or when the session-incomplete
-   * leg's blocking row has no group of its own (ungrouped — nothing to
-   * name or target).
+   * Retained for API compatibility with the decision surface's "blocked by
+   * a sibling group" affordance. Session-completeness is now scoped to this
+   * same group (see isSessionComplete's groupId param), so a blocked member
+   * in a *different* group can never be the reason this group's session leg
+   * reads incomplete — this always resolves null. Only turnInFlight (a
+   * genuinely still-running session) can make `sessionIncomplete` true now,
+   * and that has no other group to blame.
    */
   blockingGroupId: string | null;
   /** The blocked-member count of `blockingGroupId`, or null when that's null. */
@@ -1747,11 +1757,13 @@ interface GroupBlockedSignals {
  * group is blocked when any member (any state, any visibility) sits in
  * needs_revision/pending_verification, or when any live member's owning
  * session hasn't gone complete (see isSessionComplete/
- * resolveSessionCompleteForDisplay). Read every member via
- * listStagedIntentsByGroup — the same unfiltered source commitGroupIntents
- * itself reads — never the decision-surface-filtered listing, so a group
- * whose only blocked member is hidden (a live-session auto-rejected row)
- * still reports blocked.
+ * resolveSessionCompleteForDisplay), scoped to *this* group — a blocked
+ * member the owning session left behind in a different group, or in a
+ * terminal/archived session's history, never counts (see isSessionComplete).
+ * Read every member via listStagedIntentsByGroup — the same unfiltered
+ * source commitGroupIntents itself reads — never the decision-surface-
+ * filtered listing, so a group whose only blocked member is hidden (a
+ * live-session auto-rejected row) still reports blocked.
  */
 function computeGroupBlockedSignals(
   groupId: string,
@@ -1771,37 +1783,15 @@ function computeGroupBlockedSignals(
     (r) =>
       !!r.session_id &&
       !(cache
-        ? getSessionCompleteCached(r.session_id, sessionManager, cache)
-        : resolveSessionCompleteForDisplay(r.session_id, sessionManager)),
+        ? getSessionCompleteCached(r.session_id, sessionManager, cache, groupId)
+        : resolveSessionCompleteForDisplay(
+            r.session_id,
+            sessionManager,
+            groupId,
+          )),
   );
-  let blockingGroupId: string | null = null;
-  let blockingGroupBlockedMemberCount: number | null = null;
-  if (blockedMemberCount === 0 && sessionIncomplete) {
-    for (const r of activeMembers) {
-      if (!r.session_id) continue;
-      const complete = cache
-        ? getSessionCompleteCached(r.session_id, sessionManager, cache)
-        : resolveSessionCompleteForDisplay(r.session_id, sessionManager);
-      if (complete) continue;
-      const blockerRow = listStagedIntentsBySession(r.session_id).find(
-        (sr) =>
-          (sr.state === 'needs_revision' ||
-            sr.state === 'pending_verification') &&
-          !!sr.group_id &&
-          sr.group_id !== groupId,
-      );
-      if (blockerRow) {
-        blockingGroupId = blockerRow.group_id!;
-        blockingGroupBlockedMemberCount = listStagedIntentsByGroup(
-          blockingGroupId,
-        ).filter(
-          (m) =>
-            m.state === 'needs_revision' || m.state === 'pending_verification',
-        ).length;
-        break;
-      }
-    }
-  }
+  const blockingGroupId: string | null = null;
+  const blockingGroupBlockedMemberCount: number | null = null;
   const result: GroupBlockedSignals = {
     blocked: blockedMemberCount > 0 || sessionIncomplete,
     blockedMemberCount,
@@ -1873,6 +1863,7 @@ function rowToApi(
           row.session_id,
           stagedIntentSessionManager,
           cache,
+          row.group_id,
         )
       : null,
     groupKind: getGroupKindCached(row.session_id, cache),
@@ -4912,7 +4903,7 @@ async function applyIntent(
   if (HUMAN_APPLY_ONLY_KINDS.has(intent.kind) && actorType !== 'human') {
     throw new HumanApplyOnlyError(intent.kind);
   }
-  assertOwningSessionComplete(intent.sessionId, sessionManager);
+  assertOwningSessionComplete(intent.sessionId, sessionManager, intent.groupId);
 
   const backend = getTaskBackend(intent.projectId);
   const commands = new BackendTaskWriteCommands(backend, intent.projectId);
@@ -8178,7 +8169,7 @@ export async function commitGroupIntents(
     if (!r.session_id) return false;
     const turnInFlight =
       sessionManager?.getLiveSession?.(r.session_id)?.hasActiveTurn() ?? false;
-    return !isSessionComplete(r.session_id, turnInFlight);
+    return !isSessionComplete(r.session_id, turnInFlight, groupId);
   });
   if (incompleteMember) {
     return {

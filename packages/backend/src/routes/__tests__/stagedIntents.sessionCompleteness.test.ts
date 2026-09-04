@@ -31,7 +31,11 @@ vi.mock('../../db/db', async () => {
 });
 
 import { db } from '../../db/db';
-import { insertSession } from '../../db/queries';
+import {
+  insertSession,
+  isSessionComplete,
+  transitionStagedIntent,
+} from '../../db/queries';
 import { createStagedIntentsRouter, stageIntent } from '../stagedIntents';
 
 function makeSessionManager(hasActiveTurn: boolean) {
@@ -56,13 +60,17 @@ function makeApp(sessionManager: ReturnType<typeof makeSessionManager>) {
 const PROJECT_ID = 'proj-completeness-gate';
 const SESSION_ID = 'sess-completeness-gate-1';
 
-function seedSession(sessionId: string) {
+function seedSession(
+  sessionId: string,
+  status: string = 'running',
+  archived = 0,
+) {
   insertSession({
     session_id: sessionId,
     task_id: null,
     task_url: null,
     project_context_url: null,
-    status: 'running',
+    status,
     started_at: 0,
     session_type: 'groom',
     note: null,
@@ -79,6 +87,11 @@ function seedSession(sessionId: string) {
     events_pruned_at: null,
     granted_capabilities: '[]',
   });
+  if (archived) {
+    db.prepare('UPDATE sessions SET archived = 1 WHERE session_id = ?').run(
+      sessionId,
+    );
+  }
 }
 
 beforeEach(() => {
@@ -172,5 +185,131 @@ describe('session-turn-completeness disposition gating', () => {
       .post(`/api/staged-intents/${intentB.id}/apply`)
       .send({});
     expect(afterStop.status).toBe(200);
+  });
+});
+
+describe('isSessionComplete — group scoping and session lifecycle', () => {
+  it('is not blocked by a needs_revision intent parked in a different group of the same session', () => {
+    seedSession(SESSION_ID, 'running');
+    const groupA = 'group-a';
+    const groupB = 'group-b';
+    const blocked = stageIntent(
+      'task.setProperties',
+      { taskId: 'task-a', patch: { priority: 'High' } },
+      PROJECT_ID,
+      groupA,
+      SESSION_ID,
+    );
+    transitionStagedIntent(blocked.id, 'needs_revision');
+    stageIntent(
+      'task.setProperties',
+      { taskId: 'task-b', patch: { priority: 'Low' } },
+      PROJECT_ID,
+      groupB,
+      SESSION_ID,
+    );
+
+    expect(isSessionComplete(SESSION_ID, false, groupB)).toBe(true);
+  });
+
+  it('still reads incomplete when the blocked intent belongs to the group under evaluation', () => {
+    seedSession(SESSION_ID, 'running');
+    const groupA = 'group-a';
+    const blocked = stageIntent(
+      'task.setProperties',
+      { taskId: 'task-a', patch: { priority: 'High' } },
+      PROJECT_ID,
+      groupA,
+      SESSION_ID,
+    );
+    transitionStagedIntent(blocked.id, 'needs_revision');
+    stageIntent(
+      'task.setProperties',
+      { taskId: 'task-b', patch: { priority: 'Low' } },
+      PROJECT_ID,
+      groupA,
+      SESSION_ID,
+    );
+
+    expect(isSessionComplete(SESSION_ID, false, groupA)).toBe(false);
+  });
+
+  it.each(['done', 'error', 'killed'])(
+    'resolves complete for a terminal (%s) session despite a stale blocked intent',
+    (status) => {
+      seedSession(SESSION_ID, status);
+      const groupA = 'group-a';
+      const blocked = stageIntent(
+        'task.setProperties',
+        { taskId: 'task-a', patch: { priority: 'High' } },
+        PROJECT_ID,
+        groupA,
+        SESSION_ID,
+      );
+      transitionStagedIntent(blocked.id, 'needs_revision');
+
+      expect(isSessionComplete(SESSION_ID, false, groupA)).toBe(true);
+      expect(isSessionComplete(SESSION_ID, false)).toBe(true);
+    },
+  );
+
+  it('resolves complete for an archived session regardless of its status value', () => {
+    seedSession(SESSION_ID, 'running', 1);
+    const groupA = 'group-a';
+    const blocked = stageIntent(
+      'task.setProperties',
+      { taskId: 'task-a', patch: { priority: 'High' } },
+      PROJECT_ID,
+      groupA,
+      SESSION_ID,
+    );
+    transitionStagedIntent(blocked.id, 'needs_revision');
+
+    expect(isSessionComplete(SESSION_ID, false, groupA)).toBe(true);
+  });
+});
+
+describe('commitGroupIntents — agrees with computeGroupBlockedSignals on group scoping', () => {
+  it('commits a group whose owning session left a stale blocked intent behind in a sibling group (regression fixture)', async () => {
+    seedSession(SESSION_ID, 'done');
+    const sessionManager = makeSessionManager(false);
+    const app = makeApp(sessionManager);
+    const agent = supertest(app);
+
+    const groupA = 'groom-latency-jitter-3d022f91';
+    const groupB = 'groom-3d022f91-latency-jitter';
+
+    const staleBlocked = stageIntent(
+      'task.setProperties',
+      { taskId: 'task-a', patch: { priority: 'High' } },
+      PROJECT_ID,
+      groupA,
+      SESSION_ID,
+    );
+    transitionStagedIntent(staleBlocked.id, 'needs_revision');
+
+    const activeInB = stageIntent(
+      'task.setProperties',
+      { taskId: 'task-b', patch: { priority: 'Low' } },
+      PROJECT_ID,
+      groupB,
+      SESSION_ID,
+    );
+    transitionStagedIntent(activeInB.id, 'approved');
+
+    // GET listing (rowToApi/computeGroupBlockedSignals) must agree with the
+    // commit route: neither refuses group B over group A's stale blocker.
+    const listing = await agent
+      .get('/api/staged-intents')
+      .query({ projectId: PROJECT_ID });
+    const bIntent = listing.body.intents.find(
+      (i: { id: string }) => i.id === activeInB.id,
+    );
+    expect(bIntent.groupBlocked).toBe(false);
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupB}/commit`)
+      .send({});
+    expect(commit.status).toBe(200);
   });
 });

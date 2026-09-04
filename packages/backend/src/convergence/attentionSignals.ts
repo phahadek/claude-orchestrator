@@ -54,14 +54,20 @@ export interface MilestoneAttentionSignals {
  * per-intent `sessionComplete` field (routes/stagedIntents.ts rowToApi)
  * derive from this one function so they can't independently drift on what
  * "complete" means.
+ *
+ * `groupId`, when supplied, scopes the blocked-intent leg of completeness to
+ * that group's own members (see isSessionComplete) — a blocked row the
+ * session left behind in a different group must not read as incomplete
+ * here.
  */
 export function resolveSessionCompleteForDisplay(
   sessionId: string,
   sessionManager: SessionManager | undefined,
+  groupId?: string | null,
 ): boolean {
   const turnInFlight =
     sessionManager?.getLiveSession?.(sessionId)?.hasActiveTurn() ?? false;
-  return isSessionComplete(sessionId, turnInFlight);
+  return isSessionComplete(sessionId, turnInFlight, groupId);
 }
 
 /**
@@ -71,11 +77,15 @@ export function resolveSessionCompleteForDisplay(
  * complete; false while the owning session's turn is still in flight.
  */
 export function isMilestoneActionable(
-  row: Pick<StagedIntentRow, 'session_id'>,
+  row: Pick<StagedIntentRow, 'session_id' | 'group_id'>,
   sessionManager: SessionManager | undefined,
 ): boolean {
   if (!row.session_id) return true;
-  return resolveSessionCompleteForDisplay(row.session_id, sessionManager);
+  return resolveSessionCompleteForDisplay(
+    row.session_id,
+    sessionManager,
+    row.group_id,
+  );
 }
 
 function agingThresholdMs(): number {
