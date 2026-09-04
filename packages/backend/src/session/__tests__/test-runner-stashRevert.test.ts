@@ -88,9 +88,9 @@ describe('runStashRevertCheck', () => {
     expect(result.withDiff?.passed).toBe(true);
 
     // The implementation file must be restored to its pre-check (diff-applied) content.
-    expect(fs.readFileSync(path.join(worktree, 'implementation.js'), 'utf8')).toBe(
-      'module.exports.add = (a, b) => a + b;\n',
-    );
+    expect(
+      fs.readFileSync(path.join(worktree, 'implementation.js'), 'utf8'),
+    ).toBe('module.exports.add = (a, b) => a + b;\n');
   });
 
   it('flags test_did_not_fail_without_diff when the test still passes with the implementation reverted', async () => {

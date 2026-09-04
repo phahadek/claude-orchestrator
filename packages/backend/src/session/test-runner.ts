@@ -935,7 +935,8 @@ export interface StashRevertCheckResult {
  */
 export function isVacuousResult(result: StructuredTestResult | null): boolean {
   if (!result) return true;
-  const executed = result.totals.passed + result.totals.failed + result.totals.errors;
+  const executed =
+    result.totals.passed + result.totals.failed + result.totals.errors;
   return executed === 0;
 }
 
