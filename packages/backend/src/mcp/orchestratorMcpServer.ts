@@ -168,8 +168,12 @@ function safeRecordEvent(event: AuditEvent): void {
 /** Path the router registers, relative to where it's mounted (see server.ts: app.use('/api', ...)). */
 const ORCHESTRATOR_MCP_PATH = '/mcp';
 
-/** Full path as reachable from the backend root, for building the session's MCP config URL. */
-const ORCHESTRATOR_MCP_FULL_PATH = `/api${ORCHESTRATOR_MCP_PATH}`;
+/**
+ * Full path as reachable from the backend root, for building the session's
+ * MCP config URL and for excluding it from response compression (its
+ * StreamableHTTPServerTransport responses can be SSE-capable).
+ */
+export const ORCHESTRATOR_MCP_FULL_PATH = `/api${ORCHESTRATOR_MCP_PATH}`;
 
 /** Name of the MCP server entry injected into a dispatched session's config. */
 export const ORCHESTRATOR_MCP_SERVER_NAME = 'orchestrator';

@@ -12,6 +12,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import http from 'http';
 import { EventEmitter } from 'events';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import express from 'express';
+import request from 'supertest';
+import { createResponseCompression } from '../middleware/responseCompression';
+import { ORCHESTRATOR_MCP_FULL_PATH } from '../mcp/orchestratorMcpServer';
 import type { ServerMessage } from '../ws/types';
 
 vi.mock('../github/PRBootSweep', () => ({
@@ -234,5 +241,85 @@ describe('runBootSequence — listen-first', () => {
     );
     await flushQueue();
     expect(deps.autoLauncher.pollOnce).toHaveBeenCalled();
+  });
+});
+
+describe('response compression', () => {
+  const largeBody = { items: Array.from({ length: 100 }, (_, i) => ({ i, note: 'x'.repeat(20) })) };
+  const smallBody = { ok: true };
+
+  function makeApp() {
+    const app = express();
+    app.use(createResponseCompression());
+    app.get('/api/large', (_req, res) => res.json(largeBody));
+    app.get('/api/small', (_req, res) => res.json(smallBody));
+    app.get(`${ORCHESTRATOR_MCP_FULL_PATH}`, (_req, res) => res.json(largeBody));
+    app.get('/api/events', (_req, res) => {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.send(JSON.stringify(largeBody));
+    });
+    return app;
+  }
+
+  it('compresses a JSON response over the threshold when the client accepts gzip', async () => {
+    const res = await request(makeApp())
+      .get('/api/large')
+      .set('Accept-Encoding', 'gzip');
+
+    expect(res.headers['content-encoding']).toBe('gzip');
+    expect(res.body).toEqual(largeBody);
+  });
+
+  it('returns identity response with no Content-Encoding when the client sends no Accept-Encoding', async () => {
+    const res = await request(makeApp())
+      .get('/api/large')
+      .unset('Accept-Encoding');
+
+    expect(res.headers['content-encoding']).toBeUndefined();
+    expect(res.body).toEqual(largeBody);
+  });
+
+  it('does not compress a response under the 1 KB threshold', async () => {
+    const res = await request(makeApp())
+      .get('/api/small')
+      .set('Accept-Encoding', 'gzip');
+
+    expect(res.headers['content-encoding']).toBeUndefined();
+    expect(res.body).toEqual(smallBody);
+  });
+
+  it('excludes the MCP streamable-HTTP route from compression', async () => {
+    const res = await request(makeApp())
+      .get(ORCHESTRATOR_MCP_FULL_PATH)
+      .set('Accept-Encoding', 'gzip');
+
+    expect(res.headers['content-encoding']).toBeUndefined();
+  });
+
+  it('excludes text/event-stream responses from compression', async () => {
+    const res = await request(makeApp())
+      .get('/api/events')
+      .set('Accept-Encoding', 'gzip');
+
+    expect(res.headers['content-encoding']).toBeUndefined();
+  });
+
+  it('serves a compressed static bundle when the client accepts gzip', async () => {
+    const staticDir = fs.mkdtempSync(path.join(os.tmpdir(), 'compression-static-'));
+    fs.writeFileSync(
+      path.join(staticDir, 'bundle.js'),
+      `console.log(${JSON.stringify('x'.repeat(2000))});`,
+    );
+
+    const app = express();
+    app.use(createResponseCompression());
+    app.use(express.static(staticDir));
+
+    try {
+      const res = await request(app).get('/bundle.js').set('Accept-Encoding', 'gzip');
+      expect(res.headers['content-encoding']).toBe('gzip');
+    } finally {
+      fs.rmSync(staticDir, { recursive: true, force: true });
+    }
   });
 });
