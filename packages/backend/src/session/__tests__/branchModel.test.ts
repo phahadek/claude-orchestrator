@@ -5,11 +5,15 @@ import os from 'os';
 import path from 'path';
 import { execSync } from 'child_process';
 import { logger } from '../../logger';
+import { getCorporateMode } from '../../config/corporateMode';
+import { ProjectService } from '../../projects/ProjectService';
 import {
   deriveBranchSlug,
   probeBranchLocally,
   resolveResumeBranchSlug,
   resolveAvailableBranchSlug,
+  resolveBranchMode,
+  resolveStartingPoint,
   slugify,
 } from '../branchModel';
 
@@ -17,6 +21,16 @@ vi.mock('child_process', () => ({
   execSync: vi.fn(),
   exec: vi.fn(),
   execFile: vi.fn(),
+}));
+
+vi.mock('../../config/corporateMode', () => ({
+  getCorporateMode: vi.fn(),
+}));
+
+vi.mock('../../projects/ProjectService', () => ({
+  ProjectService: {
+    getMilestone: vi.fn(),
+  },
 }));
 
 describe('deriveBranchSlug', () => {
@@ -521,5 +535,104 @@ describe('resolveResumeBranchSlug', () => {
 
     const branch = resolveResumeBranchSlug(title, taskId, '/proj');
     expect(branch).toBe(current);
+  });
+});
+
+describe('resolveBranchMode', () => {
+  beforeEach(() => {
+    vi.mocked(getCorporateMode).mockReturnValue({ enabled: false });
+  });
+
+  it('an explicit milestone override wins over an opposite project setting', () => {
+    expect(resolveBranchMode('flat', 'two_tier')).toBe('two_tier');
+    expect(resolveBranchMode('two_tier', 'flat')).toBe('flat');
+  });
+
+  it('a null milestone override falls through to the project setting unchanged', () => {
+    expect(resolveBranchMode('two_tier', null)).toBe('two_tier');
+    expect(resolveBranchMode('flat', null)).toBe('flat');
+  });
+
+  it('falls through to corporate mode when both project and milestone settings are unset', () => {
+    vi.mocked(getCorporateMode).mockReturnValue({ enabled: true });
+    expect(resolveBranchMode(null, null)).toBe('two_tier');
+    vi.mocked(getCorporateMode).mockReturnValue({ enabled: false });
+    expect(resolveBranchMode(null, null)).toBe('flat');
+  });
+});
+
+describe('resolveStartingPoint', () => {
+  beforeEach(() => {
+    vi.mocked(getCorporateMode).mockReturnValue({ enabled: false });
+    vi.mocked(ProjectService.getMilestone).mockReset();
+  });
+
+  it('milestone override two_tier resolves to the milestone branch regardless of the project flat setting', () => {
+    vi.mocked(ProjectService.getMilestone).mockReturnValue({
+      id: 'm1',
+      projectId: 'p1',
+      name: 'Milestone One',
+      sourceId: null,
+      canonicalShortId: 'M1',
+      displayOrder: 0,
+      wrappedAt: null,
+      milestoneBranching: 'two_tier',
+      createdAt: 0,
+      updatedAt: 0,
+    });
+
+    const result = resolveStartingPoint(
+      { milestoneBranching: 'flat', baseBranch: 'dev' },
+      'm1',
+    );
+    expect(result).toEqual({
+      startingPoint: `milestone/${slugify('Milestone One')}`,
+      milestoneSlug: slugify('Milestone One'),
+    });
+  });
+
+  it('milestone override flat resolves to the base branch regardless of the project two_tier setting', () => {
+    vi.mocked(ProjectService.getMilestone).mockReturnValue({
+      id: 'm1',
+      projectId: 'p1',
+      name: 'Milestone One',
+      sourceId: null,
+      canonicalShortId: 'M1',
+      displayOrder: 0,
+      wrappedAt: null,
+      milestoneBranching: 'flat',
+      createdAt: 0,
+      updatedAt: 0,
+    });
+
+    const result = resolveStartingPoint(
+      { milestoneBranching: 'two_tier', baseBranch: 'dev' },
+      'm1',
+    );
+    expect(result).toEqual({ startingPoint: 'dev', milestoneSlug: null });
+  });
+
+  it('a null milestone override falls through to the project setting unchanged', () => {
+    vi.mocked(ProjectService.getMilestone).mockReturnValue({
+      id: 'm1',
+      projectId: 'p1',
+      name: 'Milestone One',
+      sourceId: null,
+      canonicalShortId: 'M1',
+      displayOrder: 0,
+      wrappedAt: null,
+      milestoneBranching: null,
+      createdAt: 0,
+      updatedAt: 0,
+    });
+
+    const result = resolveStartingPoint(
+      { milestoneBranching: 'two_tier', baseBranch: 'dev' },
+      'm1',
+    );
+    expect(result).toEqual({
+      startingPoint: `milestone/${slugify('Milestone One')}`,
+      milestoneSlug: slugify('Milestone One'),
+    });
   });
 });

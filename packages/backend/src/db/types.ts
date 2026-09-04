@@ -249,16 +249,23 @@ export interface MilestoneRow {
   display_order: number;
   /** Set once /milestone-wrap closes out this milestone. Null = active or in-planning. */
   wrapped_at: number | null;
+  /** Nullable per-milestone override of projects.milestone_branching; null falls through to the project setting. */
+  milestone_branching: 'two_tier' | 'flat' | null;
   created_at: number;
   updated_at: number;
 }
 
 export type NewMilestoneRow = Omit<
   MilestoneRow,
-  'created_at' | 'updated_at' | 'display_order' | 'wrapped_at'
+  | 'created_at'
+  | 'updated_at'
+  | 'display_order'
+  | 'wrapped_at'
+  | 'milestone_branching'
 > & {
   display_order?: number;
   wrapped_at?: number | null;
+  milestone_branching?: 'two_tier' | 'flat' | null;
   created_at?: number;
   updated_at?: number;
 };

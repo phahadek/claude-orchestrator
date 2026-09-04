@@ -122,6 +122,7 @@ type EventType =
   | 'project_record_access_guide_blocks_escalation'
   | 'flow_arm_changed'
   | 'gate_verify_auto_commit_policy_changed'
+  | 'milestone_branching_changed'
   | 'milestone_wrapped'
   | 'base_fetch_failed'
   | 'base_fetch_ref_lock_benign'
