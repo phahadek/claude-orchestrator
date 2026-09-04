@@ -60,6 +60,15 @@ const SettingsSchema = z.object({
   dependency_cache_max_total_size_mb: z.coerce.number().int().min(1),
   session_cgroup_prod_reserve_mb: z.coerce.number().int().min(0),
   session_cgroup_memory_high_fraction: z.coerce.number().min(0).max(1),
+  // Absolute write-bandwidth ceiling (bytes/sec) written to io.max's wbps=
+  // field for the sessions/ and tests/ cgroup leaves — the block device is
+  // resolved at write time from the host filesystem, see sessionCgroup.ts's
+  // resolveBlockDevice. 0 disables the cap (io.max is left unwritten).
+  test_run_io_max_wbps: z.coerce.number().int().min(0),
+  // Proportional io.weight for the same leaves, against cgroup-v2's
+  // default of 100 for every other cgroup on the host — deliberately below
+  // default so a saturated disk backs off test-run I/O before production's.
+  test_run_io_weight: z.coerce.number().int().min(1).max(10000),
   milestone_attention_aging_threshold_seconds: z.coerce.number().int().min(0),
   milestone_attention_flat_convergence_window_seconds: z.coerce
     .number()
@@ -204,6 +213,8 @@ export const SETTING_DEFAULTS: Settings = {
   dependency_cache_max_total_size_mb: 10_240,
   session_cgroup_prod_reserve_mb: 4096,
   session_cgroup_memory_high_fraction: 0.9,
+  test_run_io_max_wbps: 100 * 1024 * 1024,
+  test_run_io_weight: 50,
   milestone_attention_aging_threshold_seconds: 24 * 60 * 60,
   milestone_attention_flat_convergence_window_seconds: 48 * 60 * 60,
   flip_rate_window_n: 20,

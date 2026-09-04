@@ -30,11 +30,30 @@ let mainCgroupPath: string | null = null;
  */
 let testsCgroupPath: string | null = null;
 
+/**
+ * Whether the io controller was confirmed delegated and enabled on the
+ * parent subtree at setup time. Distinct from the memory controller, which
+ * setupSessionCgroup treats as required — io is best-effort: its absence
+ * (older kernel, missing delegation) disables I/O caps but must never block
+ * the memory cap from taking effect.
+ */
+let ioControllerAvailable = false;
+
 /** Derived cgroup memory limits, in bytes. */
 export interface SessionCgroupLimits {
   maxBytes: number;
   highBytes: number;
   denySwap: boolean;
+}
+
+/** Derived cgroup I/O limits for the block device backing the worktree tree. */
+export interface SessionCgroupIoLimits {
+  /** "major:minor" device string, or null when device resolution failed. */
+  device: string | null;
+  /** Write-bandwidth ceiling in bytes/sec; 0 means disabled (io.max unwritten). */
+  maxWbpsBytes: number;
+  /** io.weight value. */
+  weight: number;
 }
 
 /**
@@ -63,6 +82,64 @@ function currentLimits(): SessionCgroupLimits {
   });
 }
 
+/**
+ * Resolves the "major:minor" cgroup-v2 device string for the block device
+ * backing `targetPath`, via fs.statSync's bigint dev_t rather than shelling
+ * out to findmnt/lsblk/blkid — consistent with this module's existing
+ * pure-fs style (readOwnCgroupPath, readPpid parse /proc directly). Must
+ * use the bigint stat variant, not the default Number-valued dev, to avoid
+ * precision loss on the 64-bit dev_t.
+ *
+ * Decodes major/minor with the standard glibc gnu_dev_major/gnu_dev_minor
+ * encoding. Writing a partition's own major:minor to io.max is sufficient
+ * — cgroup v2's io controller resolves a partition's major:minor to its
+ * parent disk's request_queue internally, so no /sys/class/block walk to
+ * find the whole-disk device is needed.
+ *
+ * Returns null when the path can't be stat'd (e.g. it doesn't exist).
+ */
+export function resolveBlockDevice(targetPath: string): string | null {
+  try {
+    const dev = fs.statSync(targetPath, { bigint: true }).dev;
+    const major = Number(((dev >> 8n) & 0xfffn) | ((dev >> 32n) & ~0xfffn));
+    const minor = Number((dev & 0xffn) | ((dev >> 12n) & ~0xffn));
+    return `${major}:${minor}`;
+  } catch {
+    return null;
+  }
+}
+
+/** Formats an io.max write-bps line, e.g. "252:0 wbps=104857600". */
+export function formatIoMaxLine(device: string, maxWbpsBytes: number): string {
+  return `${device} wbps=${maxWbpsBytes}`;
+}
+
+/**
+ * Pure derivation of the I/O limits (device, write-bandwidth ceiling,
+ * weight) applied to the sessions/ and tests/ leaves. `maxWbps` of 0 (the
+ * configured-disabled sentinel) always yields maxWbpsBytes: 0 regardless of
+ * whether the device resolved.
+ */
+export function computeSessionCgroupIoLimits(inputs: {
+  worktreePath: string;
+  maxWbps: number;
+  weight: number;
+}): SessionCgroupIoLimits {
+  return {
+    device: resolveBlockDevice(inputs.worktreePath),
+    maxWbpsBytes: inputs.maxWbps > 0 ? inputs.maxWbps : 0,
+    weight: inputs.weight,
+  };
+}
+
+function currentIoLimits(): SessionCgroupIoLimits {
+  return computeSessionCgroupIoLimits({
+    worktreePath: process.cwd(),
+    maxWbps: runtimeSettings.test_run_io_max_wbps,
+    weight: runtimeSettings.test_run_io_weight,
+  });
+}
+
 function warnNoop(reason: string): void {
   logger.warn(
     `[sessionCgroup] delegated cgroup unavailable (${reason}) — session memory cap disabled, spawns proceed unbounded`,
@@ -88,10 +165,40 @@ function writeLimitsTo(dir: string, limits: SessionCgroupLimits): void {
   );
 }
 
+/**
+ * Writes io.max / io.weight to `dir` when the io controller is available.
+ * Best-effort: unlike memory (required for setup to proceed at all), a
+ * write failure here (e.g. an unexpectedly missing io.max file on an old
+ * kernel) is logged and swallowed rather than propagated, so it can never
+ * take down the memory cap it's applied alongside.
+ */
+function writeIoLimitsTo(dir: string, io: SessionCgroupIoLimits): void {
+  if (!ioControllerAvailable) return;
+  try {
+    if (io.device && io.maxWbpsBytes > 0) {
+      fs.writeFileSync(
+        path.join(dir, 'io.max'),
+        formatIoMaxLine(io.device, io.maxWbpsBytes),
+      );
+    }
+    fs.writeFileSync(path.join(dir, 'io.weight'), String(io.weight));
+  } catch (err) {
+    logger.warn(
+      `[sessionCgroup] failed to write io limits to ${dir}: ${(err as Error).message}`,
+    );
+  }
+}
+
 /** Applies the current derived limits to every delegated leaf that's set up. */
-function writeLimits(limits: SessionCgroupLimits): void {
-  if (sessionsCgroupPath) writeLimitsTo(sessionsCgroupPath, limits);
-  if (testsCgroupPath) writeLimitsTo(testsCgroupPath, limits);
+function writeLimits(limits: SessionCgroupLimits, io: SessionCgroupIoLimits): void {
+  if (sessionsCgroupPath) {
+    writeLimitsTo(sessionsCgroupPath, limits);
+    writeIoLimitsTo(sessionsCgroupPath, io);
+  }
+  if (testsCgroupPath) {
+    writeLimitsTo(testsCgroupPath, limits);
+    writeIoLimitsTo(testsCgroupPath, io);
+  }
 }
 
 /**
@@ -140,13 +247,25 @@ export function setupSessionCgroup(): void {
     fs.writeFileSync(path.join(mainPath, 'cgroup.procs'), String(process.pid));
 
     // Now that the parent holds no processes, enable the memory
-    // controller for its child cgroups.
-    fs.writeFileSync(path.join(ownPath, 'cgroup.subtree_control'), '+memory');
+    // controller for its child cgroups. The io controller is best-effort —
+    // its absence (older kernel, not delegated) disables I/O caps but must
+    // never block memory from being enabled.
+    const hasIo = controllers.split(/\s+/).includes('io');
+    fs.writeFileSync(
+      path.join(ownPath, 'cgroup.subtree_control'),
+      hasIo ? '+memory +io' : '+memory',
+    );
+    ioControllerAvailable = hasIo;
+    if (!hasIo) {
+      logger.warn(
+        '[sessionCgroup] io controller not delegated to this cgroup — test-run I/O cap disabled, spawns proceed unbounded on disk I/O',
+      );
+    }
 
     mainCgroupPath = mainPath;
     sessionsCgroupPath = sessionsPath;
     testsCgroupPath = testsPath;
-    writeLimits(currentLimits());
+    writeLimits(currentLimits(), currentIoLimits());
     logger.info(
       `[sessionCgroup] delegated cgroup ready at ${ownPath} — sessions bounded via ${sessionsPath}, test-lane runs bounded via ${testsPath}`,
     );
@@ -154,15 +273,16 @@ export function setupSessionCgroup(): void {
     sessionsCgroupPath = null;
     mainCgroupPath = null;
     testsCgroupPath = null;
+    ioControllerAvailable = false;
     warnNoop((err as Error).message);
   }
 }
 
-/** Re-applies memory limits from current runtimeSettings; no-op when not set up. */
+/** Re-applies memory and I/O limits from current runtimeSettings; no-op when not set up. */
 export function reapplySessionCgroupLimits(): void {
   if (!sessionsCgroupPath && !testsCgroupPath) return;
   try {
-    writeLimits(currentLimits());
+    writeLimits(currentLimits(), currentIoLimits());
   } catch (err) {
     logger.warn(
       `[sessionCgroup] failed to reapply limits: ${(err as Error).message}`,
@@ -672,6 +792,7 @@ export function _resetForTesting(): void {
   sessionsCgroupPath = null;
   mainCgroupPath = null;
   testsCgroupPath = null;
+  ioControllerAvailable = false;
 }
 
 export function _setSessionsPathForTesting(p: string | null): void {
@@ -684,4 +805,8 @@ export function _setTestsPathForTesting(p: string | null): void {
 
 export function _setMainPathForTesting(p: string | null): void {
   mainCgroupPath = p;
+}
+
+export function _setIoControllerAvailableForTesting(v: boolean): void {
+  ioControllerAvailable = v;
 }
