@@ -186,4 +186,35 @@ process.exit(1);
 
     expect(result.verdict).toBe('no_implementation_files_changed');
   });
+
+  it('restores already-reverted implementation files if the revert loop itself fails partway', async () => {
+    write('test-runner.js', TEST_RUNNER_SCRIPT);
+    write('implementation.js', 'module.exports.add = (a, b) => a - b;\n');
+    write('sub/missing.js', '// present at baseRef\n');
+    const baseRef = commitAll('base: buggy implementation');
+
+    // The diff under check: fix the implementation, add a test, and delete
+    // the "sub" directory entirely so reverting sub/missing.js to its
+    // baseRef content throws ENOENT (no parent directory to write into) --
+    // simulating a mid-loop revert failure after implementation.js has
+    // already been successfully reverted.
+    fs.rmSync(path.join(worktree, 'sub'), { recursive: true, force: true });
+    write('implementation.js', 'module.exports.add = (a, b) => a + b;\n');
+    write('math.test.js', '// covers add()\n');
+
+    const result = await runStashRevertCheck({
+      worktreePath: worktree,
+      changedFiles: ['implementation.js', 'sub/missing.js', 'math.test.js'],
+      baseRef,
+      testCommands: ['node test-runner.js'],
+      reportGlob: 'junit.xml',
+    });
+
+    expect(result.verdict).toBe('error');
+    // implementation.js was reverted before the failure -- it must be
+    // restored to its pre-check (diff-applied) content, not left at baseRef.
+    expect(
+      fs.readFileSync(path.join(worktree, 'implementation.js'), 'utf8'),
+    ).toBe('module.exports.add = (a, b) => a + b;\n');
+  });
 });
