@@ -636,7 +636,7 @@ export class AgentSession extends EventEmitter {
    */
   private getPrBodyConfig(): PrBodySectionsConfig | undefined {
     const project = getProjectById(this.projectId);
-    if (!project) return undefined;
+    if (!project?.projectDir) return undefined;
     const orchConfig = loadOrchestratorConfig(project.projectDir);
     return {
       sections: orchConfig.pr_body.sections,

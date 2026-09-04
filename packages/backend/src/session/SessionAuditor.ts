@@ -162,7 +162,7 @@ export class SessionAuditor {
       const { getProjectById } =
         require('../config.js') as typeof import('../config');
       const project = getProjectById(this.notionClientOrProjectId);
-      if (project) {
+      if (project?.projectDir) {
         return loadOrchestratorConfig(project.projectDir).pr_body.sections;
       }
     }
