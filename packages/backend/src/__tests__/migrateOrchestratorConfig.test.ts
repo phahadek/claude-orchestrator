@@ -197,11 +197,11 @@ describe('migrate-orchestrator-config', () => {
 
     it('a child that exceeds the spawnSync timeout is killed and reported as a failure', async () => {
       const { spawnSync } = await import('child_process');
-      const result = spawnSync(
-        'node',
-        ['-e', 'setTimeout(() => {}, 60000)'],
-        { encoding: 'utf-8', timeout: 200, killSignal: 'SIGKILL' },
-      );
+      const result = spawnSync('node', ['-e', 'setTimeout(() => {}, 60000)'], {
+        encoding: 'utf-8',
+        timeout: 200,
+        killSignal: 'SIGKILL',
+      });
 
       expect(result.error).toBeDefined();
       expect(result.signal).toBe('SIGKILL');
