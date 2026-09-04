@@ -176,7 +176,7 @@ describe('NotionTaskBackend.fetchNonMilestoneReadyTasks — dependsOn prefixing'
 });
 
 describe('NotionTaskBackend.fetchTaskSummary — cache-first with live fallback', () => {
-  it('resolves from task_cache with zero client calls, given a bare id, against a row written in the refresher\'s notion:-prefixed format', async () => {
+  it("resolves from task_cache with zero client calls, given a bare id, against a row written in the refresher's notion:-prefixed format", async () => {
     const rawId = 'raw-id-cached';
     // Mirrors exactly how fetchReadyTasks/the refresher persist a task: the
     // prefixed key comes from formatTaskId, not a hand-built 'notion:' string.
@@ -192,7 +192,11 @@ describe('NotionTaskBackend.fetchTaskSummary — cache-first with live fallback'
     };
     vi.mocked(getTaskCache).mockImplementation((taskId: string) =>
       taskId === prefixedId
-        ? ({ task_id: prefixedId, fetched_at: Date.now(), raw_json: JSON.stringify(cachedTask) } as never)
+        ? ({
+            task_id: prefixedId,
+            fetched_at: Date.now(),
+            raw_json: JSON.stringify(cachedTask),
+          } as never)
         : undefined,
     );
     const mockClient = { fetchTaskSummary: vi.fn() };
@@ -223,7 +227,9 @@ describe('NotionTaskBackend.fetchTaskSummary — cache-first with live fallback'
 
     const result = await backend.fetchTaskSummary('raw-id-live');
 
-    expect(mockClient.fetchTaskSummary).toHaveBeenCalledWith('notion:raw-id-live');
+    expect(mockClient.fetchTaskSummary).toHaveBeenCalledWith(
+      'notion:raw-id-live',
+    );
     expect(result).toEqual({
       title: 'Live Task',
       type: '💻 Code',
