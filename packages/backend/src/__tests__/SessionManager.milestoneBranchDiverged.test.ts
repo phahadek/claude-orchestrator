@@ -8,13 +8,38 @@
  * MilestoneBranchDivergedError: it routes through handlePokeFailure and
  * returns before any `git worktree add`/`git worktree prune` runs, instead
  * of falling through to worktree recreation.
+ *
+ * The branchModel mock below defines its own MilestoneBranchDivergedError
+ * class rather than spreading the real module's exports — SessionManager.ts
+ * and this test both resolve `../session/branchModel` to this same mocked
+ * module, so the class identity `instanceof` depends on stays consistent
+ * either way; keeping the mock fully self-contained (no importOriginal)
+ * avoids any dependency on branchModel.ts's own transitive imports
+ * (ProjectService, corporateMode) resolving cleanly in this test's module
+ * graph.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mockDbQueries } from './helpers/mockDbQueries';
 
+const { mockExecCallback } = vi.hoisted(() => ({
+  mockExecCallback: vi.fn(
+    (
+      _cmd: string,
+      _opts: unknown,
+      cb?: (err: null, result: { stdout: string; stderr: string }) => void,
+    ) => {
+      const callback = (typeof _opts === 'function' ? _opts : cb) as (
+        err: null,
+        result: { stdout: string; stderr: string },
+      ) => void;
+      process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
+    },
+  ),
+}));
+
 vi.mock('child_process', () => ({
   execSync: vi.fn().mockReturnValue(''),
-  exec: vi.fn(),
+  exec: mockExecCallback,
 }));
 
 vi.mock('../config', () => ({
@@ -103,36 +128,45 @@ vi.mock('../session/orchestrator-claudemd', () => ({
   buildReviewClaudeMd: vi.fn().mockReturnValue('review context'),
 }));
 
-const { mockResolveStartingPoint, mockEnsureMilestoneBranch } = vi.hoisted(
-  () => ({
+const {
+  mockResolveStartingPoint,
+  mockEnsureMilestoneBranch,
+  MilestoneBranchDivergedError,
+} = vi.hoisted(() => {
+  class MilestoneBranchDivergedError extends Error {
+    constructor(ref: string, cause: unknown) {
+      super(
+        `Milestone branch ${ref} has diverged from origin — fast-forward-only refresh refused: ${cause}`,
+      );
+      this.name = 'MilestoneBranchDivergedError';
+    }
+  }
+  return {
     mockResolveStartingPoint: vi.fn().mockReturnValue({
       startingPoint: 'feature/m6-readiness',
       milestoneSlug: 'm6-readiness',
     }),
     mockEnsureMilestoneBranch: vi.fn(),
-  }),
-);
-
-vi.mock('../session/branchModel', async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import('../session/branchModel')>();
-  return {
-    ...actual,
-    resolveStartingPoint: mockResolveStartingPoint,
-    ensureMilestoneBranch: mockEnsureMilestoneBranch,
-    deriveBranchSlug: vi
-      .fn()
-      .mockImplementation(
-        (s: string) => `feature/${s.toLowerCase().replace(/\s+/g, '-')}`,
-      ),
-    resolveResumeBranchSlug: vi
-      .fn()
-      .mockImplementation(
-        (s: string) => `feature/${s.toLowerCase().replace(/\s+/g, '-')}`,
-      ),
-    resolveAvailableBranchSlug: vi.fn((base: string) => base),
+    MilestoneBranchDivergedError,
   };
 });
+
+vi.mock('../session/branchModel', () => ({
+  resolveStartingPoint: mockResolveStartingPoint,
+  ensureMilestoneBranch: mockEnsureMilestoneBranch,
+  MilestoneBranchDivergedError,
+  deriveBranchSlug: vi
+    .fn()
+    .mockImplementation(
+      (s: string) => `feature/${s.toLowerCase().replace(/\s+/g, '-')}`,
+    ),
+  resolveResumeBranchSlug: vi
+    .fn()
+    .mockImplementation(
+      (s: string) => `feature/${s.toLowerCase().replace(/\s+/g, '-')}`,
+    ),
+  resolveAvailableBranchSlug: vi.fn((base: string) => base),
+}));
 
 vi.mock('../routes/tasks', () => ({
   emitTaskUpdated: vi.fn(),
@@ -172,7 +206,6 @@ vi.mock('../config/corporateMode', () => ({
 import { execSync } from 'child_process';
 import { SessionManager } from '../session/SessionManager';
 import * as queries from '../db/queries';
-import { MilestoneBranchDivergedError } from '../session/branchModel';
 
 const SESSION_ID = 'aaaabbbb-cccc-dddd-eeee-ffffffffffff';
 
