@@ -19,7 +19,9 @@ vi.mock('../../db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
-const mockLoadOrchestratorConfig = vi.fn(() => ({}) as Record<string, unknown>);
+const { mockLoadOrchestratorConfig } = vi.hoisted(() => ({
+  mockLoadOrchestratorConfig: vi.fn(() => ({}) as Record<string, unknown>),
+}));
 vi.mock('../../session/orchestrator-config', () => ({
   loadOrchestratorConfig: mockLoadOrchestratorConfig,
 }));
