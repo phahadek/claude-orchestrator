@@ -65,22 +65,41 @@ class CheckoutRWLock {
     });
   }
 
-  acquireWrite(): Promise<() => void> {
-    return new Promise((resolve) => {
+  /**
+   * `syncTracker.granted` is set synchronously (within this call, before it
+   * returns) when the write lock was granted without waiting — the initial
+   * `pump()` call below runs entirely inside the `Promise` executor, so by
+   * the time `new Promise(...)` returns, `grant()` has already run if it was
+   * going to run synchronously at all.
+   */
+  acquireWrite(): {
+    promise: Promise<() => void>;
+    syncTracker: { granted: boolean };
+  } {
+    const syncTracker = { granted: false };
+    const promise = new Promise<() => void>((resolve) => {
       this.queue.push({
         kind: 'write',
-        grant: () =>
+        grant: () => {
+          syncTracker.granted = true;
           resolve(() => {
             this.writerActive = false;
             this.pump();
-          }),
+          });
+        },
       });
       this.pump();
     });
+    return { promise, syncTracker };
   }
 
   isIdle(): boolean {
     return this.readers === 0 && !this.writerActive && this.queue.length === 0;
+  }
+
+  /** Current reader count and queue depth, for surfacing a writer's wait to callers. */
+  occupancy(): { readers: number; queueDepth: number } {
+    return { readers: this.readers, queueDepth: this.queue.length };
   }
 }
 
@@ -118,13 +137,28 @@ export function __checkoutInstallLockMapSizeForTest(): number {
   return checkoutLocks.size;
 }
 
+export interface CheckoutInstallLockHooks {
+  /** Fires only when the write lock is not granted synchronously — i.e. an actual wait began. */
+  onWaitStart?: (info: { readers: number; queueDepth: number }) => void;
+  /** Always fires once the write lock is granted, carrying elapsed ms from request to grant. */
+  onAcquired?: (waitedMs: number) => void;
+}
+
 /** Exclusive acquisition — used by the deploy's install-deps step. */
 export async function withCheckoutInstallLock<T>(
   checkoutDir: string,
   fn: () => Promise<T>,
+  hooks?: CheckoutInstallLockHooks,
 ): Promise<T> {
   const { key, lock } = getLock(checkoutDir);
-  const release = await lock.acquireWrite();
+  const requestedAt = Date.now();
+  const occupancyBeforeRequest = lock.occupancy();
+  const { promise, syncTracker } = lock.acquireWrite();
+  if (!syncTracker.granted) {
+    hooks?.onWaitStart?.(occupancyBeforeRequest);
+  }
+  const release = await promise;
+  hooks?.onAcquired?.(Date.now() - requestedAt);
   try {
     return await fn();
   } finally {

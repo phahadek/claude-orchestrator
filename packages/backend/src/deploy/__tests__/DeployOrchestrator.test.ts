@@ -19,7 +19,15 @@ vi.mock('../../db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
+const { mockLoadOrchestratorConfig } = vi.hoisted(() => ({
+  mockLoadOrchestratorConfig: vi.fn(() => ({}) as Record<string, unknown>),
+}));
+vi.mock('../../session/orchestrator-config', () => ({
+  loadOrchestratorConfig: mockLoadOrchestratorConfig,
+}));
+
 import { db } from '../../db/db.js';
+import { withCheckoutTestRunLock } from '../../orchestration/checkoutInstallLock';
 import {
   DeployOrchestrator,
   buildDeployStepEnv,
@@ -45,6 +53,8 @@ beforeEach(() => {
   db.prepare('DELETE FROM project_deployed_sha').run();
   db.prepare('DELETE FROM deploy_run_event').run();
   db.prepare('DELETE FROM deploy_run').run();
+  mockLoadOrchestratorConfig.mockReset();
+  mockLoadOrchestratorConfig.mockReturnValue({});
 });
 
 function step(
@@ -1451,6 +1461,110 @@ async function flush(): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
 }
+
+describe('DeployOrchestrator: install-deps checkout lock events', () => {
+  it('records lock_wait_started and lock_acquired when install-deps is contended by a held checkout lock', async () => {
+    const dir = '/tmp/checkout-lock-events-contended';
+    const playbook = playbookWith([
+      step({ id: 'install-deps', kind: 'shell' }),
+    ]);
+    const deps = makeDeps(playbook);
+    const orchestrator = new DeployOrchestrator('proj', dir, deps);
+
+    let releaseRead: () => void;
+    const readPromise = withCheckoutTestRunLock(
+      dir,
+      () =>
+        new Promise<void>((resolve) => {
+          releaseRead = resolve;
+        }),
+    );
+    await flush();
+
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    let events = listDeployRunEvents(run.run_id).filter(
+      (e) => e.step === 'install-deps',
+    );
+    expect(events.map((e) => e.event_type)).toContain('lock_wait_started');
+    expect(getDeployRun(run.run_id)?.status).not.toBe('succeeded');
+
+    releaseRead!();
+    await readPromise;
+    await flush();
+
+    events = listDeployRunEvents(run.run_id).filter(
+      (e) => e.step === 'install-deps',
+    );
+    expect(events.map((e) => e.event_type)).toEqual([
+      'step_started',
+      'lock_wait_started',
+      'lock_acquired',
+      'step_succeeded',
+    ]);
+    expect(getDeployRun(run.run_id)?.status).toBe('succeeded');
+  });
+
+  it('records only lock_acquired for an uncontended install-deps step', async () => {
+    const dir = '/tmp/checkout-lock-events-uncontended';
+    const playbook = playbookWith([
+      step({ id: 'install-deps', kind: 'shell' }),
+    ]);
+    const deps = makeDeps(playbook);
+    const orchestrator = new DeployOrchestrator('proj', dir, deps);
+
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    const events = listDeployRunEvents(run.run_id).filter(
+      (e) => e.step === 'install-deps',
+    );
+    expect(events.map((e) => e.event_type)).toEqual([
+      'step_started',
+      'lock_acquired',
+      'step_succeeded',
+    ]);
+    expect(getDeployRun(run.run_id)?.status).toBe('succeeded');
+  });
+
+  it('takes no lock and emits no lock events for a project with a bootstrap_script', async () => {
+    const dir = '/tmp/checkout-lock-events-bootstrap';
+    mockLoadOrchestratorConfig.mockReturnValue({
+      bootstrap_script: './scripts/bootstrap.sh',
+    });
+    const playbook = playbookWith([
+      step({ id: 'install-deps', kind: 'shell' }),
+    ]);
+    const deps = makeDeps(playbook);
+    const orchestrator = new DeployOrchestrator('proj', dir, deps);
+
+    let releaseRead: () => void;
+    const readPromise = withCheckoutTestRunLock(
+      dir,
+      () =>
+        new Promise<void>((resolve) => {
+          releaseRead = resolve;
+        }),
+    );
+    await flush();
+
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    const events = listDeployRunEvents(run.run_id).filter(
+      (e) => e.step === 'install-deps',
+    );
+    expect(events.map((e) => e.event_type)).toEqual([
+      'step_started',
+      'step_succeeded',
+    ]);
+    expect(getDeployRun(run.run_id)?.status).toBe('succeeded');
+
+    releaseRead!();
+    await readPromise;
+  });
+});
 
 describe('DeployOrchestrator: run kind (deploy vs wrap)', () => {
   it('defaults to the "deploy" kind when none is passed', async () => {

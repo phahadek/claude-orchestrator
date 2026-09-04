@@ -904,7 +904,26 @@ export class DeployOrchestrator {
         const result =
           step.id === INSTALL_DEPS_STEP_ID &&
           sharesCheckoutNodeModules(this.projectDir)
-            ? await withCheckoutInstallLock(this.projectDir, runIt)
+            ? await withCheckoutInstallLock(this.projectDir, runIt, {
+                onWaitStart: (info) => {
+                  appendDeployRunEvent({
+                    runId,
+                    step: step.id,
+                    eventType: 'lock_wait_started',
+                    detail: `waiting on checkout install lock: ${info.readers} in-flight reader(s), ${info.queueDepth} queued`,
+                    at: this.now(),
+                  });
+                },
+                onAcquired: (waitedMs) => {
+                  appendDeployRunEvent({
+                    runId,
+                    step: step.id,
+                    eventType: 'lock_acquired',
+                    detail: `acquired checkout install lock after waiting ${waitedMs}ms`,
+                    at: this.now(),
+                  });
+                },
+              })
             : await runIt();
         return {
           ok: result.ok,
