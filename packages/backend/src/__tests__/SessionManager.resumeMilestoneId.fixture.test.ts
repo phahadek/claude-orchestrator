@@ -50,7 +50,7 @@ vi.mock('../config', () => ({
     name: 'Test Project',
     projectDir: '/tmp/test',
     taskSource: 'notion',
-    gitMode: 'remote',
+    gitMode: 'local-only',
     milestoneBranching: 'two_tier',
     autoLaunchEnabled: true,
     baseBranch: 'dev',
