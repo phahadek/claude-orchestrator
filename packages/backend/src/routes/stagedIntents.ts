@@ -1546,16 +1546,22 @@ function extractGroupScopeTaskId(payload: unknown): string | null {
  * fully terminal (findOpenGroupForTask sees nothing live), accepts any new
  * groupId. A no-op when no groupId is supplied — that case is governed by
  * assertTaskCreateGrouped / assertGroomBodyEditGrouped above, which decide
- * whether a groupId was required in the first place.
+ * whether a groupId was required in the first place. The cross-session
+ * ownership check is skipped when this call carries an explicitSupersedes
+ * pointer: that path's own dedicated validation (stageIntent, below) already
+ * rejects a target belonging to a different session, with a message specific
+ * to the supersede target rather than the group — this generic check would
+ * otherwise preempt it with a less precise rejection.
  */
 function assertTaskGroupConsistency(
   payload: unknown,
   groupId: string | null | undefined,
   sessionId: string | null | undefined,
+  explicitSupersedes: string | null | undefined,
 ): void {
   if (!groupId) return;
 
-  if (sessionId) {
+  if (sessionId && !explicitSupersedes) {
     const owners = findOpenGroupOwnerSessions(groupId);
     const foreignOwner = owners.find((owner) => owner !== sessionId);
     if (foreignOwner) {
@@ -4201,7 +4207,7 @@ export function stageIntent(
   assertTaskCreateGrouped(kind, sessionId, groupId);
   assertGroomTaskCreateNotDesignFollowOn(kind, sessionId);
   assertGroomBodyEditGrouped(kind, sessionId, groupId);
-  assertTaskGroupConsistency(payload, groupId, sessionId);
+  assertTaskGroupConsistency(payload, groupId, sessionId, explicitSupersedes);
   sweepGroomBodyEditsIntoGroup(sessionId, groupId);
 
   ({ payload, decisionProposal } = applyDesignClosingSynthesisGeneration(
