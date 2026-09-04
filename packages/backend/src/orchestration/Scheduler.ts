@@ -23,6 +23,16 @@ export const GLOBAL_MAX_CONCURRENT_JOBS = 4;
  */
 export const DEGRADED_TICK_THRESHOLD_MS = 5 * 60 * 1000;
 
+/**
+ * Scheduler-wide default execution window for a job's `run`. Applies when a
+ * job does not set its own `timeoutMs`. A hung network-bound job that never
+ * settles would otherwise hold a global concurrency slot (see
+ * GLOBAL_MAX_CONCURRENT_JOBS) forever and starve every other job — this
+ * bounds that. Jobs with legitimately longer runtimes (observed:
+ * multi-hour) must set their own `timeoutMs` override.
+ */
+export const DEFAULT_JOB_TIMEOUT_MS = 10 * 60 * 1000;
+
 export interface JobOptions {
   name: string;
   intervalMs: number | (() => number);
@@ -40,6 +50,13 @@ export interface JobOptions {
   jitterMs?: number;
   enabled?: () => boolean;
   concurrency?: 'skip-if-running' | 'queue-next' | 'serial-no-overlap';
+  /**
+   * Max time allowed for `run` to settle before it is treated as timed
+   * out: its AbortSignal is aborted, the global concurrency slot is
+   * released, and the run is recorded as failed. Defaults to
+   * DEFAULT_JOB_TIMEOUT_MS. Set higher for jobs with known long runtimes.
+   */
+  timeoutMs?: number;
   run: (ctx: {
     signal: AbortSignal;
   }) => Promise<
@@ -233,8 +250,37 @@ export class Scheduler {
     let runStatus: 'ok' | 'failed' = 'ok';
     let runError: { message: string; stack?: string } | undefined;
 
+    const timeoutMs = state.opts.timeoutMs ?? DEFAULT_JOB_TIMEOUT_MS;
+    // The raw run promise is kept separate from the race so a late settle
+    // (after we've already timed out and moved on) can be swallowed here
+    // instead of surfacing as an unhandled rejection or re-triggering any
+    // of the finally-block bookkeeping below.
+    const runPromise = state.opts.run({ signal: ac.signal });
+    runPromise.catch(() => {});
+
+    const TIMED_OUT = Symbol('timed-out');
+    let timeoutHandle: NodeJS.Timeout | null = null;
+    const timeoutPromise = new Promise<typeof TIMED_OUT>((resolve) => {
+      timeoutHandle = setTimeout(() => resolve(TIMED_OUT), timeoutMs);
+    });
+    timeoutHandle!.unref?.();
+
     try {
-      result = await state.opts.run({ signal: ac.signal });
+      const raced = await Promise.race([runPromise, timeoutPromise]);
+      if (raced === TIMED_OUT) {
+        runStatus = 'failed';
+        runError = {
+          message: `job '${state.opts.name}' timed out after ${timeoutMs}ms`,
+        };
+        ac.abort();
+        if (state.opts.onError) {
+          state.opts.onError(new Error(runError.message));
+        } else {
+          logger.error(`[Scheduler] ${runError.message}`);
+        }
+      } else {
+        result = raced;
+      }
     } catch (err) {
       runStatus = 'failed';
       runError = {
@@ -247,6 +293,7 @@ export class Scheduler {
         logger.error(`[Scheduler] job '${state.opts.name}' failed:`, err);
       }
     } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
       const completedAt = Date.now();
       const eventLoopBlockedMs = Math.round(
         performance.eventLoopUtilization(startElu).active,
