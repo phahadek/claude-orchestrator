@@ -190,7 +190,10 @@ function writeIoLimitsTo(dir: string, io: SessionCgroupIoLimits): void {
 }
 
 /** Applies the current derived limits to every delegated leaf that's set up. */
-function writeLimits(limits: SessionCgroupLimits, io: SessionCgroupIoLimits): void {
+function writeLimits(
+  limits: SessionCgroupLimits,
+  io: SessionCgroupIoLimits,
+): void {
   if (sessionsCgroupPath) {
     writeLimitsTo(sessionsCgroupPath, limits);
     writeIoLimitsTo(sessionsCgroupPath, io);
