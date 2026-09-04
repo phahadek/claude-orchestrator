@@ -321,7 +321,12 @@ export class ReviewOrchestrator {
       job.headSha = prRow?.head_sha ?? null;
     }
 
-    const alreadyQueued = this.queue.some((q) => this.prKey(q) === key);
+    const alreadyQueued = this.queue.some(
+      (q) =>
+        this.prKey(q) === key &&
+        (q.type === 'local_branch' ? undefined : (q as ReviewJob).headSha) ===
+          job.headSha,
+    );
     if (alreadyQueued) {
       logger.info(
         `[ReviewOrchestrator] coalescing pr_opened/enqueueReview for PR #${job.prNumber} (${job.repo}) — already queued`,
