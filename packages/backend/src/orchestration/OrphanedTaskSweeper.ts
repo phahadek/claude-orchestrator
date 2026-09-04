@@ -276,7 +276,10 @@ export class OrphanedTaskSweeper {
         // grace window — async PR creation (marker flow) may still be in flight.
         // A machine-parked-idle row was never a clean exit (it was hard-stopped),
         // so it must not get this grace-window protection — fall through instead.
-        if (latestSession.status === 'idle' && !isMachineParkedIdle(latestSession)) {
+        if (
+          latestSession.status === 'idle' &&
+          !isMachineParkedIdle(latestSession)
+        ) {
           const endedAt = latestSession.ended_at ?? latestSession.started_at;
           if (Date.now() - endedAt < POST_CLEAN_EXIT_GRACE_MS) {
             return;
