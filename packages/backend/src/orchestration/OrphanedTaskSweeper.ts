@@ -99,6 +99,14 @@ export class OrphanedTaskSweeper {
    */
   private readonly permanentlyFailedTaskIds = new Set<string>();
 
+  /**
+   * Last non-permanent revert-check failure message per task id — used
+   * only to suppress repeat logging for a task that fails identically
+   * tick after tick. Cleared once the task reverts cleanly, so a later
+   * failure logs again as a fresh transition.
+   */
+  private readonly lastRevertFailureMessage = new Map<string, string>();
+
   constructor(
     private readonly broadcast: (msg: ServerMessage) => void,
     private readonly options: {
@@ -131,13 +139,11 @@ export class OrphanedTaskSweeper {
       intervalMs: () =>
         this.options.intervalMs ?? runtimeSettings.auto_launch_poll_interval_ms,
       concurrency: 'skip-if-running',
-      run: async () => {
-        await this.sweepOnce();
-      },
+      run: async () => this.sweepOnce(),
     });
   }
 
-  async sweepOnce(): Promise<void> {
+  async sweepOnce(): Promise<{ items_processed: number }> {
     const listProjects = this.options.listProjects ?? getAllProjects;
     const resolveBackend = this.options.resolveBackend ?? getTaskBackend;
     const seen = new Set<string>();
@@ -187,27 +193,46 @@ export class OrphanedTaskSweeper {
             resolved.task.type,
             backend,
           );
+          this.lastRevertFailureMessage.delete(taskId);
         } catch (err) {
+          // A single task's revert check failing must not throw the whole
+          // tick — that would mark every other task's work (which already
+          // completed above) as failed too, and would repeat forever for
+          // an unrevertable task. Record it and move on; the tick itself
+          // still succeeds.
           failedTaskIds.push(taskId);
+          const message = (err as Error).message;
           if (isPermanentRevertFailure(err)) {
             this.permanentlyFailedTaskIds.add(taskId);
+            this.lastRevertFailureMessage.delete(taskId);
             logger.error(
-              `[OrphanedTaskSweeper] revert check for ${taskId} failed permanently (source page archived/trashed) — giving up, will not retry: ${(err as Error).message}`,
+              `[OrphanedTaskSweeper] revert check for ${taskId} failed permanently (source page archived/trashed) — giving up, will not retry: ${message}`,
             );
           } else {
-            logger.warn(
-              `[OrphanedTaskSweeper] revert check failed for ${taskId}: ${(err as Error).message}`,
-            );
+            // Log only on the first occurrence or when the failure reason
+            // changes — an unrevertable task otherwise logs identically
+            // every tick forever.
+            const isRepeat =
+              this.lastRevertFailureMessage.get(taskId) === message;
+            this.lastRevertFailureMessage.set(taskId, message);
+            if (!isRepeat) {
+              logger.warn(
+                `[OrphanedTaskSweeper] revert check failed for ${taskId}: ${message}`,
+              );
+            }
           }
+          recordEvent({
+            event_type: 'task_revert_check_failed',
+            actor_type: 'system',
+            project_id: project.id,
+            task_id: taskId,
+            payload: { message, permanent: isPermanentRevertFailure(err) },
+          });
         }
       }
     }
 
-    if (failedTaskIds.length > 0) {
-      throw new Error(
-        `${failedTaskIds.length} revert check(s) failed: ${failedTaskIds.join(', ')}`,
-      );
-    }
+    return { items_processed: seen.size };
   }
 
   private async maybeRevertTask(

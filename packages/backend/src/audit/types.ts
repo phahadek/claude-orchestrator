@@ -181,7 +181,8 @@ type EventType =
   | 'review_verdict_parse_fallback'
   | 'review_verdict_pr_unresolved'
   | 'review_verdict_overwrite_suppressed'
-  | 're_review_skipped_pr_terminal';
+  | 're_review_skipped_pr_terminal'
+  | 'task_revert_check_failed';
 
 type ActorType = 'ai' | 'human' | 'system';
 
