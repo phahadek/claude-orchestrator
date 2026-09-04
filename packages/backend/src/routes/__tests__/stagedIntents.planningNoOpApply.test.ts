@@ -174,6 +174,7 @@ describe('applyIntent — grouped planning.noOp commits instead of throwing', ()
       type: 'notion',
       createTask,
       updateBody,
+      fetchTaskPage: vi.fn().mockResolvedValue(''),
     });
 
     seedSession('sess-closing', { task_id: 'task-closing' });

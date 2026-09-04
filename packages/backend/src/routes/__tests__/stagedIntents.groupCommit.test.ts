@@ -1045,6 +1045,77 @@ describe('group commit — whole-group precheck (all-or-nothing)', () => {
     expect(commit.body.reasons.join(' ')).toContain(patch.body.id);
     expect(commit.body.reasons.join(' ')).toContain('did not compose');
   });
+
+  it('refuses a group whose live task.updateBody member renders a level-4 (####) markdown heading — before any member applies', async () => {
+    const updateBody = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+      updateBody,
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const groupId = 'g-heading4';
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'task.updateBody',
+      projectId: 'proj-heading4',
+      groupId,
+      payload: {
+        taskId: 't-heading4',
+        sections: sections({ summary: '#### Not actually a heading' }),
+      },
+    });
+    expect(staged.status).toBe(201);
+    await agent.post(`/api/staged-intents/${staged.body.id}/approve`).send({});
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(409);
+    expect(commit.body.precheck).toBe(true);
+    expect(commit.body.error).toContain(staged.body.id);
+    expect(updateBody).not.toHaveBeenCalled();
+
+    const list = await agent
+      .get('/api/staged-intents')
+      .query({ projectId: 'proj-heading4' });
+    expect(list.body.intents[0].state).toBe('approved');
+  });
+
+  it('commits a group whose members render no heading deeper than ### exactly as before (unaffected by the #### precheck)', async () => {
+    const updateBody = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+      updateBody,
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const groupId = 'g-heading3-ok';
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'task.updateBody',
+      projectId: 'proj-heading3-ok',
+      groupId,
+      payload: { taskId: 't-heading3-ok', sections: sections() },
+    });
+    expect(staged.status).toBe(201);
+    await agent.post(`/api/staged-intents/${staged.body.id}/approve`).send({});
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(commit.body.committed).toEqual([staged.body.id]);
+    expect(updateBody).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('task.setStatus -> Deferred automatically re-points a non-terminal dependent left unaddressed', () => {
