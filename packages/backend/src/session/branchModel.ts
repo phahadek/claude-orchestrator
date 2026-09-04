@@ -188,8 +188,13 @@ export function resolveBranchMode(
  * Resolves the git starting point (the ref the detached worktree will point at).
  *
  * Returns:
- *   - `feature/<milestone-slug>` for two_tier mode with a known milestone
+ *   - `milestone/<milestone-slug>` for two_tier mode with a known milestone
  *   - project.baseBranch (default 'dev') for flat mode or when no milestoneId is provided
+ *
+ * Uses a dedicated `milestone/` prefix — distinct from the `feature/` prefix
+ * task branches derive via `deriveBranchSlug` — so a milestone branch and a
+ * task branch can never collide on the same ref even when their slugs are
+ * identical (e.g. a task titled the same as its milestone).
  */
 export function resolveStartingPoint(
   project: {
@@ -203,23 +208,32 @@ export function resolveStartingPoint(
     const milestone = ProjectService.getMilestone(milestoneId);
     if (milestone) {
       const slug = slugify(milestone.name);
-      return { startingPoint: `feature/${slug}`, milestoneSlug: slug };
+      return { startingPoint: `milestone/${slug}`, milestoneSlug: slug };
     }
   }
   return { startingPoint: project.baseBranch ?? 'dev', milestoneSlug: null };
 }
 
 /**
- * Ensures `feature/<milestoneSlug>` exists locally and on origin.
+ * Ensures `milestone/<milestoneSlug>` exists locally and on origin.
  * Creates it from origin/<baseBranch> when missing; no-ops when it already exists.
  * Only called in two_tier mode.
+ *
+ * Migrates a pre-existing `feature/<milestoneSlug>` branch (the prefix used
+ * before milestone branches got their own `milestone/` namespace) the first
+ * time it runs post-cutover: when the new-scheme ref is absent both locally
+ * and on origin, the legacy ref is probed locally then on origin, and if
+ * found, renamed in place (history preserved) rather than left behind as an
+ * orphaned branch while a fresh empty `milestone/<slug>` is created next to
+ * it. No-ops for a project with no pre-existing legacy branch.
  */
 export function ensureMilestoneBranch(
   milestoneSlug: string,
   projectDir: string,
   baseBranch = 'dev',
 ): void {
-  const ref = `feature/${milestoneSlug}`;
+  const ref = `milestone/${milestoneSlug}`;
+  const legacyRef = `feature/${milestoneSlug}`;
 
   // Check if branch already exists locally.
   try {
@@ -252,9 +266,53 @@ export function ensureMilestoneBranch(
     execSync(`git branch ${ref} origin/${ref}`, { cwd: projectDir });
     return;
   } catch {
-    // not on origin — create it from origin/<baseBranch>
+    // not on origin — check for a pre-existing legacy branch to migrate
   }
 
-  execSync(`git branch ${ref} origin/${baseBranch}`, { cwd: projectDir });
+  // Migration: legacy branch present locally — rename in place, then
+  // propagate the rename to origin (push new name, delete old name).
+  let legacyExistsLocally = false;
+  try {
+    execSync(`git rev-parse --verify ${legacyRef}`, {
+      cwd: projectDir,
+      stdio: 'pipe',
+    });
+    legacyExistsLocally = true;
+  } catch {
+    // not found locally
+  }
+
+  if (legacyExistsLocally) {
+    execSync(`git branch -m ${legacyRef} ${ref}`, { cwd: projectDir });
+    execSync(`git push origin ${ref}`, { cwd: projectDir });
+    try {
+      execSync(`git push origin --delete ${legacyRef}`, { cwd: projectDir });
+    } catch {
+      // non-fatal — legacy ref may never have existed on origin
+    }
+    return;
+  }
+
+  // Migration: legacy branch present on origin only — pull it down as a
+  // local tracking branch first, then rename and propagate as above.
+  try {
+    execSync(`git rev-parse --verify origin/${legacyRef}`, {
+      cwd: projectDir,
+      stdio: 'pipe',
+    });
+  } catch {
+    // no pre-existing legacy branch anywhere — fall through to plain create
+    execSync(`git branch ${ref} origin/${baseBranch}`, { cwd: projectDir });
+    execSync(`git push origin ${ref}`, { cwd: projectDir });
+    return;
+  }
+
+  execSync(`git branch ${legacyRef} origin/${legacyRef}`, { cwd: projectDir });
+  execSync(`git branch -m ${legacyRef} ${ref}`, { cwd: projectDir });
   execSync(`git push origin ${ref}`, { cwd: projectDir });
+  try {
+    execSync(`git push origin --delete ${legacyRef}`, { cwd: projectDir });
+  } catch {
+    // non-fatal
+  }
 }
