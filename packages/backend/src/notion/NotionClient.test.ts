@@ -1373,7 +1373,7 @@ describe('notionRequest — 429 retry with Retry-After backoff', () => {
       .mockResolvedValueOnce(rateLimitRes('9'))
       .mockResolvedValueOnce(jsonRes(SUMMARY_PAGE));
 
-    const promise = client.fetchTaskSummary('abc');
+    const promise = client.fetchTaskSummary('notion:abc');
     // Flush the synchronous fetch + rejection handling so the retry's
     // setTimeout is registered before we advance virtual time toward it.
     await vi.advanceTimersByTimeAsync(0);
@@ -1389,7 +1389,7 @@ describe('notionRequest — 429 retry with Retry-After backoff', () => {
       .mockResolvedValueOnce(rateLimitRes(null))
       .mockResolvedValueOnce(jsonRes(SUMMARY_PAGE));
 
-    const promise = client.fetchTaskSummary('abc');
+    const promise = client.fetchTaskSummary('notion:abc');
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(1_000);
     const result = await promise;
@@ -1403,7 +1403,7 @@ describe('notionRequest — 429 retry with Retry-After backoff', () => {
       .mockResolvedValueOnce(rateLimitRes('not-a-number'))
       .mockResolvedValueOnce(jsonRes(SUMMARY_PAGE));
 
-    const promise = client.fetchTaskSummary('abc');
+    const promise = client.fetchTaskSummary('notion:abc');
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(1_000);
     const result = await promise;
@@ -1415,7 +1415,7 @@ describe('notionRequest — 429 retry with Retry-After backoff', () => {
   it('throws NotionApiError with status 429 after the retry budget is exhausted on continuous 429s', async () => {
     fetchSpy.mockResolvedValue(rateLimitRes('1'));
 
-    const promise = client.fetchTaskSummary('abc');
+    const promise = client.fetchTaskSummary('notion:abc');
     // Drain expectation errors synchronously-ish; catch to inspect after timers advance.
     const assertion = expect(promise).rejects.toMatchObject({
       name: 'NotionApiError',
@@ -1434,7 +1434,7 @@ describe('notionRequest — 429 retry with Retry-After backoff', () => {
       .mockResolvedValueOnce(rateLimitRes('999999'))
       .mockResolvedValueOnce(jsonRes(SUMMARY_PAGE));
 
-    const promise = client.fetchTaskSummary('abc');
+    const promise = client.fetchTaskSummary('notion:abc');
     await vi.advanceTimersByTimeAsync(0);
     // Advance well past any sane cap but far short of 999999s.
     await vi.advanceTimersByTimeAsync(60_000);
@@ -1447,7 +1447,7 @@ describe('notionRequest — 429 retry with Retry-After backoff', () => {
   it('does not retry a 404 — fetchTaskSummary converts it to null with a single request', async () => {
     fetchSpy.mockResolvedValueOnce(errorRes(404, 'not found'));
 
-    const result = await client.fetchTaskSummary('abc');
+    const result = await client.fetchTaskSummary('notion:abc');
 
     expect(result).toBeNull();
     expect(fetchSpy).toHaveBeenCalledTimes(1);
@@ -1456,7 +1456,7 @@ describe('notionRequest — 429 retry with Retry-After backoff', () => {
   it('does not retry other non-2xx statuses (e.g. 400) and throws immediately', async () => {
     fetchSpy.mockResolvedValueOnce(errorRes(400, 'bad request'));
 
-    await expect(client.fetchTaskSummary('abc')).rejects.toMatchObject({
+    await expect(client.fetchTaskSummary('notion:abc')).rejects.toMatchObject({
       name: 'NotionApiError',
       statusCode: 400,
     });
@@ -1466,7 +1466,7 @@ describe('notionRequest — 429 retry with Retry-After backoff', () => {
   it('does not retry a 500 and throws immediately', async () => {
     fetchSpy.mockResolvedValueOnce(errorRes(500, 'server error'));
 
-    await expect(client.fetchTaskSummary('abc')).rejects.toMatchObject({
+    await expect(client.fetchTaskSummary('notion:abc')).rejects.toMatchObject({
       name: 'NotionApiError',
       statusCode: 500,
     });
@@ -1476,7 +1476,7 @@ describe('notionRequest — 429 retry with Retry-After backoff', () => {
   it('issues exactly one request on a successful first response (no added latency on the happy path)', async () => {
     fetchSpy.mockResolvedValueOnce(jsonRes(SUMMARY_PAGE));
 
-    const result = await client.fetchTaskSummary('abc');
+    const result = await client.fetchTaskSummary('notion:abc');
 
     expect(result).not.toBeNull();
     expect(fetchSpy).toHaveBeenCalledTimes(1);
