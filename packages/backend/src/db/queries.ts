@@ -12149,10 +12149,11 @@ function hasBlockedStagedIntentForSession(
  * A session in a terminal status (done/error/killed) or archived can never
  * resume its turn — nothing is being "awaited" from it, so it always reads
  * complete regardless of any stale blocked intent left behind in its
- * history; a session with no row at all (deleted) is treated the same way.
- * This is checked ahead of the blocked-intent lookup so a finished session's
- * stale needs_revision/pending_verification row from an unrelated group can
- * never wedge anything.
+ * history. This is checked ahead of the blocked-intent lookup so a finished
+ * session's stale needs_revision/pending_verification row from an unrelated
+ * group can never wedge anything. A sessionId with no row at all falls
+ * through to the ordinary blocked/active checks below, unchanged from
+ * before — it is not treated as terminal.
  *
  * `groupId`, when supplied, scopes the blocked-intent check to that group's
  * own members — see hasBlockedStagedIntentForSession. Pass the group being
@@ -12169,9 +12170,8 @@ export function isSessionComplete(
     | Session
     | undefined;
   if (
-    !session ||
-    TERMINAL_SESSION_STATUSES.has(session.status) ||
-    session.archived
+    session &&
+    (TERMINAL_SESSION_STATUSES.has(session.status) || session.archived)
   ) {
     return true;
   }
