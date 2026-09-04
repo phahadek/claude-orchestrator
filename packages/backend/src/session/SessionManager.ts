@@ -22,6 +22,7 @@ import {
 import {
   resolveStartingPoint,
   ensureMilestoneBranch,
+  MilestoneBranchDivergedError,
   deriveBranchSlug,
   resolveResumeBranchSlug,
   resolveAvailableBranchSlug,
@@ -2075,6 +2076,15 @@ export class SessionManager extends EventEmitter {
               project.baseBranch,
             );
           } catch (err) {
+            // A diverged local ref must not be cut from silently — rethrow
+            // so the completeStart().catch handler in start() drives the
+            // session to 'error' instead of proceeding with a stale ref.
+            // Every other ensureMilestoneBranch failure (e.g. a transient
+            // fetch-origin-dev network error while creating a brand-new
+            // ref) stays non-fatal, same as before.
+            if (err instanceof MilestoneBranchDivergedError) {
+              throw err;
+            }
             logger.warn(
               `[SessionManager] ensureMilestoneBranch failed (continuing): ${err}`,
             );
@@ -5589,6 +5599,18 @@ export class SessionManager extends EventEmitter {
         try {
           ensureMilestoneBranch(milestoneSlug, projectDir, project.baseBranch);
         } catch (err) {
+          if (err instanceof MilestoneBranchDivergedError) {
+            // Do not cut the resumed worktree from a local ref we know is
+            // stale/diverged — route through the same poke-retry-then-flag
+            // path used for other hard resume failures (worktree recreation,
+            // missing planning checkout) instead of silently continuing.
+            const detail = `${err.message}`;
+            logger.warn(
+              `[SessionManager] sendOrResume: ${detail} — refusing to cut worktree from stale ref`,
+            );
+            this.handlePokeFailure(row, 'milestone_branch_diverged', detail);
+            return sessionId;
+          }
           logger.warn(
             `[SessionManager] sendOrResume: ensureMilestoneBranch failed (continuing): ${err}`,
           );

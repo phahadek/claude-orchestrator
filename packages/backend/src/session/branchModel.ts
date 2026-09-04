@@ -215,6 +215,25 @@ export function resolveStartingPoint(
 }
 
 /**
+ * Thrown by `ensureMilestoneBranch` when the fast-forward-only refresh of an
+ * already-existing local milestone ref is rejected by git (the local ref has
+ * diverged from origin). Callers must not treat this the same as the other,
+ * non-fatal failure modes ensureMilestoneBranch already tolerates (e.g. a
+ * transient `git fetch` network failure while creating a brand-new ref) —
+ * doing so would cut the worktree from the same stale local ref this feature
+ * exists to stop using, silently defeating the fail-closed guarantee. See
+ * SessionManager.ts's two call sites for how each responds.
+ */
+export class MilestoneBranchDivergedError extends Error {
+  constructor(ref: string, cause: unknown) {
+    super(
+      `Milestone branch ${ref} has diverged from origin — fast-forward-only refresh refused: ${cause}`,
+    );
+    this.name = 'MilestoneBranchDivergedError';
+  }
+}
+
+/**
  * Ensures `milestone/<milestoneSlug>` exists locally and on origin, refreshed
  * to match origin's tip via a fast-forward-only fetch when it already exists
  * locally. Every worktree cut for a milestone task must see any sibling PR
@@ -224,7 +243,9 @@ export function resolveStartingPoint(
  * lifetime of the milestone. The refspec's `+` is deliberately omitted:
  * git's own fast-forward-only semantics reject the fetch outright if the
  * local ref has diverged from origin, rather than force-overwriting local
- * history or silently leaving it stale.
+ * history or silently leaving it stale — that rejection is surfaced here as
+ * MilestoneBranchDivergedError specifically (see its doc comment for why
+ * callers must not treat it as just another swallow-and-continue failure).
  *
  * Also migrates a pre-existing `feature/<milestoneSlug>` branch (the prefix
  * used before milestone branches got their own `milestone/` namespace) the
@@ -258,13 +279,18 @@ export function ensureMilestoneBranch(
 
   if (existsLocally) {
     // Fast-forward-only refresh from origin. A diverged local ref makes git
-    // reject this fetch (non-zero exit) — propagate rather than swallow, so
-    // callers fail closed instead of cutting a worktree from a stale ref.
-    execSync(`git fetch origin ${ref}:${ref}`, {
-      cwd: projectDir,
-      timeout: 30_000,
-      stdio: 'pipe',
-    });
+    // reject this fetch (non-zero exit) — surfaced as
+    // MilestoneBranchDivergedError rather than swallowed, so callers fail
+    // closed instead of cutting a worktree from a stale ref.
+    try {
+      execSync(`git fetch origin ${ref}:${ref}`, {
+        cwd: projectDir,
+        timeout: 30_000,
+        stdio: 'pipe',
+      });
+    } catch (err) {
+      throw new MilestoneBranchDivergedError(ref, err);
+    }
     return;
   }
 
