@@ -2124,9 +2124,7 @@ export function setSessionMilestoneId(
 }
 
 /** Reads back the milestone id captured by setSessionMilestoneId. Undefined when never captured (session dispatched before this feature, flat-mode project, or a non-milestone task). */
-export function getSessionMilestoneId(
-  sessionId: string,
-): string | undefined {
+export function getSessionMilestoneId(sessionId: string): string | undefined {
   const row = db
     .prepare('SELECT metadata FROM sessions WHERE session_id = ?')
     .get(sessionId) as { metadata: string | null } | undefined;
