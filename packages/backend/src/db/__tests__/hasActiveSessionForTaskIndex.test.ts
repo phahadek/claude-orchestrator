@@ -86,14 +86,23 @@ describe('sessions.task_id_norm — indexable normalized task_id match', () => {
     // measurements share the same host, so their ratio stays stable under
     // scheduling jitter even though neither absolute value does — an
     // absolute millisecond bound on either alone would flake under load.
-    const scanQuery = db.prepare(
-      `SELECT 1 FROM sessions
-       WHERE REPLACE(COALESCE(task_id, ''), '-', '') = @task_id_norm
-         AND status NOT IN (${terminalList})
-         AND (session_type = 'standard' OR session_type IS NULL)
-         AND archived = 0
-       LIMIT 1`,
-    );
+    // hasActiveSessionForTask() re-prepares its statement from SQL text on
+    // every call (no cross-call statement cache), so the baseline below
+    // does the same inside its loop — preparing it once outside would give
+    // the baseline an unfair per-call advantage and could make the indexed
+    // path look relatively slower than it is.
+    function runScanQuery(): unknown {
+      return db
+        .prepare(
+          `SELECT 1 FROM sessions
+           WHERE REPLACE(COALESCE(task_id, ''), '-', '') = @task_id_norm
+             AND status NOT IN (${terminalList})
+             AND (session_type = 'standard' OR session_type IS NULL)
+             AND archived = 0
+           LIMIT 1`,
+        )
+        .get({ task_id_norm: 'needletaskid' });
+    }
 
     const indexedStart = process.hrtime.bigint();
     for (let i = 0; i < 500; i++) {
@@ -104,7 +113,7 @@ describe('sessions.task_id_norm — indexable normalized task_id match', () => {
 
     const scanStart = process.hrtime.bigint();
     for (let i = 0; i < 500; i++) {
-      scanQuery.get({ task_id_norm: 'needletaskid' });
+      runScanQuery();
     }
     const scanElapsedMs = Number(process.hrtime.bigint() - scanStart) / 1e6;
 
