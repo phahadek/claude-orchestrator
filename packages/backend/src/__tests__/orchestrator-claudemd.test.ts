@@ -16,6 +16,26 @@ const standardParams = {
   verify: ['npx tsc --noEmit', 'npx vite build'],
 };
 
+// Representative session_rules payload, sized off real per-project rules
+// observed across managed repos' .claude-orchestrator.yml (a handful of
+// one-to-two-sentence project conventions — migration numbering, codegen
+// steps, env var handling — not a handful of words each).
+const representativeSessionRules = [
+  'Migration numbers come from db/migrations/LATEST.txt — never hand-pick the next number, and bump LATEST.txt in the same commit as the migration file.',
+  'Run `npm run codegen` after editing anything under schema/ and commit the regenerated output alongside the schema change — generated files are checked in, not built in CI.',
+  'Feature flags are defined in config/flags.yaml; do not gate new behavior on an ad hoc env var or a literal boolean, even for a "temporary" rollout.',
+  'The `legacy/` directory is frozen — port any shared logic you need out of it into `packages/shared` instead of importing from `legacy/` directly.',
+  'Prefer editing the existing seed script over adding a new one-off migration for local/dev data fixtures.',
+];
+
+// Fixture combining the standard template baseline with a realistic,
+// non-empty session_rules payload — the actual artifact delivered to a
+// session, not just the bare template.
+const paramsWithSessionRules = {
+  ...standardParams,
+  sessionRules: representativeSessionRules,
+};
+
 describe('buildOrchestratorClaudeMd — size ceilings', () => {
   // Ceilings were bumped to track legitimate growth (Context Efficiency,
   // Responding to Review Comments, Manual Verification Gate sections, the
@@ -37,6 +57,27 @@ describe('buildOrchestratorClaudeMd — size ceilings', () => {
   it('hard ceiling: rendered standard fixture is ≤ 10,250 characters', () => {
     const output = buildOrchestratorClaudeMd(standardParams);
     expect(output.length).toBeLessThanOrEqual(10250);
+  });
+});
+
+describe('buildOrchestratorClaudeMd — combined artifact (template + session_rules) size ceiling', () => {
+  // The caps above only ever exercise an empty session_rules fixture, so they
+  // miss the artifact a session with project-specific rules actually
+  // receives: template + rendered "## Project Rules" section. Measured
+  // baseline with the representative payload above: 10,594 chars / 1,725
+  // words (vs. 9,839 / 1,601 for the bare template). Ceilings here give ~4%
+  // character / ~7% word headroom over that baseline — enough for incidental
+  // drift, not enough to let session_rules silently balloon the delivered
+  // artifact.
+  it('rendered fixture with representative session_rules is ≤ 11,000 characters', () => {
+    const output = buildOrchestratorClaudeMd(paramsWithSessionRules);
+    expect(output.length).toBeLessThanOrEqual(11000);
+  });
+
+  it('rendered fixture with representative session_rules is ≤ 1,850 words', () => {
+    const output = buildOrchestratorClaudeMd(paramsWithSessionRules);
+    const wordCount = output.trim().split(/\s+/).length;
+    expect(wordCount).toBeLessThanOrEqual(1850);
   });
 });
 
