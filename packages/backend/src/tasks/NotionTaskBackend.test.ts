@@ -4,6 +4,7 @@ vi.mock('../db/queries', () => ({
   getGrantedCapabilities: vi.fn(() => []),
   upsertTaskCache: vi.fn(),
   getRecentTaskStatusWrite: vi.fn(() => null),
+  getTaskCache: vi.fn(() => undefined),
 }));
 vi.mock('../projects/ProjectService', () => ({
   ProjectService: {
@@ -13,8 +14,10 @@ vi.mock('../projects/ProjectService', () => ({
 
 import { NotionTaskBackend } from './NotionTaskBackend';
 import { ProjectService } from '../projects/ProjectService';
-import { upsertTaskCache } from '../db/queries';
+import { upsertTaskCache, getTaskCache } from '../db/queries';
+import { formatTaskId } from './taskId';
 import type { ResolvedTask } from './types';
+import type { NotionTask } from '../notion/types';
 
 function makeResolvedTask(rawId: string, depIds: string[] = []): ResolvedTask {
   return {
@@ -169,5 +172,100 @@ describe('NotionTaskBackend.fetchNonMilestoneReadyTasks — dependsOn prefixing'
     }>;
     expect(cached[0].id).toBe('notion:raw-nm-a');
     expect(cached[0].dependsOn).toEqual(['notion:raw-nm-b']);
+  });
+});
+
+describe('NotionTaskBackend.fetchTaskSummary — cache-first with live fallback', () => {
+  it('resolves from task_cache with zero client calls, given a bare id, against a row written in the refresher\'s notion:-prefixed format', async () => {
+    const rawId = 'raw-id-cached';
+    // Mirrors exactly how fetchReadyTasks/the refresher persist a task: the
+    // prefixed key comes from formatTaskId, not a hand-built 'notion:' string.
+    const prefixedId = formatTaskId('notion', rawId);
+    const cachedTask: NotionTask = {
+      id: prefixedId,
+      title: 'Cached Task Title',
+      status: '🗂️ Ready',
+      type: '💻 Code',
+      dependsOn: [],
+      notionUrl: `https://notion.so/${rawId}`,
+      archived: false,
+    };
+    vi.mocked(getTaskCache).mockImplementation((taskId: string) =>
+      taskId === prefixedId
+        ? ({ task_id: prefixedId, fetched_at: Date.now(), raw_json: JSON.stringify(cachedTask) } as never)
+        : undefined,
+    );
+    const mockClient = { fetchTaskSummary: vi.fn() };
+    const backend = new NotionTaskBackend(mockClient as never);
+
+    const result = await backend.fetchTaskSummary(rawId);
+
+    expect(mockClient.fetchTaskSummary).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      title: 'Cached Task Title',
+      type: '💻 Code',
+      status: '🗂️ Ready',
+      archived: false,
+    });
+  });
+
+  it('falls through to the client on a cache miss', async () => {
+    vi.mocked(getTaskCache).mockReturnValue(undefined);
+    const mockClient = {
+      fetchTaskSummary: vi.fn().mockResolvedValue({
+        title: 'Live Task',
+        status: '🗂️ Ready',
+        type: '💻 Code',
+        archived: false,
+      }),
+    };
+    const backend = new NotionTaskBackend(mockClient as never);
+
+    const result = await backend.fetchTaskSummary('raw-id-live');
+
+    expect(mockClient.fetchTaskSummary).toHaveBeenCalledWith('notion:raw-id-live');
+    expect(result).toEqual({
+      title: 'Live Task',
+      type: '💻 Code',
+      status: '🗂️ Ready',
+      archived: false,
+    });
+  });
+
+  it('returns null on a cache miss whose live fetch 404s, unchanged from today', async () => {
+    vi.mocked(getTaskCache).mockReturnValue(undefined);
+    const mockClient = { fetchTaskSummary: vi.fn().mockResolvedValue(null) };
+    const backend = new NotionTaskBackend(mockClient as never);
+
+    const result = await backend.fetchTaskSummary('raw-id-missing');
+
+    expect(result).toBeNull();
+  });
+
+  it('falls through to the live fetch when the cache row has malformed raw_json', async () => {
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: 'notion:raw-id-bad',
+      fetched_at: Date.now(),
+      raw_json: '{not valid json',
+    } as never);
+    const mockClient = {
+      fetchTaskSummary: vi.fn().mockResolvedValue({
+        title: 'Recovered Task',
+        status: '🗂️ Ready',
+        type: '💻 Code',
+        archived: false,
+      }),
+    };
+    const backend = new NotionTaskBackend(mockClient as never);
+
+    const result = await backend.fetchTaskSummary('raw-id-bad');
+
+    expect(mockClient.fetchTaskSummary).toHaveBeenCalled();
+    expect(result).toEqual({
+      title: 'Recovered Task',
+      type: '💻 Code',
+      status: '🗂️ Ready',
+      archived: false,
+    });
   });
 });

@@ -121,7 +121,22 @@ export class NotionTaskBackend implements TaskBackend {
   }
 
   async fetchTaskSummary(taskId: string): Promise<TaskSummary | null> {
-    const task = await this.client.fetchTaskSummary(normalizeTaskId(taskId));
+    const normalizedId = normalizeTaskId(taskId);
+    const cached = getTaskCache(normalizedId);
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached.raw_json) as NotionTask;
+        return {
+          title: parsed.title,
+          type: parsed.type,
+          status: parsed.status,
+          archived: parsed.archived === true,
+        };
+      } catch {
+        // fall through to live fetch on malformed cache entries
+      }
+    }
+    const task = await this.client.fetchTaskSummary(normalizedId);
     return task
       ? {
           title: task.title,
