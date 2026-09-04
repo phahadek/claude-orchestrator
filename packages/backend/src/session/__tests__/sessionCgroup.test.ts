@@ -14,6 +14,8 @@ vi.mock('../../config', () => ({
     session_cgroup_prod_reserve_mb: 4096,
     session_cgroup_memory_high_fraction: 0.9,
     session_cgroup_deny_swap: true,
+    test_run_io_max_wbps: 100 * 1024 * 1024,
+    test_run_io_weight: 50,
   },
 }));
 
@@ -38,6 +40,9 @@ import { recordEvent } from '../../audit/AuditLog';
 import { getTestRequestRunById, getSession } from '../../db/queries';
 import {
   computeSessionCgroupLimits,
+  computeSessionCgroupIoLimits,
+  resolveBlockDevice,
+  formatIoMaxLine,
   setupSessionCgroup,
   placeSessionPid,
   killSessionCgroup,
@@ -54,6 +59,7 @@ import {
   _setSessionsPathForTesting,
   _setTestsPathForTesting,
   _setMainPathForTesting,
+  _setIoControllerAvailableForTesting,
 } from '../sessionCgroup';
 
 describe('computeSessionCgroupLimits', () => {
@@ -99,6 +105,73 @@ describe('computeSessionCgroupLimits', () => {
         denySwap: false,
       }).denySwap,
     ).toBe(false);
+  });
+});
+
+describe('resolveBlockDevice', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('decodes major:minor from a bigint dev_t using glibc gnu_dev encoding', () => {
+    vi.spyOn(fs, 'statSync').mockReturnValue({ dev: 64512n } as any);
+    expect(resolveBlockDevice('/some/path')).toBe('252:0');
+  });
+
+  it('returns null when the path cannot be stat-ed', () => {
+    vi.spyOn(fs, 'statSync').mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    expect(resolveBlockDevice('/missing')).toBeNull();
+  });
+});
+
+describe('formatIoMaxLine', () => {
+  it('formats a device and byte ceiling as an io.max wbps= line', () => {
+    expect(formatIoMaxLine('252:0', 104857600)).toBe('252:0 wbps=104857600');
+  });
+});
+
+describe('computeSessionCgroupIoLimits', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('resolves the device and carries the configured ceiling and weight through', () => {
+    vi.spyOn(fs, 'statSync').mockReturnValue({ dev: 64512n } as any);
+    const limits = computeSessionCgroupIoLimits({
+      worktreePath: '/repo',
+      maxWbps: 104857600,
+      weight: 50,
+    });
+    expect(limits).toEqual({
+      device: '252:0',
+      maxWbpsBytes: 104857600,
+      weight: 50,
+    });
+  });
+
+  it('disables the write ceiling when maxWbps is 0, even if the device resolves', () => {
+    vi.spyOn(fs, 'statSync').mockReturnValue({ dev: 64512n } as any);
+    const limits = computeSessionCgroupIoLimits({
+      worktreePath: '/repo',
+      maxWbps: 0,
+      weight: 50,
+    });
+    expect(limits.maxWbpsBytes).toBe(0);
+    expect(limits.device).toBe('252:0');
+  });
+
+  it('carries a null device through when resolution fails', () => {
+    vi.spyOn(fs, 'statSync').mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    const limits = computeSessionCgroupIoLimits({
+      worktreePath: '/missing',
+      maxWbps: 104857600,
+      weight: 50,
+    });
+    expect(limits.device).toBeNull();
   });
 });
 
@@ -255,6 +328,64 @@ describe('reapplySessionCgroupLimits', () => {
     expect(writtenPaths).toContain(
       '/sys/fs/cgroup/orchestrator.service/tests/memory.swap.max',
     );
+  });
+
+  it('also writes io.max and io.weight alongside memory.max when the io controller is available', () => {
+    _setSessionsPathForTesting('/sys/fs/cgroup/orchestrator.service/sessions');
+    _setIoControllerAvailableForTesting(true);
+    vi.spyOn(fs, 'statSync').mockReturnValue({ dev: 64512n } as any);
+    const writeSpy = vi
+      .spyOn(fs, 'writeFileSync')
+      .mockImplementation(() => undefined);
+    reapplySessionCgroupLimits();
+    const writtenPaths = writeSpy.mock.calls.map((c) => c[0]);
+    expect(writtenPaths).toContain(
+      '/sys/fs/cgroup/orchestrator.service/sessions/io.max',
+    );
+    expect(writtenPaths).toContain(
+      '/sys/fs/cgroup/orchestrator.service/sessions/io.weight',
+    );
+    const ioMaxCall = writeSpy.mock.calls.find(
+      (c) => c[0] === '/sys/fs/cgroup/orchestrator.service/sessions/io.max',
+    );
+    expect(ioMaxCall?.[1]).toBe('252:0 wbps=104857600');
+    const ioWeightCall = writeSpy.mock.calls.find(
+      (c) => c[0] === '/sys/fs/cgroup/orchestrator.service/sessions/io.weight',
+    );
+    expect(ioWeightCall?.[1]).toBe('50');
+  });
+
+  it('does not write io.max/io.weight when the io controller is unavailable', () => {
+    _setSessionsPathForTesting('/sys/fs/cgroup/orchestrator.service/sessions');
+    _setIoControllerAvailableForTesting(false);
+    const writeSpy = vi
+      .spyOn(fs, 'writeFileSync')
+      .mockImplementation(() => undefined);
+    reapplySessionCgroupLimits();
+    const writtenPaths = writeSpy.mock.calls.map((c) => c[0]);
+    expect(writtenPaths).not.toContain(
+      '/sys/fs/cgroup/orchestrator.service/sessions/io.max',
+    );
+    expect(writtenPaths).not.toContain(
+      '/sys/fs/cgroup/orchestrator.service/sessions/io.weight',
+    );
+    // memory limits must still be applied — io is best-effort only.
+    expect(writtenPaths).toContain(
+      '/sys/fs/cgroup/orchestrator.service/sessions/memory.max',
+    );
+  });
+
+  it('tolerates io.max/io.weight write failures without throwing or blocking memory limits', () => {
+    _setSessionsPathForTesting('/sys/fs/cgroup/orchestrator.service/sessions');
+    _setIoControllerAvailableForTesting(true);
+    vi.spyOn(fs, 'statSync').mockReturnValue({ dev: 64512n } as any);
+    vi.spyOn(fs, 'writeFileSync').mockImplementation((p) => {
+      if (String(p).endsWith('io.max') || String(p).endsWith('io.weight')) {
+        throw new Error('ENOENT: no such file');
+      }
+    });
+    expect(() => reapplySessionCgroupLimits()).not.toThrow();
+    expect(logger.warn).toHaveBeenCalled();
   });
 });
 

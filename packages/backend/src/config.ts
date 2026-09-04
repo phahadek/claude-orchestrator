@@ -792,6 +792,13 @@ export interface RuntimeSettings {
   session_cgroup_memory_high_fraction: number;
   /** When true (default), the session cgroup sets memory.swap.max=0 to deny swap. */
   session_cgroup_deny_swap: boolean;
+  /**
+   * Absolute write-bandwidth ceiling (bytes/sec) applied to the sessions/
+   * and tests/ cgroup leaves via io.max's wbps= field. 0 disables the cap.
+   */
+  test_run_io_max_wbps: number;
+  /** Proportional io.weight applied to the same leaves, vs. cgroup-v2's default of 100. */
+  test_run_io_weight: number;
   /** Stuck-session timer: seconds before emitting a notify toast. */
   session_notify_threshold_seconds: number;
   /** Stuck-session timer: seconds before injecting a pause message. */
@@ -997,6 +1004,10 @@ export const runtimeSettings: RuntimeSettings = {
     process.env.SESSION_CGROUP_MEMORY_HIGH_FRACTION ?? 0.9,
   ),
   session_cgroup_deny_swap: process.env.SESSION_CGROUP_DENY_SWAP !== 'false',
+  test_run_io_max_wbps: Number(
+    process.env.TEST_RUN_IO_MAX_WBPS ?? 100 * 1024 * 1024,
+  ),
+  test_run_io_weight: Number(process.env.TEST_RUN_IO_WEIGHT ?? 50),
   session_notify_threshold_seconds: Number(
     process.env.SESSION_NOTIFY_THRESHOLD_SECONDS ?? 3600,
   ),

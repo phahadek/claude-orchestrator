@@ -40,6 +40,8 @@ const SETTING_KEYS = [
   'session_cgroup_prod_reserve_mb',
   'session_cgroup_memory_high_fraction',
   'session_cgroup_deny_swap',
+  'test_run_io_max_wbps',
+  'test_run_io_weight',
   'session_notify_threshold_seconds',
   'session_pause_threshold_seconds',
   'session_inert_threshold_seconds',
@@ -147,6 +149,14 @@ function applyToRuntime(
       break;
     case 'session_cgroup_deny_swap':
       runtimeSettings.session_cgroup_deny_swap = value as boolean;
+      reapplySessionCgroupLimits();
+      break;
+    case 'test_run_io_max_wbps':
+      runtimeSettings.test_run_io_max_wbps = value as number;
+      reapplySessionCgroupLimits();
+      break;
+    case 'test_run_io_weight':
+      runtimeSettings.test_run_io_weight = value as number;
       reapplySessionCgroupLimits();
       break;
     case 'session_notify_threshold_seconds':
@@ -308,6 +318,8 @@ function runtimeSettingsAsRecord(): {
       runtimeSettings.session_cgroup_memory_high_fraction,
     ),
     session_cgroup_deny_swap: String(runtimeSettings.session_cgroup_deny_swap),
+    test_run_io_max_wbps: String(runtimeSettings.test_run_io_max_wbps),
+    test_run_io_weight: String(runtimeSettings.test_run_io_weight),
     session_notify_threshold_seconds: String(
       runtimeSettings.session_notify_threshold_seconds,
     ),
