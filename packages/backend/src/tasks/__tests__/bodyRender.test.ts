@@ -370,6 +370,65 @@ describe('WAF-safe command-line rendering', () => {
   });
 });
 
+describe('renderTaskBody / markdownToBlocks — code-fence language normalisation', () => {
+  function codeLanguageFor(markdown: string): string {
+    const blocks = markdownToBlocks(markdown);
+    const block = blocks.find((b) => b.type === 'code');
+    return (block as any).code.language;
+  }
+
+  it('renders a `ts` fence as `typescript`', () => {
+    expect(codeLanguageFor(['```ts', 'const x = 1;', '```'].join('\n'))).toBe(
+      'typescript',
+    );
+  });
+
+  it.each([
+    ['ts', 'typescript'],
+    ['js', 'javascript'],
+    ['py', 'python'],
+    ['sh', 'bash'],
+    ['zsh', 'bash'],
+    ['shell', 'bash'],
+    ['yml', 'yaml'],
+    ['dockerfile', 'docker'],
+    ['rs', 'rust'],
+    ['cs', 'c#'],
+    ['cpp', 'c++'],
+  ])('maps alias %s to Notion spelling %s', (alias, expected) => {
+    expect(
+      codeLanguageFor(['```' + alias, 'line', '```'].join('\n')),
+    ).toBe(expected);
+  });
+
+  it('falls back to plain text for a language absent from the enum and alias map', () => {
+    expect(
+      codeLanguageFor(['```brainfuck', '+++', '```'].join('\n')),
+    ).toBe('plain text');
+  });
+
+  it('renders a fence with no language as plain text, unchanged from today', () => {
+    expect(codeLanguageFor(['```', 'line', '```'].join('\n'))).toBe(
+      'plain text',
+    );
+  });
+
+  it.each(['bash', 'json'])(
+    'passes an already-valid, correctly spelled language %s through untouched',
+    (language) => {
+      expect(
+        codeLanguageFor(['```' + language, 'line', '```'].join('\n')),
+      ).toBe(language);
+    },
+  );
+
+  it('is case-insensitive and tolerant of surrounding whitespace', () => {
+    expect(codeLanguageFor(['```  TypeScript  ', 'line', '```'].join('\n'))).toBe(
+      'typescript',
+    );
+  });
+});
+
 describe('markdownToBlocks — move round-trip (blockToLine inverse)', () => {
   /** Mirrors NotionClient.fetchTaskPage: one blockToLine per block, joined. */
   function toMarkdown(blocks: ReturnType<typeof renderTaskBody>): string {
