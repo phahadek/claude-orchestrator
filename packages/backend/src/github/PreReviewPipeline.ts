@@ -162,7 +162,8 @@ export class PreReviewPipeline {
                 logger.info(
                   `[PreReviewPipeline] autofix PR #${ctx.prNumber}: ${msg}`,
                 ),
-              'dev',
+              getPRByNumber(ctx.prNumber, ctx.repo)?.base_branch ??
+                ctx.project.baseBranch,
               autofixCfg.autofix_skip_ci,
             );
 
@@ -399,7 +400,8 @@ export class PreReviewPipeline {
           const normalized = config.analyze.map(normalizeAnalyzeCommand);
           const diffPaths = await getChangedFiles(
             ctx.worktreePath,
-            ctx.project.baseBranch,
+            getPRByNumber(ctx.prNumber, ctx.repo)?.base_branch ??
+              ctx.project.baseBranch,
           );
 
           const outputParts: string[] = [];
@@ -764,7 +766,10 @@ export class PreReviewPipeline {
     deleteAnalyzeResult(prNumber, repo, headSha);
 
     const normalized = config.analyze.map(normalizeAnalyzeCommand);
-    const diffPaths = await getChangedFiles(worktreePath, project.baseBranch);
+    const diffPaths = await getChangedFiles(
+      worktreePath,
+      getPRByNumber(prNumber, repo)?.base_branch ?? project.baseBranch,
+    );
 
     const outputParts: string[] = [];
     let allPassed = true;

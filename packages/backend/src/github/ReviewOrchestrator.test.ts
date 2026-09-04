@@ -57,6 +57,7 @@ const projectFixture = {
   contextUrl: 'https://notion.so/ctx',
   boardId: 'board-1',
   gitMode: 'github' as const,
+  baseBranch: 'dev',
 };
 
 const localOnlyProjectFixture = {
@@ -2577,6 +2578,62 @@ describe('ReviewOrchestrator — autofix WS messages', () => {
     await new Promise((r) => setTimeout(r, 50));
 
     expect(vi.mocked(runAutofix)).toHaveBeenCalledTimes(2);
+  });
+
+  it("passes the PR's own base_branch to runAutofix, not the project's, for a two_tier PR", async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      base_branch: 'release/1.0',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({ success: true, summary: 'done' });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(runAutofix)).toHaveBeenCalledWith(
+      '/fake/worktree',
+      '/tmp',
+      ['npm run lint'],
+      expect.anything(),
+      'release/1.0',
+      expect.anything(),
+    );
+  });
+
+  it("falls back to the project's base branch when the PR has no base_branch recorded", async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      base_branch: null,
+    } as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({ success: true, summary: 'done' });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(runAutofix)).toHaveBeenCalledWith(
+      '/fake/worktree',
+      '/tmp',
+      ['npm run lint'],
+      expect.anything(),
+      'dev',
+      expect.anything(),
+    );
   });
 
   it('calls sessionManager.addToRevertLock with touchedFiles after a successful autofix commit', async () => {

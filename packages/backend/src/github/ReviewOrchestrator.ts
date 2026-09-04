@@ -583,7 +583,7 @@ export class ReviewOrchestrator {
           autofixCommands,
           (msg) =>
             logger.info(`[ReviewOrchestrator] autofix PR #${prNumber}: ${msg}`),
-          'dev',
+          prRow?.base_branch ?? project.baseBranch,
           autofixConfig.autofix_skip_ci,
         );
         autofixSuccess = result.success;
@@ -1026,7 +1026,7 @@ export class ReviewOrchestrator {
                 logger.info(
                   `[ReviewOrchestrator] autofix local branch ${job.branchName}: ${msg}`,
                 ),
-              'dev',
+              project.baseBranch,
               config.autofix_skip_ci,
             );
             if (autofixResult.commitSha) {
