@@ -239,3 +239,23 @@ export function isInvestigateSession(
 ): boolean {
   return typeof taskId === 'string' && taskId.startsWith('report-batch:');
 }
+
+/**
+ * True for a session row left non-terminal (often status='idle') by
+ * StuckSessionMonitor.escalateHardStop's machine-park archival — writing a
+ * terminal status there would violate the invariant that a session is only
+ * terminalized by its own lifecycle completing or by an operator, so it
+ * discriminates via archive_kind instead. This is the single shared
+ * definition of that discrimination; a bare `status === 'idle'` check
+ * cannot tell a live, resumable idle session apart from one of these, and a
+ * bare `archived === 1` check cannot tell this apart from an
+ * operator-archived (or legacy NULL, fail-closed) row that must stay
+ * terminal — see SessionManager._doSendOrResume's inline comment for the
+ * full rationale, now consuming this predicate.
+ */
+export function isMachineParkedIdle(session: {
+  archived: number;
+  archive_kind: string | null;
+}): boolean {
+  return session.archived === 1 && session.archive_kind === 'machine_park';
+}

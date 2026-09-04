@@ -4,6 +4,7 @@ import {
   isCodeSession,
   isGateVerifySession,
   isInvestigateSession,
+  isMachineParkedIdle,
   isPlanningSession,
   isTaskTypeCompatibleWithSessionType,
   movesTargetInProgress,
@@ -262,6 +263,35 @@ describe('sessionPredicates', () => {
 
     it('returns false for an unrecognized sessionType', () => {
       expect(isTaskTypeCompatibleWithSessionType('💻 Code', 'bogus')).toBe(
+        false,
+      );
+    });
+  });
+
+  describe('isMachineParkedIdle', () => {
+    it('is true only for archived=1 with archive_kind="machine_park"', () => {
+      expect(
+        isMachineParkedIdle({ archived: 1, archive_kind: 'machine_park' }),
+      ).toBe(true);
+    });
+
+    it('is false for archived=1 with archive_kind="operator"', () => {
+      expect(
+        isMachineParkedIdle({ archived: 1, archive_kind: 'operator' }),
+      ).toBe(false);
+    });
+
+    it('fails closed for archived=1 with legacy archive_kind NULL', () => {
+      expect(isMachineParkedIdle({ archived: 1, archive_kind: null })).toBe(
+        false,
+      );
+    });
+
+    it('is false when not archived, regardless of archive_kind', () => {
+      expect(
+        isMachineParkedIdle({ archived: 0, archive_kind: 'machine_park' }),
+      ).toBe(false);
+      expect(isMachineParkedIdle({ archived: 0, archive_kind: null })).toBe(
         false,
       );
     });

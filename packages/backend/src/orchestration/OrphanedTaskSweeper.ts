@@ -25,6 +25,7 @@ import {
   getTaskRepoAssignment,
 } from '../db/queries';
 import { sessionDidWork } from '../session/sessionLifecycle';
+import { isMachineParkedIdle } from '../session/sessionPredicates';
 import { isUsageAdmitted } from './usageAdmission';
 import {
   recordEvent,
@@ -273,7 +274,9 @@ export class OrphanedTaskSweeper {
         }
         // Defense-in-depth: skip if the session ended cleanly (idle) within the
         // grace window — async PR creation (marker flow) may still be in flight.
-        if (latestSession.status === 'idle') {
+        // A machine-parked-idle row was never a clean exit (it was hard-stopped),
+        // so it must not get this grace-window protection — fall through instead.
+        if (latestSession.status === 'idle' && !isMachineParkedIdle(latestSession)) {
           const endedAt = latestSession.ended_at ?? latestSession.started_at;
           if (Date.now() - endedAt < POST_CLEAN_EXIT_GRACE_MS) {
             return;
@@ -302,9 +305,12 @@ export class OrphanedTaskSweeper {
     // legitimate — it is not stalled, not abandoned, and not a candidate for
     // any terminal action (nudge, revert-to-Ready, surface-to-operator) or
     // crash-budget accounting. It is the system working: the session asked
-    // and is waiting for an answer only the operator can give.
+    // and is waiting for an answer only the operator can give. A
+    // machine-parked-idle row is a hard-stopped session, not one legitimately
+    // parked awaiting anything it actually asked for — exclude it here too.
     if (
       latestSession?.status === 'idle' &&
+      !isMachineParkedIdle(latestSession) &&
       isSessionAwaitingCapabilityDisposition(latestSession)
     ) {
       return;
@@ -318,6 +324,7 @@ export class OrphanedTaskSweeper {
     // surface-to-operator path below instead of being protected forever.
     if (
       latestSession?.status === 'idle' &&
+      !isMachineParkedIdle(latestSession) &&
       isSessionAwaitingOperatorDecision(latestSession)
     ) {
       if (
