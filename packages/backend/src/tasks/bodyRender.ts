@@ -247,11 +247,141 @@ function todo(text: string, checked = false): RenderedBlock {
   };
 }
 
-function codeBlock(text: string, language = 'plain text'): RenderedBlock {
+// ─── Code-fence language normalisation ─────────────────────────────────────
+
+/** Notion's `code.language` enum — anything outside this set is rejected by the API. */
+const NOTION_CODE_LANGUAGES = new Set([
+  'abap',
+  'abc',
+  'agda',
+  'arduino',
+  'ascii art',
+  'assembly',
+  'bash',
+  'basic',
+  'bnf',
+  'c',
+  'c#',
+  'c++',
+  'clojure',
+  'coffeescript',
+  'coq',
+  'css',
+  'dart',
+  'dhall',
+  'diff',
+  'docker',
+  'ebnf',
+  'elixir',
+  'elm',
+  'erlang',
+  'f#',
+  'flow',
+  'fortran',
+  'gherkin',
+  'glsl',
+  'go',
+  'graphql',
+  'groovy',
+  'haskell',
+  'hcl',
+  'html',
+  'idris',
+  'java',
+  'javascript',
+  'json',
+  'julia',
+  'kotlin',
+  'latex',
+  'less',
+  'lisp',
+  'livescript',
+  'llvm ir',
+  'lua',
+  'makefile',
+  'markdown',
+  'markup',
+  'matlab',
+  'mathematica',
+  'mermaid',
+  'nix',
+  'notion formula',
+  'objective-c',
+  'ocaml',
+  'pascal',
+  'perl',
+  'php',
+  'plain text',
+  'powershell',
+  'prolog',
+  'protobuf',
+  'purescript',
+  'python',
+  'r',
+  'racket',
+  'reason',
+  'ruby',
+  'rust',
+  'sass',
+  'scala',
+  'scheme',
+  'scss',
+  'shell',
+  'smalltalk',
+  'solidity',
+  'sql',
+  'swift',
+  'toml',
+  'typescript',
+  'vb.net',
+  'verilog',
+  'vhdl',
+  'visual basic',
+  'webassembly',
+  'xml',
+  'yaml',
+  'java/c/c++/c#',
+]);
+
+/** Common aliases that map to a Notion-accepted spelling. */
+const CODE_LANGUAGE_ALIASES: Record<string, string> = {
+  ts: 'typescript',
+  tsx: 'typescript',
+  js: 'javascript',
+  jsx: 'javascript',
+  py: 'python',
+  sh: 'bash',
+  zsh: 'bash',
+  shell: 'bash',
+  yml: 'yaml',
+  dockerfile: 'docker',
+  rs: 'rust',
+  cs: 'c#',
+  cpp: 'c++',
+};
+
+/**
+ * Maps an arbitrary fence language to Notion's accepted enum, normalising
+ * case/whitespace and common aliases, and falling back to 'plain text' for
+ * anything unrecognised — the API rejects the whole body on an invalid
+ * `code.language`, so an unvalidated string must never pass through.
+ */
+function normalizeCodeLanguage(language: string | undefined): string {
+  if (!language) return 'plain text';
+  const normalized = language.trim().toLowerCase();
+  if (!normalized) return 'plain text';
+  const aliased = CODE_LANGUAGE_ALIASES[normalized] ?? normalized;
+  return NOTION_CODE_LANGUAGES.has(aliased) ? aliased : 'plain text';
+}
+
+function codeBlock(text: string, language?: string): RenderedBlock {
   return {
     object: 'block',
     type: 'code',
-    code: { rich_text: chunkedRichText(text), language },
+    code: {
+      rich_text: chunkedRichText(text),
+      language: normalizeCodeLanguage(language),
+    },
   };
 }
 
