@@ -67,7 +67,10 @@ export interface JobOptions {
 
 export interface JobStatus {
   name: string;
+  /** True once the job has been admitted into the global concurrency window and is actually executing. */
   running: boolean;
+  /** True while the job is waiting for a free global concurrency slot, before it starts executing. */
+  queued: boolean;
   lastRunAt: string | null;
   lastStatus: JobRunStatus | null;
   nextRunAt: string | null;
@@ -76,7 +79,12 @@ export interface JobStatus {
 interface JobState {
   opts: JobOptions;
   timer: NodeJS.Timeout | null;
+  // In-flight from the moment a fire is accepted (pre-admission) through
+  // completion — this is what the skip-if-running / queue-next concurrency
+  // guard checks, and its semantics must not change. It does NOT distinguish
+  // queued-for-a-slot from actually executing; `executing` does that.
   running: boolean;
+  executing: boolean;
   queued: boolean;
   abortController: AbortController | null;
   lastRunAt: string | null;
@@ -106,6 +114,7 @@ export class Scheduler {
       opts,
       timer: null,
       running: false,
+      executing: false,
       queued: false,
       abortController: null,
       lastRunAt: null,
@@ -235,6 +244,7 @@ export class Scheduler {
     // window is saturated, so timing/measurement below reflects actual
     // execution, not queueing.
     await this._admitGlobalSlot();
+    state.executing = true;
 
     const startedAt = Date.now();
     // Sampled immediately before the job's await and diffed at completion —
@@ -299,6 +309,7 @@ export class Scheduler {
         performance.eventLoopUtilization(startElu).active,
       );
       state.running = false;
+      state.executing = false;
       state.abortController = null;
       this._releaseGlobalSlot();
       // Jobs must report items_processed explicitly, so a genuine zero is
@@ -402,11 +413,23 @@ export class Scheduler {
   status(): JobStatus[] {
     return Array.from(this.jobs.values()).map((s) => ({
       name: s.opts.name,
-      running: s.running,
+      running: s.executing,
+      queued: s.running && !s.executing,
       lastRunAt: s.lastRunAt,
       lastStatus: s.lastStatus,
       nextRunAt: s.nextRunAt,
     }));
+  }
+
+  /**
+   * Snapshot of the global concurrency window: how many jobs currently hold
+   * an admitted slot, and how many are queued waiting for one to free up.
+   */
+  admissionStats(): { occupiedSlots: number; pendingAdmission: number } {
+    return {
+      occupiedSlots: this.globalRunning,
+      pendingAdmission: this.admissionQueue.length,
+    };
   }
 
   async stopAll(

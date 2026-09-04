@@ -40,10 +40,11 @@ describe('GET /api/diagnostics/scheduler', () => {
     const app = makeApp(scheduler);
     const res = await request(app).get('/api/diagnostics/scheduler');
     expect(res.status).toBe(200);
-    expect(Array.isArray(res.body)).toBe(true);
-    expect(res.body[0]).toMatchObject({
+    expect(Array.isArray(res.body.jobs)).toBe(true);
+    expect(res.body.jobs[0]).toMatchObject({
       name: 'test_job',
       running: false,
+      queued: false,
       lastRunAt: null,
       lastStatus: null,
     });
@@ -54,7 +55,18 @@ describe('GET /api/diagnostics/scheduler', () => {
     const app = makeApp(scheduler);
     const res = await request(app).get('/api/diagnostics/scheduler');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual([]);
+    expect(res.body.jobs).toEqual([]);
+  });
+
+  it('reports occupied-slot count and pending-admission depth in the admission block', async () => {
+    const scheduler = new Scheduler();
+    const app = makeApp(scheduler);
+    const res = await request(app).get('/api/diagnostics/scheduler');
+    expect(res.status).toBe(200);
+    expect(res.body.admission).toEqual({
+      occupiedSlots: 0,
+      pendingAdmission: 0,
+    });
   });
 
   it('backfills lastDurationMs, runCount24h, errorCount24h from audit stats', async () => {
@@ -75,7 +87,7 @@ describe('GET /api/diagnostics/scheduler', () => {
     const app = makeApp(scheduler);
     const res = await request(app).get('/api/diagnostics/scheduler');
     expect(res.status).toBe(200);
-    expect(res.body[0]).toMatchObject({
+    expect(res.body.jobs[0]).toMatchObject({
       name: 'test_job',
       lastDurationMs: 1234,
       runCount24h: 5,
@@ -94,7 +106,7 @@ describe('GET /api/diagnostics/scheduler', () => {
     const app = makeApp(scheduler);
     const res = await request(app).get('/api/diagnostics/scheduler');
     expect(res.status).toBe(200);
-    expect(res.body[0]).toMatchObject({
+    expect(res.body.jobs[0]).toMatchObject({
       name: 'new_job',
       lastDurationMs: null,
       runCount24h: 0,
@@ -120,8 +132,8 @@ describe('GET /api/diagnostics/scheduler', () => {
     const app = makeApp(scheduler);
     const res = await request(app).get('/api/diagnostics/scheduler');
     expect(res.status).toBe(200);
-    const a = res.body.find((j: { name: string }) => j.name === 'job_a');
-    const b = res.body.find((j: { name: string }) => j.name === 'job_b');
+    const a = res.body.jobs.find((j: { name: string }) => j.name === 'job_a');
+    const b = res.body.jobs.find((j: { name: string }) => j.name === 'job_b');
     expect(a).toMatchObject({
       lastDurationMs: 500,
       runCount24h: 3,
@@ -154,7 +166,7 @@ describe('GET /api/diagnostics/scheduler', () => {
     const app = makeApp(scheduler);
     const res = await request(app).get('/api/diagnostics/scheduler');
     expect(res.status).toBe(200);
-    expect(res.body[0]).toMatchObject({
+    expect(res.body.jobs[0]).toMatchObject({
       name: 'test_job',
       maxEventLoopBlockedMs24h: 4200,
       meanEventLoopBlockedMs24h: 900,
@@ -172,7 +184,7 @@ describe('GET /api/diagnostics/scheduler', () => {
     const app = makeApp(scheduler);
     const res = await request(app).get('/api/diagnostics/scheduler');
     expect(res.status).toBe(200);
-    expect(res.body[0]).toMatchObject({
+    expect(res.body.jobs[0]).toMatchObject({
       name: 'new_job',
       maxEventLoopBlockedMs24h: null,
       meanEventLoopBlockedMs24h: null,

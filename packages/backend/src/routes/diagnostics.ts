@@ -38,7 +38,7 @@ export function createDiagnosticsRouter(): Router {
         meanEventLoopBlockedMs24h: s?.meanEventLoopBlockedMs24h ?? null,
       };
     });
-    res.json(augmented);
+    res.json({ jobs: augmented, admission: _scheduler.admissionStats() });
   });
 
   // POST /api/diagnostics/scheduler/:name/trigger
