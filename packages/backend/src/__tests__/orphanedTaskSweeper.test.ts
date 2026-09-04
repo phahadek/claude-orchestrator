@@ -143,6 +143,7 @@ function makeSession(
   endedAt?: number,
   worktreePath?: string | null,
   archived = 0,
+  archiveKind: 'machine_park' | 'operator' | null = null,
 ) {
   const started_at = Date.now() - startedAtOffsetMs;
   return {
@@ -155,6 +156,7 @@ function makeSession(
     session_type: 'standard',
     worktree_path: worktreePath !== undefined ? worktreePath : '/fake/worktree',
     archived,
+    archive_kind: archiveKind,
   };
 }
 
@@ -985,6 +987,99 @@ describe('OrphanedTaskSweeper', () => {
     // Archived idle session must NOT be nudged
     expect(enqueueFeedback).not.toHaveBeenCalled();
     // Treat as a genuine orphan — revert to Ready
+    expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
+  });
+
+  // ── Machine-parked-idle sessions (archived=1, archive_kind='machine_park') ──
+
+  it('does not grant a machine-parked-idle session the clean-exit grace window', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    // Ended just now — well inside POST_CLEAN_EXIT_GRACE_MS, which would
+    // normally protect a clean idle exit from revert.
+    const endedAt = Date.now() - 5 * 1000;
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession(
+        'idle',
+        30 * 60 * 1000,
+        endedAt,
+        '/fake/worktree',
+        1,
+        'machine_park',
+      ) as ReturnType<typeof getLatestCodeSessionByNotionTaskId>,
+    );
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      enqueueFeedback,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(enqueueFeedback).not.toHaveBeenCalled();
+    expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
+  });
+
+  it('does not treat a machine-parked-idle session as legitimately awaiting a capability disposition', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    const endedAt = Date.now() - 10 * 60 * 1000;
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession(
+        'idle',
+        30 * 60 * 1000,
+        endedAt,
+        '/fake/worktree',
+        1,
+        'machine_park',
+      ) as ReturnType<typeof getLatestCodeSessionByNotionTaskId>,
+    );
+    // Even if the underlying signal would say "awaiting disposition", a
+    // machine-parked row must not be shielded by it.
+    vi.mocked(isSessionAwaitingCapabilityDisposition).mockReturnValue(true);
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      enqueueFeedback,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
+  });
+
+  it('does not treat a machine-parked-idle session as legitimately awaiting an operator decision', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    const endedAt = Date.now() - 10 * 60 * 1000;
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession(
+        'idle',
+        30 * 60 * 1000,
+        endedAt,
+        '/fake/worktree',
+        1,
+        'machine_park',
+      ) as ReturnType<typeof getLatestCodeSessionByNotionTaskId>,
+    );
+    vi.mocked(isSessionAwaitingOperatorDecision).mockReturnValue(true);
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      enqueueFeedback,
+    });
+
+    await sweeper.sweepOnce();
+
     expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
   });
 

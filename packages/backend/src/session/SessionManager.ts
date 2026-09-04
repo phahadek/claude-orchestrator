@@ -154,6 +154,7 @@ import {
   countsAgainstConcurrency,
   countsAgainstCodeSessionConcurrency,
   isGateVerifySession,
+  isMachineParkedIdle,
   isPlanningSession,
   movesTargetInProgress,
   usesWorktree,
@@ -5294,7 +5295,7 @@ export class SessionManager extends EventEmitter {
       (row.status === 'done' ||
         row.status === 'error' ||
         row.status === 'killed' ||
-        (row.archived === 1 && row.archive_kind !== 'machine_park'))
+        (row.archived === 1 && !isMachineParkedIdle(row)))
     ) {
       logger.warn(
         `[SessionManager] sendOrResume: refusing to respawn terminal session ${sessionId} (status=${row.status}, archived=${row.archived}, archive_kind=${row.archive_kind ?? 'null'})`,
