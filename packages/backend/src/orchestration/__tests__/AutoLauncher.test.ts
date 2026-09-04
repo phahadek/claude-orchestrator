@@ -2072,7 +2072,7 @@ describe('AutoLauncher.pollOnce() — fire-and-forget timing regression guard', 
     ).auto_launch_concurrency = 5;
   });
 
-  it('poll cycle completes in <1s when launching 3 tasks (start() does not block poll on git)', async () => {
+  it('pollOnce() resolves without waiting for start()-triggered git/bootstrap work to finish (start() does not block poll on git)', async () => {
     const tasks = [
       makeResolvedTask({ id: 'task-1', title: 'Task One' }),
       makeResolvedTask({ id: 'task-2', title: 'Task Two' }),
@@ -2083,8 +2083,26 @@ describe('AutoLauncher.pollOnce() — fire-and-forget timing regression guard', 
       fetchReadyTasks: vi.fn().mockResolvedValue(tasks),
     };
     const resolveBackend = vi.fn().mockReturnValue(notionBackend);
-    // start() mock returns immediately (simulates fire-and-forget: caller unblocked)
     const sessionManager = makeSessionManager(0);
+
+    // Rather than measuring pollOnce()'s wall-clock duration against an
+    // absolute bound (flaky under host jitter), prove fire-and-forget via
+    // promise-resolution ordering: start() kicks off "git/bootstrap" work
+    // that only resolves once the test explicitly releases it. If
+    // AutoLauncher ever started awaiting that work inline, this ordering
+    // check would fail deterministically regardless of how fast or slow
+    // the host is.
+    let releaseBootstrap: () => void = () => {};
+    const bootstrapGate = new Promise<void>((resolve) => {
+      releaseBootstrap = resolve;
+    });
+    let bootstrapSettled = false;
+    sessionManager.start = vi.fn().mockImplementation(() => {
+      bootstrapGate.then(() => {
+        bootstrapSettled = true;
+      });
+      return 'session-id-abc123';
+    });
 
     const launcher = new AutoLauncher(sessionManager as never, undefined, {
       listProjects: () => [makeProject()],
@@ -2092,15 +2110,18 @@ describe('AutoLauncher.pollOnce() — fire-and-forget timing regression guard', 
       pollOnStart: false,
     });
 
-    const t0 = Date.now();
     await launcher.pollOnce();
-    const elapsed = Date.now() - t0;
 
     // All 3 tasks must be dispatched via start()
     expect(sessionManager.start).toHaveBeenCalledTimes(3);
-    // Poll cycle must complete well under 1 second — start() is fire-and-forget
-    // so the poll loop does not wait for git/bootstrap/spawn to complete.
-    expect(elapsed).toBeLessThan(1_000);
+    // pollOnce() must have resolved before the gated bootstrap work did —
+    // proof that the poll loop does not wait for git/bootstrap/spawn to
+    // complete, independent of any real elapsed time.
+    expect(bootstrapSettled).toBe(false);
+
+    releaseBootstrap();
+    await bootstrapGate;
+    expect(bootstrapSettled).toBe(true);
   });
 });
 
