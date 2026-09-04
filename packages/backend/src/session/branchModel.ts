@@ -283,6 +283,48 @@ export function ensureMilestoneBranch(
   }
 
   if (legacyExistsLocally) {
+    // The local legacy branch may be stale relative to origin's copy (e.g.
+    // never fetched, or pushed to from another machine/session). Fetch
+    // origin's copy into a remote-tracking ref and reconcile before renaming
+    // — otherwise a rename-then-push-then-delete-origin sequence built on a
+    // stale local ref would permanently discard origin-only commits.
+    let originLegacyExists = false;
+    try {
+      execSync(`git fetch origin ${legacyRef}:refs/remotes/origin/${legacyRef}`, {
+        cwd: projectDir,
+        timeout: 30_000,
+      });
+      originLegacyExists = true;
+    } catch {
+      // no legacy branch on origin — local copy is the only one
+    }
+
+    if (originLegacyExists) {
+      let localIsAncestorOfOrigin = false;
+      try {
+        execSync(`git merge-base --is-ancestor ${legacyRef} origin/${legacyRef}`, {
+          cwd: projectDir,
+          stdio: 'pipe',
+        });
+        localIsAncestorOfOrigin = true;
+      } catch {
+        // local has commits origin lacks, or history diverged
+      }
+
+      if (!localIsAncestorOfOrigin) {
+        // Unsafe to auto-migrate: local and origin's legacy branch have
+        // diverged. Leave both alone for manual resolution rather than risk
+        // discarding commits, and create milestone/<slug> fresh from base.
+        execSync(`git branch ${ref} origin/${baseBranch}`, { cwd: projectDir });
+        execSync(`git push origin ${ref}`, { cwd: projectDir });
+        return;
+      }
+
+      // Local is behind (or equal to) origin — fast-forward it before renaming
+      // so the rename carries origin's latest commits, not a stale snapshot.
+      execSync(`git branch -f ${legacyRef} origin/${legacyRef}`, { cwd: projectDir });
+    }
+
     execSync(`git branch -m ${legacyRef} ${ref}`, { cwd: projectDir });
     execSync(`git push origin ${ref}`, { cwd: projectDir });
     try {

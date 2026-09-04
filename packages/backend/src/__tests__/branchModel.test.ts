@@ -291,14 +291,17 @@ describe('ensureMilestoneBranch', () => {
     );
   });
 
-  it('migrates a pre-existing local feature/<slug> branch to milestone/<slug>', () => {
+  it('migrates a pre-existing local feature/<slug> branch to milestone/<slug> (local caught up with origin)', () => {
     // 1st call: local ref check (milestone/<slug>) → throws (not found)
     // 2nd call: git fetch → ok
     // 3rd call: origin ref check (milestone/<slug>) → throws (not on origin)
     // 4th call: local ref check for legacy feature/<slug> → succeeds (found)
-    // 5th call: git branch -m (rename)
-    // 6th call: git push origin milestone/<slug>
-    // 7th call: git push origin --delete feature/<slug>
+    // 5th call: fetch legacy ref into origin/feature/<slug> → succeeds
+    // 6th call: merge-base --is-ancestor (local is ancestor of origin) → succeeds
+    // 7th call: git branch -f (fast-forward local to origin's tip)
+    // 8th call: git branch -m (rename)
+    // 9th call: git push origin milestone/<slug>
+    // 10th call: git push origin --delete feature/<slug>
     execSyncMock
       .mockImplementationOnce(() => {
         throw new Error('not found');
@@ -308,12 +311,27 @@ describe('ensureMilestoneBranch', () => {
         throw new Error('not on origin');
       })
       .mockReturnValueOnce('') // legacy local ref check succeeds
+      .mockReturnValueOnce('') // fetch legacy ref from origin
+      .mockReturnValueOnce('') // merge-base --is-ancestor succeeds
+      .mockReturnValueOnce('') // git branch -f
       .mockReturnValueOnce('') // git branch -m
       .mockReturnValueOnce('') // git push origin milestone/<slug>
       .mockReturnValueOnce(''); // git push origin --delete feature/<slug>
 
     ensureMilestoneBranch('m6-readiness', '/repo');
 
+    expect(execSyncMock).toHaveBeenCalledWith(
+      'git fetch origin feature/m6-readiness:refs/remotes/origin/feature/m6-readiness',
+      expect.objectContaining({ cwd: '/repo' }),
+    );
+    expect(execSyncMock).toHaveBeenCalledWith(
+      'git merge-base --is-ancestor feature/m6-readiness origin/feature/m6-readiness',
+      expect.objectContaining({ cwd: '/repo' }),
+    );
+    expect(execSyncMock).toHaveBeenCalledWith(
+      'git branch -f feature/m6-readiness origin/feature/m6-readiness',
+      expect.objectContaining({ cwd: '/repo' }),
+    );
     expect(execSyncMock).toHaveBeenCalledWith(
       'git branch -m feature/m6-readiness milestone/m6-readiness',
       expect.objectContaining({ cwd: '/repo' }),
@@ -330,6 +348,79 @@ describe('ensureMilestoneBranch', () => {
     expect(execSyncMock).not.toHaveBeenCalledWith(
       expect.stringContaining('origin/dev'),
       expect.anything(),
+    );
+  });
+
+  it('migrates a pre-existing local feature/<slug> branch with no origin copy (no fast-forward needed)', () => {
+    // Fetch of the legacy ref from origin fails (branch never pushed) — the
+    // local branch is the only copy, so rename proceeds without reconciling.
+    execSyncMock
+      .mockImplementationOnce(() => {
+        throw new Error('not found');
+      })
+      .mockReturnValueOnce('') // fetch
+      .mockImplementationOnce(() => {
+        throw new Error('not on origin');
+      })
+      .mockReturnValueOnce('') // legacy local ref check succeeds
+      .mockImplementationOnce(() => {
+        throw new Error('no origin copy of legacy branch');
+      })
+      .mockReturnValueOnce('') // git branch -m
+      .mockReturnValueOnce('') // git push origin milestone/<slug>
+      .mockReturnValueOnce(''); // git push origin --delete feature/<slug>
+
+    ensureMilestoneBranch('m6-readiness', '/repo');
+
+    expect(execSyncMock).not.toHaveBeenCalledWith(
+      expect.stringContaining('merge-base'),
+      expect.anything(),
+    );
+    expect(execSyncMock).toHaveBeenCalledWith(
+      'git branch -m feature/m6-readiness milestone/m6-readiness',
+      expect.objectContaining({ cwd: '/repo' }),
+    );
+  });
+
+  it('does not delete origin commits when local legacy branch has diverged from origin', () => {
+    // 1st call: local ref check (milestone/<slug>) → throws (not found)
+    // 2nd call: git fetch → ok
+    // 3rd call: origin ref check (milestone/<slug>) → throws (not on origin)
+    // 4th call: local ref check for legacy feature/<slug> → succeeds (found)
+    // 5th call: fetch legacy ref into origin/feature/<slug> → succeeds
+    // 6th call: merge-base --is-ancestor → throws (diverged / local ahead)
+    // 7th call: git branch milestone/<slug> from origin/dev (safe fallback)
+    // 8th call: git push origin milestone/<slug>
+    execSyncMock
+      .mockImplementationOnce(() => {
+        throw new Error('not found');
+      })
+      .mockReturnValueOnce('') // fetch
+      .mockImplementationOnce(() => {
+        throw new Error('not on origin');
+      })
+      .mockReturnValueOnce('') // legacy local ref check succeeds
+      .mockReturnValueOnce('') // fetch legacy ref from origin
+      .mockImplementationOnce(() => {
+        throw new Error('diverged');
+      })
+      .mockReturnValueOnce('') // git branch from origin/dev
+      .mockReturnValueOnce(''); // git push
+
+    ensureMilestoneBranch('m6-readiness', '/repo');
+
+    // The stale/diverged legacy branch is never renamed or deleted.
+    expect(execSyncMock).not.toHaveBeenCalledWith(
+      expect.stringContaining('git branch -m'),
+      expect.anything(),
+    );
+    expect(execSyncMock).not.toHaveBeenCalledWith(
+      expect.stringContaining('--delete'),
+      expect.anything(),
+    );
+    expect(execSyncMock).toHaveBeenCalledWith(
+      'git branch milestone/m6-readiness origin/dev',
+      expect.objectContaining({ cwd: '/repo' }),
     );
   });
 
