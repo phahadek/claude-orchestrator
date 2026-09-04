@@ -245,7 +245,9 @@ describe('runBootSequence — listen-first', () => {
 });
 
 describe('response compression', () => {
-  const largeBody = { items: Array.from({ length: 100 }, (_, i) => ({ i, note: 'x'.repeat(20) })) };
+  const largeBody = {
+    items: Array.from({ length: 100 }, (_, i) => ({ i, note: 'x'.repeat(20) })),
+  };
   const smallBody = { ok: true };
 
   function makeApp() {
@@ -253,7 +255,9 @@ describe('response compression', () => {
     app.use(createResponseCompression());
     app.get('/api/large', (_req, res) => res.json(largeBody));
     app.get('/api/small', (_req, res) => res.json(smallBody));
-    app.get(`${ORCHESTRATOR_MCP_FULL_PATH}`, (_req, res) => res.json(largeBody));
+    app.get(`${ORCHESTRATOR_MCP_FULL_PATH}`, (_req, res) =>
+      res.json(largeBody),
+    );
     app.get('/api/events', (_req, res) => {
       res.setHeader('Content-Type', 'text/event-stream');
       res.send(JSON.stringify(largeBody));
@@ -305,7 +309,9 @@ describe('response compression', () => {
   });
 
   it('serves a compressed static bundle when the client accepts gzip', async () => {
-    const staticDir = fs.mkdtempSync(path.join(os.tmpdir(), 'compression-static-'));
+    const staticDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'compression-static-'),
+    );
     fs.writeFileSync(
       path.join(staticDir, 'bundle.js'),
       `console.log(${JSON.stringify('x'.repeat(2000))});`,
@@ -316,7 +322,9 @@ describe('response compression', () => {
     app.use(express.static(staticDir));
 
     try {
-      const res = await request(app).get('/bundle.js').set('Accept-Encoding', 'gzip');
+      const res = await request(app)
+        .get('/bundle.js')
+        .set('Accept-Encoding', 'gzip');
       expect(res.headers['content-encoding']).toBe('gzip');
     } finally {
       fs.rmSync(staticDir, { recursive: true, force: true });
