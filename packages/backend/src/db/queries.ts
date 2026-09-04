@@ -12079,6 +12079,8 @@ export function listStagedIntentsBySession(
 
 let _stmtHasActiveStagedIntentForSession: Database.Statement | null = null;
 let _stmtHasBlockedStagedIntentForSession: Database.Statement | null = null;
+let _stmtHasBlockedStagedIntentForSessionInGroup: Database.Statement | null =
+  null;
 
 /**
  * True when the session owns at least one staged_intent row parked in
@@ -12086,8 +12088,34 @@ let _stmtHasBlockedStagedIntentForSession: Database.Statement | null = null;
  * commitGroupIntents' blocked-member guard (routes/stagedIntents.ts) refuses
  * a group over. Read directly off the persisted table, never a live session
  * handle, so this stays correct across a backend restart.
+ *
+ * When `groupId` is supplied, the check is scoped to that group's own
+ * members only — a blocked row the session left behind in a *different*
+ * group (e.g. a stale needs_revision intent from an earlier, unrelated
+ * decision) must not wedge this group. Omitting `groupId` checks across the
+ * session's entire history, for callers with no single group in view.
  */
-function hasBlockedStagedIntentForSession(sessionId: string): boolean {
+function hasBlockedStagedIntentForSession(
+  sessionId: string,
+  groupId?: string | null,
+): boolean {
+  if (groupId) {
+    _stmtHasBlockedStagedIntentForSessionInGroup ??= db.prepare<{
+      session_id: string;
+      group_id: string;
+    }>(
+      `SELECT 1 FROM staged_intent
+       WHERE session_id = @session_id AND group_id = @group_id
+         AND state IN ('needs_revision', 'pending_verification')
+       LIMIT 1`,
+    );
+    return (
+      _stmtHasBlockedStagedIntentForSessionInGroup.get({
+        session_id: sessionId,
+        group_id: groupId,
+      }) !== undefined
+    );
+  }
   _stmtHasBlockedStagedIntentForSession ??= db.prepare<{
     session_id: string;
   }>(
@@ -12117,13 +12145,33 @@ function hasBlockedStagedIntentForSession(sessionId: string): boolean {
  * turn-in-flight back to true, so a previously-complete session's staged
  * intents refuse disposition again until the resumed turn ends — no extra
  * bookkeeping needed.
+ *
+ * A session in a terminal status (done/error/killed) or archived can never
+ * resume its turn — nothing is being "awaited" from it, so it always reads
+ * complete regardless of any stale blocked intent left behind in its
+ * history; a session with no row at all (deleted) is treated the same way.
+ * This is checked ahead of the blocked-intent lookup so a finished session's
+ * stale needs_revision/pending_verification row from an unrelated group can
+ * never wedge anything.
+ *
+ * `groupId`, when supplied, scopes the blocked-intent check to that group's
+ * own members — see hasBlockedStagedIntentForSession. Pass the group being
+ * committed/displayed so a blocked member in a sibling group never counts
+ * against it.
  */
 export function isSessionComplete(
   sessionId: string,
   turnInFlight: boolean,
+  groupId?: string | null,
 ): boolean {
   if (turnInFlight) return false;
-  if (hasBlockedStagedIntentForSession(sessionId)) return false;
+  const session = getStmtGetSession().get({ session_id: sessionId }) as
+    | Session
+    | undefined;
+  if (!session || TERMINAL_SESSION_STATUSES.has(session.status) || session.archived) {
+    return true;
+  }
+  if (hasBlockedStagedIntentForSession(sessionId, groupId)) return false;
   _stmtHasActiveStagedIntentForSession ??= db.prepare<{
     session_id: string;
   }>(
