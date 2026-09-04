@@ -1104,14 +1104,15 @@ describe('runBootWorktreeReconciliation — parallelism', () => {
 
     async function runWithCap(cap: number, prefix: string): Promise<number> {
       const projects = Array.from({ length: N }, (_, i) =>
-        makeProject({ id: `${prefix}-${i}`, projectDir: `/fake/${prefix}${i}` }),
+        makeProject({
+          id: `${prefix}-${i}`,
+          projectDir: `/fake/${prefix}${i}`,
+        }),
       );
       mockedRunWithConcurrency.mockImplementationOnce(
         (items: any[], _cap: number, fn: (item: any) => Promise<any>) =>
           realRwc(items, cap, async (item: unknown) => {
-            await new Promise<void>((resolve) =>
-              setTimeout(resolve, DELAY_MS),
-            );
+            await new Promise<void>((resolve) => setTimeout(resolve, DELAY_MS));
             return fn(item);
           }),
       );
