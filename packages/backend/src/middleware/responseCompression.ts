@@ -14,7 +14,10 @@ export function createResponseCompression(): RequestHandler {
       if (req.path.startsWith(ORCHESTRATOR_MCP_FULL_PATH)) return false;
       // res.send() of a string appends "; charset=utf-8", so match by prefix.
       const contentType = res.getHeader('Content-Type');
-      if (typeof contentType === 'string' && contentType.startsWith('text/event-stream')) {
+      if (
+        typeof contentType === 'string' &&
+        contentType.startsWith('text/event-stream')
+      ) {
         return false;
       }
       return compression.filter(req, res);
