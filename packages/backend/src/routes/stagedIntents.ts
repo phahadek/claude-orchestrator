@@ -1486,7 +1486,7 @@ function sweepGroomBodyEditsIntoGroup(
  * instead of trust in a session-authored free-text field. Names the existing
  * group id so the staging session can retry against it.
  */
-export class TaskGroupMismatchError extends Error {
+class TaskGroupMismatchError extends Error {
   constructor(
     taskId: string,
     existingGroupId: string,
@@ -1506,7 +1506,7 @@ export class TaskGroupMismatchError extends Error {
  * owned by a different session — prevents two sessions from merging their
  * proposals into one group by coincidence of a shared free-text id.
  */
-export class GroupOwnedByAnotherSessionError extends Error {
+class GroupOwnedByAnotherSessionError extends Error {
   constructor(groupId: string, ownerSessionId: string) {
     super(
       `[stagedIntents] groupId "${groupId}" already has a live member staged by session "${ownerSessionId}" ` +

@@ -12078,7 +12078,7 @@ export function listStagedIntentsByGroup(groupId: string): StagedIntentRow[] {
  * member of a task's prior group lands there, that task has no open group and
  * a fresh groupId is free to be chosen for the next grooming pass.
  */
-export const OPEN_DECISION_GROUP_STATES: readonly StagedIntentState[] = [
+const OPEN_DECISION_GROUP_STATES: readonly StagedIntentState[] = [
   'staged',
   'approved',
   'needs_revision',
