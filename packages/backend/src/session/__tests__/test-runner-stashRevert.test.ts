@@ -172,6 +172,7 @@ process.exit(1);
   });
 
   it('returns no_implementation_files_changed when the diff touches only test files', async () => {
+    write('implementation.js', 'module.exports.add = (a, b) => a - b;\n');
     const baseRef = commitAll('base');
     write('math.test.js', '// new test only\n');
 
