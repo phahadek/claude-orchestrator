@@ -570,6 +570,127 @@ describe('Scheduler global concurrency bound', () => {
     resolveRun();
     await scheduler.stopAll();
   });
+
+  it('reports a newly-scheduled job as queued (not executing) while the global window is saturated, then executing once a slot frees', async () => {
+    const { scheduler } = makeScheduler();
+    const tracker = {
+      inFlight: 0,
+      peakInFlight: 0,
+      completed: 0,
+      active: [] as Array<() => void>,
+    };
+    registerBusyJobs(scheduler, GLOBAL_MAX_CONCURRENT_JOBS, tracker);
+
+    let resolveLate!: () => void;
+    const latePending = new Promise<void>((r) => {
+      resolveLate = r;
+    });
+    scheduler.register({
+      name: 'late_job',
+      intervalMs: 60_000,
+      runOnBoot: true,
+      run: () => latePending,
+    });
+
+    scheduler.start();
+    // All GLOBAL_MAX_CONCURRENT_JOBS busy jobs fire and occupy every slot;
+    // late_job's own boot fire is accepted (running) but blocked on admission.
+    await vi.advanceTimersByTimeAsync(1);
+
+    const late = scheduler
+      .status()
+      .find((s) => s.name === 'late_job');
+    expect(late).toMatchObject({ running: false, queued: true });
+
+    // Free one slot — late_job should now be admitted and executing.
+    const [release] = tracker.active.splice(0, 1);
+    release();
+    await vi.advanceTimersByTimeAsync(1);
+
+    const lateAfter = scheduler
+      .status()
+      .find((s) => s.name === 'late_job');
+    expect(lateAfter).toMatchObject({ running: true, queued: false });
+
+    resolveLate();
+    tracker.active.forEach((r) => r());
+    await vi.advanceTimersByTimeAsync(1);
+    await scheduler.stopAll();
+  });
+
+  it('skip-if-running still suppresses a second fire while a job is queued but not yet executing', async () => {
+    const { scheduler } = makeScheduler();
+    const tracker = {
+      inFlight: 0,
+      peakInFlight: 0,
+      completed: 0,
+      active: [] as Array<() => void>,
+    };
+    registerBusyJobs(scheduler, GLOBAL_MAX_CONCURRENT_JOBS, tracker);
+
+    const runFn = vi.fn().mockResolvedValue(undefined);
+    scheduler.register({
+      name: 'queued_skip_job',
+      intervalMs: 60_000,
+      runOnBoot: true,
+      concurrency: 'skip-if-running',
+      run: runFn,
+    });
+
+    scheduler.start();
+    // Global window saturated by the busy jobs; queued_skip_job is
+    // in-flight (running=true) but stuck waiting for admission (queued=true).
+    await vi.advanceTimersByTimeAsync(1);
+    expect(
+      scheduler.status().find((s) => s.name === 'queued_skip_job'),
+    ).toMatchObject({ running: false, queued: true });
+    expect(runFn).not.toHaveBeenCalled();
+
+    // A second fire while queued must be skipped, not double-admitted.
+    void scheduler.triggerNow('queued_skip_job');
+    await vi.advanceTimersByTimeAsync(1);
+    const skipped = mockInsertAudit.mock.calls.filter(
+      (c) => c[0].status === 'skipped',
+    );
+    expect(skipped.length).toBeGreaterThanOrEqual(1);
+    expect(runFn).not.toHaveBeenCalled();
+
+    tracker.active.forEach((r) => r());
+    await vi.advanceTimersByTimeAsync(10);
+    await scheduler.stopAll();
+  });
+
+  it('reports occupied-slot count and pending-admission depth', async () => {
+    const { scheduler } = makeScheduler();
+    const tracker = {
+      inFlight: 0,
+      peakInFlight: 0,
+      completed: 0,
+      active: [] as Array<() => void>,
+    };
+    const jobCount = GLOBAL_MAX_CONCURRENT_JOBS + 2;
+    registerBusyJobs(scheduler, jobCount, tracker);
+
+    expect(scheduler.admissionStats()).toEqual({
+      occupiedSlots: 0,
+      pendingAdmission: 0,
+    });
+
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(scheduler.admissionStats()).toEqual({
+      occupiedSlots: GLOBAL_MAX_CONCURRENT_JOBS,
+      pendingAdmission: 2,
+    });
+
+    while (tracker.completed < jobCount) {
+      const batch = tracker.active.splice(0, tracker.active.length);
+      batch.forEach((release) => release());
+      await vi.advanceTimersByTimeAsync(1);
+    }
+    await scheduler.stopAll();
+  });
 });
 
 describe('Scheduler items_processed reporting', () => {
