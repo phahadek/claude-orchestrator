@@ -1323,7 +1323,9 @@ function rateLimitRes(retryAfter: string | null) {
   return {
     ok: false,
     status: 429,
-    headers: { get: (name: string) => (name === 'Retry-After' ? retryAfter : null) },
+    headers: {
+      get: (name: string) => (name === 'Retry-After' ? retryAfter : null),
+    },
     json: async () => ({}),
     text: async () => 'rate limited',
   };

@@ -235,7 +235,10 @@ async function notionRequest<T>(
 
     const headerDelayMs = parseRetryAfterMs(res);
     const backoffDelayMs = BASE_BACKOFF_MS * 2 ** attempt;
-    const delayMs = Math.min(headerDelayMs ?? backoffDelayMs, MAX_RETRY_DELAY_MS);
+    const delayMs = Math.min(
+      headerDelayMs ?? backoffDelayMs,
+      MAX_RETRY_DELAY_MS,
+    );
 
     if (attempt >= MAX_429_RETRIES) {
       const text = await res.text().catch(() => res.statusText);
