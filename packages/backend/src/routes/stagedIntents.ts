@@ -97,6 +97,7 @@ import {
   isSessionComplete,
   TERMINAL_SESSION_STATUSES,
   getPRByNumber,
+  getPRBySessionId,
   setPRReviewResult,
   getSessionDeclaredWrites,
   getLatestOpsSessionByTaskId,
@@ -6154,10 +6155,11 @@ async function resolveTestRequestExecutionInputs(intent: StagedIntent): Promise<
       reason: 'originating session has no resolvable worktree',
     };
   }
+  const pr = getPRBySessionId(intent.sessionId);
   const commands = await resolveTestCommandsForDiff(
     config,
     worktreePath,
-    project.baseBranch,
+    pr?.base_branch ?? project.baseBranch,
   );
   return {
     ok: true,

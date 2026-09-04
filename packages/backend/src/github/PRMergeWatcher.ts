@@ -1076,7 +1076,7 @@ export class PRMergeWatcher extends EventEmitter {
               logger.info(
                 `[PRMergeWatcher] autofix PR #${pr.pr_number}: ${msg}`,
               ),
-            'dev',
+            pr.base_branch ?? project!.baseBranch,
             mergeWatcherConfig?.autofix_skip_ci ?? false,
           );
           if (result.commitSha) {

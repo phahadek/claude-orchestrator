@@ -1809,6 +1809,94 @@ describe('PRMergeWatcher autofix-first CI failure path', () => {
     );
   });
 
+  it("passes the PR's own base_branch to runAutofix, not the project's, for a two_tier PR", async () => {
+    const pr = makePRRow({
+      merge_state: 'clean',
+      session_id: 'coding-session',
+      head_sha: 'original-sha',
+      base_branch: 'release/1.0',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeCI(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+      baseBranch: 'dev',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run format:write']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      commitSha: 'autofix-sha-abc',
+      summary: 'formatted',
+    });
+
+    const sessions = makeMockSessions();
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(runAutofix)).toHaveBeenCalledWith(
+      '/worktree',
+      '/proj',
+      ['npm run format:write'],
+      expect.anything(),
+      'release/1.0',
+      expect.anything(),
+    );
+  });
+
+  it("falls back to the project's base branch when the PR has no base_branch recorded", async () => {
+    const pr = makePRRow({
+      merge_state: 'clean',
+      session_id: 'coding-session',
+      head_sha: 'original-sha',
+      base_branch: null,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeCI(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+      baseBranch: 'dev',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run format:write']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      commitSha: 'autofix-sha-abc',
+      summary: 'formatted',
+    });
+
+    const sessions = makeMockSessions();
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(runAutofix)).toHaveBeenCalledWith(
+      '/worktree',
+      '/proj',
+      ['npm run format:write'],
+      expect.anything(),
+      'dev',
+      expect.anything(),
+    );
+  });
+
   it('forwards CI failure to session when autofix produces no diff', async () => {
     const pr = makePRRow({
       merge_state: 'clean',
