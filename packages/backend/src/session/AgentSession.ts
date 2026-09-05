@@ -2161,15 +2161,9 @@ The full task spec and all rules are in your system prompt. Begin implementing d
 
     let baseBranch = 'dev';
     try {
-      const project = getProjectById(this.projectId);
-      baseBranch = project
-        ? resolveStartingPoint(
-            project,
-            getSessionMilestoneId(this.sessionId) ?? null,
-          ).startingPoint
-        : 'dev';
+      baseBranch = getProjectById(this.projectId)?.baseBranch ?? 'dev';
     } catch {
-      // project/milestone lookup failed — keep 'dev' default
+      // project lookup failed — keep 'dev' default
     }
 
     let branch: string;
