@@ -69,6 +69,15 @@ const ALLOWED_TERMINAL_WRITES: AllowedWrite[] = [
     reason: 'reason',
     kind: 'evidence-based',
   },
+  {
+    file: 'SessionManager.ts',
+    // variable — classifySessionRunError(err) resolves to 'launch_failed'
+    // for a genuine PreSpawnConfigError raised before the CLI process
+    // exists (config load/allowlist reconciliation in CliSessionRunner.spawn),
+    // or 'run_error' otherwise. Both are evidence-based, never inferred.
+    reason: 'preSpawnAwareReason',
+    kind: 'evidence-based',
+  },
 ];
 
 function walk(dir: string, files: string[] = []): string[] {

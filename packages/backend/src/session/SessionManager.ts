@@ -34,7 +34,7 @@ import {
   resolvePreGrantCapabilities,
 } from './orchestrator-config';
 import { WorktreeSetupError } from './WorktreeSetupError';
-import { CliSessionRunner, PreSpawnConfigError } from './CliSessionRunner';
+import { CliSessionRunner } from './CliSessionRunner';
 import {
   killSessionCgroup,
   reapOrphanedMainCgroupProcesses,
@@ -624,9 +624,17 @@ const UNCOUNTED_REASONS = new Set([
  * task's crash budget; AutoLauncher owns backoff/escalation for it via the
  * resulting session_launch_failed message. Any other rejection is a genuine
  * in-session crash and keeps counting against the budget as 'run_error'.
+ *
+ * Matches by `.name` rather than `instanceof PreSpawnConfigError`: many test
+ * files mock CliSessionRunner.ts without re-exporting that class, which would
+ * make an imported reference to it `undefined` and throw on `instanceof`.
+ * `.name` is preserved on any real PreSpawnConfigError instance regardless of
+ * how its constructor module is mocked elsewhere.
  */
 export function classifySessionRunError(err: unknown): string {
-  return err instanceof PreSpawnConfigError ? 'launch_failed' : 'run_error';
+  return err instanceof Error && err.name === 'PreSpawnConfigError'
+    ? 'launch_failed'
+    : 'run_error';
 }
 
 /** Statuses a dying standard session must never demote from. */
@@ -2895,10 +2903,16 @@ export class SessionManager extends EventEmitter {
         // notify the frontend so the session doesn't stay stuck at 'running'.
         if (!session.hasEnded) {
           const detail = err instanceof Error ? err.message : String(err);
+          // Evidence-based: classifySessionRunError resolves to 'launch_failed'
+          // only for a genuine PreSpawnConfigError thrown by CliSessionRunner
+          // before the CLI process exists, and 'run_error' otherwise — never a
+          // guess from the session merely going quiet. See
+          // automaticSessionKillAllowlist.test.ts's preSpawnAwareReason entry.
+          const preSpawnAwareReason = classifySessionRunError(err);
           this.markSessionErrored(
             sessionId,
             'error',
-            classifySessionRunError(err),
+            preSpawnAwareReason,
             detail,
           );
         }
