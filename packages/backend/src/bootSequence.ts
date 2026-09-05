@@ -287,6 +287,7 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
     'stuck_session_monitor_rehydrate',
     'auto_merger_rehydrate',
     'pr_boot_sweep',
+    'stale_task_pause_reasons_sweep',
     'boot_idle_reconciliation',
     'feedback_inbox_reconciliation',
     'stalled_pr_reconciliation',
