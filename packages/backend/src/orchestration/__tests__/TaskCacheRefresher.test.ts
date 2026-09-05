@@ -815,10 +815,7 @@ describe('TaskCacheRefresher', () => {
 
       const backend = makeBackend({
         fetchReadyTasks: vi.fn().mockImplementation(async (fetchId: string) => {
-          throw new MilestoneNotFoundError(
-            '/fake/project/tasks.yaml',
-            fetchId,
-          );
+          throw new MilestoneNotFoundError('/fake/project/tasks.yaml', fetchId);
         }),
       });
       vi.mocked(getTaskBackend).mockReturnValue(backend);
@@ -854,10 +851,7 @@ describe('TaskCacheRefresher', () => {
         fetchReadyTasks: vi
           .fn()
           .mockRejectedValue(
-            new MilestoneNotFoundError(
-              '/fake/project/tasks.yaml',
-              'src-1',
-            ),
+            new MilestoneNotFoundError('/fake/project/tasks.yaml', 'src-1'),
           ),
       });
       vi.mocked(getTaskBackend).mockReturnValue(backend);
