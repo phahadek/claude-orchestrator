@@ -1126,6 +1126,7 @@ describe('group commit — whole-group precheck (all-or-nothing)', () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
       fetchTaskPage: vi.fn().mockRejectedValue(new Error('Notion API down')),
+      fetchTaskSummary: vi.fn().mockResolvedValue({ archived: false }),
       updateStatus: vi.fn(),
       setDependsOn: vi.fn(),
       updateBody,
