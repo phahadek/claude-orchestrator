@@ -11668,22 +11668,33 @@ export function isPlanningKillSuppressed(
 }
 
 /**
- * True when at least one mcp_connection_established audit event exists for
- * this session with ts > sinceMs — the detection signal
+ * The most recently reported orchestrator MCP server status (from a
+ * session_orchestrator_mcp_status_reported audit event, recorded off the
+ * CLI init event's `mcp_servers` array — see AgentSession.getOrchestratorMcpStatus)
+ * for this session with ts > sinceMs, or undefined if no init has been
+ * reported yet in that window. The detection signal
  * SessionManager.reconcileMcpUnreachableSessions checks per spawn/respawn
- * window (see AgentSession.isMcpUnreachable).
+ * window (see AgentSession.isMcpUnreachable) — undefined means "still
+ * initialising", not "unreachable".
  */
-export function hasMcpConnectionEstablishedSince(
+export function getLatestOrchestratorMcpStatusSince(
   sessionId: string,
   sinceMs: number,
-): boolean {
+): string | undefined {
   const row = db
-    .prepare<[string, number], { cnt: number }>(
-      `SELECT COUNT(*) AS cnt FROM audit_log
-       WHERE event_type = 'mcp_connection_established' AND actor_id = ? AND ts > ?`,
+    .prepare<[string, number], { payload: string }>(
+      `SELECT payload FROM audit_log
+       WHERE event_type = 'session_orchestrator_mcp_status_reported' AND actor_id = ? AND ts > ?
+       ORDER BY ts DESC LIMIT 1`,
     )
     .get(sessionId, sinceMs);
-  return (row?.cnt ?? 0) > 0;
+  if (!row) return undefined;
+  try {
+    const payload = JSON.parse(row.payload) as { status?: string };
+    return typeof payload.status === 'string' ? payload.status : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

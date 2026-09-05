@@ -233,22 +233,36 @@ export function isPreReviewBlocked(pr: {
 }
 
 /**
- * True when a session past the MCP-connection grace window has still not
- * established any orchestrator MCP connection since its most recent
- * spawn/respawn — the CLI-side stall SessionManager.reconcileMcpUnreachableSessions
- * recovers via a bounded in-place respawn (see that method's doc comment).
+ * True when a session's orchestrator MCP server is unreachable — the
+ * CLI-side stall SessionManager.reconcileMcpUnreachableSessions recovers
+ * via a bounded in-place respawn (see that method's doc comment). Keyed on
+ * `orchestratorMcpStatus`, the most recently reported status off the CLI's
+ * init event (see getOrchestratorMcpStatus), not on whether a connection was
+ * ever established — a connection that opens and then immediately closes
+ * with an error still leaves the session with no orchestrator tools, so it
+ * must not suppress detection.
+ *
+ * Once an init has reported a status, that status is authoritative and
+ * decides the result outright, regardless of elapsed time: anything other
+ * than 'connected' means unreachable. Only when no init has reported yet
+ * (`orchestratorMcpStatus === undefined`, i.e. the session is still
+ * starting up) does the grace window apply, so a session that hasn't had a
+ * chance to initialise isn't flagged prematurely.
+ *
  * Pure predicate, kept alongside AgentSession's other exported
  * classification helpers for unit testing; `lastSpawnMs` is the session's
  * original started_at, or its latest respawn attempt's timestamp once one
  * has happened, so the grace window restarts on each fresh spawn.
  */
 export function isMcpUnreachable(params: {
-  hasConnectedSinceSpawn: boolean;
+  orchestratorMcpStatus: string | undefined;
   nowMs: number;
   lastSpawnMs: number;
   graceMs: number;
 }): boolean {
-  if (params.hasConnectedSinceSpawn) return false;
+  if (params.orchestratorMcpStatus !== undefined) {
+    return params.orchestratorMcpStatus !== 'connected';
+  }
   return params.nowMs - params.lastSpawnMs >= params.graceMs;
 }
 
@@ -1532,12 +1546,21 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     if (rawType === 'system' && (event.subtype as string) === 'init') {
       sessionLog(this.sessionId, `INIT permissionMode=${event.permissionMode}`);
       const orchestratorMcpStatus = getOrchestratorMcpStatus(event);
-      if (
-        orchestratorMcpStatus !== undefined &&
-        orchestratorMcpStatus !== 'connected' &&
-        isCodeSession(this.sessionType)
-      ) {
-        this.pauseForOrchestratorMcpConnectFailure(orchestratorMcpStatus);
+      if (orchestratorMcpStatus !== undefined) {
+        recordEvent({
+          event_type: 'session_orchestrator_mcp_status_reported',
+          actor_type: 'system',
+          actor_id: this.sessionId,
+          project_id: null,
+          task_id: this.taskId ?? null,
+          payload: { sessionId: this.sessionId, status: orchestratorMcpStatus },
+        });
+        if (
+          orchestratorMcpStatus !== 'connected' &&
+          isCodeSession(this.sessionType)
+        ) {
+          this.pauseForOrchestratorMcpConnectFailure(orchestratorMcpStatus);
+        }
       }
     }
 

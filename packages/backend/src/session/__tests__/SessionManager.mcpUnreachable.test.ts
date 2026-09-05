@@ -51,12 +51,14 @@ vi.mock('../AgentSession', () => ({
   }),
   parseNotionPageIdDashed: vi.fn().mockReturnValue(''),
   isMcpUnreachable: (params: {
-    hasConnectedSinceSpawn: boolean;
+    orchestratorMcpStatus: string | undefined;
     nowMs: number;
     lastSpawnMs: number;
     graceMs: number;
   }) => {
-    if (params.hasConnectedSinceSpawn) return false;
+    if (params.orchestratorMcpStatus !== undefined) {
+      return params.orchestratorMcpStatus !== 'connected';
+    }
     return params.nowMs - params.lastSpawnMs >= params.graceMs;
   },
 }));
@@ -131,7 +133,7 @@ vi.mock('../../config/corporateMode', () => ({
 // Stateful MCP-unreachable bookkeeping — keyed by sessionId — mirroring
 // grantCapability.test.ts's grantedCapabilitiesStore pattern, so the
 // reconciler's real query calls read whatever the test set up.
-let mcpConnectedSince: Record<string, boolean>;
+let mcpOrchestratorStatus: Record<string, string | undefined>;
 let mcpRespawnAttempts: Record<string, number>;
 let mcpLatestRespawnTs: Record<string, number | null>;
 let mcpExhausted: Record<string, boolean>;
@@ -177,8 +179,8 @@ vi.mock('../../db/queries', () => ({
   expireStagedIntentsForSession: vi.fn(),
   reapStagedIntentsForNeverStagedSession: vi.fn(() => 0),
   listLiveSessionRows: vi.fn(() => liveSessionRows),
-  hasMcpConnectionEstablishedSince: vi.fn(
-    (sessionId: string) => mcpConnectedSince[sessionId] ?? false,
+  getLatestOrchestratorMcpStatusSince: vi.fn(
+    (sessionId: string) => mcpOrchestratorStatus[sessionId],
   ),
   countMcpUnreachableRespawnAttempts: vi.fn(
     (sessionId: string) => mcpRespawnAttempts[sessionId] ?? 0,
@@ -308,7 +310,7 @@ describe('reconcileMcpUnreachableSessions', () => {
     capturedSessions = [];
     vi.clearAllMocks();
     vi.mocked(fs.existsSync).mockReturnValue(true);
-    mcpConnectedSince = {};
+    mcpOrchestratorStatus = {};
     mcpRespawnAttempts = {};
     mcpLatestRespawnTs = {};
     mcpExhausted = {};
@@ -328,14 +330,26 @@ describe('reconcileMcpUnreachableSessions', () => {
     expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
   });
 
-  it('does not fire for a session that already connected', async () => {
+  it('does not fire for a session whose init reports the orchestrator server connected', async () => {
     liveSessionRows = [makeRow()];
-    mcpConnectedSince[SESSION_ID] = true;
+    mcpOrchestratorStatus[SESSION_ID] = 'connected';
 
     const result = await sm.reconcileMcpUnreachableSessions();
 
     expect(result.detected).toEqual([]);
     expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+  });
+
+  it('fires for a session whose init reports the orchestrator server failed, even inside what would otherwise be the grace window', async () => {
+    // A connection may have opened and immediately closed with an error —
+    // the init-reported status is authoritative regardless of connection
+    // history or elapsed time since spawn.
+    liveSessionRows = [makeRow({ started_at: Date.now() - 1000 })];
+    mcpOrchestratorStatus[SESSION_ID] = 'failed';
+
+    const result = await sm.reconcileMcpUnreachableSessions();
+
+    expect(result.detected).toEqual([SESSION_ID]);
   });
 
   it('detects and respawns in place, past the grace window with no connection', async () => {
@@ -405,6 +419,37 @@ describe('reconcileMcpUnreachableSessions', () => {
     expect(eventTypes).toContain('session_mcp_unreachable_respawn_exhausted');
   });
 
+  it('does not count a prior respawn as a successful recovery when its own init still does not report connected, and escalates once the budget is spent', async () => {
+    liveSessionRows = [makeRow()];
+    mcpRespawnAttempts[SESSION_ID] = 2; // already at MAX_MCP_UNREACHABLE_RESPAWNS
+    mcpLatestRespawnTs[SESSION_ID] = Date.now() - GRACE_MS - 60_000;
+    mcpOrchestratorStatus[SESSION_ID] = 'failed'; // the respawned process's own init still failed
+
+    const result = await sm.reconcileMcpUnreachableSessions();
+
+    expect(result.detected).toEqual([SESSION_ID]);
+    expect(result.respawned).toEqual([]);
+    expect(result.exhausted).toEqual([SESSION_ID]);
+    expect(vi.mocked(setSessionPauseReason)).toHaveBeenCalledWith(
+      SESSION_ID,
+      'mcp_unreachable_exhausted',
+    );
+  });
+
+  it('clears the condition once the respawned session reports connected', async () => {
+    liveSessionRows = [makeRow()];
+    mcpRespawnAttempts[SESSION_ID] = 1;
+    mcpLatestRespawnTs[SESSION_ID] = Date.now() - GRACE_MS - 60_000;
+    mcpOrchestratorStatus[SESSION_ID] = 'connected';
+
+    const result = await sm.reconcileMcpUnreachableSessions();
+
+    expect(result.detected).toEqual([]);
+    expect(result.respawned).toEqual([]);
+    expect(result.exhausted).toEqual([]);
+    expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+  });
+
   it('never re-surfaces a session once already exhausted', async () => {
     liveSessionRows = [makeRow()];
     mcpExhausted[SESSION_ID] = true;
@@ -423,7 +468,7 @@ describe('reconcileMcpUnreachableSessions — api session_mode', () => {
     capturedSessions = [];
     vi.clearAllMocks();
     vi.mocked(fs.existsSync).mockReturnValue(true);
-    mcpConnectedSince = {};
+    mcpOrchestratorStatus = {};
     mcpRespawnAttempts = {};
     mcpLatestRespawnTs = {};
     mcpExhausted = {};
