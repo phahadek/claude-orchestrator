@@ -41,6 +41,7 @@ import {
   listUndeliveredInboxItems,
   markInboxItemsDelivered,
   getSession,
+  getSessionMilestoneId,
   markSessionInitiatedPRClose,
   getGrantedCapabilities,
   setTaskPauseReason,
@@ -100,6 +101,7 @@ import {
   serializePauseReason,
 } from '../db/pauseReason';
 import { matchesWorkflowScopeDenylist } from './workflowScopeDenylist';
+import { resolveStartingPoint } from './branchModel';
 import type {
   ParsedDispositionItem,
   DispositionsParsedPayload,
@@ -2159,9 +2161,15 @@ The full task spec and all rules are in your system prompt. Begin implementing d
 
     let baseBranch = 'dev';
     try {
-      baseBranch = getProjectById(this.projectId)?.baseBranch ?? 'dev';
+      const project = getProjectById(this.projectId);
+      baseBranch = project
+        ? resolveStartingPoint(
+            project,
+            getSessionMilestoneId(this.sessionId) ?? null,
+          ).startingPoint
+        : 'dev';
     } catch {
-      // project lookup failed — keep 'dev' default
+      // project/milestone lookup failed — keep 'dev' default
     }
 
     let branch: string;
