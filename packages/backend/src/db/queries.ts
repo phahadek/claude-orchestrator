@@ -4560,9 +4560,7 @@ export function listTaskPauseReasonsForTaskIds(
  */
 export function deleteTaskPauseReasonsForTaskIds(taskIds: string[]): number {
   if (taskIds.length === 0) return 0;
-  const stmt = db.prepare(
-    `DELETE FROM task_pause_reasons WHERE task_id = ?`,
-  );
+  const stmt = db.prepare(`DELETE FROM task_pause_reasons WHERE task_id = ?`);
   const txn = db.transaction((ids: string[]) => {
     let count = 0;
     for (const id of ids) {

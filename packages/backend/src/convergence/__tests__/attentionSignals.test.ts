@@ -623,7 +623,11 @@ describe('computeMilestoneAttentionSignals — one-pass board index', () => {
   });
 
   it('drops pause rows on another milestone or no board before parsePauseReason, producing signals only for the target milestone', () => {
-    const result = computeMilestoneAttentionSignals(PROJECT_ID, 'M0', undefined);
+    const result = computeMilestoneAttentionSignals(
+      PROJECT_ID,
+      'M0',
+      undefined,
+    );
     const blocked = result.tier2.filter((s) => s.type === 'blocked');
     expect(blocked.map((s) => s.key).sort()).toEqual(
       [
@@ -634,7 +638,11 @@ describe('computeMilestoneAttentionSignals — one-pass board index', () => {
   });
 
   it('produces output identical across repeated calls (stable snapshot of tier2 and pendingCount)', () => {
-    const before = computeMilestoneAttentionSignals(PROJECT_ID, 'M0', undefined);
+    const before = computeMilestoneAttentionSignals(
+      PROJECT_ID,
+      'M0',
+      undefined,
+    );
     const after = computeMilestoneAttentionSignals(PROJECT_ID, 'M0', undefined);
     expect(after).toEqual(before);
     expect(before.pendingCount).toBe(0);

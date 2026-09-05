@@ -205,7 +205,9 @@ export function resolveMilestoneRowForProject(
  * (shouldn't normally happen), the first milestone in project.milestones
  * order wins — matching the early-return behavior this replaced.
  */
-export function buildTaskMilestoneIndex(projectId: string): Map<string, string> {
+export function buildTaskMilestoneIndex(
+  projectId: string,
+): Map<string, string> {
   const index = new Map<string, string>();
   const project = ProjectService.getById(projectId);
   if (!project) return index;
@@ -232,7 +234,9 @@ export function resolveMilestoneForTaskId(
   projectId: string,
   taskId: string,
 ): string | null {
-  return buildTaskMilestoneIndex(projectId).get(normalizeTaskId(taskId)) ?? null;
+  return (
+    buildTaskMilestoneIndex(projectId).get(normalizeTaskId(taskId)) ?? null
+  );
 }
 
 /**

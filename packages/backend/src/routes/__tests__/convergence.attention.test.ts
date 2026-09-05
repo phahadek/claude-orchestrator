@@ -64,7 +64,7 @@ describe('GET /api/milestones/:project/:milestone/attention', () => {
     for (let i = 1; i < NUM_MILESTONES; i++) {
       setTaskPauseReason(`task-${i}-a`, 'planning_terminal_no_decision', 'z');
     }
-    let seeded = NUM_MILESTONES;
+    const seeded = NUM_MILESTONES;
     for (let i = 0; seeded + i < TOTAL_PAUSE_ROWS; i++) {
       setTaskPauseReason(`orphan-task-${i}`, 'launch_failed', 'w');
     }
@@ -78,9 +78,11 @@ describe('GET /api/milestones/:project/:milestone/attention', () => {
     const elapsedMs = performance.now() - start;
 
     expect(res.status).toBe(200);
-    expect(res.body.tier2.some((s: { key: string }) =>
-      s.key.startsWith('blocked:task-0-a'),
-    )).toBe(true);
+    expect(
+      res.body.tier2.some((s: { key: string }) =>
+        s.key.startsWith('blocked:task-0-a'),
+      ),
+    ).toBe(true);
     expect(elapsedMs).toBeLessThan(200);
   });
 });

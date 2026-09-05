@@ -225,7 +225,8 @@ export function computeMilestoneAttentionSignals(
   const taskMilestoneIndex = buildTaskMilestoneIndex(projectId);
   const blockedRows = listTaskPauseReasons()
     .filter(
-      (row) => taskMilestoneIndex.get(normalizeTaskId(row.task_id)) === milestone,
+      (row) =>
+        taskMilestoneIndex.get(normalizeTaskId(row.task_id)) === milestone,
     )
     .map((row) => ({
       task_id: row.task_id,
