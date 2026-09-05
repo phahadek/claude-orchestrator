@@ -239,7 +239,6 @@ export function useDecisionQueue(
           : { ...prev, [sessionId]: complete },
       );
     });
-     
   }, [scope.type]);
 
   const upsert = useCallback((intent: StagedIntent) => {
