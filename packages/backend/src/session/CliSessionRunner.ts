@@ -59,6 +59,20 @@ function log(sessionId: string, ...args: unknown[]) {
 }
 
 /**
+ * Thrown when CliSessionRunner.run() fails before the CLI subprocess is
+ * spawned (config load, allowlist/add-dir reconciliation, or a sibling
+ * pre-spawn fault). Callers use this to classify the failure as an
+ * orchestrator-side infrastructure fault (launch_failed) rather than an
+ * in-session crash (run_error) — see SessionManager's UNCOUNTED_REASONS.
+ */
+export class PreSpawnConfigError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'PreSpawnConfigError';
+  }
+}
+
+/**
  * Session runner that spawns the `claude` CLI as a subprocess and communicates
  * via stdin/stdout using the stream-json protocol.
  *
@@ -140,56 +154,74 @@ export class CliSessionRunner implements ISessionRunner {
     // `read:path:` capability granted on re-dispatch — see
     // getSessionAddDirs. Coding/review sessions keep the default
     // worktree-only sandbox (empty add-dir list).
-    const addDirs = getSessionAddDirs(
-      sessionType ?? '',
-      granted ?? [],
-      worktreePath,
-    );
+    // Everything in this block runs before the CLI process exists — a
+    // failure here (a corrupt orchestrator config, a bad granted-capability
+    // path, …) is an orchestrator-side pre-spawn infrastructure fault, not
+    // an in-session crash. Tag it as PreSpawnConfigError so the caller can
+    // classify it alongside launch_failed instead of run_error (see
+    // SessionManager's UNCOUNTED_REASONS).
+    let addDirs: string[];
+    let testDenyPatterns: string[];
+    let spawnArgs: string[];
+    try {
+      addDirs = getSessionAddDirs(
+        sessionType ?? '',
+        granted ?? [],
+        worktreePath,
+      );
 
-    // Code sessions must not be able to run the project's test commands
-    // directly — they're denied at the SDK permission layer (via the CLI's
-    // --settings flag, the settings.json-based route to the same
-    // `permissions.deny` field the Agent SDK exposes) and routed through
-    // test.request instead (see the Flaky/CI section of orchestrator-claudemd.ts).
-    const testDenyPatterns =
-      sessionType && isCodeSession(sessionType)
-        ? getTestCommandDenyPatterns(loadOrchestratorConfig(worktreePath).test)
-        : [];
-    const settingsOverrides: Record<string, unknown> = {};
-    if (disableAutoCompact) settingsOverrides.autoCompactEnabled = false;
-    if (testDenyPatterns.length) {
-      settingsOverrides.permissions = { deny: testDenyPatterns };
+      // Code sessions must not be able to run the project's test commands
+      // directly — they're denied at the SDK permission layer (via the CLI's
+      // --settings flag, the settings.json-based route to the same
+      // `permissions.deny` field the Agent SDK exposes) and routed through
+      // test.request instead (see the Flaky/CI section of orchestrator-claudemd.ts).
+      testDenyPatterns =
+        sessionType && isCodeSession(sessionType)
+          ? getTestCommandDenyPatterns(loadOrchestratorConfig(worktreePath).test)
+          : [];
+      const settingsOverrides: Record<string, unknown> = {};
+      if (disableAutoCompact) settingsOverrides.autoCompactEnabled = false;
+      if (testDenyPatterns.length) {
+        settingsOverrides.permissions = { deny: testDenyPatterns };
+      }
+
+      spawnArgs = [
+        ...(resumeSessionId
+          ? ['--resume', resumeSessionId]
+          : ['--session-id', this.sessionId]),
+        '--print',
+        '--output-format',
+        'stream-json',
+        '--input-format',
+        'stream-json',
+        '--verbose',
+        '--permission-mode',
+        permissionMode,
+        ...(model ? ['--model', model] : []),
+        ...(effort ? ['--effort', effort] : []),
+        ...(Object.keys(settingsOverrides).length
+          ? ['--settings', JSON.stringify(settingsOverrides)]
+          : []),
+        ...(mcpConfigPath
+          ? ['--mcp-config', mcpConfigPath, '--strict-mcp-config']
+          : []),
+        ...(systemPromptFilePath
+          ? ['--append-system-prompt-file', systemPromptFilePath]
+          : []),
+        '--allowed-tools',
+        ...allowedTools,
+        '--disallowed-tools',
+        ...(isPlanning
+          ? PLANNING_DISALLOWED_TOOLS
+          : SCHEDULING_DISALLOWED_TOOLS),
+        ...addDirs.flatMap((dir) => ['--add-dir', dir]),
+      ];
+    } catch (err) {
+      throw new PreSpawnConfigError(
+        `pre-spawn config error: ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
+      );
     }
-
-    const spawnArgs = [
-      ...(resumeSessionId
-        ? ['--resume', resumeSessionId]
-        : ['--session-id', this.sessionId]),
-      '--print',
-      '--output-format',
-      'stream-json',
-      '--input-format',
-      'stream-json',
-      '--verbose',
-      '--permission-mode',
-      permissionMode,
-      ...(model ? ['--model', model] : []),
-      ...(effort ? ['--effort', effort] : []),
-      ...(Object.keys(settingsOverrides).length
-        ? ['--settings', JSON.stringify(settingsOverrides)]
-        : []),
-      ...(mcpConfigPath
-        ? ['--mcp-config', mcpConfigPath, '--strict-mcp-config']
-        : []),
-      ...(systemPromptFilePath
-        ? ['--append-system-prompt-file', systemPromptFilePath]
-        : []),
-      '--allowed-tools',
-      ...allowedTools,
-      '--disallowed-tools',
-      ...(isPlanning ? PLANNING_DISALLOWED_TOOLS : SCHEDULING_DISALLOWED_TOOLS),
-      ...addDirs.flatMap((dir) => ['--add-dir', dir]),
-    ];
 
     const envKeys = ['PROJECT_DIR', 'SESSIONS_DIR'] as const;
     const envStr = envKeys

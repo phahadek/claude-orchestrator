@@ -34,7 +34,7 @@ import {
   resolvePreGrantCapabilities,
 } from './orchestrator-config';
 import { WorktreeSetupError } from './WorktreeSetupError';
-import { CliSessionRunner } from './CliSessionRunner';
+import { CliSessionRunner, PreSpawnConfigError } from './CliSessionRunner';
 import {
   killSessionCgroup,
   reapOrphanedMainCgroupProcesses,
@@ -614,6 +614,20 @@ const UNCOUNTED_REASONS = new Set([
   // this Set is constructed at module init, before that const exists.
   'backend_spawn_degraded',
 ]);
+
+/**
+ * Classifies a rejection from session.run() for markSessionErrored's `reason`
+ * param. A PreSpawnConfigError fires before the CLI process exists (config
+ * load, allowlist/add-dir reconciliation in CliSessionRunner.spawn) — an
+ * orchestrator-side infrastructure fault, not an in-session crash. Mapping it
+ * to 'launch_failed' (already in UNCOUNTED_REASONS) means it never spends the
+ * task's crash budget; AutoLauncher owns backoff/escalation for it via the
+ * resulting session_launch_failed message. Any other rejection is a genuine
+ * in-session crash and keeps counting against the budget as 'run_error'.
+ */
+export function classifySessionRunError(err: unknown): string {
+  return err instanceof PreSpawnConfigError ? 'launch_failed' : 'run_error';
+}
 
 /** Statuses a dying standard session must never demote from. */
 const TERMINAL_TASK_STATUSES = new Set<string>([
@@ -2881,7 +2895,12 @@ export class SessionManager extends EventEmitter {
         // notify the frontend so the session doesn't stay stuck at 'running'.
         if (!session.hasEnded) {
           const detail = err instanceof Error ? err.message : String(err);
-          this.markSessionErrored(sessionId, 'error', 'run_error', detail);
+          this.markSessionErrored(
+            sessionId,
+            'error',
+            classifySessionRunError(err),
+            detail,
+          );
         }
         this.applyPendingDoneForSettledSession(sessionId);
         if (
