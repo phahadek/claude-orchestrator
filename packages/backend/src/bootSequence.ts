@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { GitHubClient } from './github/GitHubClient';
 import { runPRBootSweep } from './github/PRBootSweep';
 import { runBootIdleReconciliation } from './session/bootIdleReconciliation';
+import { sweepStaleTaskPauseReasons } from './projects/milestoneResolver';
 import { runGitConfigIntegrityCheck } from './orchestration/gitConfigIntegrity';
 import {
   recoverInterruptedTestRequestRuns,
@@ -336,6 +337,9 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   await tracker.runStep('pr_boot_sweep', () =>
     runPRBootSweep(deps.githubClient),
   );
+  await tracker.runStep('stale_task_pause_reasons_sweep', () => {
+    sweepStaleTaskPauseReasons();
+  });
   await tracker.runStep('boot_idle_reconciliation', () =>
     runBootIdleReconciliation((sessionId) =>
       deps.sessionManager.isAlive(sessionId),
