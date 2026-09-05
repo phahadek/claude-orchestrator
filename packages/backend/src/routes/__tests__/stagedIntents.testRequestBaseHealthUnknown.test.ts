@@ -84,17 +84,17 @@ vi.mock(
   },
 );
 
-vi.mock('../../orchestration/baseHealthCheck', async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import('../../orchestration/baseHealthCheck')>();
-  return { ...actual, checkBaseBranchHealth: mockCheckBaseBranchHealth };
-});
+vi.mock('../../orchestration/baseHealthCheck', () => ({
+  checkBaseBranchHealth: mockCheckBaseBranchHealth,
+  classifyRun: vi.fn(),
+  classifyTestRunOutcome: vi.fn(),
+  getBaseHealthWorktreePath: vi.fn(),
+}));
 
-vi.mock('../../session/autofix-runner', async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import('../../session/autofix-runner')>();
-  return { ...actual, getChangedFiles: mockGetChangedFiles };
-});
+vi.mock('../../session/autofix-runner', () => ({
+  getChangedFiles: mockGetChangedFiles,
+  expandAutofixCommand: vi.fn(),
+}));
 
 vi.mock('../../audit/baseHealthRemediationFiling', () => ({
   recordAndMaybeFileBaseHealthRemediation: vi.fn(async () => ({
