@@ -1,4 +1,19 @@
-import { DEFAULT_PR_BODY_SECTIONS } from '../github/PRBodyValidator';
+/**
+ * Mirrors PRBodyValidator.ts's own DEFAULT_PR_BODY_SECTIONS literal rather
+ * than importing it as a value — this is a function-default-parameter value
+ * (see `prBodySections` below), and importing it here would silently break
+ * for any test that `vi.mock`s PRBodyValidator with a partial factory:
+ * vitest's module mocking replaces the resolved module for every importer in
+ * the graph, not just the mocking test file's own import statement, so the
+ * missing export would resolve to `undefined` and `[...undefined]` would
+ * throw. Keep these two literals in sync by hand; drift only affects this
+ * template's own default, not PRBodyValidator's validation behavior.
+ */
+const DEFAULT_PR_BODY_SECTIONS_FALLBACK = [
+  '## Summary',
+  '## Notion Task',
+  '## Automated Tests',
+];
 
 export interface OrchestratorClaudeMdParams {
   taskName: string;
@@ -247,7 +262,7 @@ export function buildOrchestratorClaudeMd(
     projectContextContent,
     gitMode = 'github',
     jiraBrowseBaseUrl,
-    prBodySections = [...DEFAULT_PR_BODY_SECTIONS],
+    prBodySections = [...DEFAULT_PR_BODY_SECTIONS_FALLBACK],
   } = params;
 
   const resolvedBashRules = bashRules ?? [

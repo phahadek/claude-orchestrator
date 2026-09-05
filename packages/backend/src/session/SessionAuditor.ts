@@ -13,8 +13,23 @@ import type { WorktreeEscapeViolation, SessionEvent } from '../db/types';
 import { eventKind } from './eventKind';
 import { isCodeSession } from './sessionPredicates';
 import { sessionDidWork } from './sessionLifecycle';
-import { validatePRBody, DEFAULT_PR_BODY_SECTIONS } from '../github/PRBodyValidator';
+import { validatePRBody } from '../github/PRBodyValidator';
 import { loadOrchestratorConfig } from './orchestrator-config';
+
+/**
+ * Mirrors PRBodyValidator.ts's own DEFAULT_PR_BODY_SECTIONS literal rather
+ * than importing it — many pre-existing test files `vi.mock` PRBodyValidator
+ * with a partial factory (only `validatePRBody`/`buildValidationComment`),
+ * and vitest's module mocking replaces the resolved module for every
+ * importer in the graph, not just the mocking test file's own import
+ * statement. Keep these two literals in sync by hand; drift only affects
+ * this audit's fallback section list, not PRBodyValidator's own behavior.
+ */
+const DEFAULT_PR_BODY_SECTIONS_FALLBACK = [
+  '## Summary',
+  '## Notion Task',
+  '## Automated Tests',
+];
 
 // ── Public interfaces ────────────────────────────────────────────────────────
 
@@ -166,7 +181,7 @@ export class SessionAuditor {
         return loadOrchestratorConfig(project.projectDir).pr_body.sections;
       }
     }
-    return DEFAULT_PR_BODY_SECTIONS;
+    return DEFAULT_PR_BODY_SECTIONS_FALLBACK;
   }
 
   /**

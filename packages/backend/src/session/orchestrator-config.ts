@@ -19,7 +19,6 @@ import {
   isInvestigateSession,
   isGateVerifySession,
 } from './sessionPredicates';
-import { DEFAULT_PR_BODY_SECTIONS } from '../github/PRBodyValidator';
 
 /**
  * The closed set of session-kind keys a project's `.claude-orchestrator.yml`
@@ -237,8 +236,21 @@ export interface PrBodyConfig {
   max_section_chars: Record<string, number>;
 }
 
+/**
+ * Mirrors PRBodyValidator.ts's own DEFAULT_PR_BODY_SECTIONS literal rather
+ * than importing it. This is a top-level constant evaluated at module load,
+ * so importing a value from PRBodyValidator.ts here would silently break
+ * for every one of the many pre-existing test files that `vi.mock` that
+ * module with a partial factory (only `validatePRBody`/`buildValidationComment`)
+ * — vitest's module mocking replaces the resolved module for every importer
+ * in the graph, not just the test file's own import statement, so the
+ * missing export would resolve to `undefined` and `[...undefined]` would
+ * throw at import time, crashing the whole test file. Keep these two
+ * literals in sync by hand; drift only affects this config schema's
+ * fallback default, not PRBodyValidator's own validation behavior.
+ */
 const DEFAULT_PR_BODY_CONFIG: PrBodyConfig = {
-  sections: [...DEFAULT_PR_BODY_SECTIONS],
+  sections: ['## Summary', '## Notion Task', '## Automated Tests'],
   max_section_chars: {},
 };
 
