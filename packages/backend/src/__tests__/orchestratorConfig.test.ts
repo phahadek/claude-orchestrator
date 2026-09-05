@@ -10,6 +10,16 @@ import path from 'path';
 vi.mock('../config.js', () => ({
   normalizePath: (p: string) => p,
   config: { notionApiKey: 'test-key' },
+  ALLOWED_TOOLS: [],
+  GROOM_ALLOWED_TOOLS: [],
+  DESIGN_ALLOWED_TOOLS: [],
+  OPS_ALLOWED_TOOLS: [],
+  INVESTIGATE_ALLOWED_TOOLS: [],
+  DOCS_ALLOWED_TOOLS: [],
+  DEPTH_REVIEW_ALLOWED_TOOLS: [],
+  docsWebFetchTools: () => [],
+  NOTION_READ_MCP_TOOLS: [],
+  runtimeSettings: { capability_auto_approve_allowlist: [] },
 }));
 
 vi.mock('../db/queries.js', () => ({

@@ -355,19 +355,46 @@ function reachableBashBinaries(entries: string[]): Set<string> {
   return binaries;
 }
 
+/** A single `verify`/`autofix`/`analyze` command whose binary is not reachable through `allowed_tools` or the base allowlist. */
+export interface GateCommandAllowedToolsFinding {
+  field: string;
+  command: string;
+  binary: string;
+}
+
 /**
- * Fails loudly at config load when a `verify`/`autofix`/`analyze` command
- * names a binary that is not reachable through the union of the base
- * `ALLOWED_TOOLS` allowlist and the project's own `allowed_tools` — the
- * gap that let a downstream project's gate nudge a session to "fix" a lint
- * failure while granting that session no way to invoke the linter at all
- * (35 approval-required results before it gave up and guessed). Surfacing
- * this as a startup error, naming the offending binary and command, turns a
- * per-PR deadlock discovered weeks later into an immediate, fixable
- * misconfiguration. Auto-granting the gate's own commands was considered and
- * rejected as out of scope here — see the task notes; this is hard-fail only.
+ * Formats the same message text `reconcileGateCommandsWithAllowedTools` used
+ * to throw, for callers (e.g. project-level config validation) that want to
+ * surface a finding as a misconfiguration error.
  */
-function reconcileGateCommandsWithAllowedTools(cfg: OrchestratorConfig): void {
+export function formatGateCommandAllowedToolsError(
+  finding: GateCommandAllowedToolsFinding,
+): string {
+  return (
+    `[orchestrator-config] ${finding.field} command "${finding.command}" invokes ` +
+    `"${finding.binary}", which is not covered by allowed_tools or the base ` +
+    `allowlist. Add a matching Bash(${finding.binary}:*) entry to allowed_tools ` +
+    `in .claude-orchestrator.yml.`
+  );
+}
+
+/**
+ * Finds every `verify`/`autofix`/`analyze` command that names a binary not
+ * reachable through the union of the base `ALLOWED_TOOLS` allowlist and the
+ * project's own `allowed_tools` — the gap that let a downstream project's
+ * gate nudge a session to "fix" a lint failure while granting that session
+ * no way to invoke the linter at all (35 approval-required results before it
+ * gave up and guessed). Returns findings rather than throwing: this runs
+ * against a project's config on every session spawn (see
+ * `CliSessionRunner.spawn`'s `loadOrchestratorConfig` call for the test
+ * deny-pattern lookup), and a worktree checked out before a gate command and
+ * its allowed_tools entry landed in the same commit must still be able to
+ * spawn — see the project-level config validation path for where this is
+ * surfaced as an actionable misconfiguration instead.
+ */
+export function validateGateCommandsAgainstAllowedTools(
+  cfg: OrchestratorConfig,
+): GateCommandAllowedToolsFinding[] {
   const reachable = reachableBashBinaries([
     ...ALLOWED_TOOLS,
     ...cfg.allowed_tools,
@@ -380,17 +407,15 @@ function reconcileGateCommandsWithAllowedTools(cfg: OrchestratorConfig): void {
       commands: cfg.analyze.map((c) => (typeof c === 'string' ? c : c.command)),
     },
   ];
+  const findings: GateCommandAllowedToolsFinding[] = [];
   for (const { field, commands } of groups) {
     for (const command of commands) {
       const binary = extractCommandBinary(command);
       if (!binary || reachable.has(binary)) continue;
-      throw new Error(
-        `[orchestrator-config] ${field} command "${command}" invokes "${binary}", which ` +
-          `is not covered by allowed_tools or the base allowlist. Add a matching ` +
-          `Bash(${binary}:*) entry to allowed_tools in .claude-orchestrator.yml.`,
-      );
+      findings.push({ field, command, binary });
     }
   }
+  return findings;
 }
 
 /**
@@ -398,11 +423,12 @@ function reconcileGateCommandsWithAllowedTools(cfg: OrchestratorConfig): void {
  * Falls back to empty defaults if the file does not exist or is invalid.
  * The file is read fresh on every call — no server restart needed to pick up changes.
  *
- * Throws when a configured `verify`/`autofix`/`analyze` command names a
- * binary not reachable through allowed_tools (see
- * `reconcileGateCommandsWithAllowedTools`) — deliberately not swallowed by
- * the parse try/catch below, since that failure is a real misconfiguration
- * to surface at load time, not a malformed-YAML case to default past.
+ * Never throws on a `verify`/`autofix`/`analyze` command naming a binary not
+ * reachable through allowed_tools — this is called on every session spawn
+ * (see `CliSessionRunner.spawn`), and a worktree checked out before a gate
+ * command's allowed_tools entry landed must still be able to load config and
+ * spawn. Use `validateGateCommandsAgainstAllowedTools` to surface that as a
+ * misconfiguration on the project-level config path instead.
  */
 export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
   const configPath = path.join(projectDir, '.claude-orchestrator.yml');
@@ -538,7 +564,6 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
     );
     return { ...DEFAULTS };
   }
-  reconcileGateCommandsWithAllowedTools(result);
   return result;
 }
 

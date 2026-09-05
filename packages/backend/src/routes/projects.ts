@@ -17,7 +17,11 @@ import {
   MilestoneCanonicalShortIdCollisionError,
 } from '../db/queries';
 import { NotionClient, normalizeNotionId } from '../notion/NotionClient';
-import { loadOrchestratorConfig } from '../session/orchestrator-config';
+import {
+  loadOrchestratorConfig,
+  validateGateCommandsAgainstAllowedTools,
+  formatGateCommandAllowedToolsError,
+} from '../session/orchestrator-config';
 import { GitHubClient } from '../github/GitHubClient';
 import { JiraClient } from '../tasks/JiraClient';
 import { JIRA_HOST, JIRA_TOKEN, JIRA_EMAIL } from '../config';
@@ -950,7 +954,12 @@ projectsRouter.get(
     const configFile = path.join(dir, '.claude-orchestrator.yml');
     const present = fs.existsSync(configFile);
     const config = loadOrchestratorConfig(dir);
-    res.json({ present, config });
+    const gateCommandFindings = validateGateCommandsAgainstAllowedTools(config);
+    const misconfigurations = gateCommandFindings.map((finding) => ({
+      ...finding,
+      message: formatGateCommandAllowedToolsError(finding),
+    }));
+    res.json({ present, config, misconfigurations });
   },
 );
 
