@@ -548,10 +548,30 @@ describe('recordWrapLaunchParams / readWrapLaunchParams (boot-resume support)', 
 });
 
 describe('Step: integrate-milestone-branch (confirm-gate + real merge)', () => {
-  /** Flush pending microtasks so the fire-and-forget `drive()` loop settles. */
+  /** Flush pending microtasks so the fire-and-forget `drive()` loop settles up to (but not past) a step that's genuinely waiting (e.g. a pending confirm-gate). */
   async function flush(): Promise<void> {
     for (let i = 0; i < 15; i++) {
       await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+
+  /**
+   * Polls until the run reaches a terminal status. Unlike `flush()`, the
+   * integrate-milestone-branch step spawns a real `git`/bash subprocess
+   * (createWrapShellRunner's fallback is the real `spawnShell`, not a
+   * mocked one) — its completion takes real wall-clock time the fire-and-
+   * forget `drive()` loop needs actual delay, not just queued microtasks,
+   * to observe.
+   */
+  async function waitForTerminal(
+    runId: string,
+    timeoutMs = 10_000,
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const status = getDeployRun(runId)?.status;
+      if (status === 'succeeded' || status === 'failed') return;
+      await new Promise((resolve) => setTimeout(resolve, 25));
     }
   }
 
@@ -678,7 +698,7 @@ describe('Step: integrate-milestone-branch (confirm-gate + real merge)', () => {
       .trim();
 
     resolveGate(true);
-    await flush();
+    await waitForTerminal(run.run_id);
 
     expect(getDeployRun(run.run_id)?.status).toBe('succeeded');
     const tipAfterApproval = execSync(`git rev-parse ${baseBranch}`, {
@@ -700,7 +720,7 @@ describe('Step: integrate-milestone-branch (confirm-gate + real merge)', () => {
     );
 
     const run = await orchestrator.startDeploy(CLOSING_MILESTONE);
-    await flush();
+    await waitForTerminal(run.run_id);
 
     expect(getDeployRun(run.run_id)?.status).toBe('succeeded');
     const events = listDeployRunEvents(run.run_id).map((e) => ({
@@ -734,7 +754,7 @@ describe('Step: integrate-milestone-branch (confirm-gate + real merge)', () => {
       vi.fn(async () => true),
     );
     const run = await orchestrator.startDeploy(CLOSING_MILESTONE);
-    await flush();
+    await waitForTerminal(run.run_id);
 
     expect(getDeployRun(run.run_id)?.status).toBe('failed');
     const events = listDeployRunEvents(run.run_id).map((e) => e.event_type);
