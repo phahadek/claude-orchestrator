@@ -229,7 +229,7 @@ export interface OrchestratorConfig {
   pr_body: PrBodyConfig;
 }
 
-export interface PrBodyConfig {
+interface PrBodyConfig {
   /** Required PR body section headers, in order. Default: DEFAULT_PR_BODY_SECTIONS (no `## Files Changed` — opt in by listing it here). */
   sections: string[];
   /** Per-section character ceiling, keyed by section header. A section exceeding its ceiling fails validation. Default: no ceilings. */
