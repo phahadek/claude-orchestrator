@@ -12,6 +12,10 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { execSync } from 'child_process';
 
 vi.mock('../../db/db.js', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
@@ -24,7 +28,16 @@ import {
   insertMilestone,
   insertGateItem,
 } from '../../db/queries.js';
-import { startDeployRun } from '../deployService.js';
+import {
+  startDeployRun,
+  getDeployRun,
+  listDeployRunEvents,
+} from '../deployService.js';
+import {
+  DeployOrchestrator,
+  type DeployOrchestratorDeps,
+} from '../DeployOrchestrator.js';
+import type { LoadPlaybookResult } from '../loadPlaybook.js';
 import {
   buildWrapPlaybook,
   markMilestoneWrapped,
@@ -34,8 +47,11 @@ import {
   createWrapShellRunner,
   recordWrapLaunchParams,
   readWrapLaunchParams,
+  WRAP_STATIC_BINDINGS,
   WRAP_STEP_MARK_WRAPPED,
   WRAP_STEP_CARRY_GATE_ITEMS,
+  WRAP_STEP_CONFIRM_INTEGRATE,
+  WRAP_STEP_INTEGRATE,
   WRAP_STEP_CONFIRM_REPOINT,
   WRAP_STEP_REPOINT,
   WRAP_STEP_ADVANCE_MAIN,
@@ -102,18 +118,21 @@ function insertGateItemFixture(input: {
 }
 
 describe('buildWrapPlaybook: shape', () => {
-  it('produces the 5-action, 7-step playbook — a confirm-gate ahead of each of the two prod-mutating gated actions', () => {
+  it('produces the 6-action, 9-step playbook — a confirm-gate ahead of each of the three prod-mutating gated actions', () => {
     const playbook = buildWrapPlaybook({
       projectId: PROJECT,
       closingMilestoneId: CLOSING_MILESTONE,
       nextMilestoneId: NEXT_MILESTONE,
       releaseVersion: '1.9.0',
       repoUrl: 'https://github.com/acme/wrap-test-project.git',
+      baseBranch: 'dev',
     });
 
     expect(playbook.steps.map((s) => s.id)).toEqual([
       WRAP_STEP_MARK_WRAPPED,
       WRAP_STEP_CARRY_GATE_ITEMS,
+      WRAP_STEP_CONFIRM_INTEGRATE,
+      WRAP_STEP_INTEGRATE,
       WRAP_STEP_CONFIRM_REPOINT,
       WRAP_STEP_REPOINT,
       WRAP_STEP_ADVANCE_MAIN,
@@ -125,19 +144,54 @@ describe('buildWrapPlaybook: shape', () => {
       'shell',
       'confirm-gate',
       'shell',
+      'confirm-gate',
+      'shell',
       'shell',
       'confirm-gate',
       'shell',
     ]);
-    // The two hard-to-reverse actions (repoint auto-launch, cut the
-    // release) are prod-mutating; both confirm-gates precede them and are
-    // themselves non-mutating (they only gate).
+    // The three hard-to-reverse actions (integrating the milestone branch,
+    // repointing auto-launch, cutting the release) are prod-mutating; all
+    // three confirm-gates precede them and are themselves non-mutating (they
+    // only gate).
     const byId = Object.fromEntries(playbook.steps.map((s) => [s.id, s]));
+    expect(byId[WRAP_STEP_CONFIRM_INTEGRATE].is_prod_mutating).toBe(false);
+    expect(byId[WRAP_STEP_INTEGRATE].is_prod_mutating).toBe(true);
     expect(byId[WRAP_STEP_CONFIRM_REPOINT].is_prod_mutating).toBe(false);
     expect(byId[WRAP_STEP_REPOINT].is_prod_mutating).toBe(true);
     expect(byId[WRAP_STEP_CONFIRM_RELEASE].is_prod_mutating).toBe(false);
     expect(byId[WRAP_STEP_CUT_RELEASE].is_prod_mutating).toBe(true);
     expect(byId[WRAP_STEP_ADVANCE_MAIN].is_prod_mutating).toBe(true);
+  });
+
+  it('bakes the milestone branch and base branch into the integrate-milestone-branch command', () => {
+    const playbook = buildWrapPlaybook({
+      projectId: PROJECT,
+      closingMilestoneId: CLOSING_MILESTONE,
+      nextMilestoneId: NEXT_MILESTONE,
+      releaseVersion: '1.9.0',
+      repoUrl: 'https://github.com/acme/wrap-test-project.git',
+      baseBranch: 'main',
+    });
+    const integrate = playbook.steps.find(
+      (s) => s.id === WRAP_STEP_INTEGRATE,
+    );
+    expect(integrate?.command_or_prompt).toContain('git merge --no-ff');
+    expect(integrate?.command_or_prompt).toContain('origin/milestone/m1');
+    expect(integrate?.command_or_prompt).toContain('origin/main');
+  });
+
+  it('throws MilestoneNotFoundError when the closing milestone does not exist', () => {
+    expect(() =>
+      buildWrapPlaybook({
+        projectId: PROJECT,
+        closingMilestoneId: 'does-not-exist',
+        nextMilestoneId: NEXT_MILESTONE,
+        releaseVersion: '1.9.0',
+        repoUrl: 'https://github.com/acme/wrap-test-project.git',
+        baseBranch: 'dev',
+      }),
+    ).toThrow(MilestoneNotFoundError);
   });
 
   it('bakes the release tag into the advance-main/cut-release commands', () => {
@@ -147,6 +201,7 @@ describe('buildWrapPlaybook: shape', () => {
       nextMilestoneId: NEXT_MILESTONE,
       releaseVersion: '2.0.0',
       repoUrl: 'https://github.com/acme/wrap-test-project.git',
+      baseBranch: 'dev',
     });
     const cutRelease = playbook.steps.find(
       (s) => s.id === WRAP_STEP_CUT_RELEASE,
@@ -322,6 +377,7 @@ describe('createWrapShellRunner: directive dispatch', () => {
       nextMilestoneId: NEXT_MILESTONE,
       releaseVersion: '1.9.0',
       repoUrl: 'https://github.com/acme/wrap-test-project.git',
+      baseBranch: 'dev',
     });
     const markWrappedStep = playbook.steps.find(
       (s) => s.id === WRAP_STEP_MARK_WRAPPED,
@@ -347,6 +403,7 @@ describe('createWrapShellRunner: directive dispatch', () => {
       nextMilestoneId: NEXT_MILESTONE,
       releaseVersion: '1.9.0',
       repoUrl: 'https://github.com/acme/wrap-test-project.git',
+      baseBranch: 'dev',
     });
     const markWrappedStep = playbook.steps.find(
       (s) => s.id === WRAP_STEP_MARK_WRAPPED,
@@ -370,6 +427,7 @@ describe('createWrapShellRunner: directive dispatch', () => {
       nextMilestoneId: NEXT_MILESTONE,
       releaseVersion: '1.9.0',
       repoUrl: 'https://github.com/acme/wrap-test-project.git',
+      baseBranch: 'dev',
     });
     const markWrappedStep = playbook.steps.find(
       (s) => s.id === WRAP_STEP_MARK_WRAPPED,
@@ -396,6 +454,7 @@ describe('createWrapShellRunner: directive dispatch', () => {
       nextMilestoneId: NEXT_MILESTONE,
       releaseVersion: '1.9.0',
       repoUrl: 'https://github.com/acme/wrap-test-project.git',
+      baseBranch: 'dev',
     });
     const carryStep = playbook.steps.find(
       (s) => s.id === WRAP_STEP_CARRY_GATE_ITEMS,
@@ -419,6 +478,7 @@ describe('createWrapShellRunner: directive dispatch', () => {
       nextMilestoneId: NEXT_MILESTONE,
       releaseVersion: '1.9.0',
       repoUrl: 'https://github.com/acme/wrap-test-project.git',
+      baseBranch: 'dev',
     });
     const repointStep = playbook.steps.find((s) => s.id === WRAP_STEP_REPOINT)!;
 
@@ -446,6 +506,7 @@ describe('createWrapShellRunner: directive dispatch', () => {
       nextMilestoneId: NEXT_MILESTONE,
       releaseVersion: '1.9.0',
       repoUrl: 'https://github.com/acme/wrap-test-project.git',
+      baseBranch: 'dev',
     });
     const advanceMainStep = playbook.steps.find(
       (s) => s.id === WRAP_STEP_ADVANCE_MAIN,
@@ -476,6 +537,7 @@ describe('recordWrapLaunchParams / readWrapLaunchParams (boot-resume support)', 
       nextMilestoneId: NEXT_MILESTONE,
       releaseVersion: '1.9.0',
       repoUrl: 'https://github.com/acme/wrap-test-project.git',
+      baseBranch: 'dev',
     };
 
     recordWrapLaunchParams(run.run_id, params, '2026-08-24T00:00:00.000Z');
@@ -495,5 +557,210 @@ describe('recordWrapLaunchParams / readWrapLaunchParams (boot-resume support)', 
 
   it('returns null for an unknown run id', () => {
     expect(readWrapLaunchParams('no-such-run')).toBeNull();
+  });
+});
+
+describe('Step: integrate-milestone-branch (confirm-gate + real merge)', () => {
+  /** Flush pending microtasks so the fire-and-forget `drive()` loop settles. */
+  async function flush(): Promise<void> {
+    for (let i = 0; i < 15; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+
+  function mkTmpDir(prefix: string): string {
+    return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  }
+
+  /**
+   * A bare "origin" repo with a base branch and a `milestone/m1` branch (the
+   * slug `slugify('M1')` produces — matches the CLOSING_MILESTONE fixture's
+   * name) diverged from it. `conflicting: true` also commits an overlapping
+   * change to the base branch itself so merging the milestone branch in
+   * conflicts; otherwise the milestone branch only touches a disjoint file,
+   * so the merge is clean.
+   */
+  function setupGitFixture(options: { conflicting: boolean }): {
+    originDir: string;
+    baseBranch: string;
+  } {
+    const baseBranch = 'main';
+    const originDir = mkTmpDir('wrap-origin-');
+    execSync('git init -q --bare', { cwd: originDir });
+
+    const workDir = mkTmpDir('wrap-work-');
+    execSync('git init -q', { cwd: workDir });
+    execSync('git checkout -q -b main', { cwd: workDir });
+    execSync('git config user.email test@example.com', { cwd: workDir });
+    execSync('git config user.name Test', { cwd: workDir });
+    fs.writeFileSync(path.join(workDir, 'shared.txt'), 'base\n');
+    execSync('git add .', { cwd: workDir });
+    execSync('git commit -q -m base', { cwd: workDir });
+    execSync(`git remote add origin ${originDir}`, { cwd: workDir });
+    execSync(`git push -q origin ${baseBranch}`, { cwd: workDir });
+
+    execSync('git checkout -q -b milestone/m1', { cwd: workDir });
+    if (options.conflicting) {
+      fs.writeFileSync(path.join(workDir, 'shared.txt'), 'milestone change\n');
+    } else {
+      fs.writeFileSync(path.join(workDir, 'feature.txt'), 'feature\n');
+    }
+    execSync('git add .', { cwd: workDir });
+    execSync('git commit -q -m milestone-commit', { cwd: workDir });
+    execSync('git push -q origin milestone/m1', { cwd: workDir });
+
+    if (options.conflicting) {
+      execSync(`git checkout -q ${baseBranch}`, { cwd: workDir });
+      fs.writeFileSync(path.join(workDir, 'shared.txt'), 'main change\n');
+      execSync('git add .', { cwd: workDir });
+      execSync('git commit -q -m main-commit', { cwd: workDir });
+      execSync(`git push -q origin ${baseBranch}`, { cwd: workDir });
+    }
+
+    return { originDir, baseBranch };
+  }
+
+  /** Builds a DeployOrchestrator driving only the confirm-gate + shell pair the integrate-milestone-branch step is made of. */
+  function makeIntegrateOrchestrator(
+    originDir: string,
+    baseBranch: string,
+    projectDir: string,
+    waitForConfirmGate: DeployOrchestratorDeps['waitForConfirmGate'],
+  ): DeployOrchestrator {
+    const full = buildWrapPlaybook({
+      projectId: PROJECT,
+      closingMilestoneId: CLOSING_MILESTONE,
+      nextMilestoneId: NEXT_MILESTONE,
+      releaseVersion: '1.9.0',
+      repoUrl: originDir,
+      baseBranch,
+    });
+    const steps = full.steps.filter(
+      (s) =>
+        s.id === WRAP_STEP_CONFIRM_INTEGRATE || s.id === WRAP_STEP_INTEGRATE,
+    );
+    const loadResult: LoadPlaybookResult = {
+      ok: true,
+      playbook: { steps, hazards: [], failure_diagnoses: [], companions: [] },
+    };
+    return new DeployOrchestrator(PROJECT, projectDir, {
+      loadPlaybook: () => loadResult,
+      loadDeployBindings: () => ({
+        ok: true,
+        bindings: WRAP_STATIC_BINDINGS,
+        bindingsPath: null,
+      }),
+      runShell: createWrapShellRunner(),
+      spawnAgenticStep: vi.fn(),
+      waitForConfirmGate,
+      getDiffPaths: vi.fn(async () => []),
+    });
+  }
+
+  it("blocks the merge until the confirm-gate is approved — the milestone branch's tip is not merged in while pending", async () => {
+    const { originDir, baseBranch } = setupGitFixture({ conflicting: false });
+    const projectDir = mkTmpDir('wrap-projectdir-');
+    let resolveGate!: (approved: boolean) => void;
+    const gatePromise = new Promise<boolean>((resolve) => {
+      resolveGate = resolve;
+    });
+    const waitForConfirmGate = vi.fn(() => gatePromise);
+    const orchestrator = makeIntegrateOrchestrator(
+      originDir,
+      baseBranch,
+      projectDir,
+      waitForConfirmGate,
+    );
+
+    const run = await orchestrator.startDeploy(CLOSING_MILESTONE);
+    await flush();
+
+    expect(waitForConfirmGate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: run.run_id,
+        step: expect.objectContaining({ id: WRAP_STEP_CONFIRM_INTEGRATE }),
+      }),
+    );
+    expect(getDeployRun(run.run_id)?.status).toBe('running');
+    const tipWhilePending = execSync(`git rev-parse ${baseBranch}`, {
+      cwd: originDir,
+    })
+      .toString()
+      .trim();
+
+    resolveGate(true);
+    await flush();
+
+    expect(getDeployRun(run.run_id)?.status).toBe('succeeded');
+    const tipAfterApproval = execSync(`git rev-parse ${baseBranch}`, {
+      cwd: originDir,
+    })
+      .toString()
+      .trim();
+    expect(tipAfterApproval).not.toBe(tipWhilePending);
+  });
+
+  it('a clean merge advances the run past the step', async () => {
+    const { originDir, baseBranch } = setupGitFixture({ conflicting: false });
+    const projectDir = mkTmpDir('wrap-projectdir-');
+    const orchestrator = makeIntegrateOrchestrator(
+      originDir,
+      baseBranch,
+      projectDir,
+      vi.fn(async () => true),
+    );
+
+    const run = await orchestrator.startDeploy(CLOSING_MILESTONE);
+    await flush();
+
+    expect(getDeployRun(run.run_id)?.status).toBe('succeeded');
+    const events = listDeployRunEvents(run.run_id).map((e) => ({
+      step: e.step,
+      eventType: e.event_type,
+    }));
+    expect(events).toContainEqual({
+      step: WRAP_STEP_INTEGRATE,
+      eventType: 'step_succeeded',
+    });
+
+    const checkoutDir = mkTmpDir('wrap-verify-');
+    execSync(`git clone -q ${originDir} ${checkoutDir}`);
+    execSync(`git checkout -q ${baseBranch}`, { cwd: checkoutDir });
+    expect(fs.existsSync(path.join(checkoutDir, 'feature.txt'))).toBe(true);
+  });
+
+  it('a conflicting merge fails the step, halts the run, and leaves origin and the prod checkout untouched', async () => {
+    const { originDir, baseBranch } = setupGitFixture({ conflicting: true });
+    const projectDir = mkTmpDir('wrap-projectdir-');
+    const tipBefore = execSync(`git rev-parse ${baseBranch}`, {
+      cwd: originDir,
+    })
+      .toString()
+      .trim();
+
+    const orchestrator = makeIntegrateOrchestrator(
+      originDir,
+      baseBranch,
+      projectDir,
+      vi.fn(async () => true),
+    );
+    const run = await orchestrator.startDeploy(CLOSING_MILESTONE);
+    await flush();
+
+    expect(getDeployRun(run.run_id)?.status).toBe('failed');
+    const events = listDeployRunEvents(run.run_id).map((e) => e.event_type);
+    expect(events).toContain('step_failed');
+
+    // No partial mutation: origin's base branch tip is unchanged (the
+    // conflict aborts the throwaway clone's merge before it ever pushes),
+    // and the "prod checkout" (projectDir) — never touched by the
+    // clone-into-$tmp mechanism to begin with — stays empty.
+    const tipAfter = execSync(`git rev-parse ${baseBranch}`, {
+      cwd: originDir,
+    })
+      .toString()
+      .trim();
+    expect(tipAfter).toBe(tipBefore);
+    expect(fs.readdirSync(projectDir)).toEqual([]);
   });
 });
