@@ -148,9 +148,14 @@ vi.mock('../session/orchestrator-claudemd', () => ({
   buildReviewClaudeMd: vi.fn().mockReturnValue(''),
 }));
 
-vi.mock('../session/CliSessionRunner', () => ({
-  CliSessionRunner: vi.fn().mockImplementation(() => ({})),
-}));
+vi.mock('../session/CliSessionRunner', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../session/CliSessionRunner')>();
+  return {
+    CliSessionRunner: vi.fn().mockImplementation(() => ({})),
+    PreSpawnConfigError: actual.PreSpawnConfigError,
+  };
+});
 
 vi.mock('../session/ApiSessionRunner', () => ({
   ApiSessionRunner: vi.fn().mockImplementation(() => ({})),
@@ -169,7 +174,11 @@ vi.mock('../config/corporateMode', () => ({
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
-import { SessionManager } from '../session/SessionManager';
+import {
+  SessionManager,
+  classifySessionRunError,
+} from '../session/SessionManager';
+import { PreSpawnConfigError } from '../session/CliSessionRunner';
 import * as queries from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { emitTaskUpdated } from '../routes/tasks';
@@ -925,6 +934,139 @@ describe('SessionManager.markSessionErrored() — blocked path side-effects', ()
     expect(launchFailedMsg).toBeDefined();
     expect(launchFailedMsg!.taskId).toBe('notion-task-id');
     expect(launchFailedMsg!.sessionId).toBe('test-session');
+  });
+});
+
+// ── Pre-spawn config failures classify as launch_failed, not run_error ───────
+
+describe('SessionManager.classifySessionRunError() — pre-spawn vs in-session', () => {
+  it('classifies a PreSpawnConfigError (config-load failure before process start) as launch_failed', () => {
+    expect(
+      classifySessionRunError(
+        new PreSpawnConfigError('bad orchestrator config'),
+      ),
+    ).toBe('launch_failed');
+  });
+
+  it('classifies a genuine in-session error as run_error', () => {
+    expect(
+      classifySessionRunError(new Error('subprocess exited unexpectedly')),
+    ).toBe('run_error');
+  });
+
+  it('classifies a non-Error rejection as run_error', () => {
+    expect(classifySessionRunError('some string rejection')).toBe('run_error');
+  });
+});
+
+describe('SessionManager.markSessionErrored() — pre-spawn config failure (launch_failed classification)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(queries.getSession).mockReturnValue(makeSessionRow() as never);
+    setupFakeBackend();
+  });
+
+  it('a config-load failure classified via classifySessionRunError does not increment the crash counter', () => {
+    const sm = new SessionManager();
+    const reason = classifySessionRunError(
+      new PreSpawnConfigError('bad orchestrator config'),
+    );
+    sm.markSessionErrored(
+      'test-session',
+      'error',
+      reason,
+      'bad orchestrator config',
+    );
+    expect(queries.incrementTaskCrashCount).not.toHaveBeenCalled();
+  });
+
+  it('two consecutive pre-spawn config failures both leave the task at 🗂️ Ready, never 🚫 Blocked, and never write an auto_launch_paused audit event', async () => {
+    const mockUpdate = setupFakeBackend();
+    const sm = new SessionManager();
+    const reason = classifySessionRunError(
+      new PreSpawnConfigError('bad config'),
+    );
+
+    sm.markSessionErrored('test-session', 'error', reason, 'bad config');
+    await new Promise((r) => setTimeout(r, 0));
+    sm.markSessionErrored('test-session', 'error', reason, 'bad config');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(mockUpdate).toHaveBeenNthCalledWith(
+      1,
+      'notion-task-id',
+      '🗂️ Ready',
+      expect.anything(),
+    );
+    expect(mockUpdate).toHaveBeenNthCalledWith(
+      2,
+      'notion-task-id',
+      '🗂️ Ready',
+      expect.anything(),
+    );
+    expect(queries.incrementTaskCrashCount).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'auto_launch_paused' }),
+    );
+  });
+
+  it('emits a session_launch_failed message for the pre-spawn reason so AutoLauncher owns backoff/escalation', () => {
+    const sm = new SessionManager();
+    const msgs: ServerMessage[] = [];
+    sm.on('message', (m: ServerMessage) => msgs.push(m));
+    const reason = classifySessionRunError(
+      new PreSpawnConfigError('bad config'),
+    );
+
+    sm.markSessionErrored('test-session', 'error', reason, 'bad config');
+
+    expect(msgs.find((m) => m.type === 'auto_launch_paused')).toBeUndefined();
+    const launchFailedMsg = msgs.find(
+      (m) => m.type === 'session_launch_failed',
+    ) as { type: string; taskId: string; sessionId: string } | undefined;
+    expect(launchFailedMsg).toBeDefined();
+    expect(launchFailedMsg!.taskId).toBe('notion-task-id');
+  });
+
+  it('regression: a genuine in-session run_error still increments the crash count and blocks at the 2nd occurrence', async () => {
+    const mockUpdate = setupFakeBackend();
+    const sm = new SessionManager();
+    const reason = classifySessionRunError(new Error('subprocess crashed'));
+    expect(reason).toBe('run_error');
+
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValueOnce(1);
+    sm.markSessionErrored(
+      'test-session',
+      'error',
+      reason,
+      'subprocess crashed',
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockUpdate).toHaveBeenNthCalledWith(
+      1,
+      'notion-task-id',
+      '🗂️ Ready',
+      expect.anything(),
+    );
+
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValueOnce(2);
+    sm.markSessionErrored(
+      'test-session',
+      'error',
+      reason,
+      'subprocess crashed',
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockUpdate).toHaveBeenNthCalledWith(
+      2,
+      'notion-task-id',
+      '🚫 Blocked',
+      expect.anything(),
+    );
+    expect(queries.incrementTaskCrashCount).toHaveBeenCalledTimes(2);
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'auto_launch_paused' }),
+    );
   });
 });
 
