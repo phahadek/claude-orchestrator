@@ -28,6 +28,8 @@ vi.mock('../../db/queries', () =>
     setSessionTags: vi.fn(),
     resetTaskCrashCount: vi.fn(),
     getSession: vi.fn().mockReturnValue(null),
+    getSessionMilestoneId: vi.fn().mockReturnValue(undefined),
+    getMilestoneById: vi.fn().mockReturnValue(undefined),
     getLatestTestRequestRun: vi.fn().mockReturnValue({
       id: 'run-1',
       project_id: 'proj',
@@ -143,12 +145,14 @@ import {
   markSessionIdle,
   setPauseReason,
   getSession,
+  getSessionMilestoneId,
+  getMilestoneById,
   getLatestTestRequestRun,
 } from '../../db/queries';
 import { validatePRBody } from '../../github/PRBodyValidator';
 import { recordEvent } from '../../audit/AuditLog';
 import { execSync } from 'child_process';
-import { runtimeSettings } from '../../config';
+import { runtimeSettings, getProjectById } from '../../config';
 import { getCorporateMode } from '../../config/corporateMode';
 import { computeWholeTreeContentHash } from '../analyzeGating';
 
@@ -1185,6 +1189,98 @@ describe('<pr-body> marker — backend push before createPR', () => {
     );
     expect(runner.sendMessage).toHaveBeenCalledWith(
       expect.stringContaining('detached HEAD'),
+    );
+  });
+});
+
+describe('<pr-body> marker — PR base branch resolution (two_tier milestone branching)', () => {
+  beforeEach(() => {
+    vi.mocked(upsertPullRequest).mockClear();
+    vi.mocked(validatePRBody).mockReturnValue({
+      valid: true,
+      missingSections: [],
+    });
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(getSession).mockReturnValue(null);
+    vi.mocked(getSessionMilestoneId).mockReturnValue(undefined);
+    vi.mocked(getMilestoneById).mockReturnValue(undefined);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-1',
+      project_id: 'proj',
+      content_hash: 'hash',
+      state: 'passed',
+      output: '',
+      started_at: 0,
+      finished_at: 1,
+    } as never);
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd === 'git branch --show-current') return 'feature/my-task\n';
+      if (cmd === 'git remote get-url origin')
+        return 'https://github.com/owner/repo.git\n';
+      if (cmd.startsWith('git fetch origin')) return '';
+      if (cmd.startsWith('git diff --name-only')) return '';
+      if (cmd === 'git push -u origin feature/my-task') return '';
+      throw new Error(`unexpected execSync: ${cmd}`);
+    });
+  });
+
+  afterEach(() => {
+    vi.mocked(getProjectById).mockReturnValue(undefined as never);
+    vi.mocked(getSessionMilestoneId).mockReturnValue(undefined);
+    vi.mocked(getMilestoneById).mockReturnValue(undefined);
+  });
+
+  it('opens the PR against the milestone branch for a two_tier session with a resolved milestone', async () => {
+    vi.mocked(getProjectById).mockReturnValue({
+      milestoneBranching: 'two_tier',
+      baseBranch: 'dev',
+    } as never);
+    vi.mocked(getSessionMilestoneId).mockReturnValue('milestone-1');
+    vi.mocked(getMilestoneById).mockReturnValue({
+      id: 'milestone-1',
+      project_id: 'proj',
+      name: 'M13 Great Milestone',
+      source_id: null,
+      canonical_short_id: 'M13',
+      display_order: 0,
+      wrapped_at: null,
+      milestone_branching: null,
+      created_at: 0,
+      updated_at: 0,
+    } as never);
+
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(ghClient.createPR).toHaveBeenCalledWith(
+      'owner/repo',
+      expect.objectContaining({
+        base: 'milestone/m13-great-milestone',
+      }),
+    );
+  });
+
+  it('opens the PR against project.baseBranch for a flat-mode/non-milestone session', async () => {
+    vi.mocked(getProjectById).mockReturnValue({
+      milestoneBranching: 'flat',
+      baseBranch: 'dev',
+    } as never);
+    vi.mocked(getSessionMilestoneId).mockReturnValue(undefined);
+
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(ghClient.createPR).toHaveBeenCalledWith(
+      'owner/repo',
+      expect.objectContaining({
+        base: 'dev',
+      }),
     );
   });
 });
