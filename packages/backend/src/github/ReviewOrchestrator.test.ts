@@ -3065,6 +3065,7 @@ describe('ReviewOrchestrator — verify-as-gate: local-only, all verify commands
       expect.any(String),
       ['npm run lint', 'npm test'],
       undefined,
+      expect.any(Object),
     );
     expect(vi.mocked(rs.reviewPR)).toHaveBeenCalled();
   });
@@ -3344,6 +3345,7 @@ describe('ReviewOrchestrator — verify-as-gate: verify runs AFTER autofix (orde
       '/repos/local/worktree-42',
       expect.any(Array),
       undefined,
+      expect.any(Object),
     );
   });
 });

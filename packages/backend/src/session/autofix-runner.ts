@@ -225,19 +225,24 @@ export async function runAutofix(
     };
   }
 
-  const mismatch = await checkToolchainVersions(
-    worktreePath,
-    gateEnvOptions.expectedToolVersions,
-  );
-  if (mismatch) {
-    const toolFailureReason = formatToolchainMismatch(mismatch);
-    log(`[autofix] ERROR: tool infra failure: ${toolFailureReason}\n`);
-    return {
-      success: false,
-      isToolInfraFailure: true,
-      toolFailureReason,
-      summary: toolFailureReason,
-    };
+  if (
+    gateEnvOptions.expectedToolVersions &&
+    gateEnvOptions.expectedToolVersions.length > 0
+  ) {
+    const mismatch = await checkToolchainVersions(
+      worktreePath,
+      gateEnvOptions.expectedToolVersions,
+    );
+    if (mismatch) {
+      const toolFailureReason = formatToolchainMismatch(mismatch);
+      log(`[autofix] ERROR: tool infra failure: ${toolFailureReason}\n`);
+      return {
+        success: false,
+        isToolInfraFailure: true,
+        toolFailureReason,
+        summary: toolFailureReason,
+      };
+    }
   }
 
   const scopedEnv = buildScopedEnv(worktreePath, gateEnvOptions.cacheEnv);

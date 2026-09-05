@@ -1063,6 +1063,10 @@ export class ReviewOrchestrator {
                   job.worktreePath,
                   config.verify,
                   config.test_report_glob,
+                  {
+                    cacheEnv: config.cache_env,
+                    expectedToolVersions: config.expected_tool_versions,
+                  },
                 ),
               );
               if (retryResult.passed) {

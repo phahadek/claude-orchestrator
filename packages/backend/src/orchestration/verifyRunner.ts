@@ -83,18 +83,24 @@ export async function runVerifyAsGate(
 ): Promise<VerifyResult> {
   if (commands.length === 0) return { passed: true };
 
-  const mismatch = await checkToolchainVersions(
-    worktreePath,
-    options.expectedToolVersions,
-  );
-  if (mismatch) {
-    const reason = formatToolchainMismatch(mismatch);
-    return {
-      passed: false,
-      isToolInfraFailure: true,
-      toolFailureReason: reason,
-      truncatedOutput: reason,
-    };
+  // Only awaits (and thus only yields a tick) when a project has actually
+  // declared expected_tool_versions — the overwhelmingly common case is no
+  // declaration, and staying fully synchronous up to the first spawn() call
+  // in that case matches this function's pre-existing execution shape.
+  if (options.expectedToolVersions && options.expectedToolVersions.length > 0) {
+    const mismatch = await checkToolchainVersions(
+      worktreePath,
+      options.expectedToolVersions,
+    );
+    if (mismatch) {
+      const reason = formatToolchainMismatch(mismatch);
+      return {
+        passed: false,
+        isToolInfraFailure: true,
+        toolFailureReason: reason,
+        truncatedOutput: reason,
+      };
+    }
   }
 
   const env = buildScopedEnv(worktreePath, options.cacheEnv);

@@ -201,6 +201,7 @@ describe('autofix stage base-branch scoping', () => {
       expect.anything(),
       'release/1.0',
       expect.anything(),
+      expect.anything(),
     );
   });
 
@@ -234,6 +235,7 @@ describe('autofix stage base-branch scoping', () => {
       expect.anything(),
       expect.anything(),
       'dev',
+      expect.anything(),
       expect.anything(),
     );
   });
