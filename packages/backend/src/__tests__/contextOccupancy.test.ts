@@ -75,6 +75,7 @@ vi.mock('../github/NoOpInvestigator', () => ({
   NoOpInvestigator: vi
     .fn()
     .mockImplementation(() => ({ investigate: vi.fn(async () => {}) })),
+  isSessionStreamQuiet: vi.fn(() => true),
 }));
 
 vi.mock('../audit/AuditLog', () => ({
