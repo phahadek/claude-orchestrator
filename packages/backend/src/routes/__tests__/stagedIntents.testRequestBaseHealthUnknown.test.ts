@@ -29,7 +29,6 @@ const {
   mockFilterBaseAttributableFailuresForF2Gate,
   mockGetChangedFiles,
   mockCheckBaseBranchHealth,
-  realFilterHolder,
 } = vi.hoisted(() => ({
   mockGetProjectById: vi.fn(),
   mockLoadOrchestratorConfig: vi.fn(),
@@ -38,11 +37,6 @@ const {
   mockFilterBaseAttributableFailuresForF2Gate: vi.fn(),
   mockGetChangedFiles: vi.fn(),
   mockCheckBaseBranchHealth: vi.fn(),
-  realFilterHolder: {
-    current: null as unknown as (
-      ...args: unknown[]
-    ) => Promise<unknown>,
-  },
 }));
 
 vi.mock('../../config', async (importOriginal) => {
@@ -73,9 +67,6 @@ vi.mock(
       await importOriginal<
         typeof import('../../orchestration/baseAttributableFilter')
       >();
-    realFilterHolder.current = actual.filterBaseAttributableFailuresForF2Gate as unknown as (
-      ...args: unknown[]
-    ) => Promise<unknown>;
     return {
       ...actual,
       filterBaseAttributableFailuresForF2Gate:
@@ -111,6 +102,7 @@ import {
   type StagedIntent,
 } from '../stagedIntents';
 import type { SessionManager } from '../../session/SessionManager';
+import type { TestRequestRunRow } from '../../db/types';
 import {
   insertSession,
   updateSessionWorktreePath,
@@ -151,9 +143,6 @@ beforeEach(() => {
   mockComputeHash.mockReset();
   mockAdmitTestRequest.mockReset();
   mockFilterBaseAttributableFailuresForF2Gate.mockReset();
-  mockFilterBaseAttributableFailuresForF2Gate.mockImplementation(
-    (...args: unknown[]) => realFilterHolder.current(...args),
-  );
   mockCheckBaseBranchHealth.mockReset();
   mockCheckBaseBranchHealth.mockResolvedValue({
     outcome: 'unknown',
@@ -368,6 +357,24 @@ function seedBaseRun(
   );
 }
 
+function makeRunStub(id: string): TestRequestRunRow {
+  return {
+    id,
+    project_id: PROJECT_ID,
+    content_hash: 'x',
+    session_id: null,
+    state: 'failed',
+    output: '',
+    requested_at: null,
+    started_at: 0,
+    finished_at: null,
+    structured_result: null,
+    failure_reason: null,
+    concurrent_run_count: null,
+    oom_killed: 0,
+  } as TestRequestRunRow;
+}
+
 describe('triggerTestRequestExecution — f2 gate masking guards on the session path', () => {
   it('blocks an exclusion for a test whose file appears in the session changed-file list, leaving the run failed', async () => {
     setUpSession('sess-1');
@@ -400,9 +407,9 @@ describe('triggerTestRequestExecution — f2 gate masking guards on the session 
       excludedTests: [{ test_id: 'mymodule.testA', name: 'testA' }],
       flakyExcludedTests: [],
       remainingTests: [],
-      baseRun: getTestRequestRunById('run-guard-touched-base') ?? null,
+      baseRun: makeRunStub('run-guard-touched-base'),
     };
-    const prRun = getTestRequestRunById(runId)!;
+    const prRun = makeRunStub(runId);
     mockFilterBaseAttributableFailuresForF2Gate.mockResolvedValue(
       applyF2GateMaskingGuards(candidateResult, prRun, changedFiles),
     );
@@ -445,9 +452,9 @@ describe('triggerTestRequestExecution — f2 gate masking guards on the session 
       excludedTests: [{ test_id: 'mymodule.testA', name: 'testA' }],
       flakyExcludedTests: [],
       remainingTests: [],
-      baseRun: getTestRequestRunById('run-guard-untouched-base') ?? null,
+      baseRun: makeRunStub('run-guard-untouched-base'),
     };
-    const prRun = getTestRequestRunById(runId)!;
+    const prRun = makeRunStub(runId);
     mockFilterBaseAttributableFailuresForF2Gate.mockResolvedValue(
       applyF2GateMaskingGuards(candidateResult, prRun, changedFiles),
     );
