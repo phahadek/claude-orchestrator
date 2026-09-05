@@ -157,9 +157,9 @@ describe('checkBaseBranchHealth', () => {
     expect(result.outcome).toBe('unknown');
     expect(result.run).toBeNull();
     // No git command beyond fetch/worktree provisioning ever runs a test.
-    expect(
-      mockGitRunner.mock.calls.some(([args]) => args[0] === 'test'),
-    ).toBe(false);
+    expect(mockGitRunner.mock.calls.some(([args]) => args[0] === 'test')).toBe(
+      false,
+    );
   });
 
   it('resolves the merge-base commit against a supplied sha reference and keys the lookup on it, not the base tip', async () => {
@@ -180,11 +180,9 @@ describe('checkBaseBranchHealth', () => {
     );
     completeTestRequestRun('run-merge-base', 'passed', '');
 
-    const result = await checkBaseBranchHealth(
-      project,
-      'session-head-sha',
-      { gitRunner: mockGitRunner },
-    );
+    const result = await checkBaseBranchHealth(project, 'session-head-sha', {
+      gitRunner: mockGitRunner,
+    });
 
     expect(result.outcome).toBe('clean_pass');
     expect(
@@ -209,11 +207,9 @@ describe('checkBaseBranchHealth', () => {
       return { stdout: '', stderr: '' };
     });
 
-    const result = await checkBaseBranchHealth(
-      project,
-      'session-head-sha',
-      { gitRunner: mockGitRunner },
-    );
+    const result = await checkBaseBranchHealth(project, 'session-head-sha', {
+      gitRunner: mockGitRunner,
+    });
     expect(result.outcome).toBe('unknown');
     expect(result.run).toBeNull();
   });
