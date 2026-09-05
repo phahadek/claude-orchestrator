@@ -234,10 +234,12 @@ export function useDecisionQueue(
     if (scope.type !== 'milestone') return;
     return subscribeSessionCompletenessChange(({ sessionId, complete }) => {
       setSessionCompleteOverrides((prev) =>
-        prev[sessionId] === complete ? prev : { ...prev, [sessionId]: complete },
+        prev[sessionId] === complete
+          ? prev
+          : { ...prev, [sessionId]: complete },
       );
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [scope.type]);
 
   const upsert = useCallback((intent: StagedIntent) => {
