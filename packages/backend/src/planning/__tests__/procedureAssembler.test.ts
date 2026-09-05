@@ -1249,6 +1249,7 @@ describe('assemblePlanningProcedure', () => {
     for (const field of [
       'size_check',
       'type_check',
+      'seam_check',
       'constraintsDispositioned',
       'filesPathsEntries',
       'dependsOnTasks',
@@ -1262,6 +1263,7 @@ describe('assemblePlanningProcedure', () => {
     const example = output.slice(exampleStart, exampleStart + 600);
     expect(example).toContain('"size_check"');
     expect(example).toContain('"type_check"');
+    expect(example).toContain('"seam_check"');
     expect(example).toContain('"regions"');
     expect(example).toContain('"constraintsDispositioned"');
     expect(example).toContain('"filesPathsEntries"');

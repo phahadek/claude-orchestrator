@@ -48,6 +48,7 @@ function codeGroomingGate(migrationRaw: string) {
   return {
     size_check: { decision: 'n/a' },
     type_check: { decision: 'none' },
+    seam_check: { decision: 'n/a' },
     type: '💻 Code',
     filesPathsEntries: [
       { raw: migrationRaw, isNew: true, existsInRepo: false },
@@ -194,6 +195,7 @@ describe('Ready-flip apply-time migration-number allocation (direct commitGroupI
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
           type: '💻 Code',
           filesPathsEntries: [
             {

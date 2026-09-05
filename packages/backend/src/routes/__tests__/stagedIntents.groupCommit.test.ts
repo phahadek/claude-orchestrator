@@ -148,6 +148,7 @@ async function stageGroup(
       groomingGate: {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
         ...groomingGateOverrides,
       },
     },
@@ -278,6 +279,7 @@ describe('stage-time gate/seed contribution check — grouped Ready-flips', () =
     return {
       size_check: { decision: 'n/a' },
       type_check: { decision: 'none' },
+      seam_check: { decision: 'n/a' },
       type: '💻 Code',
       filesPathsEntries: [
         {
@@ -746,6 +748,7 @@ describe('POST /api/staged-intents/group/:groupId/commit', () => {
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       },
     });
@@ -1025,6 +1028,7 @@ describe('group commit — whole-group precheck (all-or-nothing)', () => {
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       },
     });
@@ -1495,6 +1499,7 @@ describe('task.setStatus -> Deferred automatically re-points a non-terminal depe
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       },
     });
@@ -1587,6 +1592,7 @@ describe('Manual-verification-strip grouping — commit-time hard enforcement', 
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
           hasManualVerificationSection: true,
         },
       },
@@ -1686,6 +1692,7 @@ describe('strip⇔accrete content-verification hard gate', () => {
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
           hasManualVerificationSection: true,
         },
       },
@@ -1856,6 +1863,7 @@ describe('seed_contribution strip⇔accrete content-match (body-derived "## Oper
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
           ...(seedContributionCandidates ? { seedContributionCandidates } : {}),
         },
       },
@@ -2374,6 +2382,7 @@ describe('task.setDependsOn symbolic reference to a sibling task.create — comm
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       },
     });
@@ -3109,6 +3118,7 @@ describe('task.create staged while the session has an open decision group for it
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       },
     });

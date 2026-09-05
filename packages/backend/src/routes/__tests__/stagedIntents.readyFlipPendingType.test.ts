@@ -132,6 +132,7 @@ async function stageRetypeGroup(
       groomingGate: {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
         ...opts.groomingGate,
       },
     },
@@ -276,6 +277,7 @@ describe('Ready-flip gate resolves a group-pending task.setType', () => {
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
           triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
         },
       },

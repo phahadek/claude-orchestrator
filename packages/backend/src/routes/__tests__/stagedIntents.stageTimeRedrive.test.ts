@@ -63,6 +63,7 @@ function wellFormedGroomingGate() {
   return {
     size_check: { decision: 'n/a' },
     type_check: { decision: 'none' },
+    seam_check: { decision: 'n/a' },
     type: '💻 Code',
     filesPathsEntries: [
       {

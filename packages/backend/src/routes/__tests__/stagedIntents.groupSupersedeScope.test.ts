@@ -146,6 +146,7 @@ describe('correcting one blocked group member leaves its unblocked siblings unto
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
           type: '💻 Code',
           filesPathsEntries: [
             {
@@ -175,6 +176,7 @@ describe('correcting one blocked group member leaves its unblocked siblings unto
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
           type: '💻 Code',
           filesPathsEntries: [
             {

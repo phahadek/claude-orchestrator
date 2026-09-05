@@ -66,6 +66,7 @@ describe('POST /api/staged-intents — stage-time gate/seed accretion feedback',
           groomingGate: {
             size_check: { decision: 'n/a' },
             type_check: { decision: 'none' },
+            seam_check: { decision: 'n/a' },
             type: '💻 Code',
           },
         },
@@ -104,6 +105,7 @@ describe('POST /api/staged-intents — stage-time gate/seed accretion feedback',
           groomingGate: {
             size_check: { decision: 'n/a' },
             type_check: { decision: 'none' },
+            seam_check: { decision: 'n/a' },
             type: '💻 Code',
             filesPathsEntries: [
               {

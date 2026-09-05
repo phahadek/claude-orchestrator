@@ -256,6 +256,7 @@ export const groomingGateEntrySchema = z
       .nullable()
       .optional(),
     type_check: z.record(z.string(), z.unknown()).nullable().optional(),
+    seam_check: z.record(z.string(), z.unknown()).nullable().optional(),
     type: z.string().optional(),
     regions: z.unknown().optional(),
     constraintsDispositioned: z.record(z.string(), z.unknown()).optional(),

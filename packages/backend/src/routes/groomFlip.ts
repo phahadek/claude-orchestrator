@@ -52,7 +52,7 @@ export function createGroomFlipRouter(
 
   // POST /api/groom/flip
   //   { project, taskId, title, milestone, dependsOn: string[],
-  //     groomingGate: {size_check, type_check, ...},
+  //     groomingGate: {size_check, type_check, seam_check, ...},
   //     gateContribution: {classification, items: [{text}]},
   //     seedContribution: {decision, seeds: [{spec}]} }
   router.post(

@@ -98,6 +98,14 @@ interface TaskDoc extends TaskRow {
    * the code-map digest and records it (with loc_method) in grooming-state.
    */
   sizeCheckSeed: { files: number; loc_method: 'estimated' };
+  /**
+   * Deterministic seed for seam_check: proposed seam kinds derived from
+   * `regions` — a migrations/ path proposes `schema`, a declared-but-
+   * nonexistent (planned) path proposes `new-module`, and a touched registry
+   * or runner file proposes `wiring`. A groomer's own judgment call, never a
+   * substitute for the groomer's own decision/reason.
+   */
+  seamCheckSeed: SeamSeedItem[];
   /** Deterministic keyword/heuristic type/content-mismatch scan. */
   typeCheck: TypeCheckResult;
   /** This task's declared scope, resolved into package/file regions. */
@@ -165,6 +173,53 @@ export function isSizeCheckSeedOverThreshold(
     typeof seed.locEstimate === 'number' &&
     seed.locEstimate > SIZE_TYPE_CHECK.locSplitThreshold
   );
+}
+
+/** One proposed seam from `computeSeamSeed` — a groomer-facing hypothesis, never an enforced fact. */
+export interface SeamSeedItem {
+  kind: 'schema' | 'new-module' | 'wiring';
+  what: string;
+}
+
+/** A `migrations/` (optionally `db/migrations/`) path segment — mirrors groomLoad.ts's own migration-path recognition. */
+const SEAM_MIGRATIONS_PATH_RE = /(^|\/)(db\/)?migrations?\//i;
+
+/** A registry- or runner-named file — the wiring seam's touched-surface heuristic. */
+const SEAM_REGISTRY_OR_RUNNER_RE = /(registry|runner)/i;
+
+/**
+ * Deterministic seed for seam_check: proposes seam kinds from a task's
+ * already-resolved `regions` (codeWorklist.ts's `resolveTaskRegions`) —
+ * `schema` for a migrations/ path, `new-module` for a declared-but-
+ * nonexistent (planned/greenfield) path, and `wiring` for a touched registry
+ * or runner file. This is a hypothesis the groomer confirms, corrects, or
+ * rejects — never a substitute for the groomer's own seam_check decision.
+ */
+export function computeSeamSeed(regions: TaskRegions): SeamSeedItem[] {
+  const seeds: SeamSeedItem[] = [];
+  const seen = new Set<string>();
+  const add = (kind: SeamSeedItem['kind'], what: string) => {
+    const key = `${kind}:${what}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    seeds.push({ kind, what });
+  };
+
+  for (const path of regions.files) {
+    if (SEAM_MIGRATIONS_PATH_RE.test(path)) add('schema', path);
+    if (SEAM_REGISTRY_OR_RUNNER_RE.test(path)) add('wiring', path);
+  }
+  for (const planned of regions.planned) {
+    if (SEAM_MIGRATIONS_PATH_RE.test(planned.path)) {
+      add('schema', planned.path);
+    } else {
+      add('new-module', planned.path);
+    }
+    if (SEAM_REGISTRY_OR_RUNNER_RE.test(planned.path)) {
+      add('wiring', planned.path);
+    }
+  }
+  return seeds;
 }
 
 type FreshnessStatus = 'fresh' | 'stale' | 'missing';
@@ -840,6 +895,7 @@ export async function loadGroomContext(
         files: regions.files.length + regions.planned.length,
         loc_method: 'estimated',
       },
+      seamCheckSeed: computeSeamSeed(regions),
       typeCheck: scanTypeCheck(row.type, page.rawMarkdown),
       regions,
       bindingConstraints: bindingConstraintIdsForRegions(

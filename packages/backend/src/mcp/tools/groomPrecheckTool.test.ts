@@ -147,6 +147,7 @@ const MULTI_FAILURE_PAYLOAD = {
   groomingGate: {
     size_check: { decision: 'n/a' },
     type_check: { decision: 'flagged', signals: ['api key'] },
+    seam_check: { decision: 'n/a' },
     type: '💻 Code',
     filesPathsEntries: [],
     regions: { packages: [], files: ['packages/backend/src/tasks/foo.ts'] },
@@ -229,6 +230,7 @@ describe('groom.precheck — server-derived existsInRepo parity (task 3ae22f91)'
       groomingGate: {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
         type: '💻 Code',
         filesPathsEntries: [
           {
@@ -294,6 +296,7 @@ describe('groom.precheck — server-derived existsInRepo parity (task 3ae22f91)'
       groomingGate: {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
         type: '💻 Code',
         filesPathsEntries: [
           {
@@ -437,6 +440,7 @@ describe('groom.precheck — a clean payload then stages without needs_revision'
         loc_method: 'estimated',
       },
       type_check: { decision: 'none' },
+      seam_check: { decision: 'n/a' },
       type: '💻 Code',
       filesPathsEntries: [
         {

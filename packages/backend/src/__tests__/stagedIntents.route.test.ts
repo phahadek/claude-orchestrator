@@ -119,6 +119,7 @@ async function stageReadyStatus(
       groomingGate: {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
       },
     },
   });
@@ -372,6 +373,7 @@ describe('POST /api/staged-intents/group/:groupId/commit — grooming promotion 
             loc_method: 'estimated',
           },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       },
     });

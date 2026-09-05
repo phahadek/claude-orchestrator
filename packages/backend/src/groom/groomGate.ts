@@ -2,7 +2,7 @@
  * In-backend grooming promotion gate — the enforcement point the /groom
  * skill's gate usage rewires to as grooming state moves off the file-cache
  * PreToolUse hook (scripts/groom-gate.mjs) and into the orchestrator. Covers
- * the size_check, type_check, gate_contribution, seed_contribution,
+ * the size_check, type_check, seam_check, gate_contribution, seed_contribution,
  * bindingConstraints (FM1), Files/paths resolve-in-artifact (FM2), and
  * cite-or-route (FM3) artifacts; the hook's other checks (signoff,
  * repo_assignment) migrate here in follow-on tasks as their state moves
@@ -11,7 +11,11 @@
  * size_check / type_check are "present-and-dispositioned" gates, not
  * correctness gates: the groomer must have recorded a decision, but a
  * flagged type_check never hard-blocks promotion on its own — see
- * typeCheck.ts. gate_contribution and seed_contribution instead read a
+ * typeCheck.ts. seam_check deviates deliberately from that weaker posture:
+ * the enumeration of seams *is* the entire gate, so a `cohesive` decision
+ * must carry a substantive reason and a `split_now` decision must carry
+ * `split_into` entries — see `isSeamCheckWellFormed` below. gate_contribution
+ * and seed_contribution instead read a
  * durable marker (gate_accretion / seed_accretion, written by
  * accreteGateContribution / stageSeedContribution) rather than a field on the
  * grooming-state entry, since it must survive independent of whatever cache
@@ -62,6 +66,13 @@ const SIZE_CHECK_DECISIONS = new Set([
   'no_split',
   'split_now',
   'unsplittable',
+  'n/a',
+]);
+
+const SEAM_CHECK_DECISIONS = new Set([
+  'single_seam',
+  'split_now',
+  'cohesive',
   'n/a',
 ]);
 
@@ -232,6 +243,22 @@ export interface GroomingGateEntry {
     disposition?: unknown;
     [key: string]: unknown;
   } | null;
+  /**
+   * The cohesion axis: does this task's diff form one coherent unit of
+   * change, or does it bundle distinct strands sharing one criteria budget?
+   * `seams` names each distinct strand of change (`{kind, what}`); `decision`
+   * is one of single_seam/split_now/cohesive/n/a (Design/Planning). Unlike
+   * size_check/type_check's present-and-dispositioned posture, a `cohesive`
+   * decision must carry a substantive `reason` and a `split_now` decision
+   * must carry `split_into` entries — see `isSeamCheckWellFormed`.
+   */
+  seam_check?: {
+    decision?: unknown;
+    seams?: unknown;
+    split_into?: unknown;
+    reason?: unknown;
+    [key: string]: unknown;
+  } | null;
   /** Display-format Task Type, e.g. '💻 Code' — decides whether gate_contribution is required. */
   type?: string;
   /** This task's resolved code regions (codeWorklist.ts's resolveTaskRegions) — drives bindingConstraints re-derivation. */
@@ -380,6 +407,52 @@ function isTypeCheckDispositioned(entry: GroomingGateEntry): boolean {
   if (tc.decision === 'flagged')
     return typeof tc.disposition === 'string' && tc.disposition.trim() !== '';
   return false;
+}
+
+function isSeamCheckClassified(entry: GroomingGateEntry): boolean {
+  const sc = entry.seam_check;
+  return (
+    !!sc &&
+    typeof sc === 'object' &&
+    typeof sc.decision === 'string' &&
+    SEAM_CHECK_DECISIONS.has(sc.decision)
+  );
+}
+
+/**
+ * seam_check deviates deliberately from size_check/type_check's weaker
+ * present-and-dispositioned posture: the enumeration of seams *is* the
+ * entire gate, so a `cohesive` decision (self-granting "this is one
+ * coherent unit of change") must carry a substantive, non-empty `reason` —
+ * exactly the bare `{"decision":"none"}` gate_contribution rejection's
+ * posture — and a `split_now` decision must name where each seam goes via
+ * non-empty `split_into` entries, mirroring size_check's own split_now/
+ * split_into convention. `n/a` (Design/Planning — sized in open-question
+ * count, not code seams) and `single_seam` carry no further requirement.
+ */
+function isSeamCheckWellFormed(entry: GroomingGateEntry): string[] {
+  const sc = entry.seam_check;
+  if (!sc || typeof sc !== 'object' || typeof sc.decision !== 'string') {
+    return [];
+  }
+  const reasons: string[] = [];
+  if (sc.decision === 'cohesive' && !`${sc.reason ?? ''}`.trim()) {
+    reasons.push(
+      'seam_check is dispositioned "cohesive" without a substantive reason — a self-granted cohesive ' +
+        'decision must record why the enumerated seams (or their absence) amount to one coherent unit of ' +
+        'change, not merely that the decision was recorded.',
+    );
+  }
+  if (
+    sc.decision === 'split_now' &&
+    (!Array.isArray(sc.split_into) || sc.split_into.length === 0)
+  ) {
+    reasons.push(
+      'seam_check is dispositioned "split_now" without recorded split_into entries — a split nomination ' +
+        'must name the sibling task(s) each seam routes to before promotion.',
+    );
+  }
+  return reasons;
 }
 
 /**
@@ -1013,6 +1086,16 @@ export async function checkGroomingPromotionGate(
         '{"decision":"n/a"} (exempt type), or, when the smuggle-scan flags the body, ' +
         '{"decision":"flagged","disposition":"split-filed:<id>"|"dismissed:<reason>"} before promotion.',
     );
+  }
+
+  if (!isSeamCheckClassified(entry)) {
+    reasons.push(
+      'seam_check is missing or malformed — every task must have an explicit cohesion classification ' +
+        'recorded before promotion. Expected {"seams": [{"kind": "...", "what": "..."}], ' +
+        '"decision": "single_seam"|"split_now"|"cohesive"|"n/a"}.',
+    );
+  } else {
+    reasons.push(...isSeamCheckWellFormed(entry));
   }
 
   reasons.push(

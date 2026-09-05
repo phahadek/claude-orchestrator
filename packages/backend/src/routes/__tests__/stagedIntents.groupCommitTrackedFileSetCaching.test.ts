@@ -205,6 +205,7 @@ async function stageAndApproveCodeGroup(
           type: '💻 Code',
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       },
     });

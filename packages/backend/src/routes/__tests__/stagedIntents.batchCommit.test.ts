@@ -91,6 +91,7 @@ async function stageCleanTriageGroup(
         type: '📐 Design',
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
         triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
       },
     },
@@ -420,6 +421,7 @@ describe('POST /api/staged-intents/batch/commit', () => {
               type: '📐 Design',
               size_check: { decision: 'n/a' },
               type_check: { decision: 'none' },
+              seam_check: { decision: 'n/a' },
               triage: {
                 proposedVerdict: 'clean',
                 hasOpenQuestionsHeading: true,
@@ -481,6 +483,7 @@ describe('precheckGroupCommit routes its block to the originating session', () =
         groomingGate: {
           type: '📐 Design',
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
           ...groomingGateOverrides,
         },
       },
