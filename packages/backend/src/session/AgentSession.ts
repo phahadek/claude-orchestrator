@@ -2138,7 +2138,9 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         const missing = validation.missingSections
           .map((s) => `\`${s}\``)
           .join(', ');
-        messageParts.push(`The PR body is missing required sections: ${missing}.`);
+        messageParts.push(
+          `The PR body is missing required sections: ${missing}.`,
+        );
       }
       if (oversizedSections.length > 0) {
         const oversized = oversizedSections.map((s) => `\`${s}\``).join(', ');

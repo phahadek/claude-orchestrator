@@ -1540,7 +1540,10 @@ describe('loadOrchestratorConfig — pr_body', () => {
       ].join('\n'),
     );
     const config = loadOrchestratorConfig(tmpDir);
-    expect(config.pr_body.sections).toEqual(['## Summary', '## Automated Tests']);
+    expect(config.pr_body.sections).toEqual([
+      '## Summary',
+      '## Automated Tests',
+    ]);
   });
 
   it('parses max_section_chars', () => {

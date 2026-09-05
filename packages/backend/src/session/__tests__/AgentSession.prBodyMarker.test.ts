@@ -642,7 +642,11 @@ describe('<pr-body> marker — validation failure path', () => {
   it('re-prompt scales to a three-missing-section config with no hardcoded count', async () => {
     vi.mocked(validatePRBody).mockReturnValue({
       valid: false,
-      missingSections: ['## Summary', '## Automated Tests', '## Deployment Notes'],
+      missingSections: [
+        '## Summary',
+        '## Automated Tests',
+        '## Deployment Notes',
+      ],
       oversizedSections: [],
     });
 

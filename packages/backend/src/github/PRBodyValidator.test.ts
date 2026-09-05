@@ -86,14 +86,22 @@ describe('validatePRBody() — default sections', () => {
 describe('validatePRBody() — custom sections config', () => {
   it('requires exactly the configured section list', () => {
     const config = { sections: ['## Summary', '## Automated Tests'] };
-    const result = validatePRBody('## Summary\nok\n\n## Automated Tests\nok', config);
+    const result = validatePRBody(
+      '## Summary\nok\n\n## Automated Tests\nok',
+      config,
+    );
     expect(result.valid).toBe(true);
     expect(result.missingSections).toHaveLength(0);
   });
 
   it('pauses as invalid when a body is missing a custom-configured section', () => {
-    const config = { sections: ['## Summary', '## Automated Tests', '## Files Changed'] };
-    const result = validatePRBody('## Summary\nok\n\n## Automated Tests\nok', config);
+    const config = {
+      sections: ['## Summary', '## Automated Tests', '## Files Changed'],
+    };
+    const result = validatePRBody(
+      '## Summary\nok\n\n## Automated Tests\nok',
+      config,
+    );
     expect(result.valid).toBe(false);
     expect(result.missingSections).toEqual(['## Files Changed']);
   });

@@ -59,7 +59,11 @@ export function validatePRBody(
 ): PRBodyValidationResult {
   const sections = config.sections;
   if (!body || body.trim() === '') {
-    return { valid: false, missingSections: [...sections], oversizedSections: [] };
+    return {
+      valid: false,
+      missingSections: [...sections],
+      oversizedSections: [],
+    };
   }
 
   const missingSections: string[] = [];
@@ -75,7 +79,9 @@ export function validatePRBody(
     } else if (section === '## Automated Tests') {
       if (!body.includes(section)) {
         missingSections.push(section);
-      } else if (BARE_NO_TEST_CHANGES_RE.test(extractSectionContent(body, section))) {
+      } else if (
+        BARE_NO_TEST_CHANGES_RE.test(extractSectionContent(body, section))
+      ) {
         missingSections.push(section);
       }
     } else if (!body.includes(section)) {

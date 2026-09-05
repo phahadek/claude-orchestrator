@@ -164,7 +164,8 @@ function prBodyTaskSectionContent(
 const KNOWN_SECTION_HINTS: Record<string, string> = {
   '## Summary': '<1-3 sentences: what changed and why>',
   '## Automated Tests': '<list tests added/modified, or "No test changes">',
-  '## Files Changed': '<bulleted list of files with brief description of each change>',
+  '## Files Changed':
+    '<bulleted list of files with brief description of each change>',
 };
 
 /**
