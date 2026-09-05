@@ -133,6 +133,7 @@ type EventType =
   | 'session_mcp_unreachable_respawned'
   | 'session_mcp_unreachable_respawn_exhausted'
   | 'session_orchestrator_mcp_connect_failed'
+  | 'session_orchestrator_mcp_status_reported'
   | 'mcp_session_credential_revoked'
   | 'route_session_credential_revoked'
   | 'route_session_credential_rejected'

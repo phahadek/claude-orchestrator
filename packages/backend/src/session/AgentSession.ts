@@ -1555,7 +1555,10 @@ The full task spec and all rules are in your system prompt. Begin implementing d
           task_id: this.taskId ?? null,
           payload: { sessionId: this.sessionId, status: orchestratorMcpStatus },
         });
-        if (orchestratorMcpStatus !== 'connected' && isCodeSession(this.sessionType)) {
+        if (
+          orchestratorMcpStatus !== 'connected' &&
+          isCodeSession(this.sessionType)
+        ) {
           this.pauseForOrchestratorMcpConnectFailure(orchestratorMcpStatus);
         }
       }
