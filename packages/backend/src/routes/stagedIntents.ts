@@ -88,6 +88,8 @@ import {
   setStagedIntentAppliedTaskId,
   setStagedIntentGroup,
   clearStagedIntentGroup,
+  findOpenGroupForTask,
+  findOpenGroupOwnerSessions,
   getSession,
   getGrantedCapabilities,
   hasActiveCapabilityRequestForSession,
@@ -1473,6 +1475,106 @@ function sweepGroomBodyEditsIntoGroup(
   for (const orphan of orphans) {
     const grouped = setStagedIntentGroup(orphan.id, groupId);
     broadcastIntentChange(rowToApi(grouped));
+  }
+}
+
+/**
+ * Thrown at stage time when a task already has an open decision group and
+ * this stage supplies a different groupId for it — the enforcement behind
+ * the rule task.updateBody/task.patchBodySection's tool descriptions already
+ * state in prose ("pass that same groupId"), now backed by a mechanism
+ * instead of trust in a session-authored free-text field. Names the existing
+ * group id so the staging session can retry against it.
+ */
+class TaskGroupMismatchError extends Error {
+  constructor(
+    taskId: string,
+    existingGroupId: string,
+    suppliedGroupId: string,
+  ) {
+    super(
+      `[stagedIntents] task "${taskId}" already has an open decision group ("${existingGroupId}"), but this ` +
+        `stage supplied a different groupId ("${suppliedGroupId}") — a task's grooming pass stays in one ` +
+        `group; stage again with groupId "${existingGroupId}".`,
+    );
+    this.name = 'TaskGroupMismatchError';
+  }
+}
+
+/**
+ * Thrown at stage time when the supplied groupId already has a live member
+ * owned by a different session — prevents two sessions from merging their
+ * proposals into one group by coincidence of a shared free-text id.
+ */
+class GroupOwnedByAnotherSessionError extends Error {
+  constructor(groupId: string, ownerSessionId: string) {
+    super(
+      `[stagedIntents] groupId "${groupId}" already has a live member staged by session "${ownerSessionId}" ` +
+        '— a different session cannot stage into it. Choose a new groupId.',
+    );
+    this.name = 'GroupOwnedByAnotherSessionError';
+  }
+}
+
+/**
+ * The task this intent's payload names, for the one-decision-group-per-task
+ * check below — plain `payload.taskId`, never task.patchBodySection's
+ * compound `<taskId>::<section>` dedup key (extractTaskId), since the group
+ * rule is scoped to the task, not to any one section of its body. Kinds with
+ * no plain `taskId` field (task.create, arch.*, gate.accrete, seed.stage,
+ * gate.verify, decision.pickOne, test.request, ops.prIntent — the last two
+ * explicitly can't belong to a group at all) naturally return null here and
+ * are unaffected.
+ */
+function extractGroupScopeTaskId(payload: unknown): string | null {
+  const taskId = (payload as { taskId?: unknown } | null)?.taskId;
+  return typeof taskId === 'string' ? taskId : null;
+}
+
+/**
+ * Stage-time enforcement of "one decision group per task per grooming pass":
+ * a stage carrying a groupId for a task that already has a different open
+ * decision group is rejected (TaskGroupMismatchError), and a stage carrying a
+ * groupId some other session already opened is rejected
+ * (GroupOwnedByAnotherSessionError) — independent of task, since a
+ * coincidental id collision across two unrelated tasks/sessions is exactly
+ * as unwanted as a same-task split. Deliberate re-staging into a session's
+ * own already-open group for its own task (including a superseding member
+ * pushed back for revision) is unaffected: the supplied groupId either
+ * matches the task's open group or the group has no foreign owner, so
+ * neither check fires. A task with no open group, or whose prior group is
+ * fully terminal (findOpenGroupForTask sees nothing live), accepts any new
+ * groupId. A no-op when no groupId is supplied — that case is governed by
+ * assertTaskCreateGrouped / assertGroomBodyEditGrouped above, which decide
+ * whether a groupId was required in the first place. The cross-session
+ * ownership check is skipped when this call carries an explicitSupersedes
+ * pointer: that path's own dedicated validation (stageIntent, below) already
+ * rejects a target belonging to a different session, with a message specific
+ * to the supersede target rather than the group — this generic check would
+ * otherwise preempt it with a less precise rejection.
+ */
+function assertTaskGroupConsistency(
+  payload: unknown,
+  groupId: string | null | undefined,
+  sessionId: string | null | undefined,
+  explicitSupersedes: string | null | undefined,
+): void {
+  if (!groupId) return;
+
+  if (sessionId && !explicitSupersedes) {
+    const owners = findOpenGroupOwnerSessions(groupId);
+    const foreignOwner = owners.find((owner) => owner !== sessionId);
+    if (foreignOwner) {
+      throw new GroupOwnedByAnotherSessionError(groupId, foreignOwner);
+    }
+  }
+
+  const taskId = extractGroupScopeTaskId(payload);
+  if (!taskId) return;
+
+  const existing = findOpenGroupForTask(taskId);
+  if (existing && existing.groupId !== groupId) {
+    throw new TaskGroupMismatchError(taskId, existing.groupId, groupId);
   }
 }
 
@@ -4105,6 +4207,7 @@ export function stageIntent(
   assertTaskCreateGrouped(kind, sessionId, groupId);
   assertGroomTaskCreateNotDesignFollowOn(kind, sessionId);
   assertGroomBodyEditGrouped(kind, sessionId, groupId);
+  assertTaskGroupConsistency(payload, groupId, sessionId, explicitSupersedes);
   sweepGroomBodyEditsIntoGroup(sessionId, groupId);
 
   ({ payload, decisionProposal } = applyDesignClosingSynthesisGeneration(
