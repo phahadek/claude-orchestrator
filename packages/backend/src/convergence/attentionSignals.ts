@@ -5,7 +5,8 @@ import {
   isSessionComplete,
 } from '../db/queries';
 import { parsePauseReason, type PauseReasonStruct } from '../db/pauseReason';
-import { resolveMilestoneForTaskId } from '../projects/milestoneResolver';
+import { buildTaskMilestoneIndex } from '../projects/milestoneResolver';
+import { normalizeTaskId } from '../tasks/taskId';
 import { runtimeSettings } from '../config';
 import type {
   ConvergenceSnapshotRow,
@@ -218,9 +219,14 @@ export function computeMilestoneAttentionSignals(
     (row) => isMilestoneActionable(row, sessionManager),
   );
 
+  // One pass over the project's milestone board caches (see
+  // buildTaskMilestoneIndex) instead of re-parsing every board blob per
+  // pause row — the fix for this route's per-call JSON.parse blowup.
+  const taskMilestoneIndex = buildTaskMilestoneIndex(projectId);
   const blockedRows = listTaskPauseReasons()
     .filter(
-      (row) => resolveMilestoneForTaskId(projectId, row.task_id) === milestone,
+      (row) =>
+        taskMilestoneIndex.get(normalizeTaskId(row.task_id)) === milestone,
     )
     .map((row) => ({
       task_id: row.task_id,

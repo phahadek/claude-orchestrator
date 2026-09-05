@@ -19,11 +19,15 @@ vi.mock('../../db/db.js', async () => {
 });
 
 import { db } from '../../db/db.js';
+import * as queries from '../../db/queries.js';
 import {
   insertStagedIntent,
   insertSession,
   hashIntentPayload,
+  upsertTaskCache,
+  setTaskPauseReason,
 } from '../../db/queries.js';
+import { ProjectService } from '../../projects/ProjectService.js';
 import type { StagedIntentRow } from '../../db/types.js';
 import {
   detectAgingSignals,
@@ -558,5 +562,90 @@ describe('computeMilestoneAttentionSignals actionability filter', () => {
       sessionManager,
     );
     expect(result.pendingCount).toBe(inboxVisibleCount);
+  });
+});
+
+describe('computeMilestoneAttentionSignals — one-pass board index', () => {
+  const PROJECT_ID = 'proj-index-fixture';
+  const NUM_MILESTONES = 17;
+  const TOTAL_PAUSE_ROWS = 189;
+
+  beforeEach(() => {
+    db.prepare('DELETE FROM staged_intent').run();
+    db.prepare('DELETE FROM staged_intent_group').run();
+    db.prepare('DELETE FROM sessions').run();
+    db.prepare('DELETE FROM task_cache').run();
+    db.prepare('DELETE FROM task_pause_reasons').run();
+    db.prepare('DELETE FROM projects').run();
+    db.prepare('DELETE FROM milestones').run();
+
+    ProjectService.create({
+      id: PROJECT_ID,
+      name: 'Fixture Project',
+      projectDir: '/tmp/fixture',
+    });
+
+    for (let i = 0; i < NUM_MILESTONES; i++) {
+      const milestone = ProjectService.createMilestone({
+        id: `ms-fixture-${i}`,
+        projectId: PROJECT_ID,
+        name: `M${i}`,
+        canonicalShortId: `M${i}`,
+        sourceId: `src-${i}`,
+      });
+      upsertTaskCache(
+        `board:${milestone.id}`,
+        JSON.stringify([{ id: `task-${i}-a` }, { id: `task-${i}-b` }]),
+      );
+    }
+
+    // Two matching rows on the target milestone (M0), one row per each of
+    // the other 16 milestones (foreign boards), and enough orphan rows (task
+    // ids on no board at all) to reach the fixture's 189-row total — the
+    // measured shape from context.md (only a handful of 189 rows belong to
+    // the target board).
+    setTaskPauseReason('task-0-a', 'planning_terminal_no_decision', 'x');
+    setTaskPauseReason('task-0-b', 'launch_failed', 'y');
+    for (let i = 1; i < NUM_MILESTONES; i++) {
+      setTaskPauseReason(`task-${i}-a`, 'planning_terminal_no_decision', 'z');
+    }
+    const seeded = 2 + (NUM_MILESTONES - 1);
+    for (let i = 0; seeded + i < TOTAL_PAUSE_ROWS; i++) {
+      setTaskPauseReason(`orphan-task-${i}`, 'launch_failed', 'w');
+    }
+    expect(queries.listTaskPauseReasons()).toHaveLength(TOTAL_PAUSE_ROWS);
+  });
+
+  it('parses each board cache at most once per call, not once per pause row', () => {
+    const spy = vi.spyOn(queries, 'getTaskCache');
+    computeMilestoneAttentionSignals(PROJECT_ID, 'M0', undefined);
+    expect(spy.mock.calls.length).toBeLessThanOrEqual(NUM_MILESTONES);
+  });
+
+  it('drops pause rows on another milestone or no board before parsePauseReason, producing signals only for the target milestone', () => {
+    const result = computeMilestoneAttentionSignals(
+      PROJECT_ID,
+      'M0',
+      undefined,
+    );
+    const blocked = result.tier2.filter((s) => s.type === 'blocked');
+    expect(blocked.map((s) => s.key).sort()).toEqual(
+      [
+        'blocked:task-0-a:planning_terminal_no_decision',
+        'blocked:task-0-b:launch_failed',
+      ].sort(),
+    );
+  });
+
+  it('produces output identical across repeated calls (stable snapshot of tier2 and pendingCount)', () => {
+    const before = computeMilestoneAttentionSignals(
+      PROJECT_ID,
+      'M0',
+      undefined,
+    );
+    const after = computeMilestoneAttentionSignals(PROJECT_ID, 'M0', undefined);
+    expect(after).toEqual(before);
+    expect(before.pendingCount).toBe(0);
+    expect(before.tier2.filter((s) => s.type === 'blocked')).toHaveLength(2);
   });
 });

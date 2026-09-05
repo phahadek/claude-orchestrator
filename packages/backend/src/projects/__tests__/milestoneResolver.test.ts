@@ -30,9 +30,13 @@ import {
   resolveMilestoneAnyProject,
   resolveMilestoneSourceId,
   resolveMilestoneForSessionTask,
+  resolveMilestoneForTaskId,
+  buildTaskMilestoneIndex,
+  sweepStaleTaskPauseReasons,
   UnknownMilestoneError,
 } from '../milestoneResolver.js';
 import * as queries from '../../db/queries.js';
+import { db } from '../../db/db.js';
 import type { GateItemRow } from '../../db/types.js';
 
 const M11 = {
@@ -318,5 +322,113 @@ describe('resolveMilestoneForSessionTask', () => {
     expect(
       resolveMilestoneForSessionTask('p1', 'report-batch:stale-milestone'),
     ).toBeNull();
+  });
+});
+
+describe('buildTaskMilestoneIndex / resolveMilestoneForTaskId', () => {
+  beforeEach(() => {
+    db.prepare('DELETE FROM task_cache').run();
+    db.prepare('DELETE FROM task_pause_reasons').run();
+  });
+
+  it('resolves a task id to its canonical milestone key via the board cache index', () => {
+    projectServiceMock.getById.mockReturnValue(
+      project([
+        { ...M11, sourceId: 'src-11' },
+        { ...M12, sourceId: 'src-12' },
+      ]),
+    );
+    queries.upsertTaskCache(
+      'board:ms-uuid-11',
+      JSON.stringify([{ id: 'task-aaa' }]),
+    );
+    queries.upsertTaskCache(
+      'board:ms-uuid-12',
+      JSON.stringify([{ id: 'task-bbb' }]),
+    );
+
+    expect(resolveMilestoneForTaskId('p1', 'task-bbb')).toBe('M12');
+    expect(resolveMilestoneForTaskId('p1', 'task-zzz')).toBeNull();
+  });
+
+  it('parses each board cache at most once building the index', () => {
+    const milestones = Array.from({ length: 17 }, (_, i) => ({
+      ...M11,
+      id: `ms-${i}`,
+      name: `M${i}`,
+      canonicalShortId: `M${i}`,
+      sourceId: `src-${i}`,
+    }));
+    projectServiceMock.getById.mockReturnValue(project(milestones));
+    milestones.forEach((m, i) => {
+      queries.upsertTaskCache(
+        `board:${m.id}`,
+        JSON.stringify([{ id: `task-${i}` }]),
+      );
+    });
+
+    const spy = vi.spyOn(queries, 'getTaskCache');
+    const index = buildTaskMilestoneIndex('p1');
+    expect(spy).toHaveBeenCalledTimes(17);
+    expect(index.size).toBe(17);
+    expect(index.get('notion:task-5')).toBe('M5');
+  });
+});
+
+describe('sweepStaleTaskPauseReasons', () => {
+  beforeEach(() => {
+    db.prepare('DELETE FROM task_cache').run();
+    db.prepare('DELETE FROM task_pause_reasons').run();
+  });
+
+  it('deletes a pause row on a wrapped milestone and one on no board, while a live-board row survives', () => {
+    const liveMilestone = {
+      ...M11,
+      id: 'ms-live',
+      name: 'M-live',
+      canonicalShortId: 'M-live',
+      sourceId: 'src-live',
+      wrappedAt: null,
+    };
+    const wrappedMilestone = {
+      ...M11,
+      id: 'ms-wrapped',
+      name: 'M-wrapped',
+      canonicalShortId: 'M-wrapped',
+      sourceId: 'src-wrapped',
+      wrappedAt: Date.now(),
+    };
+    projectServiceMock.list.mockReturnValue([
+      {
+        id: 'p1',
+        autoLaunchEnabled: true,
+        milestones: [liveMilestone, wrappedMilestone],
+      },
+    ]);
+
+    queries.upsertTaskCache(
+      'board:ms-live',
+      JSON.stringify([{ id: 'task-live' }]),
+    );
+    queries.upsertTaskCache(
+      'board:ms-wrapped',
+      JSON.stringify([{ id: 'task-wrapped' }]),
+    );
+
+    queries.setTaskPauseReason('task-live', 'launch_failed', 'x');
+    queries.setTaskPauseReason('task-wrapped', 'launch_failed', 'x');
+    queries.setTaskPauseReason('task-orphan', 'launch_failed', 'x');
+
+    const deleted = sweepStaleTaskPauseReasons();
+
+    expect(deleted).toBe(2);
+    const remaining = queries.listTaskPauseReasons().map((r) => r.task_id);
+    expect(remaining).toEqual(['task-live']);
+  });
+
+  it('returns 0 and does not query projects when there are no pause rows', () => {
+    projectServiceMock.list.mockClear();
+    expect(sweepStaleTaskPauseReasons()).toBe(0);
+    expect(projectServiceMock.list).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,11 @@
 import { ProjectService } from './ProjectService';
 import type { ProjectMilestone } from './ProjectService';
-import { getTaskCache, getGateItem } from '../db/queries';
+import {
+  getTaskCache,
+  getGateItem,
+  listTaskPauseReasons,
+  deleteTaskPauseReasonsForTaskIds,
+} from '../db/queries';
 import { normalizeTaskId } from '../tasks/taskId';
 import type { NotionTask } from '../notion/types';
 import {
@@ -8,6 +13,7 @@ import {
   isInvestigateSession,
 } from '../session/sessionPredicates';
 import { getReportsForBatchTaskId } from '../investigation/reportStore';
+import { recordEvent } from '../audit/AuditLog';
 
 /**
  * Thrown when a milestone reference doesn't resolve to exactly one known
@@ -189,13 +195,22 @@ export function resolveMilestoneRowForProject(
  * found in any cached board, or a board cache is missing/stale/unparseable;
  * the caller falls back to the "unattributed" bucket in that case.
  */
-export function resolveMilestoneForTaskId(
+/**
+ * Builds the project's task-id -> canonical milestone key index in one pass
+ * over its milestone board caches — each `board:${milestone.id}` task_cache
+ * blob is JSON.parsed exactly once, rather than once per task id a caller
+ * wants resolved (the shape resolveMilestoneForTaskId used to have, and
+ * computeMilestoneAttentionSignals's per-pause-row hot loop before it moved
+ * to this shared index). When a task id appears on more than one board
+ * (shouldn't normally happen), the first milestone in project.milestones
+ * order wins — matching the early-return behavior this replaced.
+ */
+export function buildTaskMilestoneIndex(
   projectId: string,
-  taskId: string,
-): string | null {
+): Map<string, string> {
+  const index = new Map<string, string>();
   const project = ProjectService.getById(projectId);
-  if (!project) return null;
-  const normalized = normalizeTaskId(taskId);
+  if (!project) return index;
   for (const milestone of project.milestones) {
     if (!milestone.sourceId) continue;
     const row = getTaskCache(`board:${milestone.id}`);
@@ -206,11 +221,22 @@ export function resolveMilestoneForTaskId(
     } catch {
       continue;
     }
-    if (tasks.some((t) => normalizeTaskId(t.id) === normalized)) {
-      return canonicalMilestoneKey(milestone);
+    const key = canonicalMilestoneKey(milestone);
+    for (const t of tasks) {
+      const normalized = normalizeTaskId(t.id);
+      if (!index.has(normalized)) index.set(normalized, key);
     }
   }
-  return null;
+  return index;
+}
+
+export function resolveMilestoneForTaskId(
+  projectId: string,
+  taskId: string,
+): string | null {
+  return (
+    buildTaskMilestoneIndex(projectId).get(normalizeTaskId(taskId)) ?? null
+  );
 }
 
 /**
@@ -286,4 +312,52 @@ export function resolveMilestoneRowAnyProject(
   throw new UnknownMilestoneError(
     `"${milestone}" is not a known milestone display name for any project`,
   );
+}
+
+/**
+ * One-time (boot-sweep-safe, re-runnable) cleanup of task_pause_reasons rows
+ * that can never again produce a milestone-attention signal: a row whose
+ * task id is on no board of any project with auto_launch_enabled, or whose
+ * board belongs to a milestone that's already wrapped. Those rows are dead
+ * weight every computeMilestoneAttentionSignals call has to skip over (see
+ * the 160 multi-progress-quest launch_failed rows this was written against),
+ * so they're deleted rather than merely ignored. Records the deleted count
+ * as a 'stale_task_pause_reasons_swept' audit event; never throws.
+ */
+export function sweepStaleTaskPauseReasons(): number {
+  const rows = listTaskPauseReasons();
+  if (rows.length === 0) return 0;
+
+  const liveTaskIds = new Set<string>();
+  for (const project of ProjectService.list()) {
+    if (!project.autoLaunchEnabled) continue;
+    for (const milestone of project.milestones) {
+      if (milestone.wrappedAt != null) continue;
+      if (!milestone.sourceId) continue;
+      const cache = getTaskCache(`board:${milestone.id}`);
+      if (!cache) continue;
+      let tasks: NotionTask[];
+      try {
+        tasks = JSON.parse(cache.raw_json) as NotionTask[];
+      } catch {
+        continue;
+      }
+      for (const t of tasks) liveTaskIds.add(normalizeTaskId(t.id));
+    }
+  }
+
+  const staleTaskIds = rows
+    .map((r) => r.task_id)
+    .filter((taskId) => !liveTaskIds.has(normalizeTaskId(taskId)));
+  if (staleTaskIds.length === 0) return 0;
+
+  const deletedCount = deleteTaskPauseReasonsForTaskIds(staleTaskIds);
+  if (deletedCount > 0) {
+    recordEvent({
+      event_type: 'stale_task_pause_reasons_swept',
+      actor_type: 'system',
+      payload: { deletedCount },
+    });
+  }
+  return deletedCount;
 }

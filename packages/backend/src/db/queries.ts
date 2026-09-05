@@ -4541,6 +4541,24 @@ export function listTaskPauseReasons(): {
 }
 
 /**
+ * Bulk-deletes task_pause_reasons rows by exact task_id — the cleanup
+ * sweep's write side (see milestoneResolver.ts's sweepStaleTaskPauseReasons).
+ * Returns the number of rows actually removed.
+ */
+export function deleteTaskPauseReasonsForTaskIds(taskIds: string[]): number {
+  if (taskIds.length === 0) return 0;
+  const stmt = db.prepare(`DELETE FROM task_pause_reasons WHERE task_id = ?`);
+  const txn = db.transaction((ids: string[]) => {
+    let count = 0;
+    for (const id of ids) {
+      count += stmt.run(id).changes;
+    }
+    return count;
+  });
+  return txn(taskIds);
+}
+
+/**
  * Clear the pause_reason on all PRs associated with a task (used when the task
  * transitions back to Ready so the next launch attempt is not blocked by a
  * stale PR-level pause such as stuck_timeout).
