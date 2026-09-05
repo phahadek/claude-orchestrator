@@ -24,7 +24,7 @@
 //   {
 //     "title": "...", "project": "...", "milestone": "M12",
 //     "hard_block_deps": ["<id>", ...],           // [] is a valid "no deps"
-//     "size_check": {...}, "type_check": {...},   // see groomGate.ts
+//     "size_check": {...}, "type_check": {...}, "seam_check": {...}, // see groomGate.ts
 //     "gate_contribution": {
 //       "classification": "Read-Only"|"Prod-Mutating"|"Human-Observation"|"needs-triage"|"none"|"n/a",
 //       "items": [{"text": "..."}]                // [] when classification is "none"/"n/a"
@@ -140,6 +140,7 @@ export function buildFlipPayload(groomingStatePath, taskId) {
     groomingGate: {
       size_check: entry.size_check,
       type_check: entry.type_check,
+      seam_check: entry.seam_check,
       type: entry.type,
       regions: entry.regions,
       constraintsDispositioned: entry.constraints_dispositioned,
