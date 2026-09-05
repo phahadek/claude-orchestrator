@@ -503,7 +503,9 @@ async function computeGroupProposedBody(
 function wasFlagged(advisoryJson: string | null): boolean {
   if (!advisoryJson) return false;
   try {
-    return (JSON.parse(advisoryJson) as { status?: unknown }).status === 'flagged';
+    return (
+      (JSON.parse(advisoryJson) as { status?: unknown }).status === 'flagged'
+    );
   } catch {
     return false;
   }
