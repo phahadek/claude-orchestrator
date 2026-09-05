@@ -109,9 +109,8 @@ export interface TestRequestRunSpec {
    * PreReviewPipeline.ts/ReviewOrchestrator.ts, null for an ordinary
    * session-attributed test.request. Required so every call site states its
    * own identity rather than relying on sessionId's absence — sessionId is
-   * null for both a base probe and a PR-branch run, and only run_origin
-   * distinguishes them (see getLatestBaseHealthTestRequestRun in
-   * db/queries.ts).
+   * null for both a historical base-probe row and a PR-branch run, and only
+   * run_origin distinguishes them.
    */
   runOrigin: RunOrigin;
   /** Which lane call site is originating this run — set at insert time onto every row; see TestRunProducer in db/types.ts. */
