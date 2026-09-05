@@ -260,6 +260,17 @@ does — but the standard names them so authoring and grooming stay aligned:
 - **`type_check`** — the type/content-mismatch scan (does the body's shape match its declared
   Type?). Also **present-and-dispositioned and advisory**: a flagged `type_check` never
   hard-blocks promotion on its own; the groomer must record a disposition, not clear the scan.
+- **`seam_check`** — the cohesion axis: does this task's diff form one coherent unit of change,
+  or does it bundle distinct strands (a migration, a new module, its wiring, a back-compat
+  shim) that share one criteria budget but can't be reverted in parts? Shape
+  `{ seams: [{ kind, what }], decision, split_into?, reason? }`. `decision` is one of
+  `single_seam` / `split_now` / `cohesive` / `n/a` (Design/Planning). `split_into` carries the
+  sibling task ids when `split_now`. **Unlike `size_check` / `type_check`, this is not merely
+  present-and-dispositioned — the enumeration itself is the entire gate.** A `cohesive` decision
+  must carry a substantive, non-empty `reason`: a seam you did not name is a seam you did not
+  split, so a self-granted `cohesive` with no reason would make the check vacuous. A `split_now`
+  decision must carry `split_into` entries — a nomination without a routing target doesn't clear
+  the gate.
 - **Split / merge are orchestrator-driven — a grooming session *nominates*, never *performs*.**
   When a task trips the split threshold (or two tasks should merge), the groomer **records a
   nomination**; the **orchestrator confirms and routes the split/merge to a dedicated session**.

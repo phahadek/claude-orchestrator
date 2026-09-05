@@ -168,6 +168,7 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
           loc_method: 'estimated',
         },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
       },
     });
 
@@ -183,6 +184,7 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
             loc_method: 'estimated',
           },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       }),
     );
@@ -233,6 +235,7 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
           loc_method: 'estimated',
         },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
       },
     });
 
@@ -250,6 +253,7 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
             loc_method: 'estimated',
           },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       },
     );
@@ -271,6 +275,7 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
           loc_method: 'estimated',
         },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
       },
     });
 
@@ -480,6 +485,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
             loc_method: 'estimated',
           },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       });
     } catch (err) {
@@ -511,6 +517,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
           loc_method: 'estimated',
         },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
       },
     });
 
@@ -526,6 +533,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
             loc_method: 'estimated',
           },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       }),
     );
@@ -556,6 +564,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
           loc_method: 'estimated',
         },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
       },
     });
 
@@ -603,6 +612,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
       groomingGate: {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'n/a' },
+        seam_check: { decision: 'n/a' },
         triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
       },
     });
@@ -640,6 +650,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'n/a' },
+          seam_check: { decision: 'n/a' },
           // 🔧 Operational is triage-eligible (see planning/triage.ts's
           // TRIAGE_ELIGIBLE_TYPES), so checkGroomingPromotionGate requires a
           // recorded triage verdict before it even reaches checkReadiness —
@@ -678,6 +689,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
       groomingGate: {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'n/a' },
+        seam_check: { decision: 'n/a' },
         triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
       },
     });
@@ -717,6 +729,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
           groomingGate: {
             size_check: { decision: 'n/a' },
             type_check: { decision: 'n/a' },
+            seam_check: { decision: 'n/a' },
             triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
           },
         }),
@@ -764,6 +777,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
               loc_method: 'estimated',
             },
             type_check: { decision: 'none' },
+            seam_check: { decision: 'n/a' },
             filesPathsEntries: [
               {
                 raw: 'packages/backend/src/abc.ts *(new)*',
@@ -808,6 +822,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'n/a' },
+          seam_check: { decision: 'n/a' },
           triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
         },
       });
@@ -871,6 +886,7 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
           loc_method: 'estimated',
         },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
       },
     });
 
@@ -886,6 +902,7 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
             loc_method: 'estimated',
           },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       }),
     );
@@ -924,6 +941,7 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
       groomingGate: {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'n/a' },
+        seam_check: { decision: 'n/a' },
         type: '📐 Design',
         triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
       },
@@ -936,6 +954,7 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'n/a' },
+          seam_check: { decision: 'n/a' },
           type: '📐 Design',
           triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
         },
@@ -965,6 +984,7 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
             loc_method: 'estimated',
           },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       });
     } catch (err) {
@@ -1000,6 +1020,7 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
             loc_method: 'estimated',
           },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       });
     } catch (err) {
@@ -1038,6 +1059,7 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
           loc_method: 'estimated',
         },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
         filesPathsEntries: [
           {
             raw: 'packages/backend/src/abc.ts *(new)*',
@@ -1060,6 +1082,7 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
             loc_method: 'estimated',
           },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
           filesPathsEntries: [
             {
               raw: 'packages/backend/src/abc.ts *(new)*',
@@ -1087,6 +1110,7 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
       groomingGate: {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'n/a' },
+        seam_check: { decision: 'n/a' },
         triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
       },
     });
@@ -2023,6 +2047,7 @@ describe('TaskWriteCommands.flipToReady', () => {
         loc_method: 'estimated',
       },
       type_check: { decision: 'none' as const },
+      seam_check: { decision: 'n/a' },
     },
     gateContribution: {
       classification: 'Read-Only' as const,
@@ -2206,6 +2231,7 @@ describe('TaskWriteCommands + NotionTaskBackend — raw Notion UUID taskId (regr
             loc_method: 'estimated',
           },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       }),
     ).resolves.toBeUndefined();

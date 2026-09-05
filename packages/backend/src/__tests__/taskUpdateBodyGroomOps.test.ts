@@ -121,6 +121,7 @@ describe('Ready-path promotion gate — unaffected by task.updateBody availabili
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
       },
       'notion:t-no-body-edit',
     );

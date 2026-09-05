@@ -245,6 +245,7 @@ describe('a withdrawn intent is never applied', () => {
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       }),
       payload_hash: 'hash-status',

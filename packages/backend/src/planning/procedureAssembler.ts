@@ -1000,7 +1000,17 @@ function renderSkeleton(
           'numeric decision missing any of the three. "n/a" (Design/Planning types ' +
           'only) carries no numbers. `type_check` (`{"decision": "none"|' +
           '"flagged"|"n/a"}`, plus `signals` naming the matched phrases when ' +
-          '"flagged"), `type` (the task\'s display-format Type, e.g. `"💻 Code"`), ' +
+          '"flagged"), `seam_check` (`{"seams": [{"kind": "...", "what": "..."}], ' +
+          '"decision": "single_seam"|"split_now"|"cohesive"|"n/a", "split_into"?: [...], ' +
+          '"reason"?: "..."}` — the cohesion axis: does this task\'s diff form one ' +
+          'coherent unit of change, or does it bundle distinct strands (a migration, a ' +
+          'new module, its wiring, a shim) sharing one criteria budget? Unlike ' +
+          '`size_check`/`type_check`\'s present-and-dispositioned posture, a "cohesive" ' +
+          'decision must carry a substantive, non-empty `reason` and a "split_now" ' +
+          'decision must carry non-empty `split_into` entries — a seam you did not name ' +
+          'is a seam you did not split, so a self-granted "cohesive" with no reason is ' +
+          'rejected outright, same posture as a bare `gate_contribution` decision), ' +
+          '`type` (the task\'s display-format Type, e.g. `"💻 Code"`), ' +
           '`regions` (`{"packages": [...], "files": [...]}` — this task\'s resolved ' +
           "code regions, the same shape as the digest's Code regions section), " +
           '`constraintsDispositioned` (a map of binding-constraint id → ' +
@@ -1014,8 +1024,8 @@ function renderSkeleton(
           'from the repo itself at promotion time, never taken from this payload), ' +
           'and `dependsOnTasks` ' +
           '(one `{"id": "<task-id>", "type": "<type>", "status": "<status>"}` per ' +
-          'declared Depends On edge — `[]` when there are none). These seven ' +
-          'fields are required for every Type. An eighth, `groomingGate.triage`, ' +
+          'declared Depends On edge — `[]` when there are none). These eight ' +
+          'fields are required for every Type. A ninth, `groomingGate.triage`, ' +
           `is required in addition for a triage-eligible Type (currently ${triageEligibleTypesList} ` +
           '— derived from `TRIAGE_ELIGIBLE_TYPES` in `planning/triage.ts`, so this ' +
           'list moves if that set does) and is rejected outright, not silently ' +
@@ -1038,11 +1048,12 @@ function renderSkeleton(
           '{"taskId":"<task-id>","status":"Ready","groomingGate":{' +
           '"size_check":{"decision":"no_split","files":1,"loc":40,"loc_method":"estimated"},' +
           '"type_check":{"decision":"none"},' +
+          '"seam_check":{"seams":[],"decision":"single_seam"},' +
           '"type":"💻 Code",' +
           '"regions":{"packages":["packages/backend"],"files":["packages/backend/src/foo.ts"]},' +
           '"constraintsDispositioned":{"constraint-a":{"disposition":"complies"}},' +
           '"filesPathsEntries":[{"raw":"packages/backend/src/foo.ts","isNew":false}],' +
-          '"dependsOnTasks":[]}}}` — omitting any one of these seven `groomingGate` ' +
+          '"dependsOnTasks":[]}}}` — omitting any one of these eight `groomingGate` ' +
           'fields (even as an empty array/object where genuinely empty) is what ' +
           'blocks the Ready flip; fill every field from the digest above rather ' +
           'than carrying only `type`. A second worked example for a ' +
@@ -1052,13 +1063,14 @@ function renderSkeleton(
           '"groomingGate":{' +
           '"size_check":{"decision":"n/a"},' +
           '"type_check":{"decision":"none"},' +
+          '"seam_check":{"seams":[],"decision":"n/a"},' +
           '"type":"📐 Design",' +
           '"regions":{"packages":[],"files":[]},' +
           '"constraintsDispositioned":{},' +
           '"filesPathsEntries":[],' +
           '"dependsOnTasks":[],' +
           '"triage":{"proposedVerdict":"clean","hasOpenQuestionsHeading":true}' +
-          '}}}` — the eighth field here, `triage`, is what a triage-eligible ' +
+          '}}}` — the ninth field here, `triage`, is what a triage-eligible ' +
           'Type adds; a 💻 Code (or other non-eligible) task must omit it ' +
           'entirely rather than carry it as `null` or `false`.\n\n' +
           'When the pre-groom body carries a "### 👁️ Manual verification" ' +

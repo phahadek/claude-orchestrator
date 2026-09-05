@@ -124,6 +124,7 @@ function stageSetStatusReady(
       groomingGate: {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
       },
     }),
     payload_hash: `hash-${id}`,

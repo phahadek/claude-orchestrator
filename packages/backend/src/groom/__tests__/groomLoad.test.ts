@@ -19,6 +19,7 @@ import {
   NotionReadClient,
   NotionTaskLike,
   isSizeCheckSeedOverThreshold,
+  computeSeamSeed,
   extractPathToken,
   filesPathsEntryExistsInRepo,
   parseFilesPathsRawItems,
@@ -1118,6 +1119,63 @@ describe('isSizeCheckSeedOverThreshold', () => {
         files: SIZE_TYPE_CHECK.fileSplitThreshold - 1,
       }),
     ).toBe(false);
+  });
+});
+
+describe('computeSeamSeed', () => {
+  it('proposes schema for a migrations/ path', () => {
+    const seeds = computeSeamSeed({
+      packages: [],
+      files: ['packages/backend/migrations/010_add_thing.sql'],
+      planned: [],
+    });
+    expect(seeds).toContainEqual({
+      kind: 'schema',
+      what: 'packages/backend/migrations/010_add_thing.sql',
+    });
+  });
+
+  it('proposes new-module for a declared-but-nonexistent (planned) path', () => {
+    const seeds = computeSeamSeed({
+      packages: [],
+      files: [],
+      planned: [
+        { path: 'packages/backend/src/foo/newModule.ts', package: null },
+      ],
+    });
+    expect(seeds).toContainEqual({
+      kind: 'new-module',
+      what: 'packages/backend/src/foo/newModule.ts',
+    });
+  });
+
+  it('proposes wiring for a touched registry or runner file', () => {
+    const seeds = computeSeamSeed({
+      packages: [],
+      files: [
+        'packages/backend/src/foo/toolRegistry.ts',
+        'packages/backend/src/foo/sessionRunner.ts',
+      ],
+      planned: [],
+    });
+    expect(seeds).toContainEqual({
+      kind: 'wiring',
+      what: 'packages/backend/src/foo/toolRegistry.ts',
+    });
+    expect(seeds).toContainEqual({
+      kind: 'wiring',
+      what: 'packages/backend/src/foo/sessionRunner.ts',
+    });
+  });
+
+  it('returns no seeds for a plain untouched file', () => {
+    expect(
+      computeSeamSeed({
+        packages: [],
+        files: ['packages/backend/src/foo/plain.ts'],
+        planned: [],
+      }),
+    ).toEqual([]);
   });
 });
 

@@ -134,6 +134,7 @@ describe('POST /api/staged-intents/group/:groupId/commit — setDependsOn group-
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       },
       projectId: 'proj-1',
@@ -171,6 +172,7 @@ describe('POST /api/staged-intents/group/:groupId/commit — setDependsOn group-
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       },
       projectId: 'proj-1',
@@ -379,6 +381,7 @@ describe('stageIntent — Ready-path member set requires a groupId at stage time
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       },
       projectId: 'proj-1',

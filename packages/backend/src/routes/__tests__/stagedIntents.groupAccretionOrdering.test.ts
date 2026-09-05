@@ -124,6 +124,7 @@ describe('POST /api/staged-intents/group/:groupId/commit — dispatched-groom Re
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
           type: '💻 Code',
           filesPathsEntries: [
             {
@@ -176,6 +177,7 @@ describe('POST /api/staged-intents/group/:groupId/commit — dispatched-groom Re
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
           type: '💻 Code',
           filesPathsEntries: [
             {

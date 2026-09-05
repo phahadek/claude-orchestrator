@@ -39,6 +39,7 @@ function wellFormedGroomingGate() {
   return {
     size_check: { decision: 'n/a' },
     type_check: { decision: 'none' },
+    seam_check: { decision: 'n/a' },
     type: '💻 Code',
     filesPathsEntries: [
       {
@@ -205,6 +206,7 @@ describe('Ready-flip preview folds same-task body patches staged outside the gro
     const checked = await stageReadyFlip('notion:cross-group', 'group-1', {
       size_check: { decision: 'n/a' },
       type_check: { decision: 'none' },
+      seam_check: { decision: 'n/a' },
       type: '💻 Code',
     });
 

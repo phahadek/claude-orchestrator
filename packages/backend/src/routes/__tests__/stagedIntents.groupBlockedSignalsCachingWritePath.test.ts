@@ -130,6 +130,7 @@ async function stageAndApproveGroup(
       groomingGate: {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
       },
     },
   });
@@ -323,6 +324,7 @@ describe('POST /api/staged-intents/group/:groupId/reject — group signal cachin
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       },
     });

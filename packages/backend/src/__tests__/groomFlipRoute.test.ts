@@ -73,6 +73,7 @@ const validBody = {
   groomingGate: {
     size_check: { decision: 'no_split' },
     type_check: { decision: 'none' },
+    seam_check: { decision: 'n/a' },
   },
   gateContribution: {
     classification: 'Read-Only',

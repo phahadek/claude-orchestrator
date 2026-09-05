@@ -129,6 +129,7 @@ describe('checkGroomingPromotionGate', () => {
       {
         size_check: { decision: 'n/a' },
         type_check: null,
+        seam_check: { decision: 'n/a' },
       },
       'notion:t1',
     );
@@ -141,6 +142,7 @@ describe('checkGroomingPromotionGate', () => {
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'flagged', signals: ['api key'] },
+        seam_check: { decision: 'n/a' },
       },
       'notion:t2',
     );
@@ -153,6 +155,7 @@ describe('checkGroomingPromotionGate', () => {
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
       },
       'notion:t3',
     );
@@ -174,6 +177,7 @@ describe('checkGroomingPromotionGate', () => {
           signals: ['api key'],
           disposition: 'split-filed:38b22f91-52f3-8146',
         },
+        seam_check: { decision: 'n/a' },
       },
       'notion:t4',
     );
@@ -185,6 +189,7 @@ describe('checkGroomingPromotionGate', () => {
       {
         size_check: null,
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
       },
       'notion:t5',
     );
@@ -197,6 +202,7 @@ describe('checkGroomingPromotionGate', () => {
       {
         size_check: { decision: 'no_split' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
       },
       'notion:t5b',
     );
@@ -219,6 +225,7 @@ describe('checkGroomingPromotionGate', () => {
           reason: 'Cannot be split further.',
         },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
       },
       'notion:t5c',
     );
@@ -230,6 +237,7 @@ describe('checkGroomingPromotionGate', () => {
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'n/a' },
+        seam_check: { decision: 'n/a' },
         type: '📐 Design',
         triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
       },
@@ -243,6 +251,7 @@ describe('checkGroomingPromotionGate', () => {
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
         type: '💻 Code',
       },
       'notion:no-marker',
@@ -272,6 +281,7 @@ describe('checkGroomingPromotionGate', () => {
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
         type: '💻 Code',
         filesPathsEntries: [
           {
@@ -291,6 +301,7 @@ describe('checkGroomingPromotionGate', () => {
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
         type: '🛠️ Tooling',
       },
       'notion:tooling-retired-gate',
@@ -306,12 +317,136 @@ describe('checkGroomingPromotionGate', () => {
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'n/a' },
+        seam_check: { decision: 'n/a' },
         type: '📐 Design',
         triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
       },
       'notion:design-task',
     );
     expect(result.allowed).toBe(true);
+  });
+});
+
+describe('checkGroomingPromotionGate — seam_check', () => {
+  it('rejects a Ready flip omitting seam_check, naming the missing artifact', async () => {
+    const result = await gate(
+      {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'none' },
+      },
+      'notion:seam-missing',
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('seam_check'))).toBe(true);
+  });
+
+  it.each(['single_seam', 'split_now', 'cohesive', 'n/a'] as const)(
+    'accepts a well-formed "%s" seam_check decision',
+    async (decision) => {
+      const seamCheck: Record<string, unknown> = { decision };
+      if (decision === 'cohesive') seamCheck.reason = 'One coherent change.';
+      if (decision === 'split_now') seamCheck.split_into = ['notion:sibling-1'];
+      const result = await gate(
+        {
+          size_check: { decision: 'n/a' },
+          type_check: { decision: 'none' },
+          seam_check: seamCheck,
+        },
+        'notion:seam-wellformed',
+      );
+      expect(result.allowed).toBe(true);
+      expect(result.reasons).toEqual([]);
+    },
+  );
+
+  it('rejects a "cohesive" decision with an absent reason', async () => {
+    const result = await gate(
+      {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'none' },
+        seam_check: { decision: 'cohesive' },
+      },
+      'notion:seam-cohesive-no-reason',
+    );
+    expect(result.allowed).toBe(false);
+    expect(
+      result.reasons.some(
+        (r) => r.includes('seam_check') && r.includes('cohesive'),
+      ),
+    ).toBe(true);
+  });
+
+  it('rejects a "cohesive" decision with a whitespace-only reason', async () => {
+    const result = await gate(
+      {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'none' },
+        seam_check: { decision: 'cohesive', reason: '   ' },
+      },
+      'notion:seam-cohesive-whitespace-reason',
+    );
+    expect(result.allowed).toBe(false);
+    expect(
+      result.reasons.some(
+        (r) => r.includes('seam_check') && r.includes('cohesive'),
+      ),
+    ).toBe(true);
+  });
+
+  it('rejects a "split_now" decision with no split_into entries', async () => {
+    const result = await gate(
+      {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'none' },
+        seam_check: { decision: 'split_now' },
+      },
+      'notion:seam-split-now-no-target',
+    );
+    expect(result.allowed).toBe(false);
+    expect(
+      result.reasons.some(
+        (r) => r.includes('seam_check') && r.includes('split_now'),
+      ),
+    ).toBe(true);
+  });
+
+  it('accepts n/a without a reason for a Design/Planning task', async () => {
+    const result = await gate(
+      {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'n/a' },
+        seam_check: { decision: 'n/a' },
+        type: '📐 Design',
+        triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
+      },
+      'notion:seam-design-na',
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it('blocks promoting a multi-strand task with seams recorded but no valid/well-formed decision', async () => {
+    const result = await gate(
+      {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'none' },
+        seam_check: {
+          seams: [
+            { kind: 'schema', what: 'packages/backend/migrations/010_x.sql' },
+            {
+              kind: 'new-module',
+              what: 'packages/backend/src/foo/newThing.ts',
+            },
+            {
+              kind: 'wiring',
+              what: 'packages/backend/src/foo/toolRegistry.ts',
+            },
+          ],
+        },
+      },
+      'notion:seam-multi-strand-undispositioned',
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('seam_check'))).toBe(true);
   });
 });
 
@@ -328,6 +463,7 @@ describe('checkGroomingPromotionGate — seed_contribution', () => {
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
         type: '💻 Code',
       },
       'notion:no-seed-marker',
@@ -358,6 +494,7 @@ describe('checkGroomingPromotionGate — seed_contribution', () => {
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
         type: '💻 Code',
         filesPathsEntries: [
           {
@@ -377,6 +514,7 @@ describe('checkGroomingPromotionGate — seed_contribution', () => {
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
         type: '🛠️ Tooling',
       },
       'notion:tooling-retired-seed',
@@ -407,6 +545,7 @@ describe('checkGroomingPromotionGate — seed_contribution', () => {
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
         type: '💻 Code',
         filesPathsEntries: [
           {
@@ -426,6 +565,7 @@ describe('checkGroomingPromotionGate — seed_contribution', () => {
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'n/a' },
+        seam_check: { decision: 'n/a' },
         type: '📐 Design',
         triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
       },
@@ -447,6 +587,7 @@ describe('checkGroomingPromotionGate — via the accretion write-surface', () =>
     const entry = {
       size_check: { decision: 'n/a' },
       type_check: { decision: 'none' },
+      seam_check: { decision: 'n/a' },
       type: '💻 Code',
       filesPathsEntries: [
         {
@@ -481,6 +622,7 @@ describe('checkGroomingPromotionGate — FM1 bindingConstraints', () => {
   const BASE = {
     size_check: { decision: 'n/a' },
     type_check: { decision: 'n/a' },
+    seam_check: { decision: 'n/a' },
     type: '📐 Design',
   };
 
@@ -579,6 +721,7 @@ describe('checkGroomingPromotionGate — FM2 resolve-in-artifact (Files/paths)',
   const BASE = {
     size_check: { decision: 'n/a' },
     type_check: { decision: 'none' },
+    seam_check: { decision: 'n/a' },
     type: '💻 Code',
   };
 
@@ -742,6 +885,7 @@ describe('checkGroomingPromotionGate — FM2 resolve-in-artifact (Files/paths)',
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'n/a' },
+        seam_check: { decision: 'n/a' },
         type: '📐 Design',
         triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
       },
@@ -755,6 +899,7 @@ describe('checkGroomingPromotionGate — Files/paths non-repo-path declaration',
   const BASE = {
     size_check: { decision: 'n/a' },
     type_check: { decision: 'none' },
+    seam_check: { decision: 'n/a' },
     type: '💻 Code',
   };
 
@@ -825,6 +970,7 @@ describe('checkGroomingPromotionGate — Files/paths non-repo-path declaration',
       {
         ...BASE,
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
         filesPathsEntries: [
           {
             raw: 'Notion: some other design page',
@@ -846,6 +992,7 @@ describe('checkGroomingPromotionGate — Files/paths non-repo-path declaration',
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'n/a' },
+        seam_check: { decision: 'n/a' },
         type: '📐 Design',
         triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
         filesPathsEntries: [
@@ -895,6 +1042,7 @@ describe('checkGroomingPromotionGate — server-derived existsInRepo (task 3ae22
   const BASE = {
     size_check: { decision: 'n/a' },
     type_check: { decision: 'none' },
+    seam_check: { decision: 'n/a' },
     type: '💻 Code',
   };
 
@@ -1070,6 +1218,7 @@ describe('checkGroomingPromotionGate — Files/paths derived from the task body,
   const BASE = {
     size_check: { decision: 'n/a' },
     type_check: { decision: 'none' },
+    seam_check: { decision: 'n/a' },
     type: '💻 Code',
   };
 
@@ -1265,6 +1414,7 @@ describe('checkGroomingPromotionGate — FM3 Design/Planning Depends On liveness
   const BASE = {
     size_check: { decision: 'n/a' },
     type_check: { decision: 'n/a' },
+    seam_check: { decision: 'n/a' },
     type: '📐 Design',
     triage: {
       proposedVerdict: 'clean' as const,
@@ -1342,6 +1492,7 @@ describe('checkGroomingPromotionGate — FM3 Design/Planning Depends On liveness
   const OPERATIONAL_BASE = {
     size_check: { decision: 'n/a' },
     type_check: { decision: 'n/a' },
+    seam_check: { decision: 'n/a' },
     type: '🔧 Operational',
     triage: {
       proposedVerdict: 'clean' as const,
@@ -1395,6 +1546,7 @@ describe('checkGroomingPromotionGate — Depends On re-derives status/type from 
   const BASE = {
     size_check: { decision: 'n/a' },
     type_check: { decision: 'n/a' },
+    seam_check: { decision: 'n/a' },
     type: '📐 Design',
     triage: {
       proposedVerdict: 'clean' as const,
@@ -1513,6 +1665,7 @@ describe('checkGroomingPromotionGate — triage eligibility (approve-by-standard
   const cleanEntry = (type: string) => ({
     size_check: { decision: 'n/a' },
     type_check: { decision: 'n/a' },
+    seam_check: { decision: 'n/a' },
     type,
     triage: {
       proposedVerdict: 'clean' as const,
@@ -1576,6 +1729,7 @@ describe('checkGroomingPromotionGate — Operational/Investigation triage floor'
   const operationalCleanEntry = {
     size_check: { decision: 'n/a' },
     type_check: { decision: 'n/a' },
+    seam_check: { decision: 'n/a' },
     type: '🔧 Operational',
     triage: {
       proposedVerdict: 'clean' as const,
@@ -1628,6 +1782,7 @@ describe('checkGroomingPromotionGate — Operational/Investigation triage floor'
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'n/a' },
+        seam_check: { decision: 'n/a' },
         type: '🔎 Investigation',
         triage: {
           proposedVerdict: 'clean' as const,
@@ -1676,6 +1831,7 @@ describe('checkGroomingPromotionGate — triage refusal text is project-agnostic
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'n/a' },
+        seam_check: { decision: 'n/a' },
         type: '📐 Design',
       },
       'notion:triage-missing-no-path',
@@ -1696,6 +1852,7 @@ describe('checkGroomingPromotionGate — triage refusal text is project-agnostic
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'n/a' },
+        seam_check: { decision: 'n/a' },
         type: '💻 Code',
         triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
       },
@@ -1805,6 +1962,7 @@ describe('checkGroomingPromotionGate — gate_contribution per-candidate triage'
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
         type: '💻 Code',
         filesPathsEntries: [
           { raw: 'a.ts *(new)*', isNew: true, existsInRepo: false },
@@ -1844,6 +2002,7 @@ describe('checkGroomingPromotionGate — gate_contribution per-candidate triage'
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
         type: '💻 Code',
         filesPathsEntries: [
           { raw: 'a.ts *(new)*', isNew: true, existsInRepo: false },
@@ -1880,6 +2039,7 @@ describe('checkGroomingPromotionGate — gate_contribution per-candidate triage'
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
         type: '💻 Code',
         filesPathsEntries: [
           { raw: 'a.ts *(new)*', isNew: true, existsInRepo: false },
@@ -1913,6 +2073,7 @@ describe('checkGroomingPromotionGate — gate_contribution per-candidate triage'
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
         type: '💻 Code',
         filesPathsEntries: [
           { raw: 'a.ts *(new)*', isNew: true, existsInRepo: false },
@@ -1945,6 +2106,7 @@ describe('checkGroomingPromotionGate — gate_contribution per-candidate triage'
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
         type: '💻 Code',
         filesPathsEntries: [
           { raw: 'a.ts *(new)*', isNew: true, existsInRepo: false },
@@ -1980,6 +2142,7 @@ describe('checkGroomingPromotionGate — seed_contribution per-candidate triage'
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
         type: '💻 Code',
         filesPathsEntries: [
           { raw: 'a.ts *(new)*', isNew: true, existsInRepo: false },
@@ -2020,6 +2183,7 @@ describe('checkGroomingPromotionGate — seed_contribution per-candidate triage'
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
         type: '💻 Code',
         filesPathsEntries: [
           { raw: 'a.ts *(new)*', isNew: true, existsInRepo: false },
@@ -2055,6 +2219,7 @@ describe('checkGroomingPromotionGate — seed_contribution per-candidate triage'
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
         type: '💻 Code',
         filesPathsEntries: [
           { raw: 'a.ts *(new)*', isNew: true, existsInRepo: false },

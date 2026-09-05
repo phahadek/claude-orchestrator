@@ -10,6 +10,25 @@ import { describe, it, expect } from 'vitest';
 import { groomingGateEntrySchema } from '../schemas';
 
 describe('groomingGateEntrySchema', () => {
+  it('accepts a seam_check object alongside size_check/type_check', () => {
+    const result = groomingGateEntrySchema.safeParse({
+      size_check: { decision: 'n/a' },
+      type_check: { decision: 'none' },
+      seam_check: {
+        seams: [
+          { kind: 'schema', what: 'packages/backend/migrations/010_x.sql' },
+        ],
+        decision: 'single_seam',
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts seam_check as null (mirrors type_check)', () => {
+    const result = groomingGateEntrySchema.safeParse({ seam_check: null });
+    expect(result.success).toBe(true);
+  });
+
   it('accepts hasOperationalSeedSection as a boolean', () => {
     const result = groomingGateEntrySchema.safeParse({
       hasOperationalSeedSection: true,

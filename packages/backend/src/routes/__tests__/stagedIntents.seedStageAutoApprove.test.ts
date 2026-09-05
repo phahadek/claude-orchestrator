@@ -81,6 +81,7 @@ function stageArmingReady(sessionId: string, groupId: string, taskId: string) {
       groomingGate: {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
         type: '💻 Code',
         filesPathsEntries: [],
         seedContributionCandidates: ['Seed the thing.'],
