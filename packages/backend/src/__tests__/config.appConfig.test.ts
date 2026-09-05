@@ -20,6 +20,7 @@ import {
   writeOrchestratorConfig as _writeOrchestratorConfig,
   _setConfigSourceForTesting,
   _resetAppConfigCache,
+  _clearConfigSourceForTesting,
 } from '../config/appConfig.js';
 
 // ── DataDirConfigSource ───────────────────────────────────────────────────────
@@ -323,7 +324,11 @@ describe('getOrchestratorConfig .env fallback merge', () => {
   const saved: Record<string, string | undefined> = {};
 
   beforeEach(() => {
-    _resetAppConfigCache();
+    // These tests assert on real config-source resolution (config.json vs
+    // .env), so opt out of the in-memory test source testSetupDb.ts pins
+    // for the rest of the suite — see _clearConfigSourceForTesting()'s doc
+    // comment in appConfig.ts.
+    _clearConfigSourceForTesting();
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-fallback-'));
     vi.mocked(getDataDir).mockReturnValue(tmpDir);
     // The getDataDir mock above never actually reaches getOrchestratorConfig()'s
@@ -418,7 +423,10 @@ describe('getConfigProvenance', () => {
   const saved: Record<string, string | undefined> = {};
 
   beforeEach(() => {
-    _resetAppConfigCache();
+    // See the .env fallback merge block above: these tests assert on real
+    // provenance resolution, so they must opt out of the pinned in-memory
+    // test source.
+    _clearConfigSourceForTesting();
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-provenance-'));
     vi.mocked(getDataDir).mockReturnValue(tmpDir);
     prevXdgDataHome = process.env.XDG_DATA_HOME;
@@ -501,5 +509,24 @@ describe('getConfigProvenance', () => {
     // Cache wasn't invalidated by writing directly via the source, so it's
     // the same reference — mirrors getOrchestratorConfig()'s own caching.
     expect(second).toBe(first);
+  });
+
+  it('does not see a config.json written into a different scratch data dir', () => {
+    const otherDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-provenance-other-'));
+    try {
+      const otherSrc = new DataDirConfigSource(otherDir);
+      otherSrc.write({ github: { repo: 'leaked-owner/leaked-repo' } });
+
+      // This block's own beforeEach pointed getDataDir/XDG_DATA_HOME at
+      // `tmpDir`, a separate scratch dir from `otherDir` — the write above
+      // must be invisible here.
+      const provenance = getConfigProvenance();
+      expect(provenance['github.repo']).toBe('default');
+      expect(getOrchestratorConfig().github.repo).not.toBe(
+        'leaked-owner/leaked-repo',
+      );
+    } finally {
+      fs.rmSync(otherDir, { recursive: true, force: true });
+    }
   });
 });

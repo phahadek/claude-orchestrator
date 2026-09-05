@@ -39,7 +39,10 @@ process.env.XDG_DATA_HOME = resolveTestScratchDataDir(process.pid);
 // as ':memory:' regardless of what's on disk or in DB_PATH. Installed via
 // _setDefaultTestConfigSource so _resetAppConfigCache() (called by several
 // test files) restores to this instead of falling back to the data-dir
-// branch.
+// branch. Tests whose subject is config resolution itself (provenance,
+// .env fallback, etc.) need the real branch back — see
+// _clearConfigSourceForTesting() in appConfig.ts, which opts a single test
+// out of this restore without disabling it for the rest of the suite.
 class InMemoryTestConfigSource implements ConfigSource {
   read(): OrchestratorConfig {
     const config = new EnvFileConfigSource().read();

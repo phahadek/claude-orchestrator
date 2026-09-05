@@ -44,6 +44,7 @@ import {
 import {
   _setConfigSourceForTesting,
   _resetAppConfigCache,
+  _clearConfigSourceForTesting,
   getOrchestratorConfig,
 } from '../config/appConfig.js';
 
@@ -150,6 +151,9 @@ describe('setup writes bust the config cache', () => {
     // the real data dir and ignores any source override — so reads must go
     // through the same real (XDG_DATA_HOME-derived) path via the default
     // resolve(), not a tmpDir-literal override that the writes never reach.
+    // Opt this test out of the pinned in-memory test source so resolve()
+    // actually reaches that real path.
+    _clearConfigSourceForTesting();
     prevXdgDataHome = process.env.XDG_DATA_HOME;
     process.env.XDG_DATA_HOME = tmpDir;
     // POST /setup/import (tested below) writes its .env fixture under
@@ -231,6 +235,24 @@ describe('setup writes bust the config cache', () => {
     expect(cfg.github.token).toBe('ghp-from-import');
     expect(cfg.notion.apiKey).toBe('ntn-from-import');
   });
+
+  it('does not see a config.json written into a different scratch data dir', async () => {
+    const otherDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-setup-cache-other-'));
+    try {
+      const otherSrc = new DataDirConfigSource(otherDir);
+      otherSrc.write({ github: { token: 'ghp-leaked-elsewhere' } });
+
+      // This block's own XDG_DATA_HOME points at `tmpDir`, not `otherDir` —
+      // the write above must be invisible to this test's resolution.
+      const res = await supertest(buildApp()).get('/api/setup/status');
+      expect(res.body.missing).toContain('github.token');
+      expect(getOrchestratorConfig().github.token).not.toBe(
+        'ghp-leaked-elsewhere',
+      );
+    } finally {
+      fs.rmSync(otherDir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ── POST /setup/complete validation ────────────────────────────────────────────
@@ -247,6 +269,10 @@ describe('POST /setup/complete validation', () => {
     // The getDataDir mock never actually reaches writeOrchestratorConfig()
     // (see the other describe blocks in this file) — point the real data
     // dir at this tmp dir so the real write path stays isolated too.
+    // Opt out of the pinned in-memory test source so getOrchestratorConfig()
+    // actually resolves against this tmp dir instead of always reporting
+    // config.json from the in-memory source.
+    _clearConfigSourceForTesting();
     prevXdgDataHome = process.env.XDG_DATA_HOME;
     process.env.XDG_DATA_HOME = tmpDir;
     // No _setConfigSourceForTesting override: /setup/complete's write
