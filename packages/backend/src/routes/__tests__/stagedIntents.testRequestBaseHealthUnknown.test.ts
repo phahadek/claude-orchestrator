@@ -26,13 +26,23 @@ const {
   mockLoadOrchestratorConfig,
   mockComputeHash,
   mockAdmitTestRequest,
-  mockFilterBaseAttributableFailures,
+  mockFilterBaseAttributableFailuresForF2Gate,
+  mockGetChangedFiles,
+  mockCheckBaseBranchHealth,
+  realFilterHolder,
 } = vi.hoisted(() => ({
   mockGetProjectById: vi.fn(),
   mockLoadOrchestratorConfig: vi.fn(),
   mockComputeHash: vi.fn(),
   mockAdmitTestRequest: vi.fn(),
-  mockFilterBaseAttributableFailures: vi.fn(),
+  mockFilterBaseAttributableFailuresForF2Gate: vi.fn(),
+  mockGetChangedFiles: vi.fn(),
+  mockCheckBaseBranchHealth: vi.fn(),
+  realFilterHolder: {
+    current: null as unknown as (
+      ...args: unknown[]
+    ) => Promise<unknown>,
+  },
 }));
 
 vi.mock('../../config', async (importOriginal) => {
@@ -63,12 +73,34 @@ vi.mock(
       await importOriginal<
         typeof import('../../orchestration/baseAttributableFilter')
       >();
+    realFilterHolder.current = actual.filterBaseAttributableFailuresForF2Gate as unknown as (
+      ...args: unknown[]
+    ) => Promise<unknown>;
     return {
       ...actual,
-      filterBaseAttributableFailures: mockFilterBaseAttributableFailures,
+      filterBaseAttributableFailuresForF2Gate:
+        mockFilterBaseAttributableFailuresForF2Gate,
     };
   },
 );
+
+vi.mock('../../orchestration/baseHealthCheck', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../orchestration/baseHealthCheck')>();
+  return { ...actual, checkBaseBranchHealth: mockCheckBaseBranchHealth };
+});
+
+vi.mock('../../session/autofix-runner', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../session/autofix-runner')>();
+  return { ...actual, getChangedFiles: mockGetChangedFiles };
+});
+
+vi.mock('../../audit/baseHealthRemediationFiling', () => ({
+  recordAndMaybeFileBaseHealthRemediation: vi.fn(async () => ({
+    filed: false,
+  })),
+}));
 
 import { db } from '../../db/db';
 import {
@@ -86,6 +118,7 @@ import {
   getTestRequestRunById,
   incrementSessionTestRequestCycleCount,
   getSessionTestRequestCycleCount,
+  insertTestRunResults,
 } from '../../db/queries';
 import { typedSetSetting } from '../../config/settings';
 
@@ -116,16 +149,34 @@ beforeEach(() => {
   mockLoadOrchestratorConfig.mockReset();
   mockComputeHash.mockReset();
   mockAdmitTestRequest.mockReset();
-  mockFilterBaseAttributableFailures.mockReset();
+  mockFilterBaseAttributableFailuresForF2Gate.mockReset();
+  mockFilterBaseAttributableFailuresForF2Gate.mockImplementation(
+    (...args: unknown[]) => realFilterHolder.current(...args),
+  );
+  mockCheckBaseBranchHealth.mockReset();
+  mockCheckBaseBranchHealth.mockResolvedValue({
+    outcome: 'unknown',
+    projectId: PROJECT_ID,
+    contentHash: null,
+    cacheHit: false,
+    run: null,
+  });
+  mockGetChangedFiles.mockReset();
+  mockGetChangedFiles.mockResolvedValue([]);
   db.prepare('DELETE FROM staged_intent').run();
   db.prepare('DELETE FROM staged_intent_group').run();
   db.prepare('DELETE FROM sessions').run();
   db.prepare('DELETE FROM session_test_request_cycles').run();
   db.prepare('DELETE FROM session_feedback_inbox').run();
   db.prepare('DELETE FROM test_request_runs').run();
+  db.prepare('DELETE FROM test_run_results').run();
   db.prepare('DELETE FROM audit_log').run();
 
-  mockGetProjectById.mockReturnValue({ id: PROJECT_ID, projectDir: '/proj' });
+  mockGetProjectById.mockReturnValue({
+    id: PROJECT_ID,
+    projectDir: '/proj',
+    baseBranch: 'main',
+  });
   mockLoadOrchestratorConfig.mockReturnValue({
     test: ['npm test'],
     test_timeout_sec: 60,
@@ -174,12 +225,16 @@ describe('triggerTestRequestExecution — unknown base-health outcome', () => {
     const runId = 'run-unknown-1';
     seedRawFailedRun(runId);
     mockAdmission(runId);
-    mockFilterBaseAttributableFailures.mockResolvedValue({
-      outcome: 'unknown',
-      passed: false,
-      excludedTests: [],
-      flakyExcludedTests: [],
-      remainingTests: [],
+    mockFilterBaseAttributableFailuresForF2Gate.mockResolvedValue({
+      result: {
+        outcome: 'unknown',
+        passed: false,
+        excludedTests: [],
+        flakyExcludedTests: [],
+        remainingTests: [],
+        baseRun: null,
+      },
+      guardBlocked: [],
     });
 
     await triggerTestRequestExecution(intent, undefined);
@@ -198,12 +253,16 @@ describe('triggerTestRequestExecution — unknown base-health outcome', () => {
     const runId = 'run-unknown-2';
     seedRawFailedRun(runId);
     mockAdmission(runId);
-    mockFilterBaseAttributableFailures.mockResolvedValue({
-      outcome: 'unknown',
-      passed: false,
-      excludedTests: [],
-      flakyExcludedTests: [],
-      remainingTests: [],
+    mockFilterBaseAttributableFailuresForF2Gate.mockResolvedValue({
+      result: {
+        outcome: 'unknown',
+        passed: false,
+        excludedTests: [],
+        flakyExcludedTests: [],
+        remainingTests: [],
+        baseRun: null,
+      },
+      guardBlocked: [],
     });
 
     await triggerTestRequestExecution(intent, undefined);
@@ -227,12 +286,16 @@ describe('triggerTestRequestExecution — unknown base-health outcome', () => {
     const runId = 'run-unknown-3';
     seedRawFailedRun(runId);
     mockAdmission(runId);
-    mockFilterBaseAttributableFailures.mockResolvedValue({
-      outcome: 'unknown',
-      passed: false,
-      excludedTests: [],
-      flakyExcludedTests: [],
-      remainingTests: [],
+    mockFilterBaseAttributableFailuresForF2Gate.mockResolvedValue({
+      result: {
+        outcome: 'unknown',
+        passed: false,
+        excludedTests: [],
+        flakyExcludedTests: [],
+        remainingTests: [],
+        baseRun: null,
+      },
+      guardBlocked: [],
     });
 
     const sessionManager = makeSessionManager();
@@ -254,12 +317,16 @@ describe('triggerTestRequestExecution — unknown base-health outcome', () => {
     const runId = 'run-unknown-4';
     seedRawFailedRun(runId);
     mockAdmission(runId);
-    mockFilterBaseAttributableFailures.mockResolvedValue({
-      outcome: 'unknown',
-      passed: false,
-      excludedTests: [],
-      flakyExcludedTests: [],
-      remainingTests: [{ test_id: 'suite.testA', name: 'testA' }],
+    mockFilterBaseAttributableFailuresForF2Gate.mockResolvedValue({
+      result: {
+        outcome: 'unknown',
+        passed: false,
+        excludedTests: [],
+        flakyExcludedTests: [],
+        remainingTests: [{ test_id: 'suite.testA', name: 'testA' }],
+        baseRun: null,
+      },
+      guardBlocked: [],
     });
 
     const sessionManager = makeSessionManager();
@@ -275,5 +342,174 @@ describe('triggerTestRequestExecution — unknown base-health outcome', () => {
       /not counted against your test-request budget/i,
     );
     expect(payload.passed).toBe(false);
+  });
+});
+
+function seedBaseRun(
+  runId: string,
+  failing: { test_id: string; name: string }[],
+) {
+  insertTestRequestRun(runId, PROJECT_ID, 'base-hash', 'sess-base', Date.now());
+  completeTestRequestRun(runId, 'failed', 'some tests failed on base');
+  insertTestRunResults(
+    runId,
+    PROJECT_ID,
+    failing.map((t) => ({
+      test_id: t.test_id,
+      name: t.name,
+      outcome: 'failed',
+      duration_ms: 1,
+      failureMessage: 'boom',
+      failureTraceExcerpt: 'trace excerpt',
+    })),
+    null,
+    false,
+  );
+}
+
+function mockPartialFailBaseHealth(baseRunId: string) {
+  mockCheckBaseBranchHealth.mockResolvedValue({
+    outcome: 'partial_fail',
+    projectId: PROJECT_ID,
+    contentHash: 'base-hash',
+    cacheHit: true,
+    run: getTestRequestRunById(baseRunId),
+  });
+}
+
+describe('triggerTestRequestExecution — f2 gate masking guards on the session path', () => {
+  it('blocks an exclusion for a test whose file appears in the session changed-file list, leaving the run failed', async () => {
+    setUpSession('sess-1');
+    const intent = stageTestRequest('sess-1') as StagedIntent;
+    const runId = 'run-guard-touched';
+    seedRawFailedRun(runId);
+    insertTestRunResults(
+      runId,
+      PROJECT_ID,
+      [
+        {
+          test_id: 'mymodule.testA',
+          name: 'testA',
+          outcome: 'failed',
+          duration_ms: 1,
+          failureMessage: 'boom',
+          failureTraceExcerpt: 'trace excerpt',
+        },
+      ],
+      null,
+      false,
+    );
+    seedBaseRun('run-guard-touched-base', [
+      { test_id: 'mymodule.testA', name: 'testA' },
+    ]);
+    mockPartialFailBaseHealth('run-guard-touched-base');
+    mockGetChangedFiles.mockResolvedValue(['mymodule.ts']);
+    mockAdmission(runId);
+
+    await triggerTestRequestExecution(intent, undefined);
+
+    expect(getTestRequestRunById(runId)?.state).toBe('failed');
+  });
+
+  it('still clears — and rewrites the run to passed — for a test that fails identically on base in a file the session did not touch', async () => {
+    setUpSession('sess-1');
+    const intent = stageTestRequest('sess-1') as StagedIntent;
+    const runId = 'run-guard-untouched';
+    seedRawFailedRun(runId);
+    insertTestRunResults(
+      runId,
+      PROJECT_ID,
+      [
+        {
+          test_id: 'mymodule.testA',
+          name: 'testA',
+          outcome: 'failed',
+          duration_ms: 1,
+          failureMessage: 'boom',
+          failureTraceExcerpt: 'trace excerpt',
+        },
+      ],
+      null,
+      false,
+    );
+    seedBaseRun('run-guard-untouched-base', [
+      { test_id: 'mymodule.testA', name: 'testA' },
+    ]);
+    mockPartialFailBaseHealth('run-guard-untouched-base');
+    mockGetChangedFiles.mockResolvedValue(['unrelated/file.ts']);
+    mockAdmission(runId);
+
+    await triggerTestRequestExecution(intent, undefined);
+
+    expect(getTestRequestRunById(runId)?.state).toBe('passed');
+  });
+
+  it("leaves the run failed when the session's changed files cannot be determined", async () => {
+    setUpSession('sess-1');
+    const intent = stageTestRequest('sess-1') as StagedIntent;
+    const runId = 'run-guard-unknown-diff';
+    seedRawFailedRun(runId);
+    insertTestRunResults(
+      runId,
+      PROJECT_ID,
+      [
+        {
+          test_id: 'mymodule.testA',
+          name: 'testA',
+          outcome: 'failed',
+          duration_ms: 1,
+          failureMessage: 'boom',
+          failureTraceExcerpt: 'trace excerpt',
+        },
+      ],
+      null,
+      false,
+    );
+    seedBaseRun('run-guard-unknown-diff-base', [
+      { test_id: 'mymodule.testA', name: 'testA' },
+    ]);
+    mockPartialFailBaseHealth('run-guard-unknown-diff-base');
+    mockGetChangedFiles.mockRejectedValue(new Error('git diff failed'));
+    mockAdmission(runId);
+
+    await triggerTestRequestExecution(intent, undefined);
+
+    expect(getTestRequestRunById(runId)?.state).toBe('failed');
+    expect(mockFilterBaseAttributableFailuresForF2Gate).not.toHaveBeenCalled();
+  });
+
+  it('records the excluded, flaky-excluded and guard-blocked test ids and counts in the staged_intent_disposition payload', async () => {
+    setUpSession('sess-1');
+    const intent = stageTestRequest('sess-1') as StagedIntent;
+    const runId = 'run-guard-payload';
+    seedRawFailedRun(runId);
+    mockAdmission(runId);
+    mockFilterBaseAttributableFailuresForF2Gate.mockResolvedValue({
+      result: {
+        outcome: 'filtered_partial',
+        passed: false,
+        excludedTests: [{ test_id: 'suite.t1', name: 't1' }],
+        flakyExcludedTests: [{ test_id: 'suite.t2', name: 't2' }],
+        remainingTests: [{ test_id: 'suite.t3', name: 't3' }],
+        baseRun: null,
+      },
+      guardBlocked: [{ test_id: 'suite.t3', name: 't3' }],
+    });
+
+    await triggerTestRequestExecution(intent, undefined);
+
+    const disposition = db
+      .prepare(
+        "SELECT payload FROM audit_log WHERE event_type = 'staged_intent_disposition' ORDER BY id DESC LIMIT 1",
+      )
+      .get() as { payload: string } | undefined;
+    expect(disposition).toBeDefined();
+    const payload = JSON.parse(disposition!.payload);
+    expect(payload.excludedTestCount).toBe(1);
+    expect(payload.excludedTestIds).toEqual(['suite.t1']);
+    expect(payload.flakyExcludedTestCount).toBe(1);
+    expect(payload.flakyExcludedTestIds).toEqual(['suite.t2']);
+    expect(payload.guardBlockedTestCount).toBe(1);
+    expect(payload.guardBlockedTestIds).toEqual(['suite.t3']);
   });
 });

@@ -227,8 +227,10 @@ import { classifyTestRunOutcome } from '../orchestration/baseHealthCheck';
 import type { TestRequestPayload, TestRequestRunRow } from '../db/types';
 import { buildTestResultDigest } from '../session/testResultDigest';
 import {
-  filterBaseAttributableFailures,
+  filterBaseAttributableFailuresForF2Gate,
   renderBaseAttributableFilterDigest,
+  type FailingTest,
+  type BaseAttributableFilterResult,
 } from '../orchestration/baseAttributableFilter';
 import type {
   PRReviewService,
@@ -6409,26 +6411,49 @@ export async function triggerTestRequestExecution(
   // Filter a raw failure against the project's current base-branch health
   // before anything downstream (commit annotation, audit event, session
   // feedback) sees `result.passed` — a confirmed base-attributable failure
-  // must never charge the session or read to it as its own fault. See
+  // must never charge the session or read to it as its own fault. Routed
+  // through the same guarded entry point PreReviewPipeline/PRMergeWatcher's
+  // f2 gate use (filterBaseAttributableFailuresForF2Gate), so a candidate
+  // exclusion here is also blocked when the session's own diff touches the
+  // test's file, or the branch/base failure signatures differ. See
   // orchestration/baseAttributableFilter.ts.
-  let filterResult: Awaited<
-    ReturnType<typeof filterBaseAttributableFailures>
-  > | null = null;
+  let filterResult: BaseAttributableFilterResult | null = null;
+  let guardBlocked: FailingTest[] = [];
   if (runId && !result.passed && !executionFailed) {
     const project = getProjectById(intent.projectId);
     const run = getTestRequestRunById(runId);
-    if (project && run) {
+    if (project && run && inputs.ok) {
+      let changedFiles: string[] | null = null;
       try {
-        filterResult = await filterBaseAttributableFailures(
-          project,
-          run,
-          (intent.payload as TestRequestPayload).taskId ?? null,
+        const pr = getPRBySessionId(intent.sessionId ?? '');
+        changedFiles = await getChangedFiles(
+          inputs.worktreePath,
+          pr?.base_branch ?? project.baseBranch,
         );
       } catch (err) {
-        logger.error(
-          `[stagedIntents] base-attributable filter failed for test.request ${intent.id}: ${err instanceof Error ? err.message : err}`,
+        logger.warn(
+          `[stagedIntents] getChangedFiles failed for test.request ${intent.id} f2 gate masking guard: ${err instanceof Error ? err.message : err}`,
         );
       }
+      if (changedFiles !== null) {
+        try {
+          const gated = await filterBaseAttributableFailuresForF2Gate(
+            project,
+            run,
+            changedFiles,
+            (intent.payload as TestRequestPayload).taskId ?? null,
+          );
+          filterResult = gated.result;
+          guardBlocked = gated.guardBlocked;
+        } catch (err) {
+          logger.error(
+            `[stagedIntents] base-attributable filter failed for test.request ${intent.id}: ${err instanceof Error ? err.message : err}`,
+          );
+        }
+      }
+      // changedFiles === null: the session's changed files could not be
+      // determined — fail closed. filterResult stays null, so nothing
+      // below excuses the failure or rewrites the run's state.
     }
   }
   if (filterResult && filterResult.outcome !== 'unfiltered') {
@@ -6473,6 +6498,24 @@ export async function triggerTestRequestExecution(
       ...(filterResult && filterResult.outcome !== 'unfiltered'
         ? { baseAttributableFilterOutcome: filterResult.outcome }
         : {}),
+      ...(filterResult
+        ? {
+            excludedTestCount: filterResult.excludedTests.length,
+            excludedTestIds: filterResult.excludedTests.map(
+              (t) => t.test_id,
+            ),
+            flakyExcludedTestCount: filterResult.flakyExcludedTests.length,
+            flakyExcludedTestIds: filterResult.flakyExcludedTests.map(
+              (t) => t.test_id,
+            ),
+          }
+        : {}),
+      ...(guardBlocked.length > 0
+        ? {
+            guardBlockedTestCount: guardBlocked.length,
+            guardBlockedTestIds: guardBlocked.map((t) => t.test_id),
+          }
+        : {}),
     },
   });
 
@@ -6484,7 +6527,7 @@ export async function triggerTestRequestExecution(
     ? `[test.request] The test run could not be executed — the test runner process failed to start, so no test result exists. This is an infrastructure failure, not a test failure; it does not indicate your changes are broken. Retry the request.\n\n${truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP)}`
     : (filterResult &&
         filterResult.outcome !== 'unfiltered' &&
-        renderBaseAttributableFilterDigest(filterResult)) ||
+        renderBaseAttributableFilterDigest(filterResult, guardBlocked)) ||
       (structuredResult && buildTestResultDigest(structuredResult)) ||
       truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP);
   try {

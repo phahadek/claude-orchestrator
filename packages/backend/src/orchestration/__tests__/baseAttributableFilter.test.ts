@@ -27,15 +27,18 @@ const {
   mockGetFailingTestIdsForRun,
   mockGetFlaggedFlakyTestIds,
   mockGetSession,
+  mockGetFailureContentForRunTest,
 } = vi.hoisted(() => ({
   mockGetFailingTestIdsForRun: vi.fn(),
   mockGetFlaggedFlakyTestIds: vi.fn(() => new Set<string>()),
   mockGetSession: vi.fn(() => undefined),
+  mockGetFailureContentForRunTest: vi.fn(),
 }));
 vi.mock('../../db/queries', () => ({
   getFailingTestIdsForRun: mockGetFailingTestIdsForRun,
   getFlaggedFlakyTestIds: mockGetFlaggedFlakyTestIds,
   getSession: mockGetSession,
+  getFailureContentForRunTest: mockGetFailureContentForRunTest,
 }));
 
 const { mockRecordAndMaybeFileBaseHealthRemediation } = vi.hoisted(() => ({
@@ -52,6 +55,9 @@ import {
   filterBaseAttributableFailures,
   filterVerifyFailureByBaseHealth,
   renderBaseAttributableFilterDigest,
+  extractFailureSignature,
+  applyF2GateMaskingGuards,
+  type BaseAttributableFilterResult,
 } from '../baseAttributableFilter';
 import type { ProjectConfig } from '../../config';
 import type { StructuredTestResult, TestRequestRunRow } from '../../db/types';
@@ -86,9 +92,104 @@ beforeEach(() => {
   mockGetFailingTestIdsForRun.mockReset();
   mockGetFlaggedFlakyTestIds.mockReset();
   mockGetFlaggedFlakyTestIds.mockReturnValue(new Set<string>());
+  mockGetFailureContentForRunTest.mockReset();
+  mockGetFailureContentForRunTest.mockReturnValue(undefined);
   mockRecordAndMaybeFileBaseHealthRemediation.mockReset();
   mockRecordAndMaybeFileBaseHealthRemediation.mockResolvedValue({
     filed: false,
+  });
+});
+
+describe('extractFailureSignature', () => {
+  it('returns the recorded failure content from test_run_results when structured_result is null', () => {
+    mockGetFailureContentForRunTest.mockReturnValue('boom\ntrace excerpt');
+    const run = makeRun({ structured_result: null });
+
+    const sig = extractFailureSignature(run, 'suite.testA');
+
+    expect(sig).toBe('boom\ntrace excerpt');
+    expect(mockGetFailureContentForRunTest).toHaveBeenCalledWith(
+      run.id,
+      'suite.testA',
+    );
+  });
+
+  it('falls back to structured_result when no test_run_results row exists (an unswept run)', () => {
+    mockGetFailureContentForRunTest.mockReturnValue(undefined);
+    const structured: StructuredTestResult = {
+      format: 'junit-xml',
+      suites: [
+        {
+          name: 'suite',
+          tests: [
+            {
+              id: 'suite.testA',
+              name: 'testA',
+              outcome: 'failed',
+              durationMs: 1,
+              failureMessage: 'boom',
+              failureTraceExcerpt: 'trace excerpt',
+            },
+          ],
+        },
+      ],
+      totals: { passed: 0, failed: 1, skipped: 0, errors: 0 },
+      durationMsTotal: 1,
+    } as StructuredTestResult;
+    const run = makeRun({ structured_result: JSON.stringify(structured) });
+
+    const sig = extractFailureSignature(run, 'suite.testA');
+
+    expect(sig).toBe('boom\ntrace excerpt');
+  });
+});
+
+describe('applyF2GateMaskingGuards', () => {
+  const candidateResult: BaseAttributableFilterResult = {
+    outcome: 'filtered_pass',
+    passed: true,
+    excludedTests: [{ test_id: 'suite.testA', name: 'testA' }],
+    flakyExcludedTests: [],
+    remainingTests: [],
+    baseRun: BASE_RUN,
+  };
+
+  it('clears the exclusion when branch and base recorded the same failure content and the PR did not touch the test file', () => {
+    mockGetFailureContentForRunTest.mockReturnValue('same failure content');
+    const prRun = makeRun();
+
+    const { result, guardBlocked } = applyF2GateMaskingGuards(
+      candidateResult,
+      prRun,
+      ['unrelated/file.ts'],
+    );
+
+    expect(guardBlocked).toEqual([]);
+    expect(result.outcome).toBe('filtered_pass');
+    expect(result.passed).toBe(true);
+    expect(result.excludedTests).toEqual([
+      { test_id: 'suite.testA', name: 'testA' },
+    ]);
+  });
+
+  it('blocks the exclusion when branch and base recorded different failure content', () => {
+    const prRun = makeRun();
+    mockGetFailureContentForRunTest.mockImplementation(
+      (runId: string) => (runId === prRun.id ? 'branch failure' : 'base failure'),
+    );
+
+    const { result, guardBlocked } = applyF2GateMaskingGuards(
+      candidateResult,
+      prRun,
+      ['unrelated/file.ts'],
+    );
+
+    expect(guardBlocked).toEqual([{ test_id: 'suite.testA', name: 'testA' }]);
+    expect(result.excludedTests).toEqual([]);
+    expect(result.remainingTests).toEqual([
+      { test_id: 'suite.testA', name: 'testA' },
+    ]);
+    expect(result.passed).toBe(false);
   });
 });
 
