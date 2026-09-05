@@ -153,7 +153,9 @@ describe('GET /api/config/status', () => {
   });
 
   it('does not see a config.json written into a different scratch data dir', async () => {
-    const otherDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-configstatus-other-'));
+    const otherDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'oc-configstatus-other-'),
+    );
     try {
       const otherSrc = new DataDirConfigSource(otherDir);
       otherSrc.write({ github: { token: 'ghp-leaked-elsewhere' } });

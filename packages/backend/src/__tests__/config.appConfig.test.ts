@@ -512,7 +512,9 @@ describe('getConfigProvenance', () => {
   });
 
   it('does not see a config.json written into a different scratch data dir', () => {
-    const otherDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-provenance-other-'));
+    const otherDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'oc-provenance-other-'),
+    );
     try {
       const otherSrc = new DataDirConfigSource(otherDir);
       otherSrc.write({ github: { repo: 'leaked-owner/leaked-repo' } });

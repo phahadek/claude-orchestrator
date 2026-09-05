@@ -237,7 +237,9 @@ describe('setup writes bust the config cache', () => {
   });
 
   it('does not see a config.json written into a different scratch data dir', async () => {
-    const otherDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-setup-cache-other-'));
+    const otherDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'oc-setup-cache-other-'),
+    );
     try {
       const otherSrc = new DataDirConfigSource(otherDir);
       otherSrc.write({ github: { token: 'ghp-leaked-elsewhere' } });
