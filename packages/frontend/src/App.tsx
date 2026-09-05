@@ -346,6 +346,44 @@ export default function App() {
   const [taskViews, setTaskViews] = useState<TaskView[]>([]);
   const [taskViewsLoading, setTaskViewsLoading] = useState(true);
   const [taskCacheCold, setTaskCacheCold] = useState(false);
+  // Per-shape client cache for GET /api/tasks/active — 'summary' (Milestones view)
+  // and 'full' (every other view) are fetched and cached independently, keyed on
+  // the current project/board/tasksReady/refresh generation so switching topView
+  // between already-cached shapes costs zero network requests. Cleared whenever
+  // the generation changes (project/board switch, tasks_ready, forced refresh).
+  const taskShapeCacheRef = useRef<{
+    full: { data: TaskView[]; coldCache: boolean } | null;
+    summary: { data: TaskView[]; coldCache: boolean } | null;
+  }>({ full: null, summary: null });
+  const taskShapeGenerationRef = useRef<string>('');
+  const taskShapeRequestSeqRef = useRef<{ full: number; summary: number }>({
+    full: 0,
+    summary: 0,
+  });
+  const currentTaskShapeRef = useRef<'full' | 'summary'>('full');
+  // Applies an in-place taskViews patch (WS-driven single-task merges) to both the live
+  // state and the currently-displayed shape's cache entry, so a later topView switch back
+  // to this shape doesn't revert the patch by replaying stale cached data. The other shape's
+  // cache is invalidated rather than patched, since its trimmed fields wouldn't be findable.
+  const patchTaskViews = useCallback(
+    (updater: (prev: TaskView[]) => TaskView[]) => {
+      setTaskViews((prev) => {
+        const next = updater(prev);
+        if (next !== prev) {
+          const shape = currentTaskShapeRef.current;
+          const existing = taskShapeCacheRef.current[shape];
+          taskShapeCacheRef.current[shape] = {
+            data: next,
+            coldCache: existing?.coldCache ?? false,
+          };
+          const other = shape === 'full' ? 'summary' : 'full';
+          taskShapeCacheRef.current[other] = null;
+        }
+        return next;
+      });
+    },
+    [],
+  );
   const settingsInitialTab = 'general' as const;
   const isMobile = useIsMobile();
 
@@ -563,12 +601,13 @@ export default function App() {
       setTaskViews([]);
       setTaskCacheCold(false);
       setTaskViewsLoading(false);
+      taskShapeCacheRef.current = { full: null, summary: null };
+      taskShapeGenerationRef.current = '';
       return;
     }
-    setTaskViewsLoading(true);
-    let url: string;
     if (activeBoardId === NON_MILESTONE_BOARD_ID) {
-      url = `/api/tasks/non-milestone?projectId=${encodeURIComponent(activeProjectId)}`;
+      setTaskViewsLoading(true);
+      const url = `/api/tasks/non-milestone?projectId=${encodeURIComponent(activeProjectId)}`;
       authedFetch(url)
         .then((r) =>
           r.ok ? (r.json() as Promise<TaskView[]>) : Promise.resolve([]),
@@ -581,43 +620,76 @@ export default function App() {
         .catch(() => {
           setTaskViewsLoading(false);
         });
-    } else {
-      const params = new URLSearchParams({ projectId: activeProjectId });
-      if (activeBoardId) params.set('boardId', activeBoardId);
-      url = `/api/tasks/active?${params.toString()}`;
-      authedFetch(url)
-        .then((r) =>
-          r.ok
-            ? (r.json() as Promise<TasksActiveResponse>)
-            : Promise.resolve(null),
-        )
-        .then((data) => {
-          if (data) {
-            setTaskViews(Array.isArray(data.tasks) ? data.tasks : []);
-            setTaskCacheCold(data.coldCache);
-          } else {
-            setTaskViews([]);
-            setTaskCacheCold(false);
-          }
-          setTaskViewsLoading(false);
-        })
-        .catch(() => {
-          setTaskViewsLoading(false);
-        });
+      return;
     }
-  }, [activeProjectId, activeBoardId, tasksReady, taskListRefreshTrigger]);
+
+    // Any change to the underlying data (project/board switch, tasks_ready,
+    // forced refresh) invalidates both cached shapes — a topView switch alone does not.
+    const generation = `${activeProjectId}|${activeBoardId}|${tasksReady}|${taskListRefreshTrigger}`;
+    if (taskShapeGenerationRef.current !== generation) {
+      taskShapeGenerationRef.current = generation;
+      taskShapeCacheRef.current = { full: null, summary: null };
+    }
+
+    const shape: 'full' | 'summary' =
+      topView === 'milestone' ? 'summary' : 'full';
+    currentTaskShapeRef.current = shape;
+    const cached = taskShapeCacheRef.current[shape];
+    if (cached) {
+      setTaskViews(cached.data);
+      setTaskCacheCold(cached.coldCache);
+      setTaskViewsLoading(false);
+      return;
+    }
+
+    setTaskViewsLoading(true);
+    const seq = ++taskShapeRequestSeqRef.current[shape];
+    const params = new URLSearchParams({ projectId: activeProjectId, shape });
+    if (activeBoardId) params.set('boardId', activeBoardId);
+    authedFetch(`/api/tasks/active?${params.toString()}`)
+      .then((r) =>
+        r.ok
+          ? (r.json() as Promise<TasksActiveResponse>)
+          : Promise.resolve(null),
+      )
+      .then((data) => {
+        if (seq !== taskShapeRequestSeqRef.current[shape]) return;
+        if (data) {
+          const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+          taskShapeCacheRef.current[shape] = {
+            data: tasks,
+            coldCache: data.coldCache,
+          };
+          setTaskViews(tasks);
+          setTaskCacheCold(data.coldCache);
+        } else {
+          setTaskViews([]);
+          setTaskCacheCold(false);
+        }
+        setTaskViewsLoading(false);
+      })
+      .catch(() => {
+        setTaskViewsLoading(false);
+      });
+  }, [
+    activeProjectId,
+    activeBoardId,
+    tasksReady,
+    taskListRefreshTrigger,
+    topView,
+  ]);
 
   // Merge a single task update in-place so TaskDetail sees live changes without a full re-fetch
   useEffect(() => {
     if (!lastTaskUpdate) return;
-    setTaskViews((prev) => {
+    patchTaskViews((prev) => {
       const idx = prev.findIndex((t) => t.taskId === lastTaskUpdate.taskId);
       if (idx < 0) return prev;
       const next = [...prev];
       next[idx] = lastTaskUpdate;
       return next;
     });
-  }, [lastTaskUpdate]);
+  }, [lastTaskUpdate, patchTaskViews]);
 
   // In-place update when a session starts: mark the matching task's codeSession as starting.
   // This runs in addition to the task_updated path so the panel reflects the change immediately
@@ -625,7 +697,7 @@ export default function App() {
   useEffect(() => {
     if (!lastSessionStartedEvent) return;
     const { taskId, sessionId } = lastSessionStartedEvent;
-    setTaskViews((prev) => {
+    patchTaskViews((prev) => {
       const idx = prev.findIndex((t) => t.taskId === taskId);
       if (idx < 0) return prev;
       const task = prev[idx];
@@ -645,13 +717,13 @@ export default function App() {
       };
       return next;
     });
-  }, [lastSessionStartedEvent]);
+  }, [lastSessionStartedEvent, patchTaskViews]);
 
   // In-place update when a session ends: mark codeSession as ended and carry prUrl.
   useEffect(() => {
     if (!lastSessionEndedEvent) return;
     const { taskId, status, prUrl } = lastSessionEndedEvent;
-    setTaskViews((prev) => {
+    patchTaskViews((prev) => {
       const idx = prev.findIndex((t) => t.taskId === taskId);
       if (idx < 0) return prev;
       const task = prev[idx];
@@ -666,7 +738,7 @@ export default function App() {
       };
       return next;
     });
-  }, [lastSessionEndedEvent]);
+  }, [lastSessionEndedEvent, patchTaskViews]);
 
   // Re-fetch task list when the background refresher signals that the cache was updated
   // for the active project/board, clearing the cold-cache banner when it fires.
@@ -677,35 +749,47 @@ export default function App() {
       lastCacheUpdatedEvent.boardId !== activeBoardId
     )
       return;
-    const params = new URLSearchParams({ projectId: activeProjectId });
+    const shape: 'full' | 'summary' =
+      topView === 'milestone' ? 'summary' : 'full';
+    const params = new URLSearchParams({ projectId: activeProjectId, shape });
     params.set('boardId', activeBoardId);
+    const seq = ++taskShapeRequestSeqRef.current[shape];
     authedFetch(`/api/tasks/active?${params.toString()}`)
       .then((r) => (r.ok ? (r.json() as Promise<TasksActiveResponse>) : null))
       .then((data) => {
+        if (seq !== taskShapeRequestSeqRef.current[shape]) return;
         if (data) {
-          setTaskViews(Array.isArray(data.tasks) ? data.tasks : []);
+          const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+          taskShapeCacheRef.current[shape] = {
+            data: tasks,
+            coldCache: data.coldCache,
+          };
+          setTaskViews(tasks);
           setTaskCacheCold(data.coldCache);
         }
       })
       .catch(() => {
         /* ignore */
       });
-  }, [lastCacheUpdatedEvent, activeProjectId, activeBoardId]);
+  }, [lastCacheUpdatedEvent, activeProjectId, activeBoardId, topView]);
 
   // Passed to TaskList so it can apply optimistic status updates without a full re-fetch
-  const handleTaskOptimisticDispatch = useCallback((taskIds: string[]) => {
-    setTaskViews((prev) =>
-      prev.map((t) =>
-        taskIds.includes(t.taskId)
-          ? {
-              ...t,
-              notionStatus: '🔄 In Progress',
-              displayStatus: 'in_progress' as const,
-            }
-          : t,
-      ),
-    );
-  }, []);
+  const handleTaskOptimisticDispatch = useCallback(
+    (taskIds: string[]) => {
+      patchTaskViews((prev) =>
+        prev.map((t) =>
+          taskIds.includes(t.taskId)
+            ? {
+                ...t,
+                notionStatus: '🔄 In Progress',
+                displayStatus: 'in_progress' as const,
+              }
+            : t,
+        ),
+      );
+    },
+    [patchTaskViews],
+  );
 
   // Used by TaskList's Sync button. For milestone boards, triggers a background refresh;
   // for non-milestone views, re-fetches from cache directly.
@@ -727,12 +811,23 @@ export default function App() {
           /* ignore */
         });
         // Also re-read current cache to show any already-populated data
-        const params = new URLSearchParams({ projectId: activeProjectId });
+        const shape: 'full' | 'summary' =
+          topView === 'milestone' ? 'summary' : 'full';
+        const params = new URLSearchParams({
+          projectId: activeProjectId,
+          shape,
+        });
         if (activeBoardId) params.set('boardId', activeBoardId);
+        const seq = ++taskShapeRequestSeqRef.current[shape];
         const res = await authedFetch(`/api/tasks/active?${params.toString()}`);
-        if (res.ok) {
+        if (res.ok && seq === taskShapeRequestSeqRef.current[shape]) {
           const data = (await res.json()) as TasksActiveResponse;
-          setTaskViews(Array.isArray(data.tasks) ? data.tasks : []);
+          const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+          taskShapeCacheRef.current[shape] = {
+            data: tasks,
+            coldCache: data.coldCache,
+          };
+          setTaskViews(tasks);
           setTaskCacheCold(data.coldCache);
         }
       }
@@ -741,7 +836,7 @@ export default function App() {
     } finally {
       setTaskViewsLoading(false);
     }
-  }, [activeProjectId, activeBoardId]);
+  }, [activeProjectId, activeBoardId, topView]);
 
   useEffect(() => {
     for (const session of sessions) {
