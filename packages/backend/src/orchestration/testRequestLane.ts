@@ -839,6 +839,7 @@ export function ingestTestRunResults(run: TestRequestRunRow): void {
     !!run.oom_killed,
     !!parsed.incomplete,
     run.foreign_concurrent_run_count ?? null,
+    run.content_hash,
   );
 
   const touchedTestIds = tests.map((t) => t.test_id);

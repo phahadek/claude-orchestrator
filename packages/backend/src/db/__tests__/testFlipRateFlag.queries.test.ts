@@ -22,14 +22,17 @@ import {
 
 let seq = 0;
 
-function insertRun(): string {
+/** Shared across most fixtures below so pre-existing window/exclusion assertions (which predate hash-scoping) keep testing what they test. */
+const SHARED_HASH = 'shared-hash';
+
+function insertRun(contentHash: string | null): string {
   seq += 1;
   const id = `run-${seq}`;
   db.prepare(
     `INSERT INTO test_request_runs
        (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at)
      VALUES (@id, 'proj-1', @content_hash, NULL, 'passed', '', 0, 0, 0)`,
-  ).run({ id, content_hash: `hash-${seq}` });
+  ).run({ id, content_hash: contentHash });
   return id;
 }
 
@@ -39,6 +42,9 @@ function insertRun(): string {
  * write ingestTestRunResultsTx makes per test at ingestion time.
  * createdAt doubles as the digest's caller-assigned sequenced-at value, so
  * ordering in these fixtures stays exactly what the test author wrote.
+ * contentHash defaults to one shared value so fixtures not exercising the
+ * hash-scoping behavior itself keep pooling into a single tree, as they did
+ * before content-hash scoping existed.
  */
 function insertSample(opts: {
   testId: string;
@@ -47,8 +53,11 @@ function insertSample(opts: {
   oomKilled?: boolean;
   createdAt: number;
   foreignConcurrentRunCount?: number | null;
+  contentHash?: string | null;
 }): void {
-  insertRun();
+  const contentHash =
+    opts.contentHash === undefined ? SHARED_HASH : opts.contentHash;
+  insertRun(contentHash);
   recordTestPerfDigestSample(
     opts.testId,
     'proj-1',
@@ -60,6 +69,7 @@ function insertSample(opts: {
     opts.createdAt,
     undefined,
     opts.foreignConcurrentRunCount,
+    contentHash,
   );
 }
 
@@ -168,5 +178,170 @@ describe('computeTestFlipRateFlag', () => {
     const flag = computeTestFlipRateFlag('test-d', 4, 2);
     expect(flag.transitionCount).toBeLessThan(2);
     expect(flag.flagged).toBe(false);
+  });
+
+  it('counts zero transitions for an alternating P/F sequence where every sample carries a distinct content hash', () => {
+    const outcomes: Array<'passed' | 'failed'> = [
+      'passed',
+      'failed',
+      'passed',
+      'failed',
+    ];
+    outcomes.forEach((outcome, i) =>
+      insertSample({
+        testId: 'test-distinct-hash',
+        outcome,
+        createdAt: i,
+        contentHash: `hash-${i}`,
+      }),
+    );
+
+    const flag = computeTestFlipRateFlag('test-distinct-hash', 20, 2);
+    expect(flag.transitionCount).toBe(0);
+    expect(flag.flagged).toBe(false);
+  });
+
+  it('counts transitions for an alternating P/F/P sequence sharing one content hash, and flags at threshold 2', () => {
+    const outcomes: Array<'passed' | 'failed' | 'passed'> = [
+      'passed',
+      'failed',
+      'passed',
+    ];
+    outcomes.forEach((outcome, i) =>
+      insertSample({
+        testId: 'test-same-hash',
+        outcome,
+        createdAt: i,
+        contentHash: 'one-tree',
+      }),
+    );
+
+    const flag = computeTestFlipRateFlag('test-same-hash', 20, 2);
+    expect(flag.transitionCount).toBe(2);
+    expect(flag.flagged).toBe(true);
+  });
+
+  it('never counts a transition when either or both samples in the pair lack a content hash, including a mixed window of legacy and hash-bearing samples', () => {
+    // Legacy samples (no h at all) interleaved with hash-bearing samples
+    // that don't match each other.
+    insertSample({
+      testId: 'test-mixed-hash',
+      outcome: 'passed',
+      createdAt: 0,
+      contentHash: null,
+    });
+    insertSample({
+      testId: 'test-mixed-hash',
+      outcome: 'failed',
+      createdAt: 1,
+      contentHash: null,
+    });
+    insertSample({
+      testId: 'test-mixed-hash',
+      outcome: 'passed',
+      createdAt: 2,
+      contentHash: 'hash-x',
+    });
+    insertSample({
+      testId: 'test-mixed-hash',
+      outcome: 'failed',
+      createdAt: 3,
+      contentHash: 'hash-y',
+    });
+
+    const flag = computeTestFlipRateFlag('test-mixed-hash', 20, 2);
+    expect(flag.sampleCount).toBe(4);
+    expect(flag.transitionCount).toBe(0);
+    expect(flag.flagged).toBe(false);
+  });
+});
+
+describe('recordTestPerfDigestSample content hash persistence', () => {
+  it('persists h on the appended sample, and stores a null content hash as an absent h rather than a literal null string', () => {
+    insertRun('hash-1');
+    recordTestPerfDigestSample(
+      'test-persist-hash',
+      'proj-1',
+      'test-persist-hash',
+      'passed',
+      1,
+      0,
+      false,
+      0,
+      undefined,
+      undefined,
+      'hash-1',
+    );
+    insertRun(null);
+    recordTestPerfDigestSample(
+      'test-persist-hash',
+      'proj-1',
+      'test-persist-hash',
+      'failed',
+      1,
+      0,
+      false,
+      1,
+      undefined,
+      undefined,
+      null,
+    );
+
+    const row = db
+      .prepare(
+        `SELECT recent_outcomes FROM test_perf_baselines WHERE test_id = ?`,
+      )
+      .get('test-persist-hash') as { recent_outcomes: string };
+    const samples = JSON.parse(row.recent_outcomes);
+    expect(samples).toHaveLength(2);
+    expect(samples[0].h).toBe('hash-1');
+    expect('h' in samples[1]).toBe(false);
+  });
+
+  it('never writes a digest sample when concurrent_run_count, oom_killed, or foreign_concurrent_run_count exclude the row, even with a content hash supplied', () => {
+    recordTestPerfDigestSample(
+      'test-excluded',
+      'proj-1',
+      'test-excluded',
+      'failed',
+      1,
+      1,
+      false,
+      0,
+      undefined,
+      undefined,
+      'hash-1',
+    );
+    recordTestPerfDigestSample(
+      'test-excluded',
+      'proj-1',
+      'test-excluded',
+      'failed',
+      1,
+      0,
+      true,
+      1,
+      undefined,
+      undefined,
+      'hash-1',
+    );
+    recordTestPerfDigestSample(
+      'test-excluded',
+      'proj-1',
+      'test-excluded',
+      'failed',
+      1,
+      0,
+      false,
+      2,
+      undefined,
+      1,
+      'hash-1',
+    );
+
+    const row = db
+      .prepare(`SELECT * FROM test_perf_baselines WHERE test_id = ?`)
+      .get('test-excluded');
+    expect(row).toBeUndefined();
   });
 });

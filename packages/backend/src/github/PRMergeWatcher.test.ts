@@ -4465,6 +4465,10 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
 
 describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
   let seq = 0;
+  // Shared across the flip-rate history fixtures so they keep pooling into
+  // one tree, as they did before content-hash scoping — this suite isn't
+  // testing that scoping itself.
+  const HISTORY_SHARED_HASH = 'history-shared-hash';
 
   function insertHistoryRun(): string {
     seq += 1;
@@ -4496,6 +4500,9 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
       0,
       false,
       opts.createdAt,
+      undefined,
+      undefined,
+      HISTORY_SHARED_HASH,
     );
   }
 

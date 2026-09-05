@@ -1457,6 +1457,10 @@ describe('bench: querySessionEventsByProject{Aggregate,Rows} — filtered reads 
 
 describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
   let seq = 0;
+  // Shared across these fixtures so they keep pooling into one tree, as they
+  // did before computeTestFlipRateFlag started scoping transitions to a
+  // matching content hash — this suite isn't testing that scoping itself.
+  const FLAKY_SHARED_HASH = 'flaky-shared-hash';
 
   function insertTestResult(opts: {
     projectId: string;
@@ -1476,7 +1480,7 @@ describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
       .run({
         id: runId,
         project_id: opts.projectId,
-        content_hash: `flaky-hash-${seq}`,
+        content_hash: FLAKY_SHARED_HASH,
       });
     typedDb
       .prepare(
@@ -1505,6 +1509,9 @@ describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
       0,
       false,
       opts.createdAt,
+      undefined,
+      undefined,
+      FLAKY_SHARED_HASH,
     );
   }
 

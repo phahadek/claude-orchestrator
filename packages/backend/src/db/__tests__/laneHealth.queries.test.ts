@@ -267,6 +267,12 @@ describe('getLaneHealthRollup', () => {
   });
 
   describe('flakyTests', () => {
+    // Shared across these fixtures so they keep pooling into one tree, as
+    // they did before computeTestFlipRateFlag started scoping transitions to
+    // a matching content hash — this describe block isn't testing that
+    // scoping itself.
+    const SHARED_HASH = 'shared-hash';
+
     function insertTestResult(opts: {
       projectId: string;
       testId: string;
@@ -283,7 +289,7 @@ describe('getLaneHealthRollup', () => {
       ).run({
         id: runId,
         project_id: opts.projectId,
-        content_hash: `hash-${seq}`,
+        content_hash: SHARED_HASH,
       });
       db.prepare(
         `INSERT INTO test_run_results
@@ -308,6 +314,9 @@ describe('getLaneHealthRollup', () => {
         0,
         false,
         opts.createdAt,
+        undefined,
+        undefined,
+        SHARED_HASH,
       );
     }
 
