@@ -432,8 +432,14 @@ describe('checkGroomingPromotionGate — seam_check', () => {
         seam_check: {
           seams: [
             { kind: 'schema', what: 'packages/backend/migrations/010_x.sql' },
-            { kind: 'new-module', what: 'packages/backend/src/foo/newThing.ts' },
-            { kind: 'wiring', what: 'packages/backend/src/foo/toolRegistry.ts' },
+            {
+              kind: 'new-module',
+              what: 'packages/backend/src/foo/newThing.ts',
+            },
+            {
+              kind: 'wiring',
+              what: 'packages/backend/src/foo/toolRegistry.ts',
+            },
           ],
         },
       },

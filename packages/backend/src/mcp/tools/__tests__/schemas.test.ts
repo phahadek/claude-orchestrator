@@ -15,7 +15,9 @@ describe('groomingGateEntrySchema', () => {
       size_check: { decision: 'n/a' },
       type_check: { decision: 'none' },
       seam_check: {
-        seams: [{ kind: 'schema', what: 'packages/backend/migrations/010_x.sql' }],
+        seams: [
+          { kind: 'schema', what: 'packages/backend/migrations/010_x.sql' },
+        ],
         decision: 'single_seam',
       },
     });

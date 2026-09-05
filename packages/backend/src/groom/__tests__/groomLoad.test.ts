@@ -1139,7 +1139,9 @@ describe('computeSeamSeed', () => {
     const seeds = computeSeamSeed({
       packages: [],
       files: [],
-      planned: [{ path: 'packages/backend/src/foo/newModule.ts', package: null }],
+      planned: [
+        { path: 'packages/backend/src/foo/newModule.ts', package: null },
+      ],
     });
     expect(seeds).toContainEqual({
       kind: 'new-module',
