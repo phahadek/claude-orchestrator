@@ -103,6 +103,7 @@ vi.mock('../../audit/baseHealthRemediationFiling', () => ({
 }));
 
 import { db } from '../../db/db';
+import { applyF2GateMaskingGuards } from '../../orchestration/baseAttributableFilter';
 import {
   stageIntent,
   setStagedIntentBroadcast,
@@ -367,16 +368,6 @@ function seedBaseRun(
   );
 }
 
-function mockPartialFailBaseHealth(baseRunId: string) {
-  mockCheckBaseBranchHealth.mockResolvedValue({
-    outcome: 'partial_fail',
-    projectId: PROJECT_ID,
-    contentHash: 'base-hash',
-    cacheHit: true,
-    run: getTestRequestRunById(baseRunId),
-  });
-}
-
 describe('triggerTestRequestExecution — f2 gate masking guards on the session path', () => {
   it('blocks an exclusion for a test whose file appears in the session changed-file list, leaving the run failed', async () => {
     setUpSession('sess-1');
@@ -402,8 +393,20 @@ describe('triggerTestRequestExecution — f2 gate masking guards on the session 
     seedBaseRun('run-guard-touched-base', [
       { test_id: 'mymodule.testA', name: 'testA' },
     ]);
-    mockPartialFailBaseHealth('run-guard-touched-base');
-    mockGetChangedFiles.mockResolvedValue(['mymodule.ts']);
+    const changedFiles = ['mymodule.ts'];
+    const candidateResult = {
+      outcome: 'filtered_pass' as const,
+      passed: true,
+      excludedTests: [{ test_id: 'mymodule.testA', name: 'testA' }],
+      flakyExcludedTests: [],
+      remainingTests: [],
+      baseRun: getTestRequestRunById('run-guard-touched-base') ?? null,
+    };
+    const prRun = getTestRequestRunById(runId)!;
+    mockFilterBaseAttributableFailuresForF2Gate.mockResolvedValue(
+      applyF2GateMaskingGuards(candidateResult, prRun, changedFiles),
+    );
+    mockGetChangedFiles.mockResolvedValue(changedFiles);
     mockAdmission(runId);
 
     await triggerTestRequestExecution(intent, undefined);
@@ -435,8 +438,20 @@ describe('triggerTestRequestExecution — f2 gate masking guards on the session 
     seedBaseRun('run-guard-untouched-base', [
       { test_id: 'mymodule.testA', name: 'testA' },
     ]);
-    mockPartialFailBaseHealth('run-guard-untouched-base');
-    mockGetChangedFiles.mockResolvedValue(['unrelated/file.ts']);
+    const changedFiles = ['unrelated/file.ts'];
+    const candidateResult = {
+      outcome: 'filtered_pass' as const,
+      passed: true,
+      excludedTests: [{ test_id: 'mymodule.testA', name: 'testA' }],
+      flakyExcludedTests: [],
+      remainingTests: [],
+      baseRun: getTestRequestRunById('run-guard-untouched-base') ?? null,
+    };
+    const prRun = getTestRequestRunById(runId)!;
+    mockFilterBaseAttributableFailuresForF2Gate.mockResolvedValue(
+      applyF2GateMaskingGuards(candidateResult, prRun, changedFiles),
+    );
+    mockGetChangedFiles.mockResolvedValue(changedFiles);
     mockAdmission(runId);
 
     await triggerTestRequestExecution(intent, undefined);
@@ -449,26 +464,6 @@ describe('triggerTestRequestExecution — f2 gate masking guards on the session 
     const intent = stageTestRequest('sess-1') as StagedIntent;
     const runId = 'run-guard-unknown-diff';
     seedRawFailedRun(runId);
-    insertTestRunResults(
-      runId,
-      PROJECT_ID,
-      [
-        {
-          test_id: 'mymodule.testA',
-          name: 'testA',
-          outcome: 'failed',
-          duration_ms: 1,
-          failureMessage: 'boom',
-          failureTraceExcerpt: 'trace excerpt',
-        },
-      ],
-      null,
-      false,
-    );
-    seedBaseRun('run-guard-unknown-diff-base', [
-      { test_id: 'mymodule.testA', name: 'testA' },
-    ]);
-    mockPartialFailBaseHealth('run-guard-unknown-diff-base');
     mockGetChangedFiles.mockRejectedValue(new Error('git diff failed'));
     mockAdmission(runId);
 
