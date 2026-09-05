@@ -673,8 +673,7 @@ export class StalledPRReconciler {
           ? `This session has shown no activity for a while, but PR #${prNumber} (${repo}) is still open and unmerged. Please check the current state of the branch and PR and continue toward getting it mergeable, or report back if it's already complete.`
           : formatCIFailureFeedback({
               source: 'verify',
-              failedCommand: parseGateFailureSummary(pr.review_result),
-              truncatedOutput: undefined,
+              ...parseGateFailureDetail(pr.review_result),
               conflicted: pr.merge_state === 'dirty',
               baseBranch: pr.base_branch ?? 'dev',
             });
@@ -1022,13 +1021,29 @@ export class StalledPRReconciler {
 }
 
 /** Extract the gate-failure summary persisted by PreReviewPipeline, if any. */
-function parseGateFailureSummary(
-  reviewResult: string | null,
-): string | undefined {
-  if (!reviewResult) return undefined;
+/**
+ * Extracts the real failed command and its truncated output from a gate
+ * failure's persisted review_result — never the prose `summary` field, which
+ * for a verify failure reads `verify failed: <command>` and would render as
+ * a doubled, nonsensical "Failed command" line if echoed back into the
+ * failedCommand slot (see PreReviewPipeline.buildVerifyStage, which writes
+ * both fields alongside summary for exactly this reason).
+ */
+function parseGateFailureDetail(reviewResult: string | null): {
+  failedCommand: string | undefined;
+  truncatedOutput: string | undefined;
+} {
+  if (!reviewResult) return { failedCommand: undefined, truncatedOutput: undefined };
   try {
-    return (JSON.parse(reviewResult) as { summary?: string }).summary;
+    const parsed = JSON.parse(reviewResult) as {
+      failedCommand?: string;
+      truncatedOutput?: string;
+    };
+    return {
+      failedCommand: parsed.failedCommand,
+      truncatedOutput: parsed.truncatedOutput,
+    };
   } catch {
-    return undefined;
+    return { failedCommand: undefined, truncatedOutput: undefined };
   }
 }

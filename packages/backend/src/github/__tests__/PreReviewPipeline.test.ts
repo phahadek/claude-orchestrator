@@ -852,6 +852,7 @@ describe('PreReviewPipeline — verify gate', () => {
       PR_NUMBER,
       REPO,
       'ci_failing',
+      'type error',
     );
   });
 

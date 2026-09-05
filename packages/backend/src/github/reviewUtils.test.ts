@@ -283,13 +283,25 @@ describe('formatCIFailureFeedback() — source: verify', () => {
     expect(result).not.toMatch(/PR #\d+/);
   });
 
-  it('falls back to (unknown) when failedCommand is undefined', () => {
+  it('omits the Failed command line entirely when failedCommand is undefined', () => {
     const result = formatCIFailureFeedback({
       source: 'verify',
       failedCommand: undefined,
       truncatedOutput: undefined,
     });
-    expect(result).toContain('(unknown)');
+    expect(result).not.toContain('Failed command');
+    expect(result).not.toContain('(unknown)');
+  });
+
+  it('includes the Command output block even with no failedCommand', () => {
+    const result = formatCIFailureFeedback({
+      source: 'verify',
+      failedCommand: undefined,
+      truncatedOutput: 'some output',
+    });
+    expect(result).not.toContain('Failed command');
+    expect(result).toContain('Command output:');
+    expect(result).toContain('some output');
   });
 });
 

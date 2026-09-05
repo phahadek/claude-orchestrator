@@ -96,14 +96,16 @@ export function formatCIFailureFeedback(
   const instructionBlock = buildInstructionBlock(conflicted, baseBranch);
 
   if (args.source === 'verify') {
-    const cmd = args.failedCommand ?? '(unknown)';
     const out = args.truncatedOutput ?? '';
+    const cmdSection = args.failedCommand
+      ? `### Failed command:\n\`\`\`\n${args.failedCommand}\n\`\`\`\n\n`
+      : '';
     const outSection = out
       ? `### Command output:\n\`\`\`\n${out}\n\`\`\`\n\n`
       : '';
     return (
       `## CI Failure — verify gate\n\n` +
-      `### Failed command:\n\`\`\`\n${cmd}\n\`\`\`\n\n` +
+      cmdSection +
       outSection +
       instructionBlock
     );
