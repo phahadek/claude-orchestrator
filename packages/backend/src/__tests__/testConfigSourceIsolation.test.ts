@@ -5,6 +5,7 @@ import {
   getOrchestratorConfig,
   _resetAppConfigCache,
   _setConfigSourceForTesting,
+  _clearConfigSourceForTesting,
 } from '../config/appConfig';
 import { getDataDir } from '../config/dataDir';
 import type {
@@ -78,5 +79,48 @@ describe('test-mode config source isolation', () => {
     _setConfigSourceForTesting(customSource);
     const config = getOrchestratorConfig();
     expect(config.notion.apiKey).toBe('custom-key');
+  });
+
+  it('_clearConfigSourceForTesting() makes a following _resetAppConfigCache() leave the source null instead of restoring the default', () => {
+    const dataDir = getDataDir();
+    fs.mkdirSync(dataDir, { recursive: true });
+    const configPath = path.join(dataDir, 'config.json');
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ db: { path: '/tmp/should-be-read-now.db' } }),
+    );
+    expect(fs.existsSync(configPath)).toBe(true);
+
+    try {
+      _clearConfigSourceForTesting();
+      _resetAppConfigCache();
+      // With the source cleared (not restored to the in-memory default),
+      // resolution falls through to the real DataDirConfigSource branch
+      // and picks up the on-disk config.json.
+      const config = getOrchestratorConfig();
+      expect(config.db.path).toBe('/tmp/should-be-read-now.db');
+    } finally {
+      fs.rmSync(configPath, { force: true });
+    }
+  });
+
+  it('without the escape hatch, _resetAppConfigCache() still restores the in-memory default (pollution fix preserved)', () => {
+    const dataDir = getDataDir();
+    fs.mkdirSync(dataDir, { recursive: true });
+    const configPath = path.join(dataDir, 'config.json');
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ db: { path: '/tmp/should-still-be-ignored.db' } }),
+    );
+    expect(fs.existsSync(configPath)).toBe(true);
+
+    try {
+      // No _clearConfigSourceForTesting() call — the default (unopted-out) path.
+      _resetAppConfigCache();
+      const config = getOrchestratorConfig();
+      expect(config.db.path).toBe(':memory:');
+    } finally {
+      fs.rmSync(configPath, { force: true });
+    }
   });
 });

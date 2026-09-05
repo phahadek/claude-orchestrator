@@ -23,7 +23,10 @@ import { createConfigStatusRouter } from '../routes/configStatus.js';
 import { requireDeviceAuth } from '../auth/DeviceAuth.js';
 import { getDataDir } from '../config/dataDir.js';
 import { DataDirConfigSource } from '../config/DataDirConfigSource.js';
-import { _resetAppConfigCache } from '../config/appConfig.js';
+import {
+  _resetAppConfigCache,
+  _clearConfigSourceForTesting,
+} from '../config/appConfig.js';
 
 /** Mirrors server.ts: requireDeviceAuth gates the route ahead of it. */
 function buildApp() {
@@ -41,7 +44,10 @@ describe('GET /api/config/status', () => {
   const savedEnv: Record<string, string | undefined> = {};
 
   beforeEach(() => {
-    _resetAppConfigCache();
+    // These tests assert on real config-source resolution (config.json vs
+    // .env), so opt out of the in-memory test source testSetupDb.ts pins
+    // for the rest of the suite.
+    _clearConfigSourceForTesting();
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-configstatus-'));
     vi.mocked(getDataDir).mockReturnValue(tmpDir);
     // See config.appConfig.test.ts's ".env fallback merge" block: resolve()'s
@@ -144,5 +150,30 @@ describe('GET /api/config/status', () => {
       present: false,
       length: 0,
     });
+  });
+
+  it('does not see a config.json written into a different scratch data dir', async () => {
+    const otherDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'oc-configstatus-other-'),
+    );
+    try {
+      const otherSrc = new DataDirConfigSource(otherDir);
+      otherSrc.write({ github: { token: 'ghp-leaked-elsewhere' } });
+      expect(fs.existsSync(path.join(otherDir, 'config.json'))).toBe(true);
+
+      // getDataDir/XDG_DATA_HOME for this test point at `tmpDir`, not
+      // `otherDir` — the write above must be invisible here.
+      const app = buildApp();
+      const res = await request(app)
+        .get('/api/config/status')
+        .set('Authorization', `Bearer ${VALID_TOKEN}`);
+      expect(res.status).toBe(200);
+      expect(res.body.fields['github.token']).toMatchObject({
+        source: 'default',
+        present: false,
+      });
+    } finally {
+      fs.rmSync(otherDir, { recursive: true, force: true });
+    }
   });
 });
