@@ -118,9 +118,13 @@ export function buildWrapPlaybook(input: WrapPlaybookInput): DeployPlaybook {
     baseBranch,
   } = input;
   const tag = `v${releaseVersion}`;
+  // Not validated here: an unknown closingMilestoneId surfaces instead as
+  // the mark-wrapped step's own MilestoneNotFoundError once the run
+  // actually executes (see markMilestoneWrapped) — that step runs first and
+  // halts the run before the integrate-milestone-branch step is ever
+  // reached, so this stays a harmless placeholder in that case.
   const closingMilestone = ProjectService.getMilestone(closingMilestoneId);
-  if (!closingMilestone) throw new MilestoneNotFoundError(closingMilestoneId);
-  const milestoneBranch = `milestone/${slugify(closingMilestone.name)}`;
+  const milestoneBranch = `milestone/${slugify(closingMilestone?.name ?? closingMilestoneId)}`;
 
   const steps: StepDescriptor[] = [
     {

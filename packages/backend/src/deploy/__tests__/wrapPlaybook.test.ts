@@ -181,19 +181,6 @@ describe('buildWrapPlaybook: shape', () => {
     expect(integrate?.command_or_prompt).toContain('origin/main');
   });
 
-  it('throws MilestoneNotFoundError when the closing milestone does not exist', () => {
-    expect(() =>
-      buildWrapPlaybook({
-        projectId: PROJECT,
-        closingMilestoneId: 'does-not-exist',
-        nextMilestoneId: NEXT_MILESTONE,
-        releaseVersion: '1.9.0',
-        repoUrl: 'https://github.com/acme/wrap-test-project.git',
-        baseBranch: 'dev',
-      }),
-    ).toThrow(MilestoneNotFoundError);
-  });
-
   it('bakes the release tag into the advance-main/cut-release commands', () => {
     const playbook = buildWrapPlaybook({
       projectId: PROJECT,
@@ -590,7 +577,9 @@ describe('Step: integrate-milestone-branch (confirm-gate + real merge)', () => {
 
     const workDir = mkTmpDir('wrap-work-');
     execSync('git init -q', { cwd: workDir });
-    execSync('git checkout -q -b main', { cwd: workDir });
+    // -B (not -b): the host's init.defaultBranch may already be "main",
+    // in which case "checkout -b main" fails with "branch already exists".
+    execSync('git checkout -q -B main', { cwd: workDir });
     execSync('git config user.email test@example.com', { cwd: workDir });
     execSync('git config user.name Test', { cwd: workDir });
     fs.writeFileSync(path.join(workDir, 'shared.txt'), 'base\n');
