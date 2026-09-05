@@ -1033,7 +1033,8 @@ function parseGateFailureDetail(reviewResult: string | null): {
   failedCommand: string | undefined;
   truncatedOutput: string | undefined;
 } {
-  if (!reviewResult) return { failedCommand: undefined, truncatedOutput: undefined };
+  if (!reviewResult)
+    return { failedCommand: undefined, truncatedOutput: undefined };
   try {
     const parsed = JSON.parse(reviewResult) as {
       failedCommand?: string;
