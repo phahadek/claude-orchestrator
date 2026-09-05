@@ -26,7 +26,12 @@ import {
   isRunFailureBaseAttributable,
   isProjectBaseHealthy,
 } from '../baseAttribution';
-import { insertTestRequestRun, insertTestRunResults } from '../../db/queries';
+import {
+  insertTestRequestRun,
+  insertTestRunResults,
+  insertSession,
+  updateSessionWorktreePath,
+} from '../../db/queries';
 
 const PROJECT = { id: 'proj-1', projectDir: '/proj' } as any;
 
@@ -34,6 +39,7 @@ beforeEach(() => {
   mockCheckBaseBranchHealth.mockReset();
   db.prepare('DELETE FROM test_run_results').run();
   db.prepare('DELETE FROM test_request_runs').run();
+  db.prepare('DELETE FROM sessions').run();
 });
 
 describe('isBaseTotalFail', () => {
@@ -49,6 +55,15 @@ describe('isBaseTotalFail', () => {
       expect(await isBaseTotalFail(PROJECT)).toBe(false);
     },
   );
+
+  it("forwards the caller's referenceCommit to checkBaseBranchHealth", async () => {
+    mockCheckBaseBranchHealth.mockResolvedValue({ outcome: 'total_fail' });
+    await isBaseTotalFail(PROJECT, 'pr-head-sha');
+    expect(mockCheckBaseBranchHealth).toHaveBeenCalledWith(
+      PROJECT,
+      'pr-head-sha',
+    );
+  });
 });
 
 describe('isProjectBaseHealthy', () => {
@@ -59,27 +74,68 @@ describe('isProjectBaseHealthy', () => {
     mockCheckBaseBranchHealth.mockResolvedValue({ outcome: 'total_fail' });
     expect(await isProjectBaseHealthy(PROJECT)).toBe(false);
   });
+
+  it("forwards the caller's referenceCommit to checkBaseBranchHealth", async () => {
+    mockCheckBaseBranchHealth.mockResolvedValue({ outcome: 'clean_pass' });
+    await isProjectBaseHealthy(PROJECT, 'pr-head-sha');
+    expect(mockCheckBaseBranchHealth).toHaveBeenCalledWith(
+      PROJECT,
+      'pr-head-sha',
+    );
+  });
 });
 
 describe('isRunFailureBaseAttributable', () => {
   it('is true on a total_fail base regardless of the run', async () => {
     mockCheckBaseBranchHealth.mockResolvedValue({ outcome: 'total_fail' });
-    expect(await isRunFailureBaseAttributable(PROJECT, { id: 'run-x' })).toBe(
-      true,
-    );
+    expect(
+      await isRunFailureBaseAttributable(PROJECT, {
+        id: 'run-x',
+        session_id: null,
+      }),
+    ).toBe(true);
   });
 
   it('is false on an unknown base outcome (defaults to charge normally)', async () => {
     mockCheckBaseBranchHealth.mockResolvedValue({ outcome: 'unknown' });
-    expect(await isRunFailureBaseAttributable(PROJECT, { id: 'run-x' })).toBe(
-      false,
-    );
+    expect(
+      await isRunFailureBaseAttributable(PROJECT, {
+        id: 'run-x',
+        session_id: null,
+      }),
+    ).toBe(false);
   });
 
   it('is false on a clean_pass base', async () => {
     mockCheckBaseBranchHealth.mockResolvedValue({ outcome: 'clean_pass' });
-    expect(await isRunFailureBaseAttributable(PROJECT, { id: 'run-x' })).toBe(
-      false,
+    expect(
+      await isRunFailureBaseAttributable(PROJECT, {
+        id: 'run-x',
+        session_id: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("resolves the run's own session worktree path and forwards it as the checkBaseBranchHealth reference", async () => {
+    insertSession({
+      session_id: 'session-with-worktree',
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: Date.now(),
+    } as any);
+    updateSessionWorktreePath('session-with-worktree', '/tmp/session-worktree');
+    mockCheckBaseBranchHealth.mockResolvedValue({ outcome: 'clean_pass' });
+
+    await isRunFailureBaseAttributable(PROJECT, {
+      id: 'run-x',
+      session_id: 'session-with-worktree',
+    });
+
+    expect(mockCheckBaseBranchHealth).toHaveBeenCalledWith(
+      PROJECT,
+      '/tmp/session-worktree',
     );
   });
 
@@ -108,9 +164,12 @@ describe('isRunFailureBaseAttributable', () => {
       run: { id: 'run-base' },
     });
 
-    expect(await isRunFailureBaseAttributable(PROJECT, { id: 'run-own' })).toBe(
-      true,
-    );
+    expect(
+      await isRunFailureBaseAttributable(PROJECT, {
+        id: 'run-own',
+        session_id: null,
+      }),
+    ).toBe(true);
   });
 
   it("is false on a partial_fail base that does not cover all of the run's own failing tests", async () => {
@@ -144,7 +203,10 @@ describe('isRunFailureBaseAttributable', () => {
     });
 
     expect(
-      await isRunFailureBaseAttributable(PROJECT, { id: 'run-own-2' }),
+      await isRunFailureBaseAttributable(PROJECT, {
+        id: 'run-own-2',
+        session_id: null,
+      }),
     ).toBe(false);
   });
 
@@ -156,7 +218,10 @@ describe('isRunFailureBaseAttributable', () => {
     });
 
     expect(
-      await isRunFailureBaseAttributable(PROJECT, { id: 'run-empty' }),
+      await isRunFailureBaseAttributable(PROJECT, {
+        id: 'run-empty',
+        session_id: null,
+      }),
     ).toBe(false);
   });
 });

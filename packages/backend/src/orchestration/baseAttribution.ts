@@ -33,12 +33,28 @@ import type { ProjectConfig } from '../config';
 import {
   getFailingTestIdsForRun,
   getBaseHealthProbeRunsSince,
+  getSession,
 } from '../db/queries';
 import type { TestRequestRunRow } from '../db/types';
 
-async function checkBaseBranchHealth(project: ProjectConfig) {
+async function checkBaseBranchHealth(
+  project: ProjectConfig,
+  reference?: string,
+) {
   const { checkBaseBranchHealth: check } = await import('./baseHealthCheck');
-  return check(project);
+  return check(project, reference);
+}
+
+/**
+ * The reference checkBaseBranchHealth resolves a session's merge-base
+ * against — the session's own worktree path, when one is still live for
+ * `sessionId`. Null/undefined when no session backs the run (or the
+ * session's row carries no worktree_path), which degenerates
+ * checkBaseBranchHealth to today's base-tip content-hash behavior.
+ */
+function sessionReferenceFor(sessionId: string | null): string | undefined {
+  if (!sessionId) return undefined;
+  return getSession(sessionId)?.worktree_path ?? undefined;
 }
 
 /**
@@ -46,11 +62,16 @@ async function checkBaseBranchHealth(project: ProjectConfig) {
  * run to compare against (e.g. a PR's gate_failed reconciler stall, or a
  * flake-recovery re-run outcome, both of which surface only a pass/fail verdict,
  * not a per-test breakdown) — attributable only on a `total_fail` base.
+ * `referenceCommit` — typically the caller's own PR's head_sha — keys
+ * attribution on that PR's merge-base against the base branch rather than
+ * the base branch's own tip; omitted callers keep today's base-tip
+ * behavior.
  */
 export async function isBaseTotalFail(
   project: ProjectConfig,
+  referenceCommit?: string,
 ): Promise<boolean> {
-  const health = await checkBaseBranchHealth(project);
+  const health = await checkBaseBranchHealth(project, referenceCommit);
   return health.outcome === 'total_fail';
 }
 
@@ -58,13 +79,18 @@ export async function isBaseTotalFail(
  * Fine-grained attributability check for call sites that do have a specific
  * failing test_request_runs row in hand — additionally credits a
  * `partial_fail` base whose failing tests are a superset of the run's own
- * failing tests.
+ * failing tests. Attribution is keyed on the run's own session's merge-base
+ * against the base branch (see sessionReferenceFor), falling back to the
+ * base tip when the run carries no session.
  */
 export async function isRunFailureBaseAttributable(
   project: ProjectConfig,
-  run: Pick<TestRequestRunRow, 'id'>,
+  run: Pick<TestRequestRunRow, 'id' | 'session_id'>,
 ): Promise<boolean> {
-  const health = await checkBaseBranchHealth(project);
+  const health = await checkBaseBranchHealth(
+    project,
+    sessionReferenceFor(run.session_id),
+  );
   if (health.outcome === 'total_fail') return true;
   if (health.outcome === 'partial_fail' && health.run) {
     const runFailing = getFailingTestIdsForRun(run.id);
@@ -77,11 +103,18 @@ export async function isRunFailureBaseAttributable(
   return false;
 }
 
-/** True only when the base branch's own tests come back clean — the signal budget-restore call sites gate on. */
+/**
+ * True only when the base branch's own tests come back clean — the signal
+ * budget-restore call sites gate on. `referenceCommit` — typically the
+ * caller's own PR's head_sha — keys attribution on that PR's merge-base
+ * against the base branch rather than the base branch's own tip; omitted
+ * callers keep today's base-tip behavior.
+ */
 export async function isProjectBaseHealthy(
   project: ProjectConfig,
+  referenceCommit?: string,
 ): Promise<boolean> {
-  const health = await checkBaseBranchHealth(project);
+  const health = await checkBaseBranchHealth(project, referenceCommit);
   return health.outcome === 'clean_pass';
 }
 

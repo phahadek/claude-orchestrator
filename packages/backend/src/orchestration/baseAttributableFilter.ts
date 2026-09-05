@@ -38,7 +38,11 @@
 import { logger } from '../logger';
 import type { ProjectConfig } from '../config';
 import type { TestRequestRunRow, StructuredTestResult } from '../db/types';
-import { getFailingTestIdsForRun, getFlaggedFlakyTestIds } from '../db/queries';
+import {
+  getFailingTestIdsForRun,
+  getFlaggedFlakyTestIds,
+  getSession,
+} from '../db/queries';
 import { checkBaseBranchHealth } from './baseHealthCheck';
 import { recordAndMaybeFileBaseHealthRemediation } from '../audit/baseHealthRemediationFiling';
 import { isTestIdTouchedByChangedFiles } from '../session/test-runner';
@@ -74,6 +78,18 @@ export interface BaseAttributableFilterResult {
    * itself execute a fresh probe run).
    */
   baseRun: TestRequestRunRow | null;
+}
+
+/**
+ * The reference checkBaseBranchHealth resolves a session/PR's merge-base
+ * against — the session's own worktree path, when one is still live for
+ * `sessionId`. Null/undefined when no session backs the run (or the
+ * session's row carries no worktree_path), which degenerates
+ * checkBaseBranchHealth to today's base-tip content-hash behavior.
+ */
+function sessionReferenceFor(sessionId: string | null): string | undefined {
+  if (!sessionId) return undefined;
+  return getSession(sessionId)?.worktree_path ?? undefined;
 }
 
 const UNFILTERED = (passed: boolean): BaseAttributableFilterResult => ({
@@ -134,7 +150,10 @@ export async function filterBaseAttributableFailures(
     return UNFILTERED(run.state === 'passed');
   }
 
-  const health = await checkBaseBranchHealth(project);
+  const health = await checkBaseBranchHealth(
+    project,
+    sessionReferenceFor(run.session_id),
+  );
 
   if (health.contentHash && health.run) {
     if (health.outcome === 'total_fail') {

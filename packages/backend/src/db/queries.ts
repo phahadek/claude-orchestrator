@@ -9408,43 +9408,6 @@ export function getLatestTestRequestRun(
 }
 
 /**
- * baseHealthCheck.ts's own cache read — narrower than getLatestTestRequestRun:
- * only a run baseHealthCheck.ts itself produced (run_origin =
- * 'base_health_probe', the identity it always passes to
- * runProjectTestRequest) counts as a cached base-branch-health confirmation.
- * session_id IS NULL is not sufficient — PreReviewPipeline.ts and
- * ReviewOrchestrator.ts also pass session_id: null while executing a
- * PR-branch worktree (they state run_origin: 'pr_pipeline' instead), so
- * filtering on session_id alone would let a PR-branch run's row get misread
- * as a base-health verdict — including a flaky retry's arbitrary
- * failing-test sample, which re-files a "Base branch is broken" remediation
- * task on every such retry (see baseHealthRemediationFiling.ts's
- * per-test-id dedup, which cannot catch this because each retry's
- * failing-test set is novel).
- *
- * run_kind = 'full' is defense-in-depth, not a behavior change: a base-health
- * probe has no session diff to scope against, so runProjectTestRequest always
- * stamps these rows 'full' already — see baseHealthCheck.ts's module doc.
- */
-export function getLatestBaseHealthTestRequestRun(
-  projectId: string,
-  contentHash: string,
-): TestRequestRunRow | undefined {
-  return db
-    .prepare<{ project_id: string; content_hash: string }>(
-      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
-       FROM test_request_runs
-       WHERE project_id = @project_id AND content_hash = @content_hash
-         AND state NOT IN ('running', 'queued') AND run_origin = 'base_health_probe'
-         AND run_kind = 'full'
-       ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
-    )
-    .get({ project_id: projectId, content_hash: contentHash }) as
-    | TestRequestRunRow
-    | undefined;
-}
-
-/**
  * The project's own established base-health suite size — the maximum
  * total_count reported across its recent base-health-probe runs (run_origin
  * = 'base_health_probe'), so a legitimately growing suite raises this

@@ -250,6 +250,10 @@ describe('PRMergeWatcher — flake_recovery_attempts base-attributable exemption
       REPO,
       true,
     );
+    // The PR's own head_sha is threaded through as isBaseTotalFail's
+    // reference commit — attribution keys on this PR's merge-base, not the
+    // base branch's own tip.
+    expect(isBaseTotalFail).toHaveBeenCalledWith(expect.anything(), HEAD_SHA);
   });
 
   it('charges flake_recovery_attempts normally when a re-run failure is not base-attributable live, but still arms the flag unconditionally on any failed re-run', async () => {
@@ -300,6 +304,12 @@ describe('PRMergeWatcher — flake_recovery_attempts base-attributable exemption
       expect.objectContaining({
         event_type: 'flake_recovery_base_recovery_reset',
       }),
+    );
+    // The PR's own head_sha is threaded through as isProjectBaseHealthy's
+    // reference commit.
+    expect(isProjectBaseHealthy).toHaveBeenCalledWith(
+      expect.anything(),
+      HEAD_SHA,
     );
     // Restored budget means this re-run proceeds instead of staying
     // exhausted — the re-run (still ci_failed per the mock) increments once
