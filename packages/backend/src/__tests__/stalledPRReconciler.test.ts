@@ -298,6 +298,67 @@ describe('StalledPRReconciler', () => {
       expect.objectContaining({ pr_number: 42, repo: 'org/repo' }),
       expect.any(String),
     );
+    const prompt = vi.mocked(sm.relaunchFixerForPR).mock.calls[0][1] as string;
+    expect(prompt).not.toContain('verify failed:');
+    expect(prompt).not.toContain('Failed command');
+  });
+
+  it('names the real failed command and includes the command output when persisted in review_result', async () => {
+    const pr = makePR({
+      review_result: JSON.stringify({
+        verdict: 'verify_failed',
+        summary: 'verify failed: npm run build',
+        failedCommand: 'npm run build',
+        truncatedOutput: 'TypeError: something exploded at line 42',
+      }),
+      head_sha: 'sha1',
+      last_reviewed_sha: 'sha1',
+      review_session_id: null,
+      pending_push: 0,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+
+    const { fn: broadcast } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const sm = makeSessionManager();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+    reconciler.setSessionManager(sm as any);
+
+    await reconciler.reconcileOnce();
+
+    const prompt = vi.mocked(sm.relaunchFixerForPR).mock.calls[0][1] as string;
+    expect(prompt).toContain('npm run build');
+    expect(prompt).not.toContain('verify failed: npm run build');
+    expect(prompt).toContain('Command output:');
+    expect(prompt).toContain('TypeError: something exploded at line 42');
+  });
+
+  it('omits the Failed command line entirely when no command is recoverable from review_result', async () => {
+    const pr = makePR({
+      review_result: JSON.stringify({
+        verdict: 'verify_failed',
+        summary: 'verify failed',
+      }),
+      head_sha: 'sha1',
+      last_reviewed_sha: 'sha1',
+      review_session_id: null,
+      pending_push: 0,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+
+    const { fn: broadcast } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const sm = makeSessionManager();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+    reconciler.setSessionManager(sm as any);
+
+    await reconciler.reconcileOnce();
+
+    const prompt = vi.mocked(sm.relaunchFixerForPR).mock.calls[0][1] as string;
+    expect(prompt).not.toContain('Failed command');
+    expect(prompt).not.toContain('verify failed');
   });
 
   it('re-runs the gate via enqueueReview instead of relaunching the fixer when remote HEAD has advanced past head_sha (gate_failed)', async () => {

@@ -875,6 +875,8 @@ export class PreReviewPipeline {
         verdict,
         summary: detail.summary,
         dimensions: [],
+        failedCommand: detail.failedCommand,
+        truncatedOutput: detail.truncatedOutput,
       }),
     );
 
@@ -888,7 +890,16 @@ export class PreReviewPipeline {
         ? 'autofix_tool_infra_failure'
         : stage.pauseReason;
     if (pauseReasonToSet) {
-      setPauseReason(job.prNumber, job.repo, pauseReasonToSet);
+      if (detail.truncatedOutput) {
+        setPauseReason(
+          job.prNumber,
+          job.repo,
+          pauseReasonToSet,
+          detail.truncatedOutput,
+        );
+      } else {
+        setPauseReason(job.prNumber, job.repo, pauseReasonToSet);
+      }
     }
 
     // A tool-infra failure is a host/environment issue the session cannot
