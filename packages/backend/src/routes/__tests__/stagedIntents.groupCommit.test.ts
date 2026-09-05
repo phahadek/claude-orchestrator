@@ -1116,6 +1116,37 @@ describe('group commit — whole-group precheck (all-or-nothing)', () => {
     expect(commit.body.committed).toEqual([staged.body.id]);
     expect(updateBody).toHaveBeenCalledTimes(1);
   });
+
+  it('does not 500 the whole commit when fetchTaskPage throws during the #### precheck scan — falls back to an empty body like the sibling readiness/grooming-gate checks', async () => {
+    const updateBody = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockRejectedValue(new Error('Notion API down')),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+      updateBody,
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const groupId = 'g-heading-fetch-fails';
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'task.updateBody',
+      projectId: 'proj-heading-fetch-fails',
+      groupId,
+      payload: { taskId: 't-heading-fetch-fails', sections: sections() },
+    });
+    expect(staged.status).toBe(201);
+    await agent.post(`/api/staged-intents/${staged.body.id}/approve`).send({});
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(commit.body.committed).toEqual([staged.body.id]);
+    expect(updateBody).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('task.setStatus -> Deferred automatically re-points a non-terminal dependent left unaddressed', () => {

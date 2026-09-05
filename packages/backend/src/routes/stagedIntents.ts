@@ -7929,8 +7929,17 @@ async function precheckGroupCommit(
       | PatchBodySectionPayload;
     if (seenBodyWritingTaskIds.has(taskId)) continue;
     seenBodyWritingTaskIds.add(taskId);
-    const backend = getTaskBackend(row.project_id);
-    const { body } = await computeProposedBody(backend, groupId, taskId);
+    // See runStageTimeReadyChecks's identical fallback: a transient fetch
+    // failure (unresolvable project, network/API error) must not crash this
+    // check outright — treat it as an empty body so this precheck only ever
+    // blocks on a heading it could actually confirm.
+    let body = '';
+    try {
+      const backend = getTaskBackend(row.project_id);
+      ({ body } = await computeProposedBody(backend, groupId, taskId));
+    } catch {
+      // handled by the empty-body fallback above
+    }
     if (/^####\s+/m.test(body)) {
       return {
         status: 409,
