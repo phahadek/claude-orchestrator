@@ -25,6 +25,9 @@ import {
 
 let seq = 0;
 
+/** Shared across the flip-rate history fixtures so they keep pooling into one tree, as they did before content-hash scoping — this suite isn't testing that scoping itself. */
+const HISTORY_SHARED_HASH = 'history-shared-hash';
+
 function insertTestRequestRun(state: 'passed' | 'failed' = 'passed'): string {
   seq += 1;
   const id = `run-${seq}`;
@@ -56,6 +59,9 @@ function insertHistorySample(opts: {
     0,
     false,
     opts.createdAt,
+    undefined,
+    undefined,
+    HISTORY_SHARED_HASH,
   );
 }
 

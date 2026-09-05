@@ -10020,6 +10020,8 @@ export const TEST_OUTCOME_DIGEST_CAPACITY = 200;
 interface DigestOutcomeSample {
   o: 'P' | 'F';
   t: number;
+  /** Tree identity (test_request_runs.content_hash) the sample was produced on — absent on legacy samples predating this field. */
+  h?: string;
 }
 
 function parseDigestOutcomes(json: string): DigestOutcomeSample[] {
@@ -10106,6 +10108,7 @@ export function recordTestPerfDigestSample(
   sequencedAt: number,
   markers?: string[],
   foreignConcurrentRunCount?: number | null,
+  contentHash?: string | null,
 ): void {
   if (
     concurrentRunCount !== 0 ||
@@ -10125,7 +10128,12 @@ export function recordTestPerfDigestSample(
     ? parseDigestOutcomes(existing.recent_outcomes)
     : [];
   if (outcome === 'passed' || outcome === 'failed') {
-    outcomes.push({ o: outcome === 'passed' ? 'P' : 'F', t: sequencedAt });
+    const sample: DigestOutcomeSample = {
+      o: outcome === 'passed' ? 'P' : 'F',
+      t: sequencedAt,
+    };
+    if (contentHash) sample.h = contentHash;
+    outcomes.push(sample);
     if (outcomes.length > TEST_OUTCOME_DIGEST_CAPACITY) {
       outcomes.splice(0, outcomes.length - TEST_OUTCOME_DIGEST_CAPACITY);
     }
@@ -10191,6 +10199,7 @@ export function ingestTestRunResultsTx(
   oomKilled: boolean,
   incomplete: boolean,
   foreignConcurrentRunCount?: number | null,
+  contentHash?: string | null,
 ): TestOutcomeCounts {
   const counts: TestOutcomeCounts = {
     passed: 0,
@@ -10241,6 +10250,7 @@ export function ingestTestRunResultsTx(
         baseSequence + index,
         t.markers,
         foreignConcurrentRunCount,
+        contentHash,
       );
     });
   });
@@ -10374,7 +10384,13 @@ let _stmtTestFlipRateDigest: Database.Statement | null = null;
  * Live pass<->fail flip-rate flag for one test id, recomputed from its last
  * `windowN` valid samples (concurrent_run_count = 0 and oom_killed = false —
  * a row failing either check never occupies a window slot, so it can't be a
- * pass, a fail, or a transition). Flagged once transitionCount >= thresholdK.
+ * pass, a fail, or a transition). A pass<->fail pair only counts as a
+ * transition when both samples carry the same content_hash (`h`) — a
+ * genuine regression a PR introduces fails on that PR's tree and passes on
+ * every other tree, which is an alternation across distinct hashes, not
+ * within one; only a same-tree flip is evidence of flakiness. Legacy
+ * samples with no `h` (or a hash mismatch across the pair) never count.
+ * Flagged once transitionCount >= thresholdK.
  * Nothing is persisted here — every call reflects the current window, so the
  * flag clears on its own the moment a fresh ingestion's recomputation drops
  * the transition count back below K; there is no sticky marker to reset.
@@ -10409,7 +10425,11 @@ export function computeTestFlipRateFlag(
 
   let transitionCount = 0;
   for (let i = 1; i < windowed.length; i++) {
-    if (windowed[i].o !== windowed[i - 1].o) transitionCount++;
+    const prev = windowed[i - 1];
+    const cur = windowed[i];
+    if (cur.o !== prev.o && prev.h && cur.h && prev.h === cur.h) {
+      transitionCount++;
+    }
   }
 
   return {

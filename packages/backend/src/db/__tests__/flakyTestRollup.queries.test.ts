@@ -67,15 +67,26 @@ let seq = 0;
  * (recordTestPerfDigestSample) so ordering in these fixtures stays exactly
  * what the test author wrote.
  */
+/**
+ * Shared across fixtures below (rather than a distinct hash per call) so
+ * these rollup-equivalence/perf fixtures keep pooling into one tree, as they
+ * did before computeTestFlipRateFlag started scoping transitions to a
+ * matching content hash — none of these fixtures are testing that scoping
+ * itself (see testFlipRateFlag.queries.test.ts for that).
+ */
+const SHARED_HASH = 'shared-hash';
+
 function insertTestResult(opts: {
   projectId: string;
   testId: string;
   name: string;
   outcome: 'passed' | 'failed';
   createdAt: number;
+  contentHash?: string;
 }): void {
   seq += 1;
   const runId = `run-${seq}`;
+  const contentHash = opts.contentHash ?? SHARED_HASH;
   db.prepare(
     `INSERT INTO test_request_runs
        (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at)
@@ -83,7 +94,7 @@ function insertTestResult(opts: {
   ).run({
     id: runId,
     project_id: opts.projectId,
-    content_hash: `hash-${seq}`,
+    content_hash: contentHash,
   });
   if (opts.outcome === 'failed') {
     db.prepare(
@@ -108,6 +119,9 @@ function insertTestResult(opts: {
     0,
     false,
     opts.createdAt,
+    undefined,
+    undefined,
+    contentHash,
   );
 }
 
@@ -280,6 +294,9 @@ describe('computeTestFlipRateFlag microsecond/millisecond unit normalization', (
       0,
       false,
       nowMs * 1000,
+      undefined,
+      undefined,
+      SHARED_HASH,
     );
     // The pre-cutover backfill stamped milliseconds.
     recordTestPerfDigestSample(
@@ -291,6 +308,9 @@ describe('computeTestFlipRateFlag microsecond/millisecond unit normalization', (
       0,
       false,
       nowMs - 60_000,
+      undefined,
+      undefined,
+      SHARED_HASH,
     );
 
     // A real caller-supplied cutoff — a PR's created_at — in epoch-milliseconds.
@@ -313,6 +333,9 @@ describe('computeTestFlipRateFlag microsecond/millisecond unit normalization', (
         0,
         false,
         nowMs * 1000 + i,
+        undefined,
+        undefined,
+        SHARED_HASH,
       ),
     );
 
@@ -339,6 +362,9 @@ describe('pruneGhostFlaggedFlakyTests microsecond/millisecond unit normalization
         0,
         false,
         staleMicros + i,
+        undefined,
+        undefined,
+        SHARED_HASH,
       ),
     );
     // Flag it once, using a computedAt in the same era as the samples so the
@@ -374,6 +400,9 @@ describe('pruneGhostFlaggedFlakyTests microsecond/millisecond unit normalization
         0,
         false,
         freshMicros + i,
+        undefined,
+        undefined,
+        SHARED_HASH,
       ),
     );
     replaceFlaggedFlakyTestsRollup('proj-1', 20, 2, nowMs);
