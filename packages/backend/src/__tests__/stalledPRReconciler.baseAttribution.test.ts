@@ -172,6 +172,10 @@ describe('StalledPRReconciler base-attributable-failures exemption', () => {
       'org/repo',
       true,
     );
+    // The PR's own head_sha is threaded through as isBaseTotalFail's
+    // reference commit — attribution keys on this PR's merge-base, not the
+    // base branch's own tip.
+    expect(isBaseTotalFail).toHaveBeenCalledWith(expect.anything(), 'sha1');
   });
 
   it('charges stalled_pr_retry_count normally for a gate_failed stall not base-attributable live', async () => {
@@ -284,6 +288,7 @@ describe('StalledPRReconciler base-attributable-failures exemption', () => {
     await reconciler.reconcileOnce();
 
     expect(hasBaseTotalFailSince).toHaveBeenCalledWith(PROJECT, 1000);
+    expect(isProjectBaseHealthy).toHaveBeenCalledWith(PROJECT, 'sha1');
     expect(resetStalledPRRetryCountForBaseRecovery).toHaveBeenCalledWith(
       1715,
       'org/repo',

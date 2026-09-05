@@ -23,15 +23,19 @@ vi.mock('../baseHealthCheck', () => ({
   checkBaseBranchHealth: mockCheckBaseBranchHealth,
 }));
 
-const { mockGetFailingTestIdsForRun, mockGetFlaggedFlakyTestIds } = vi.hoisted(
-  () => ({
-    mockGetFailingTestIdsForRun: vi.fn(),
-    mockGetFlaggedFlakyTestIds: vi.fn(() => new Set<string>()),
-  }),
-);
+const {
+  mockGetFailingTestIdsForRun,
+  mockGetFlaggedFlakyTestIds,
+  mockGetSession,
+} = vi.hoisted(() => ({
+  mockGetFailingTestIdsForRun: vi.fn(),
+  mockGetFlaggedFlakyTestIds: vi.fn(() => new Set<string>()),
+  mockGetSession: vi.fn(() => undefined),
+}));
 vi.mock('../../db/queries', () => ({
   getFailingTestIdsForRun: mockGetFailingTestIdsForRun,
   getFlaggedFlakyTestIds: mockGetFlaggedFlakyTestIds,
+  getSession: mockGetSession,
 }));
 
 const { mockRecordAndMaybeFileBaseHealthRemediation } = vi.hoisted(() => ({

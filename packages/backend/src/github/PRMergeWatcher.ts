@@ -1198,7 +1198,10 @@ export class PRMergeWatcher extends EventEmitter {
       // branch has since recovered. Never a blanket reset of every open
       // PR's counter.
       if (pr.flake_recovery_base_exhausted && project) {
-        const healthy = await isProjectBaseHealthy(project);
+        const healthy = await isProjectBaseHealthy(
+          project,
+          pr.head_sha ?? undefined,
+        );
         const corroborated =
           healthy &&
           (await hasBaseTotalFailSince(project, pr.pause_reason_set_at ?? 0));
@@ -1416,7 +1419,10 @@ export class PRMergeWatcher extends EventEmitter {
       setFlakeRecoveryBaseExhausted(pr.pr_number, pr.repo, true);
       const project = getProjectByGithubRepo(pr.repo);
       if (project) {
-        baseAttributable = await isBaseTotalFail(project);
+        baseAttributable = await isBaseTotalFail(
+          project,
+          pr.head_sha ?? undefined,
+        );
       }
     }
     if (!baseAttributable) {
@@ -1546,7 +1552,7 @@ export class PRMergeWatcher extends EventEmitter {
       // recovered — mirrors handleVerifiedFlakyDisposition's own restore.
       if (
         pr.flake_recovery_base_exhausted &&
-        (await isProjectBaseHealthy(project)) &&
+        (await isProjectBaseHealthy(project, pr.head_sha ?? undefined)) &&
         (await hasBaseTotalFailSince(project, pr.pause_reason_set_at ?? 0))
       ) {
         resetFlakeRecoveryAttempts(pr.pr_number, pr.repo);

@@ -1,61 +1,62 @@
 /**
- * On-demand base-branch health check: runs a project's own base branch
- * (zero task diff) through the same test.request lane every other test run
- * uses, cached in test_request_runs by the base tree's own content hash.
+ * On-demand base-branch health check: extrapolates a project's base-branch
+ * health from whatever test_request_runs row already exists for the exact
+ * content hash of the commit being attributed against — a session's own
+ * merge-base against the base branch when a `reference` is supplied, or the
+ * base branch's own tip otherwise.
  *
- * Triggered lazily — the first time a task's test-request failure would
- * otherwise be charged against a retry budget — never by a proactive
- * poller. Reuses ScheduledAuditSweep.ts's ensureAuditWorktree/
- * getAuditWorktreePath pattern (session-independent, base-HEAD, zero-diff
- * checkout) under its own worktree namespace so this check's checkout never
- * collides with the scheduled sweep's.
+ * Never launches a fresh probe run. A fast-moving base branch's merge
+ * cadence outruns any probe this check could launch and wait on, so the
+ * locked design keys attribution on the calling session's own merge-base
+ * commit (stable for that session's lifetime) and extrapolates from
+ * whatever test_request_runs row — from any producer, any origin — already
+ * exists for that exact content hash. No result for that content hash is
+ * `unknown`, never a trigger to go compute one.
+ *
+ * Reuses ScheduledAuditSweep.ts's ensureAuditWorktree pattern (session-
+ * independent, zero-diff checkout) under its own worktree namespace so this
+ * check's checkout never collides with the scheduled sweep's — solely to
+ * compute the whole-tree content hash of the commit being attributed
+ * against, never to run a test command.
  *
  * Four distinguishable outcomes — downstream dispatch-gating consumers
  * branch on all four, not just pass/fail:
- *  - clean_pass:   base tree's configured test commands passed outright.
- *  - partial_fail: base tree failed, but a per-test breakdown exists (some
- *                   tests failed, the rest didn't) — a normal
- *                   test_request_runs failure.
- *  - total_fail:   base tree failed with no per-test breakdown at all (a
- *                   genuine process crash before any report was written) —
- *                   this shape is what the dispatch-gating follow-on task
- *                   branches on. A run killed at the project's own
- *                   test-timeout budget, or OOM-killed, never reaches
- *                   total_fail even though it also has no per-test
+ *  - clean_pass:   the attributed commit's own extrapolated run passed outright.
+ *  - partial_fail: the attributed commit's extrapolated run failed, but a
+ *                   per-test breakdown exists (some tests failed, the rest
+ *                   didn't) — a normal test_request_runs failure.
+ *  - total_fail:   the extrapolated run failed with no per-test breakdown at
+ *                   all (a genuine process crash before any report was
+ *                   written) — this shape is what the dispatch-gating
+ *                   follow-on task branches on. A run killed at the
+ *                   project's own test-timeout budget, or OOM-killed, never
+ *                   reaches total_fail even though it also has no per-test
  *                   breakdown — those are the orchestrator's own
  *                   budget/resource limits, not evidence about the base
  *                   tree, so they classify as `unknown` instead (see
  *                   classifyRun).
  *  - unknown:      no result could be produced at all (worktree
- *                   provisioning failure, content-hash unavailable, no test
- *                   commands configured, the run itself errored before
- *                   leaving a durable row, or the run was killed at the
- *                   timeout budget/OOM-killed before any report was
- *                   written). Distinct from total_fail — no per-test
- *                   breakdown exists, but also no confirmed base verdict at
- *                   all, so a caller filtering a failed session run against
- *                   it (baseAttributableFilter.ts) must not treat this as
- *                   "base is healthy, the failure is yours": it surfaces
- *                   its own distinct filter outcome instead of collapsing
- *                   to unfiltered.
+ *                   provisioning failure, content-hash unavailable, no
+ *                   existing test_request_runs row for this content hash to
+ *                   extrapolate from). Distinct from total_fail — no
+ *                   per-test breakdown exists, but also no confirmed base
+ *                   verdict at all, so a caller filtering a failed session
+ *                   run against it (baseAttributableFilter.ts) must not
+ *                   treat this as "base is healthy, the failure is yours":
+ *                   it surfaces its own distinct filter outcome instead of
+ *                   collapsing to unfiltered.
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { logger } from '../logger';
 import type { ProjectConfig } from '../config';
-import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { computeWholeTreeContentHash } from '../session/analyzeGating';
+import { getAuditWorktreePath, type GitRunner } from './ScheduledAuditSweep';
 import {
-  getAuditWorktreePath,
-  ensureAuditWorktree,
-  type GitRunner,
-} from './ScheduledAuditSweep';
-import { runProjectTestRequest } from './testRequestLane';
-import { Semaphore } from '../tasks/deferralClassifier';
-import {
-  getLatestBaseHealthTestRequestRun,
-  getTestRequestRunById,
+  getLatestTestRequestRun,
   getTestRunSummary,
   getBaseHealthSuiteSizeBaseline,
 } from '../db/queries';
@@ -104,7 +105,7 @@ export interface BaseHealthCheckResult {
   projectId: string;
   /** Null only when `unknown` was reached before a content hash could be computed. */
   contentHash: string | null;
-  /** True when an existing test_request_runs row for this content hash was reused rather than a fresh run executed. */
+  /** True whenever an outcome other than `unknown` was reached — this check never produces a fresh run, so a non-unknown result always means an existing row was extrapolated from. */
   cacheHit: boolean;
   /** The underlying test_request_runs row this outcome was classified from — null only for `unknown`. */
   run: TestRequestRunRow | null;
@@ -326,58 +327,168 @@ export function classifyTestRunOutcome(
   return { outcome, nextAction: TEST_RUN_NEXT_ACTIONS[outcome] };
 }
 
-/**
- * Per-project serialization for the base-health worktree — this check is
- * triggered lazily by any task's test-request failure, so multiple tasks in
- * the same project can trigger it near-simultaneously. ensureAuditWorktree's
- * fs.exists → mkdir/worktree-add or reset --hard/clean -fd sequence has no
- * locking of its own; without this, two concurrent calls for the same
- * project could race on the same worktree path (concurrent `git worktree
- * add` vs `reset --hard`, or one process cleaning the tree while another's
- * test run reads it). A Semaphore(1) per project.id — mirroring
- * testRequestLane.ts's own per-project Semaphore idiom — queues the second
- * call behind the first instead; the second call typically resolves as a
- * cache hit off the row the first call just wrote.
- */
-const projectLocks = new Map<string, Semaphore>();
-
-function getProjectLock(projectId: string): Semaphore {
-  let lock = projectLocks.get(projectId);
-  if (!lock) {
-    lock = new Semaphore(1);
-    projectLocks.set(projectId, lock);
+async function fsExists(p: string): Promise<boolean> {
+  try {
+    await fs.promises.access(p);
+    return true;
+  } catch {
+    return false;
   }
-  return lock;
 }
 
 /**
- * Runs (or reuses a cached) test.request execution against the project's
- * own base branch tree, keyed by that tree's whole-tree content hash — the
- * same (project_id, content_hash) cache every other test.request lane call
- * shares. Never throws; every failure mode collapses into the `unknown`
- * outcome so callers can treat this as a plain lookup. Serialized per
- * project.id — see getProjectLock.
+ * Resolves and caches a (project, reference) pair's merge-base commit sha
+ * against the project's base branch — computed once per reference (a git
+ * commit sha, or a live session/PR worktree path) for the life of this
+ * process, since a session's merge-base against the base branch is stable
+ * for that session's whole lifetime absent an explicit rebase. Never
+ * throws — a resolution failure caches (and returns) null so a persistently
+ * broken reference doesn't re-attempt `git merge-base` on every call.
+ */
+const mergeBaseCache = new Map<string, Promise<string | null>>();
+
+async function resolveMergeBaseCommit(
+  project: ProjectConfig,
+  reference: string,
+  gitRunner: GitRunner,
+): Promise<string | null> {
+  const cacheKey = `${project.id}:${reference}`;
+  let cached = mergeBaseCache.get(cacheKey);
+  if (!cached) {
+    cached = computeMergeBaseCommit(project, reference, gitRunner);
+    mergeBaseCache.set(cacheKey, cached);
+  }
+  return cached;
+}
+
+async function computeMergeBaseCommit(
+  project: ProjectConfig,
+  reference: string,
+  gitRunner: GitRunner,
+): Promise<string | null> {
+  const baseBranch = project.baseBranch || 'dev';
+  try {
+    await gitRunner(['fetch', 'origin', baseBranch], project.projectDir);
+    const referenceIsWorktreePath = await fsExists(reference);
+    const cwd = referenceIsWorktreePath ? reference : project.projectDir;
+    const target = referenceIsWorktreePath ? 'HEAD' : reference;
+    const { stdout } = await gitRunner(
+      ['merge-base', `origin/${baseBranch}`, target],
+      cwd,
+    );
+    return stdout.trim() || null;
+  } catch (err) {
+    logger.warn(
+      `[baseHealthCheck] project ${project.id}: merge-base resolution failed for reference ${reference}: ${err instanceof Error ? err.message : err}`,
+    );
+    return null;
+  }
+}
+
+/**
+ * Checks out `checkoutTarget` (a git ref/sha) into the dedicated base-health
+ * worktree — mirrors ScheduledAuditSweep.ts's ensureAuditWorktree, but
+ * against an arbitrary commit rather than always the base branch's own tip,
+ * since a supplied `reference`'s merge-base commit is not necessarily the
+ * base branch's current HEAD.
+ */
+async function ensureWorktreeAtCommit(
+  project: ProjectConfig,
+  worktreePath: string,
+  checkoutTarget: string,
+  gitRunner: GitRunner,
+): Promise<void> {
+  const exists = await fsExists(worktreePath);
+  if (!exists) {
+    await fs.promises.mkdir(path.dirname(worktreePath), { recursive: true });
+    await gitRunner(
+      ['worktree', 'add', '--force', '--detach', worktreePath, checkoutTarget],
+      project.projectDir,
+    );
+    return;
+  }
+
+  try {
+    await gitRunner(['reset', '--hard', checkoutTarget], worktreePath);
+    await gitRunner(['clean', '-fd'], worktreePath);
+  } catch (err) {
+    // Worktree dir exists but is no longer a valid checkout (e.g. manually
+    // disturbed) — reclaim it and re-add fresh rather than getting stuck.
+    logger.warn(
+      `[baseHealthCheck] project ${project.id}: existing base-health worktree at ${worktreePath} failed to reset (${err instanceof Error ? err.message : err}) — recreating`,
+    );
+    await fs.promises.rm(worktreePath, { recursive: true, force: true });
+    try {
+      await gitRunner(['worktree', 'prune'], project.projectDir);
+    } catch {
+      // best-effort
+    }
+    await gitRunner(
+      ['worktree', 'add', '--force', '--detach', worktreePath, checkoutTarget],
+      project.projectDir,
+    );
+  }
+}
+
+/**
+ * Extrapolates the project's base-branch health from whatever
+ * test_request_runs row already exists for the exact content hash of the
+ * commit being attributed against — never runs a fresh test.request lane
+ * execution itself. Never throws; every failure mode collapses into the
+ * `unknown` outcome so callers can treat this as a plain lookup.
+ *
+ * When `reference` (a git commit sha, or an existing worktree path this can
+ * run `git merge-base` from) is supplied, attribution keys on that
+ * reference's own merge-base commit against the project's base branch —
+ * the session/PR whose test-request failure is being attributed against
+ * base health. When omitted, attribution keys on the base branch's own tip
+ * (today's pre-existing behavior) — the correct degenerate case for a
+ * pre-dispatch gate check with no session/branch/commit yet to key a
+ * merge-base against.
  */
 export async function checkBaseBranchHealth(
   project: ProjectConfig,
+  reference?: string,
   deps: BaseHealthCheckDeps = defaultDeps,
 ): Promise<BaseHealthCheckResult> {
-  const release = await getProjectLock(project.id).acquire();
-  try {
-    return await checkBaseBranchHealthLocked(project, deps);
-  } finally {
-    release();
-  }
-}
-
-async function checkBaseBranchHealthLocked(
-  project: ProjectConfig,
-  deps: BaseHealthCheckDeps,
-): Promise<BaseHealthCheckResult> {
   const worktreePath = getBaseHealthWorktreePath(project);
+  const baseBranch = project.baseBranch || 'dev';
+
+  let checkoutTarget: string;
+  if (reference) {
+    const mergeBase = await resolveMergeBaseCommit(
+      project,
+      reference,
+      deps.gitRunner,
+    );
+    if (!mergeBase) {
+      return unknownResult(
+        project.id,
+        null,
+        `merge-base resolution failed for reference ${reference}`,
+      );
+    }
+    checkoutTarget = mergeBase;
+  } else {
+    try {
+      await deps.gitRunner(['fetch', 'origin', baseBranch], project.projectDir);
+    } catch (err) {
+      return unknownResult(
+        project.id,
+        null,
+        `base branch fetch failed: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+    checkoutTarget = `origin/${baseBranch}`;
+  }
 
   try {
-    await ensureAuditWorktree(project, worktreePath, deps.gitRunner);
+    await ensureWorktreeAtCommit(
+      project,
+      worktreePath,
+      checkoutTarget,
+      deps.gitRunner,
+    );
   } catch (err) {
     return unknownResult(
       project.id,
@@ -400,59 +511,16 @@ async function checkBaseBranchHealthLocked(
     return unknownResult(
       project.id,
       null,
-      'base tree content hash unavailable (empty tree)',
+      'attributed commit content hash unavailable (empty tree)',
     );
   }
 
-  const cached = getLatestBaseHealthTestRequestRun(project.id, contentHash);
-  if (cached) {
-    return {
-      outcome: classifyRun(cached),
-      projectId: project.id,
-      contentHash,
-      cacheHit: true,
-      run: cached,
-      testCounts: getRunTestCounts(cached),
-    };
-  }
-
-  const config = loadOrchestratorConfig(worktreePath);
-  if (!config.test?.length) {
-    return unknownResult(
-      project.id,
-      contentHash,
-      'project has no test commands configured',
-    );
-  }
-
-  let runId: string;
-  try {
-    const result = await runProjectTestRequest({
-      projectId: project.id,
-      contentHash,
-      worktreePath,
-      commands: config.test,
-      timeoutSec: config.test_timeout_sec,
-      maxRssMb: config.test_max_rss_mb,
-      sessionId: null,
-      runOrigin: 'base_health_probe',
-      producer: 'base_health',
-    });
-    runId = result.runId;
-  } catch (err) {
-    return unknownResult(
-      project.id,
-      contentHash,
-      `test run execution error: ${err instanceof Error ? err.message : err}`,
-    );
-  }
-
-  const run = getTestRequestRunById(runId);
+  const run = getLatestTestRequestRun(project.id, contentHash);
   if (!run) {
     return unknownResult(
       project.id,
       contentHash,
-      `test run ${runId} produced no durable record`,
+      `no existing test_request_runs row for content hash ${contentHash} — extrapolation unavailable`,
     );
   }
 
@@ -460,7 +528,7 @@ async function checkBaseBranchHealthLocked(
     outcome: classifyRun(run),
     projectId: project.id,
     contentHash,
-    cacheHit: false,
+    cacheHit: true,
     run,
     testCounts: getRunTestCounts(run),
   };

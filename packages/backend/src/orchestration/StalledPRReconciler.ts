@@ -169,7 +169,7 @@ export class StalledPRReconciler {
           const project = getProjectByGithubRepo(pr.repo);
           if (
             project &&
-            (await isProjectBaseHealthy(project)) &&
+            (await isProjectBaseHealthy(project, pr.head_sha ?? undefined)) &&
             (await hasBaseTotalFailSince(
               project,
               pr.reconcile_exhausted_set_at ?? 0,
@@ -709,7 +709,7 @@ export class StalledPRReconciler {
     const project = getProjectByGithubRepo(repo);
     const baseAttributable =
       kind === 'gate_failed' && project
-        ? await isBaseTotalFail(project)
+        ? await isBaseTotalFail(project, pr.head_sha ?? undefined)
         : false;
     if (baseAttributable) {
       setStalledRetryBaseExhausted(prNumber, repo, true);
@@ -887,7 +887,9 @@ export class StalledPRReconciler {
 
     setPendingPush(prNumber, repo, 0);
 
-    const baseAttributable = project ? await isBaseTotalFail(project) : false;
+    const baseAttributable = project
+      ? await isBaseTotalFail(project, pr.head_sha ?? undefined)
+      : false;
     if (baseAttributable) {
       setStalledRetryBaseExhausted(prNumber, repo, true);
     }
