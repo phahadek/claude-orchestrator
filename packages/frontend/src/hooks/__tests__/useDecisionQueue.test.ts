@@ -2,7 +2,10 @@ import { renderHook, waitFor, act } from '@testing-library/react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { useDecisionQueue } from '../useDecisionQueue';
 import { stagedIntentsApi } from '../../api/stagedIntents';
-import { publishStagedIntentChange } from '../stagedIntentBus';
+import {
+  publishStagedIntentChange,
+  publishSessionCompletenessChange,
+} from '../stagedIntentBus';
 import type { StagedIntent } from '../../api/stagedIntents';
 
 describe('useDecisionQueue', () => {
@@ -494,6 +497,146 @@ describe('useDecisionQueue', () => {
         'already-visible',
       ]),
     );
+  });
+
+  it("milestone scope reveals every one of a session's intents on a live session_completeness signal, without a refetch — the fix for a session that dies mid-turn without ever emitting a result", async () => {
+    const intents: StagedIntent[] = [
+      {
+        id: 'member-1',
+        kind: 'task.updateBody',
+        payload: {},
+        projectId: 'proj-1',
+        createdAt: 0,
+        sessionId: 'session-killed',
+        milestone: 'M1',
+        state: 'staged',
+        sessionComplete: false,
+      },
+      {
+        id: 'member-2',
+        kind: 'task.updateBody',
+        payload: {},
+        projectId: 'proj-1',
+        createdAt: 1,
+        sessionId: 'session-killed',
+        milestone: 'M1',
+        state: 'staged',
+        sessionComplete: false,
+      },
+      {
+        id: 'unrelated',
+        kind: 'task.updateBody',
+        payload: {},
+        projectId: 'proj-1',
+        createdAt: 2,
+        sessionId: 'session-other',
+        milestone: 'M1',
+        state: 'staged',
+        sessionComplete: false,
+      },
+    ];
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
+
+    const { result } = renderHook(() =>
+      useDecisionQueue({
+        type: 'milestone',
+        projectId: 'proj-1',
+        milestone: 'M1',
+      }),
+    );
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    expect(result.current.intents).toEqual([]);
+
+    // The session that owned member-1/member-2 was killed mid-turn — it
+    // never emits a turn-ending result, so a session_completeness signal
+    // (broadcast on the terminal-status/archive transition, not on any one
+    // staged_intent row) is the only live correction. It must apply to
+    // every intent of that session at once, and must leave the unrelated
+    // session's still-incomplete intent suppressed.
+    act(() => {
+      publishSessionCompletenessChange({
+        sessionId: 'session-killed',
+        complete: true,
+      });
+    });
+
+    await waitFor(() =>
+      expect(result.current.intents.map((i) => i.id).sort()).toEqual([
+        'member-1',
+        'member-2',
+      ]),
+    );
+  });
+
+  it('milestone scope keeps an intent suppressed while a session_completeness signal for its session reports incomplete', async () => {
+    const intents: StagedIntent[] = [
+      {
+        id: 'mid-turn',
+        kind: 'task.updateBody',
+        payload: {},
+        projectId: 'proj-1',
+        createdAt: 0,
+        sessionId: 'session-live',
+        milestone: 'M1',
+        state: 'staged',
+        // Frozen snapshot said complete at serialisation time...
+        sessionComplete: true,
+      },
+    ];
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
+
+    const { result } = renderHook(() =>
+      useDecisionQueue({
+        type: 'milestone',
+        projectId: 'proj-1',
+        milestone: 'M1',
+      }),
+    );
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    expect(result.current.intents.map((i) => i.id)).toEqual(['mid-turn']);
+
+    // ...but the session woke back up and resumed its turn — the live
+    // signal must override the stale frozen snapshot and re-suppress it.
+    act(() => {
+      publishSessionCompletenessChange({
+        sessionId: 'session-live',
+        complete: false,
+      });
+    });
+
+    await waitFor(() => expect(result.current.intents).toEqual([]));
+  });
+
+  it('session scope is unaffected by session_completeness signals — it never filters on completeness', async () => {
+    const intents: StagedIntent[] = [
+      {
+        id: 'i-1',
+        kind: 'task.updateBody',
+        payload: {},
+        projectId: 'proj-1',
+        createdAt: 0,
+        sessionId: 'session-1',
+        state: 'staged',
+        sessionComplete: false,
+      },
+    ];
+    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue(intents);
+
+    const { result } = renderHook(() =>
+      useDecisionQueue({ type: 'session', sessionId: 'session-1' }),
+    );
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    expect(result.current.intents.map((i) => i.id)).toEqual(['i-1']);
+
+    act(() => {
+      publishSessionCompletenessChange({
+        sessionId: 'session-1',
+        complete: false,
+      });
+    });
+
+    // No visibility filter applies to session scope, so nothing changes.
+    expect(result.current.intents.map((i) => i.id)).toEqual(['i-1']);
   });
 
   it('a freshly-rendered group reject draft defaults to pushback when the group has no blocked members', async () => {

@@ -246,6 +246,24 @@ export type ServerMessage =
       prUrl?: string;
       taskId?: string;
     }
+  | {
+      /**
+       * Live session-level completeness signal for the milestone decision
+       * inbox (see resolveSessionCompleteForDisplay) — broadcast whenever a
+       * session's completeness can have changed: a turn-ending result, the
+       * session reaching a terminal status (done/error/killed), or the
+       * session being archived. A staged intent's `sessionComplete` field is
+       * a point-in-time snapshot taken at serialisation time; this message
+       * is the correction for every intent of this session, superseding
+       * that snapshot on the client without a refetch. Unlike
+       * `staged_intent_changed`, this is not gated on any single intent's
+       * visibility — a session's completeness is a fact about the session,
+       * not about one of its intents.
+       */
+      type: 'session_completeness';
+      sessionId: string;
+      complete: boolean;
+    }
   | { type: 'pr_created'; sessionId: string; prUrl: string; taskId?: string }
   | {
       type: 'session_updated';

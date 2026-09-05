@@ -7,7 +7,10 @@ import {
   stagedIntentsApi,
   UNATTRIBUTED_MILESTONE_BUCKET,
 } from '../api/stagedIntents';
-import { subscribeStagedIntentChange } from './stagedIntentBus';
+import {
+  subscribeStagedIntentChange,
+  subscribeSessionCompletenessChange,
+} from './stagedIntentBus';
 import { triageVerdict } from '../components/triageVerdict';
 import { defaultGroupRejectOutcome } from '../components/groupRejectOutcome';
 
@@ -156,6 +159,16 @@ export function useDecisionQueue(
   const [batchExceptions, setBatchExceptions] = useState<
     Record<string, string>
   >({});
+  // Live per-session completeness, keyed by sessionId — see the
+  // `session_completeness` WS message. Supersedes each intent's frozen
+  // `sessionComplete` snapshot (set at serialisation time) once a signal for
+  // that session arrives, so a session that goes terminal or is archived
+  // without ever emitting a turn-ending result still reveals its staged
+  // intents live, not just after a refetch. Only meaningful for milestone
+  // scope, which is the only scope that filters on completeness at all.
+  const [sessionCompleteOverrides, setSessionCompleteOverrides] = useState<
+    Record<string, boolean>
+  >({});
 
   useEffect(() => {
     let cancelled = false;
@@ -217,6 +230,17 @@ export function useDecisionQueue(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scopeKey]);
 
+  useEffect(() => {
+    if (scope.type !== 'milestone') return;
+    return subscribeSessionCompletenessChange(({ sessionId, complete }) => {
+      setSessionCompleteOverrides((prev) =>
+        prev[sessionId] === complete
+          ? prev
+          : { ...prev, [sessionId]: complete },
+      );
+    });
+  }, [scope.type]);
+
   const upsert = useCallback((intent: StagedIntent) => {
     setIntents((prev) => {
       const idx = prev.findIndex((i) => i.id === intent.id);
@@ -236,17 +260,23 @@ export function useDecisionQueue(
   // may still stage more intents — the milestone inbox (a ranked
   // act-on-this-now queue) suppresses those cards entirely until the owning
   // session goes complete. sessionComplete is fail-toward-incomplete (see
-  // isSessionComplete): `null` means "no owning session" and is always
-  // shown, `true` means the owning session has gone complete, and both
-  // `false` and missing/undefined suppress the card. The session-scoped
-  // DecisionPanel keeps them visible (read-only) instead, so it does not
-  // filter here.
+  // isSessionComplete): a null/absent owning session is always shown, and a
+  // live `session_completeness` signal for that session (sessionCompleteOverrides)
+  // takes precedence over the intent's frozen `sessionComplete` snapshot when
+  // one has arrived — the fix for a session that dies mid-turn without ever
+  // emitting a turn-ending result, whose owning session's completeness would
+  // otherwise never self-correct on this live surface. The session-scoped
+  // DecisionPanel keeps every intent visible (read-only) instead, so it does
+  // not filter here.
   const visibleIntents =
     scope.type === 'milestone'
-      ? intents.filter(
-          (intent) =>
-            intent.sessionComplete === true || intent.sessionComplete === null,
-        )
+      ? intents.filter((intent) => {
+          if (!intent.sessionId) return true;
+          const overridden = sessionCompleteOverrides[intent.sessionId];
+          return overridden !== undefined
+            ? overridden
+            : intent.sessionComplete === true;
+        })
       : intents;
 
   const { groups, ungrouped } = useMemo(() => {

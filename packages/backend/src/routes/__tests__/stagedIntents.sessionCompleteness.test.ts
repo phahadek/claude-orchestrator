@@ -36,7 +36,12 @@ import {
   isSessionComplete,
   transitionStagedIntent,
 } from '../../db/queries';
-import { createStagedIntentsRouter, stageIntent } from '../stagedIntents';
+import {
+  createStagedIntentsRouter,
+  stageIntent,
+  setStagedIntentBroadcast,
+} from '../stagedIntents';
+import type { ServerMessage } from '../../ws/types';
 
 function makeSessionManager(hasActiveTurn: boolean) {
   const sm = new EventEmitter();
@@ -100,6 +105,7 @@ beforeEach(() => {
     type: 'notion',
     setProperties: vi.fn().mockResolvedValue(undefined),
   });
+  setStagedIntentBroadcast(() => {});
   db.prepare('DELETE FROM staged_intent').run();
   db.prepare('DELETE FROM staged_intent_group').run();
   db.prepare('DELETE FROM sessions').run();
@@ -311,5 +317,130 @@ describe('commitGroupIntents — agrees with computeGroupBlockedSignals on group
       .post(`/api/staged-intents/group/${groupB}/commit`)
       .send({});
     expect(commit.status).toBe(200);
+  });
+});
+
+/**
+ * The termination gap this task closes: sessionComplete is denormalised onto
+ * every staged intent at serialisation time, and only one thing corrects a
+ * connected client's stale copy — the turn-boundary listener riding
+ * session_event/'result'. A session that's killed, crashes, or errors out
+ * mid-turn never emits a 'result', so without a dedicated session-level
+ * signal its already-staged intents stay suppressed on a live client
+ * indefinitely. These tests exercise the broadcast wiring
+ * createStagedIntentsRouter installs on the SessionManager 'message' stream.
+ */
+describe('session_completeness broadcast — the termination-gap fix', () => {
+  it.each(['done', 'error', 'killed'])(
+    'broadcasts complete:true when a session reaches a terminal (%s) status without ever emitting a result event',
+    async (status) => {
+      seedSession(SESSION_ID, 'running');
+      const sessionManager = makeSessionManager(false);
+      makeApp(sessionManager);
+      stageIntent(
+        'task.setProperties',
+        { taskId: 'task-a', patch: { priority: 'High' } },
+        PROJECT_ID,
+        null,
+        SESSION_ID,
+      );
+
+      const broadcast = vi.fn();
+      setStagedIntentBroadcast(broadcast);
+
+      // Mirrors production: SessionManager writes the terminal status to the
+      // row before emitting the status transition on its 'message' stream.
+      db.prepare('UPDATE sessions SET status = ? WHERE session_id = ?').run(
+        status,
+        SESSION_ID,
+      );
+      sessionManager.emit('message', {
+        type: 'session_status',
+        sessionId: SESSION_ID,
+        status,
+      } as ServerMessage);
+
+      expect(broadcast).toHaveBeenCalledWith({
+        type: 'session_completeness',
+        sessionId: SESSION_ID,
+        complete: true,
+      });
+    },
+  );
+
+  it('broadcasts complete:true on session_ended, independent of session_status', async () => {
+    seedSession(SESSION_ID, 'running');
+    const sessionManager = makeSessionManager(false);
+    makeApp(sessionManager);
+
+    db.prepare('UPDATE sessions SET status = ? WHERE session_id = ?').run(
+      'killed',
+      SESSION_ID,
+    );
+
+    const broadcast = vi.fn();
+    setStagedIntentBroadcast(broadcast);
+
+    sessionManager.emit('message', {
+      type: 'session_ended',
+      sessionId: SESSION_ID,
+      status: 'killed',
+    } as ServerMessage);
+
+    expect(broadcast).toHaveBeenCalledWith({
+      type: 'session_completeness',
+      sessionId: SESSION_ID,
+      complete: true,
+    });
+  });
+
+  it('broadcasts complete:true on a clean turn-ending result, exactly as today', async () => {
+    seedSession(SESSION_ID, 'running');
+    const sessionManager = makeSessionManager(false);
+    makeApp(sessionManager);
+    stageIntent(
+      'task.setProperties',
+      { taskId: 'task-a', patch: { priority: 'High' } },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+    );
+
+    const broadcast = vi.fn();
+    setStagedIntentBroadcast(broadcast);
+
+    sessionManager.emit('message', {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'result',
+      content: '',
+    } as ServerMessage);
+
+    expect(broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'session_completeness',
+        sessionId: SESSION_ID,
+        complete: true,
+      }),
+    );
+  });
+
+  it('does not broadcast session_completeness for a non-terminal status transition (e.g. still running)', () => {
+    seedSession(SESSION_ID, 'running');
+    const sessionManager = makeSessionManager(true);
+    makeApp(sessionManager);
+
+    const broadcast = vi.fn();
+    setStagedIntentBroadcast(broadcast);
+
+    sessionManager.emit('message', {
+      type: 'session_status',
+      sessionId: SESSION_ID,
+      status: 'running',
+    } as ServerMessage);
+
+    expect(broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'session_completeness' }),
+    );
   });
 });
