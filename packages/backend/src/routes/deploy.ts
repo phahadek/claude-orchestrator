@@ -779,6 +779,7 @@ export function createWrapRouter(): Router {
         nextMilestoneId,
         releaseVersion,
         repoUrl,
+        baseBranch: project.base_branch,
       };
       const orchestrator = createWrapOrchestrator(project, params);
 

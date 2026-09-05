@@ -2,13 +2,13 @@
  * The orchestrator-owned milestone-wrap playbook — a single, non-per-project
  * `DeployPlaybook` (see playbookSchema.ts) driven by the same
  * `DeployOrchestrator` engine a project's deploy playbook runs on, under the
- * `wrap` run kind. Mirrors the human-driven `/milestone-wrap` skill's five
- * actions (mark wrapped, carry pending gate items, repoint auto-launch,
- * advance dev->main, cut the release tag), each expressed as a
- * `StepDescriptor`; the two prod-mutating, hard-to-reverse actions
- * (repointing auto-launch and cutting the release) are preceded by their own
- * `confirm-gate` step, exactly as the skill pauses for explicit go-ahead
- * before them.
+ * `wrap` run kind. Mirrors the human-driven `/milestone-wrap` skill's actions
+ * (mark wrapped, carry pending gate items, integrate the milestone branch,
+ * repoint auto-launch, advance dev->main, cut the release tag), each
+ * expressed as a `StepDescriptor`; the three prod-mutating, hard-to-reverse
+ * actions (integrating the milestone branch, repointing auto-launch, and
+ * cutting the release) are preceded by their own `confirm-gate` step, exactly
+ * as the skill pauses for explicit go-ahead before them.
  */
 import type { DeployPlaybook, StepDescriptor } from './playbookSchema';
 import type { ShellResult, ShellRunner } from './DeployOrchestrator';
@@ -20,6 +20,7 @@ import { resolveMilestoneForProject } from '../projects/milestoneResolver';
 import { carryForwardGateItem } from '../gate/gateService';
 import { recordEvent } from '../audit/AuditLog';
 import { logger } from '../logger';
+import { slugify } from '../session/branchSlug';
 
 /**
  * The `advance-main`/`cut-release` steps' only shell-local variable — a
@@ -34,6 +35,8 @@ export const WRAP_STATIC_BINDINGS: Record<string, string> = { tmp: '' };
 
 export const WRAP_STEP_MARK_WRAPPED = 'mark-wrapped';
 export const WRAP_STEP_CARRY_GATE_ITEMS = 'carry-gate-items';
+export const WRAP_STEP_CONFIRM_INTEGRATE = 'confirm-integrate-milestone-branch';
+export const WRAP_STEP_INTEGRATE = 'integrate-milestone-branch';
 export const WRAP_STEP_CONFIRM_REPOINT = 'confirm-repoint-auto-launch';
 export const WRAP_STEP_REPOINT = 'repoint-auto-launch';
 export const WRAP_STEP_ADVANCE_MAIN = 'advance-main';
@@ -48,6 +51,8 @@ export interface WrapPlaybookInput {
   releaseVersion: string;
   /** Git remote to clone into a throwaway directory for the dev->main/tag steps — never the prod checkout. */
   repoUrl: string;
+  /** The project's base branch (e.g. "dev") — the merge target of the integrate-milestone-branch step. */
+  baseBranch: string;
 }
 
 function shellQuote(value: string): string {
@@ -110,8 +115,12 @@ export function buildWrapPlaybook(input: WrapPlaybookInput): DeployPlaybook {
     nextMilestoneId,
     releaseVersion,
     repoUrl,
+    baseBranch,
   } = input;
   const tag = `v${releaseVersion}`;
+  const closingMilestone = ProjectService.getMilestone(closingMilestoneId);
+  if (!closingMilestone) throw new MilestoneNotFoundError(closingMilestoneId);
+  const milestoneBranch = `milestone/${slugify(closingMilestone.name)}`;
 
   const steps: StepDescriptor[] = [
     {
@@ -132,6 +141,33 @@ export function buildWrapPlaybook(input: WrapPlaybookInput): DeployPlaybook {
         closingMilestoneId,
         nextMilestoneId,
       }),
+      is_prod_mutating: true,
+    },
+    {
+      id: WRAP_STEP_CONFIRM_INTEGRATE,
+      kind: 'confirm-gate',
+      command_or_prompt:
+        `Merge ${milestoneBranch} into ${projectId}'s base branch ` +
+        `(${baseBranch}) now that ${closingMilestoneId} is wrapped? ` +
+        'A merge conflict fails this run — resolve it manually and re-launch the wrap.',
+      is_prod_mutating: false,
+    },
+    {
+      id: WRAP_STEP_INTEGRATE,
+      kind: 'shell',
+      command_or_prompt: [
+        'set -e',
+        'tmp=$(mktemp -d)',
+        `git clone --quiet ${shellQuote(repoUrl)} "$tmp"`,
+        'cd "$tmp"',
+        `git fetch --quiet origin ${baseBranch} ${milestoneBranch}`,
+        `git checkout -B ${baseBranch} origin/${baseBranch}`,
+        `git merge --no-ff --quiet origin/${milestoneBranch} -m ${shellQuote(
+          `chore(wrap): merge ${milestoneBranch} into ${baseBranch} for milestone close (${tag})`,
+        )}`,
+        `git push --quiet origin ${baseBranch}`,
+        'rm -rf "$tmp"',
+      ].join(' && '),
       is_prod_mutating: true,
     },
     {
