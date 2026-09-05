@@ -1774,7 +1774,7 @@ describe('PreReviewPipeline.rerunFlakyAnalyze', () => {
       ['eslint .'],
       300,
       expect.any(Function),
-      { maxRssMb: 0, failFast: true },
+      { maxRssMb: 0, failFast: true, env: process.env },
     );
     expect(mockUpsertAnalyzeResult).toHaveBeenCalledWith(
       PR_NUMBER,
