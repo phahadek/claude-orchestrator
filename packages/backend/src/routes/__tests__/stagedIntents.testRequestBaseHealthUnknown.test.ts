@@ -158,8 +158,12 @@ beforeEach(() => {
   db.prepare('DELETE FROM sessions').run();
   db.prepare('DELETE FROM session_test_request_cycles').run();
   db.prepare('DELETE FROM session_feedback_inbox').run();
-  db.prepare('DELETE FROM test_request_runs').run();
+  // test_run_results.test_request_run_id has a (non-cascading) foreign key
+  // to test_request_runs(id) and setupTestDb runs with foreign_keys=ON —
+  // the child rows must be cleared before the parent rows, or this throws
+  // once a prior test has inserted into both (see seedBaseRun below).
   db.prepare('DELETE FROM test_run_results').run();
+  db.prepare('DELETE FROM test_request_runs').run();
   db.prepare('DELETE FROM audit_log').run();
 
   mockGetProjectById.mockReturnValue({
