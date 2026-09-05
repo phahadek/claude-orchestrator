@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -1303,5 +1303,182 @@ describe('NotionClient.fetchBoardTasks — reconciles against a recent status wr
     const tasks = await client.fetchReadyTasks(BOARD_ID_RECONCILE);
 
     expect(tasks[0].task.status).toBe('🔲 Backlog');
+  });
+});
+
+// ─── notionRequest — 429 retry with Retry-After backoff ─────────────────────
+
+function jsonRes(body: unknown) {
+  return {
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    json: async () => body,
+    text: async () => JSON.stringify(body),
+  };
+}
+
+function rateLimitRes(retryAfter: string | null) {
+  return {
+    ok: false,
+    status: 429,
+    headers: {
+      get: (name: string) => (name === 'Retry-After' ? retryAfter : null),
+    },
+    json: async () => ({}),
+    text: async () => 'rate limited',
+  };
+}
+
+function errorRes(status: number, text = 'error') {
+  return {
+    ok: false,
+    status,
+    headers: { get: () => null },
+    json: async () => ({}),
+    text: async () => text,
+  };
+}
+
+const SUMMARY_PAGE = {
+  id: 'abc',
+  url: 'https://notion.so/abc',
+  properties: {
+    'Task Name': { type: 'title', title: [{ text: { content: 'Test' } }] },
+    Status: { type: 'select', select: null },
+    Type: { type: 'select', select: null },
+    'Depends On': { type: 'rich_text', rich_text: [] },
+    Notes: { type: 'rich_text', rich_text: [] },
+  },
+};
+
+describe('notionRequest — 429 retry with Retry-After backoff', () => {
+  let client: NotionClient;
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    client = new NotionClient();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('retries a 429 carrying Retry-After after approximately that delay and returns the retried response', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(rateLimitRes('9'))
+      .mockResolvedValueOnce(jsonRes(SUMMARY_PAGE));
+
+    const promise = client.fetchTaskSummary('notion:abc');
+    // Flush the synchronous fetch + rejection handling so the retry's
+    // setTimeout is registered before we advance virtual time toward it.
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(9_000);
+    const result = await promise;
+
+    expect(result).not.toBeNull();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('falls back to bounded exponential backoff when Retry-After is absent', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(rateLimitRes(null))
+      .mockResolvedValueOnce(jsonRes(SUMMARY_PAGE));
+
+    const promise = client.fetchTaskSummary('notion:abc');
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await promise;
+
+    expect(result).not.toBeNull();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('falls back to bounded exponential backoff when Retry-After is unparseable', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(rateLimitRes('not-a-number'))
+      .mockResolvedValueOnce(jsonRes(SUMMARY_PAGE));
+
+    const promise = client.fetchTaskSummary('notion:abc');
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await promise;
+
+    expect(result).not.toBeNull();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('throws NotionApiError with status 429 after the retry budget is exhausted on continuous 429s', async () => {
+    fetchSpy.mockResolvedValue(rateLimitRes('1'));
+
+    const promise = client.fetchTaskSummary('notion:abc');
+    // Drain expectation errors synchronously-ish; catch to inspect after timers advance.
+    const assertion = expect(promise).rejects.toMatchObject({
+      name: 'NotionApiError',
+      statusCode: 429,
+    });
+    await vi.runAllTimersAsync();
+    await assertion;
+
+    // Bounded: a small, finite number of attempts, not an infinite loop.
+    expect(fetchSpy.mock.calls.length).toBeGreaterThan(1);
+    expect(fetchSpy.mock.calls.length).toBeLessThan(10);
+  });
+
+  it('caps the honoured delay so an absurd Retry-After does not stall the request that long', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(rateLimitRes('999999'))
+      .mockResolvedValueOnce(jsonRes(SUMMARY_PAGE));
+
+    const promise = client.fetchTaskSummary('notion:abc');
+    await vi.advanceTimersByTimeAsync(0);
+    // Advance well past any sane cap but far short of 999999s.
+    await vi.advanceTimersByTimeAsync(60_000);
+    const result = await promise;
+
+    expect(result).not.toBeNull();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry a 404 — fetchTaskSummary converts it to null with a single request', async () => {
+    fetchSpy.mockResolvedValueOnce(errorRes(404, 'not found'));
+
+    const result = await client.fetchTaskSummary('notion:abc');
+
+    expect(result).toBeNull();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry other non-2xx statuses (e.g. 400) and throws immediately', async () => {
+    fetchSpy.mockResolvedValueOnce(errorRes(400, 'bad request'));
+
+    await expect(client.fetchTaskSummary('notion:abc')).rejects.toMatchObject({
+      name: 'NotionApiError',
+      statusCode: 400,
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry a 500 and throws immediately', async () => {
+    fetchSpy.mockResolvedValueOnce(errorRes(500, 'server error'));
+
+    await expect(client.fetchTaskSummary('notion:abc')).rejects.toMatchObject({
+      name: 'NotionApiError',
+      statusCode: 500,
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('issues exactly one request on a successful first response (no added latency on the happy path)', async () => {
+    fetchSpy.mockResolvedValueOnce(jsonRes(SUMMARY_PAGE));
+
+    const result = await client.fetchTaskSummary('notion:abc');
+
+    expect(result).not.toBeNull();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });

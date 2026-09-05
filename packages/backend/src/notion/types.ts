@@ -19,6 +19,8 @@ export class NotionApiError extends Error {
   constructor(
     public readonly statusCode: number,
     message: string,
+    /** Parsed retry delay (ms) that was honoured before the retry budget was exhausted. */
+    public readonly retryAfterMs?: number,
   ) {
     super(message);
     this.name = 'NotionApiError';
