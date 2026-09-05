@@ -286,12 +286,13 @@ export function broadcastIntentById(id: string): void {
  * surface visibility — completeness is a fact about the session, not about
  * any one intent — and it fires regardless of whether the session currently
  * owns any staged intents at all, since the client's live map is keyed on
- * sessionId independent of which intents have arrived. Exported so
- * termination paths outside this router (e.g. the session archive route,
- * which has no staged_intent row to key a rebroadcast off) can trigger it
- * directly.
+ * sessionId independent of which intents have arrived. The session archive
+ * route (routes/sessions.ts) needs the same signal but has no staged_intent
+ * row to key a rebroadcast off; it computes and broadcasts it independently
+ * via resolveSessionCompleteForDisplay rather than importing this, since it
+ * has its own `_broadcast` wiring already.
  */
-export function broadcastSessionCompleteness(
+function broadcastSessionCompleteness(
   sessionId: string,
   sessionManager: SessionManager | undefined,
 ): void {
