@@ -422,6 +422,12 @@ describe('triggerTestRequestExecution — f2 gate masking guards on the session 
 
     await triggerTestRequestExecution(intent, undefined);
 
+    expect(mockFilterBaseAttributableFailuresForF2Gate).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      changedFiles,
+      expect.anything(),
+    );
     expect(getTestRequestRunById(runId)?.state).toBe('failed');
   });
 
@@ -467,6 +473,12 @@ describe('triggerTestRequestExecution — f2 gate masking guards on the session 
 
     await triggerTestRequestExecution(intent, undefined);
 
+    expect(mockFilterBaseAttributableFailuresForF2Gate).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      changedFiles,
+      expect.anything(),
+    );
     expect(getTestRequestRunById(runId)?.state).toBe('passed');
   });
 
