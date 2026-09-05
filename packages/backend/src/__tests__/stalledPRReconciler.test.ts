@@ -336,7 +336,10 @@ describe('StalledPRReconciler', () => {
 
   it('omits the Failed command line entirely when no command is recoverable from review_result', async () => {
     const pr = makePR({
-      review_result: JSON.stringify({ verdict: 'verify_failed', summary: 'verify failed' }),
+      review_result: JSON.stringify({
+        verdict: 'verify_failed',
+        summary: 'verify failed',
+      }),
       head_sha: 'sha1',
       last_reviewed_sha: 'sha1',
       review_session_id: null,
@@ -356,7 +359,6 @@ describe('StalledPRReconciler', () => {
     const prompt = vi.mocked(sm.relaunchFixerForPR).mock.calls[0][1] as string;
     expect(prompt).not.toContain('Failed command');
     expect(prompt).not.toContain('verify failed');
-    );
   });
 
   it('re-runs the gate via enqueueReview instead of relaunching the fixer when remote HEAD has advanced past head_sha (gate_failed)', async () => {
