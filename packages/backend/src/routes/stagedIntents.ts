@@ -279,6 +279,31 @@ export function broadcastIntentById(id: string): void {
 }
 
 /**
+ * Broadcasts the session-level completeness signal (see
+ * resolveSessionCompleteForDisplay) that supersedes every one of this
+ * session's staged intents' frozen `sessionComplete` snapshot on the
+ * client. Unlike broadcastIntentChange, this is never gated on decision-
+ * surface visibility — completeness is a fact about the session, not about
+ * any one intent — and it fires regardless of whether the session currently
+ * owns any staged intents at all, since the client's live map is keyed on
+ * sessionId independent of which intents have arrived. Exported so
+ * termination paths outside this router (e.g. the session archive route,
+ * which has no staged_intent row to key a rebroadcast off) can trigger it
+ * directly.
+ */
+export function broadcastSessionCompleteness(
+  sessionId: string,
+  sessionManager: SessionManager | undefined,
+): void {
+  const complete = resolveSessionCompleteForDisplay(sessionId, sessionManager);
+  stagedIntentBroadcastFn?.({
+    type: 'session_completeness',
+    sessionId,
+    complete,
+  });
+}
+
+/**
  * The Ready-path member set: the staged-intent kinds that only ever belong to
  * a single Ready-flip grooming decision — gate.accrete, seed.stage,
  * task.setDependsOn, and task.setStatus when its target status is Ready —
@@ -8672,6 +8697,24 @@ export function createStagedIntentsRouter(
       (['staged', 'approved'] as StagedIntentState[]).includes(row.state),
     );
     for (const row of active) broadcastIntentById(row.id);
+    broadcastSessionCompleteness(msg.sessionId, sessionManager);
+  });
+
+  // The clean turn-ending result above is not the only event that can flip
+  // isSessionComplete: a session that's killed, crashes, or errors out mid-
+  // turn never emits a 'result', but it also can never resume that turn —
+  // so its completeness must still be corrected live rather than staying
+  // suppressed until an unrelated remount refetches it. Neither
+  // session_status (done/error/killed) nor session_ended carries a
+  // staged_intent row change of its own, so there's nothing for the
+  // per-intent broadcastIntentById above to key off; the dedicated
+  // session-level signal is the only way this reaches connected clients.
+  sessionManager?.on?.('message', (msg: ServerMessage) => {
+    const isTerminalStatus =
+      msg.type === 'session_status' &&
+      (['done', 'error', 'killed'] as string[]).includes(msg.status);
+    if (!isTerminalStatus && msg.type !== 'session_ended') return;
+    broadcastSessionCompleteness(msg.sessionId, sessionManager);
   });
 
   // The same turn-boundary signal is the retry point for a gate.verify

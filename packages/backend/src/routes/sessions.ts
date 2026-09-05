@@ -33,6 +33,7 @@ import type { SessionManager } from '../session/SessionManager';
 import { deriveCapabilityProvenance } from '../audit/capabilityProvenance';
 import type { Session } from '../db/types';
 import { asyncHandler } from './asyncHandler';
+import { resolveSessionCompleteForDisplay } from '../convergence/attentionSignals';
 
 /** Attaches lastActivityAgeMs — ms since the session's last session_events row, null when unknown (none recorded, or pruned). */
 function withActivityAge<T extends Session>(
@@ -202,6 +203,21 @@ sessionsRouter.patch('/:id/archive', (req: Request, res: Response) => {
   } else {
     archiveSession(sessionId, 'operator');
   }
+  // archiveAndEndSession's endSession() call only broadcasts a
+  // session_status/session_ended transition when a live in-memory session
+  // still exists to escalate against — an already-terminal, evicted session
+  // (the common case: archiving a long-done/killed row) produces no WS
+  // traffic at all otherwise, leaving the milestone inbox's cached
+  // sessionComplete snapshots stuck suppressed even though isSessionComplete
+  // now resolves true from the archived flag alone.
+  _broadcast({
+    type: 'session_completeness',
+    sessionId,
+    complete: resolveSessionCompleteForDisplay(
+      sessionId,
+      _sessionManager ?? undefined,
+    ),
+  });
   res.json({ ok: true });
 });
 
