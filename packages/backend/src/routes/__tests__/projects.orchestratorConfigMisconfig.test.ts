@@ -49,9 +49,7 @@ describe('GET /api/projects/:id/orchestrator-config — misconfigurations', () =
   let projectDir: string;
 
   beforeEach(() => {
-    projectDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), 'orch-config-route-'),
-    );
+    projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-config-route-'));
     fs.writeFileSync(
       path.join(projectDir, '.claude-orchestrator.yml'),
       'analyze:\n  - some-uncovered-linter check\n',

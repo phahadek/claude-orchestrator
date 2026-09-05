@@ -1209,7 +1209,11 @@ describe('loadOrchestratorConfig: verify/autofix/analyze vs allowed_tools reconc
 
     const findings = validateGateCommandsAgainstAllowedTools(config!);
     expect(findings).toEqual([
-      { field: 'verify', command: 'golangci-lint run', binary: 'golangci-lint' },
+      {
+        field: 'verify',
+        command: 'golangci-lint run',
+        binary: 'golangci-lint',
+      },
     ]);
     expect(formatGateCommandAllowedToolsError(findings[0])).toMatch(
       /golangci-lint run.*golangci-lint|golangci-lint.*golangci-lint run/s,
@@ -1284,7 +1288,11 @@ describe('loadOrchestratorConfig: verify/autofix/analyze vs allowed_tools reconc
 
     const config = loadOrchestratorConfig(tmpDir);
     expect(validateGateCommandsAgainstAllowedTools(config)).toEqual([
-      { field: 'analyze', command: 'golangci-lint run', binary: 'golangci-lint' },
+      {
+        field: 'analyze',
+        command: 'golangci-lint run',
+        binary: 'golangci-lint',
+      },
     ]);
   });
 
