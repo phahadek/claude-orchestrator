@@ -4,11 +4,21 @@ import {
   clearReportFiles,
   collectStructuredTestResult,
 } from '../session/test-runner';
+import type { ToolVersionCheck } from '../session/orchestrator-config';
+import {
+  buildScopedEnv,
+  checkToolchainVersions,
+  formatToolchainMismatch,
+} from './gateEnv';
 
 export interface VerifyResult {
   passed: boolean;
   failedCommand?: string;
   truncatedOutput?: string;
+  /** True when the failure is a host toolchain-version mismatch against a declared expected_tool_versions entry, not a code defect. */
+  isToolInfraFailure?: boolean;
+  /** Names the mismatched version_command and versions, for operator triage. */
+  toolFailureReason?: string;
   /**
    * The failing command's own report, parsed against `testReportGlob` when
    * one is configured — null when no glob is configured, the glob matched
@@ -39,10 +49,11 @@ export function tailOfLog(
 function runCommand(
   cmd: string,
   cwd: string,
+  env: NodeJS.ProcessEnv,
 ): Promise<{ exitCode: number; output: string }> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = [];
-    const proc = spawn(cmd, { shell: true, cwd });
+    const proc = spawn(cmd, { shell: true, cwd, env });
     proc.stdout.on('data', (d: Buffer) => chunks.push(d));
     proc.stderr.on('data', (d: Buffer) => chunks.push(d));
     proc.on('close', (code) => {
@@ -57,12 +68,36 @@ function runCommand(
   });
 }
 
+export interface RunVerifyAsGateOptions {
+  /** Env var name -> path (relative to worktreePath) scoping a tool's cache to this worktree. See OrchestratorConfig.cache_env. */
+  cacheEnv?: Record<string, string>;
+  /** Toolchain versions this gate expects. See OrchestratorConfig.expected_tool_versions. */
+  expectedToolVersions?: ToolVersionCheck[];
+}
+
 export async function runVerifyAsGate(
   worktreePath: string,
   commands: string[],
   testReportGlob?: string,
+  options: RunVerifyAsGateOptions = {},
 ): Promise<VerifyResult> {
   if (commands.length === 0) return { passed: true };
+
+  const mismatch = await checkToolchainVersions(
+    worktreePath,
+    options.expectedToolVersions,
+  );
+  if (mismatch) {
+    const reason = formatToolchainMismatch(mismatch);
+    return {
+      passed: false,
+      isToolInfraFailure: true,
+      toolFailureReason: reason,
+      truncatedOutput: reason,
+    };
+  }
+
+  const env = buildScopedEnv(worktreePath, options.cacheEnv);
 
   const startedAt = testReportGlob ? Date.now() : undefined;
   if (testReportGlob) {
@@ -70,7 +105,7 @@ export async function runVerifyAsGate(
   }
 
   for (const cmd of commands) {
-    const { exitCode, output } = await runCommand(cmd, worktreePath);
+    const { exitCode, output } = await runCommand(cmd, worktreePath, env);
     if (exitCode !== 0) {
       const truncated = tailOfLog(output);
       let structuredResult: StructuredTestResult | null = null;

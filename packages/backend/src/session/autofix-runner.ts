@@ -5,6 +5,12 @@ import yaml from 'js-yaml';
 import { isHardBanned } from '../github/PRFileValidator';
 import { recordEvent } from '../audit/AuditLog';
 import { logger } from '../logger';
+import type { ToolVersionCheck } from './orchestrator-config';
+import {
+  buildScopedEnv,
+  checkToolchainVersions,
+  formatToolchainMismatch,
+} from '../orchestration/gateEnv';
 
 interface OrchestratorYml {
   autofix?: string[];
@@ -189,6 +195,13 @@ export function expandAutofixCommand(
   return cmd.replace(/\{\{changed_files\}\}/g, quoted);
 }
 
+export interface AutofixGateEnvOptions {
+  /** Env var name -> path (relative to worktreePath) scoping a tool's cache to this worktree. See OrchestratorConfig.cache_env. */
+  cacheEnv?: Record<string, string>;
+  /** Toolchain versions this gate expects. See OrchestratorConfig.expected_tool_versions. */
+  expectedToolVersions?: ToolVersionCheck[];
+}
+
 export async function runAutofix(
   worktreePath: string,
   _projectDir: string,
@@ -196,6 +209,7 @@ export async function runAutofix(
   log: (msg: string) => void,
   baseBranch = 'dev',
   skipCi = true,
+  gateEnvOptions: AutofixGateEnvOptions = {},
 ): Promise<AutofixResult> {
   if (commands.length === 0) {
     return { success: true, summary: 'no autofix commands configured' };
@@ -210,6 +224,23 @@ export async function runAutofix(
       summary: 'autofix skipped: worktree path no longer exists',
     };
   }
+
+  const mismatch = await checkToolchainVersions(
+    worktreePath,
+    gateEnvOptions.expectedToolVersions,
+  );
+  if (mismatch) {
+    const toolFailureReason = formatToolchainMismatch(mismatch);
+    log(`[autofix] ERROR: tool infra failure: ${toolFailureReason}\n`);
+    return {
+      success: false,
+      isToolInfraFailure: true,
+      toolFailureReason,
+      summary: toolFailureReason,
+    };
+  }
+
+  const scopedEnv = buildScopedEnv(worktreePath, gateEnvOptions.cacheEnv);
 
   // Resolve the PR's changed files upfront: used both to expand {{changed_files}}
   // placeholders and to scope what the autofix commit is allowed to stage, so a
@@ -229,7 +260,7 @@ export async function runAutofix(
     log(`[autofix] running: ${cmd}\n`);
     const { exitCode, output } = await spawnShell(
       cmd,
-      { cwd: worktreePath },
+      { cwd: worktreePath, env: scopedEnv },
       log,
     );
     if (exitCode !== 0) {
