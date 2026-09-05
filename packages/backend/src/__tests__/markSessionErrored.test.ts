@@ -942,14 +942,16 @@ describe('SessionManager.markSessionErrored() — blocked path side-effects', ()
 describe('SessionManager.classifySessionRunError() — pre-spawn vs in-session', () => {
   it('classifies a PreSpawnConfigError (config-load failure before process start) as launch_failed', () => {
     expect(
-      classifySessionRunError(new PreSpawnConfigError('bad orchestrator config')),
+      classifySessionRunError(
+        new PreSpawnConfigError('bad orchestrator config'),
+      ),
     ).toBe('launch_failed');
   });
 
   it('classifies a genuine in-session error as run_error', () => {
-    expect(classifySessionRunError(new Error('subprocess exited unexpectedly'))).toBe(
-      'run_error',
-    );
+    expect(
+      classifySessionRunError(new Error('subprocess exited unexpectedly')),
+    ).toBe('run_error');
   });
 
   it('classifies a non-Error rejection as run_error', () => {
@@ -969,14 +971,21 @@ describe('SessionManager.markSessionErrored() — pre-spawn config failure (laun
     const reason = classifySessionRunError(
       new PreSpawnConfigError('bad orchestrator config'),
     );
-    sm.markSessionErrored('test-session', 'error', reason, 'bad orchestrator config');
+    sm.markSessionErrored(
+      'test-session',
+      'error',
+      reason,
+      'bad orchestrator config',
+    );
     expect(queries.incrementTaskCrashCount).not.toHaveBeenCalled();
   });
 
   it('two consecutive pre-spawn config failures both leave the task at 🗂️ Ready, never 🚫 Blocked, and never write an auto_launch_paused audit event', async () => {
     const mockUpdate = setupFakeBackend();
     const sm = new SessionManager();
-    const reason = classifySessionRunError(new PreSpawnConfigError('bad config'));
+    const reason = classifySessionRunError(
+      new PreSpawnConfigError('bad config'),
+    );
 
     sm.markSessionErrored('test-session', 'error', reason, 'bad config');
     await new Promise((r) => setTimeout(r, 0));
@@ -1005,7 +1014,9 @@ describe('SessionManager.markSessionErrored() — pre-spawn config failure (laun
     const sm = new SessionManager();
     const msgs: ServerMessage[] = [];
     sm.on('message', (m: ServerMessage) => msgs.push(m));
-    const reason = classifySessionRunError(new PreSpawnConfigError('bad config'));
+    const reason = classifySessionRunError(
+      new PreSpawnConfigError('bad config'),
+    );
 
     sm.markSessionErrored('test-session', 'error', reason, 'bad config');
 
@@ -1024,7 +1035,12 @@ describe('SessionManager.markSessionErrored() — pre-spawn config failure (laun
     expect(reason).toBe('run_error');
 
     vi.mocked(queries.incrementTaskCrashCount).mockReturnValueOnce(1);
-    sm.markSessionErrored('test-session', 'error', reason, 'subprocess crashed');
+    sm.markSessionErrored(
+      'test-session',
+      'error',
+      reason,
+      'subprocess crashed',
+    );
     await new Promise((r) => setTimeout(r, 0));
     expect(mockUpdate).toHaveBeenNthCalledWith(
       1,
@@ -1034,7 +1050,12 @@ describe('SessionManager.markSessionErrored() — pre-spawn config failure (laun
     );
 
     vi.mocked(queries.incrementTaskCrashCount).mockReturnValueOnce(2);
-    sm.markSessionErrored('test-session', 'error', reason, 'subprocess crashed');
+    sm.markSessionErrored(
+      'test-session',
+      'error',
+      reason,
+      'subprocess crashed',
+    );
     await new Promise((r) => setTimeout(r, 0));
     expect(mockUpdate).toHaveBeenNthCalledWith(
       2,
