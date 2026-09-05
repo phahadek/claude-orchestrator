@@ -585,3 +585,38 @@ describe('CliSessionRunner test-command deny patterns', () => {
     expect(capturedSpawnArgs).toContain('Bash(tsc:*)');
   });
 });
+
+describe('CliSessionRunner spawn survives a stale worktree config', () => {
+  let worktreeDir: string;
+
+  beforeEach(() => {
+    // Simulates a worktree checked out before a gate command and its
+    // matching allowed_tools entry landed in the same commit: `analyze`
+    // names a binary that is covered by neither allowed_tools nor the base
+    // allowlist. loadOrchestratorConfig must not throw on this — only the
+    // project-level validation path should ever surface it.
+    worktreeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-stale-config-'));
+    fs.writeFileSync(
+      path.join(worktreeDir, '.claude-orchestrator.yml'),
+      'analyze:\n  - some-uncovered-linter check\n',
+    );
+  });
+
+  afterEach(() => {
+    fs.rmSync(worktreeDir, { recursive: true, force: true });
+  });
+
+  it('spawn is not aborted by config loading for a code session', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    const exitCode = await runner.run(
+      'hello',
+      undefined,
+      { ...defaultOptions, worktreePath: worktreeDir, sessionType: 'standard' },
+      () => {},
+    );
+
+    expect(runner.hasSpawnError).toBe(false);
+    expect(exitCode).toBe(0);
+    expect(capturedSpawnArgs).toContain('--session-id');
+  });
+});

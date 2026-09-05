@@ -4,6 +4,8 @@ import os from 'os';
 import path from 'path';
 import {
   loadOrchestratorConfig,
+  validateGateCommandsAgainstAllowedTools,
+  formatGateCommandAllowedToolsError,
   getSessionAllowedTools,
   getSessionAddDirs,
   getTestCommandDenyPatterns,
@@ -1190,7 +1192,7 @@ describe('loadOrchestratorConfig: verify/autofix/analyze vs allowed_tools reconc
     );
   }
 
-  it('throws naming the binary and command when a verify command is not covered by allowed_tools or the base allowlist', () => {
+  it('loads without throwing, and the validator names the binary and command, when a verify command is not covered by allowed_tools or the base allowlist', () => {
     writeConfig(
       [
         'verify:',
@@ -1200,7 +1202,16 @@ describe('loadOrchestratorConfig: verify/autofix/analyze vs allowed_tools reconc
       ].join('\n'),
     );
 
-    expect(() => loadOrchestratorConfig(tmpDir)).toThrowError(
+    let config: ReturnType<typeof loadOrchestratorConfig>;
+    expect(() => {
+      config = loadOrchestratorConfig(tmpDir);
+    }).not.toThrow();
+
+    const findings = validateGateCommandsAgainstAllowedTools(config!);
+    expect(findings).toEqual([
+      { field: 'verify', command: 'golangci-lint run', binary: 'golangci-lint' },
+    ]);
+    expect(formatGateCommandAllowedToolsError(findings[0])).toMatch(
       /golangci-lint run.*golangci-lint|golangci-lint.*golangci-lint run/s,
     );
   });
@@ -1218,6 +1229,7 @@ describe('loadOrchestratorConfig: verify/autofix/analyze vs allowed_tools reconc
 
     const config = loadOrchestratorConfig(tmpDir);
     expect(config.verify).toEqual(['golangci-lint run', 'go build ./...']);
+    expect(validateGateCommandsAgainstAllowedTools(config)).toEqual([]);
   });
 
   it('resolves a leading environment-variable assignment to the correct binary', () => {
@@ -1230,19 +1242,34 @@ describe('loadOrchestratorConfig: verify/autofix/analyze vs allowed_tools reconc
       ].join('\n'),
     );
 
-    expect(() => loadOrchestratorConfig(tmpDir)).not.toThrow();
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(validateGateCommandsAgainstAllowedTools(config)).toEqual([]);
   });
 
-  it('fails on an env-assignment-prefixed command when the resolved binary is still uncovered', () => {
+  it('flags an env-assignment-prefixed command when the resolved binary is still uncovered', () => {
     writeConfig(['verify:', '  - CI=1 golangci-lint run'].join('\n'));
 
-    expect(() => loadOrchestratorConfig(tmpDir)).toThrowError(/golangci-lint/);
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(validateGateCommandsAgainstAllowedTools(config)).toEqual([
+      {
+        field: 'verify',
+        command: 'CI=1 golangci-lint run',
+        binary: 'golangci-lint',
+      },
+    ]);
   });
 
   it('applies the same check to autofix', () => {
     writeConfig(['autofix:', '  - golangci-lint run --fix'].join('\n'));
 
-    expect(() => loadOrchestratorConfig(tmpDir)).toThrowError(/golangci-lint/);
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(validateGateCommandsAgainstAllowedTools(config)).toEqual([
+      {
+        field: 'autofix',
+        command: 'golangci-lint run --fix',
+        binary: 'golangci-lint',
+      },
+    ]);
   });
 
   it('applies the same check to analyze, including the object-entry shape', () => {
@@ -1255,7 +1282,10 @@ describe('loadOrchestratorConfig: verify/autofix/analyze vs allowed_tools reconc
       ].join('\n'),
     );
 
-    expect(() => loadOrchestratorConfig(tmpDir)).toThrowError(/golangci-lint/);
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(validateGateCommandsAgainstAllowedTools(config)).toEqual([
+      { field: 'analyze', command: 'golangci-lint run', binary: 'golangci-lint' },
+    ]);
   });
 
   it('passes when a binary is covered by the base allowlist alone, with no project allowed_tools', () => {
@@ -1263,6 +1293,7 @@ describe('loadOrchestratorConfig: verify/autofix/analyze vs allowed_tools reconc
 
     const config = loadOrchestratorConfig(tmpDir);
     expect(config.verify).toEqual(['git status']);
+    expect(validateGateCommandsAgainstAllowedTools(config)).toEqual([]);
   });
 
   it('loads cleanly when no verify/autofix/analyze commands are declared', () => {
@@ -1272,6 +1303,7 @@ describe('loadOrchestratorConfig: verify/autofix/analyze vs allowed_tools reconc
     expect(config.verify).toEqual([]);
     expect(config.autofix).toEqual([]);
     expect(config.analyze).toEqual([]);
+    expect(validateGateCommandsAgainstAllowedTools(config)).toEqual([]);
   });
 });
 
