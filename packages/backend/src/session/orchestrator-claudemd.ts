@@ -1,3 +1,20 @@
+/**
+ * Mirrors PRBodyValidator.ts's own DEFAULT_PR_BODY_SECTIONS literal rather
+ * than importing it as a value — this is a function-default-parameter value
+ * (see `prBodySections` below), and importing it here would silently break
+ * for any test that `vi.mock`s PRBodyValidator with a partial factory:
+ * vitest's module mocking replaces the resolved module for every importer in
+ * the graph, not just the mocking test file's own import statement, so the
+ * missing export would resolve to `undefined` and `[...undefined]` would
+ * throw. Keep these two literals in sync by hand; drift only affects this
+ * template's own default, not PRBodyValidator's validation behavior.
+ */
+const DEFAULT_PR_BODY_SECTIONS_FALLBACK = [
+  '## Summary',
+  '## Notion Task',
+  '## Automated Tests',
+];
+
 export interface OrchestratorClaudeMdParams {
   taskName: string;
   taskUrl: string;
@@ -56,6 +73,18 @@ export interface OrchestratorClaudeMdParams {
    * Omitted when no Jira host is configured.
    */
   jiraBrowseBaseUrl?: string;
+  /**
+   * Required PR body section headers, in order — rendered as the "Required
+   * body sections" code block in PR Format Standards. Sourced from the
+   * project's `.claude-orchestrator.yml` `pr_body.sections` (see
+   * OrchestratorConfig.pr_body in orchestrator-config.ts); PRBodyValidator,
+   * AgentSession's re-prompt, and SessionAuditor read the same config so all
+   * four sites stay in lockstep. '## Notion Task' is a placeholder,
+   * substituted at render time with the backend-specific header (e.g. '##
+   * GitHub Issue') via prBodyTaskSectionHeader. Defaults to
+   * DEFAULT_PR_BODY_SECTIONS — '## Files Changed' is opt-in, not default.
+   */
+  prBodySections?: string[];
 }
 
 type TaskBackend = 'notion' | 'local' | 'jira' | 'github';
@@ -131,6 +160,61 @@ function prBodyTaskSectionContent(
   return '<link to the task page>';
 }
 
+/** Body-line hints for the section headers PR bodies commonly declare. Any header not listed here (a project's own custom section) renders with a generic placeholder hint. */
+const KNOWN_SECTION_HINTS: Record<string, string> = {
+  '## Summary': '<1-3 sentences: what changed and why>',
+  '## Automated Tests': '<list tests added/modified, or "No test changes">',
+  '## Files Changed':
+    '<bulleted list of files with brief description of each change>',
+};
+
+/**
+ * Render the "Required body sections" code block from a project's
+ * configured PR body section list. '## Notion Task' is a placeholder
+ * substituted with the backend-specific header + hint; every other known
+ * header uses its fixed hint; unrecognized (project-custom) headers get a
+ * generic placeholder hint.
+ */
+function renderPrBodySectionsBlock(
+  sections: string[],
+  taskBackend: TaskBackend,
+  jiraBrowseBaseUrl: string | undefined,
+): string {
+  const lines = sections.map((section) => {
+    if (section === '## Notion Task') {
+      return `${prBodyTaskSectionHeader(taskBackend)}\n${prBodyTaskSectionContent(taskBackend, jiraBrowseBaseUrl)}`;
+    }
+    const hint = KNOWN_SECTION_HINTS[section] ?? '<content for this section>';
+    return `${section}\n${hint}`;
+  });
+  return lines.join('\n\n');
+}
+
+/**
+ * Rough per-configuration size budget for the rendered CLAUDE.md, used by
+ * the size-ceiling test suite instead of three hardcoded literals. The
+ * template's non-PR-body content is fixed; only the "Required body
+ * sections" block grows with the configured section count, so the budget is
+ * a fixed base plus a per-section allowance generous enough to cover any
+ * known or custom section's header + hint line.
+ */
+const SIZE_BUDGET_BASE_CHARS = 9600;
+const SIZE_BUDGET_PER_SECTION_CHARS = 100;
+const SIZE_BUDGET_BASE_WORDS = 1600;
+const SIZE_BUDGET_PER_SECTION_WORDS = 10;
+
+export function computeSizeBudget(sections: readonly string[]): {
+  maxChars: number;
+  maxWords: number;
+} {
+  return {
+    maxChars:
+      SIZE_BUDGET_BASE_CHARS + sections.length * SIZE_BUDGET_PER_SECTION_CHARS,
+    maxWords:
+      SIZE_BUDGET_BASE_WORDS + sections.length * SIZE_BUDGET_PER_SECTION_WORDS,
+  };
+}
+
 /**
  * Build the orchestrator CLAUDE.md header content to inject into each session worktree.
  *
@@ -179,6 +263,7 @@ export function buildOrchestratorClaudeMd(
     projectContextContent,
     gitMode = 'github',
     jiraBrowseBaseUrl,
+    prBodySections = [...DEFAULT_PR_BODY_SECTIONS_FALLBACK],
   } = params;
 
   const resolvedBashRules = bashRules ?? [
@@ -301,7 +386,7 @@ Running in \`--print\` mode — optimize for speed and token efficiency:
 - **Do NOT use Agent subagents for exploration.** Use Glob and Grep directly.
 - **Minimize tool calls.** Batch reads; don't re-read files you just wrote or edited.
 - **Prefer Edit over Write** for existing files; never re-emit unchanged file bodies.
-- **Commit messages/PR descriptions:** one sentence summaries.
+- **Commit messages:** one sentence summaries. **PR body \`## Summary\` section:** 1-3 sentences — see PR Format Standards below for the full required section list.
 - **Never cat \`tasks/*.output\` files** — use the TaskOutput tool instead.
 
 ---
@@ -325,17 +410,7 @@ ${
 - **Required body sections**:
 
 \`\`\`
-## Summary
-<1-3 sentences: what changed and why>
-
-${prBodyTaskSectionHeader(taskBackend)}
-${prBodyTaskSectionContent(taskBackend, jiraBrowseBaseUrl)}
-
-## Automated Tests
-<list tests added/modified, or "No test changes — <substantive reason>" — a bare "No test changes" is rejected>
-
-## Files Changed
-<bulleted list of files with brief description of each change>
+${renderPrBodySectionsBlock(prBodySections, taskBackend, jiraBrowseBaseUrl)}
 \`\`\`
 
 ---

@@ -17,6 +17,8 @@ export interface BuildSessionContextParams {
   taskContent?: string;
   /** Git mode: 'local-only' omits PR instructions; 'github' (default) keeps full PR flow. */
   gitMode?: 'github' | 'local-only';
+  /** Required PR body section headers from the project's `pr_body.sections` config. Omitted = orchestrator-claudemd.ts's default. */
+  prBodySections?: string[];
 }
 
 /**
@@ -72,6 +74,7 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
     taskBackend,
     taskContent,
     gitMode,
+    prBodySections,
   } = params;
 
   // For GitHub-backed projects, read PROJECT.md from the project root if present.
@@ -105,5 +108,6 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
     taskContent,
     projectContextContent,
     gitMode,
+    prBodySections,
   });
 }

@@ -217,7 +217,42 @@ export interface OrchestratorConfig {
    * naming a script that may not exist in this project's checkout.
    */
   ad_hoc_read_command: string;
+  /**
+   * Configures the PR body template's section set and per-section length
+   * ceiling, consumed by PRBodyValidator (the pause-on-missing-section
+   * gate), orchestrator-claudemd.ts (the template sessions are told to
+   * emit), AgentSession's re-prompt, and SessionAuditor's post-session
+   * check — the single source of truth all four read from instead of each
+   * restating the section list as its own literal. Omitted = today's
+   * default section set (DEFAULT_PR_BODY_SECTIONS) with no length ceilings.
+   */
+  pr_body: PrBodyConfig;
 }
+
+interface PrBodyConfig {
+  /** Required PR body section headers, in order. Default: DEFAULT_PR_BODY_SECTIONS (no `## Files Changed` — opt in by listing it here). */
+  sections: string[];
+  /** Per-section character ceiling, keyed by section header. A section exceeding its ceiling fails validation. Default: no ceilings. */
+  max_section_chars: Record<string, number>;
+}
+
+/**
+ * Mirrors PRBodyValidator.ts's own DEFAULT_PR_BODY_SECTIONS literal rather
+ * than importing it. This is a top-level constant evaluated at module load,
+ * so importing a value from PRBodyValidator.ts here would silently break
+ * for every one of the many pre-existing test files that `vi.mock` that
+ * module with a partial factory (only `validatePRBody`/`buildValidationComment`)
+ * — vitest's module mocking replaces the resolved module for every importer
+ * in the graph, not just the test file's own import statement, so the
+ * missing export would resolve to `undefined` and `[...undefined]` would
+ * throw at import time, crashing the whole test file. Keep these two
+ * literals in sync by hand; drift only affects this config schema's
+ * fallback default, not PRBodyValidator's own validation behavior.
+ */
+const DEFAULT_PR_BODY_CONFIG: PrBodyConfig = {
+  sections: ['## Summary', '## Notion Task', '## Automated Tests'],
+  max_section_chars: {},
+};
 
 const DEFAULTS: OrchestratorConfig = {
   autofix: [],
@@ -248,7 +283,36 @@ const DEFAULTS: OrchestratorConfig = {
   dependency_verify_command: '',
   capability_pre_grants: {},
   ad_hoc_read_command: '',
+  pr_body: DEFAULT_PR_BODY_CONFIG,
 };
+
+function parsePrBodyConfig(raw: unknown): PrBodyConfig {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return DEFAULT_PR_BODY_CONFIG;
+  }
+  const obj = raw as Record<string, unknown>;
+  const sections =
+    Array.isArray(obj.sections) &&
+    obj.sections.every((v) => typeof v === 'string') &&
+    obj.sections.length > 0
+      ? (obj.sections as string[])
+      : DEFAULT_PR_BODY_CONFIG.sections;
+  const max_section_chars: Record<string, number> = {};
+  if (
+    obj.max_section_chars !== null &&
+    typeof obj.max_section_chars === 'object' &&
+    !Array.isArray(obj.max_section_chars)
+  ) {
+    for (const [key, value] of Object.entries(
+      obj.max_section_chars as Record<string, unknown>,
+    )) {
+      if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+        max_section_chars[key] = value;
+      }
+    }
+  }
+  return { sections, max_section_chars };
+}
 
 function isPreGrantSessionKind(v: string): v is PreGrantSessionKind {
   return (PRE_GRANT_SESSION_KINDS as readonly string[]).includes(v);
@@ -557,6 +621,7 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
         !Array.isArray(parsed.mcp_servers)
           ? (parsed.mcp_servers as Record<string, unknown>)
           : undefined,
+      pr_body: parsePrBodyConfig(parsed.pr_body),
     };
   } catch (err) {
     logger.warn(

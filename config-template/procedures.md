@@ -238,11 +238,26 @@ call to make, never yours to initiate. **Do not even propose** doing any of the 
 ## Automated Tests
 
 <list tests added/modified, or "No test changes">
-
-## Files Changed
-
-<bulleted list of files with brief description of each change>
 ```
+
+`## Files Changed` is **not** part of the default template — it duplicates GitHub's own
+Files-changed tab. A project that wants it anyway (or wants a different section set or
+shorter body entirely) declares its own list in that project's `.claude-orchestrator.yml`:
+
+```yaml
+pr_body:
+  sections:
+    - "## Summary"
+    - "## Task"
+    - "## Automated Tests"
+    - "## Files Changed"       # opt-in, not default
+  max_section_chars:
+    "## Summary": 600          # optional per-section length ceiling
+```
+
+PRBodyValidator, the session's rendered CLAUDE.md, and the post-session audit all read
+this same config — there's no other place a project needs to restate its PR body shape.
+Omitting `pr_body` entirely keeps the default three-section template shown above.
 
 ---
 

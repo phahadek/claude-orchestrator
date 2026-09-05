@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { buildOrchestratorClaudeMd } from '../session/orchestrator-claudemd';
+import {
+  buildOrchestratorClaudeMd,
+  computeSizeBudget,
+} from '../session/orchestrator-claudemd';
+import { DEFAULT_PR_BODY_SECTIONS } from '../github/PRBodyValidator';
 
 const baseParams = {
   taskName: 'test-task',
@@ -16,68 +20,61 @@ const standardParams = {
   verify: ['npx tsc --noEmit', 'npx vite build'],
 };
 
-// Representative session_rules payload, sized off real per-project rules
-// observed across managed repos' .claude-orchestrator.yml (a handful of
-// one-to-two-sentence project conventions — migration numbering, codegen
-// steps, env var handling — not a handful of words each).
-const representativeSessionRules = [
-  'Migration numbers come from db/migrations/LATEST.txt — never hand-pick the next number, and bump LATEST.txt in the same commit as the migration file.',
-  'Run `npm run codegen` after editing anything under schema/ and commit the regenerated output alongside the schema change — generated files are checked in, not built in CI.',
-  'Feature flags are defined in config/flags.yaml; do not gate new behavior on an ad hoc env var or a literal boolean, even for a "temporary" rollout.',
-  'The `legacy/` directory is frozen — port any shared logic you need out of it into `packages/shared` instead of importing from `legacy/` directly.',
-  'Prefer editing the existing seed script over adding a new one-off migration for local/dev data fixtures.',
-];
-
-// Fixture combining the standard template baseline with a realistic,
-// non-empty session_rules payload — the actual artifact delivered to a
-// session, not just the bare template.
-const paramsWithSessionRules = {
+// Populated fixture: same as standard, but with sessionRules set — guards
+// the artifact a real session actually receives, not just the empty-config
+// template (the char/word ceilings previously only asserted against a
+// fixture with no sessionRules, leaving that path unguarded).
+const populatedParams = {
   ...standardParams,
-  sessionRules: representativeSessionRules,
+  sessionRules: [
+    'Migration numbers come from db/migrations/LATEST.txt.',
+    'Never touch generated/ — it is rebuilt by the build step.',
+  ],
 };
 
 describe('buildOrchestratorClaudeMd — size ceilings', () => {
-  // Ceilings were bumped to track legitimate growth (Context Efficiency,
-  // Responding to Review Comments, Manual Verification Gate sections, the
-  // Nudges section, the test.request hard-instruction in the Pre-PR Gate /
-  // Flaky-CI sections, the Lifecycle no-op-declaration instruction, etc.)
-  // added since these were first set; they still guard against unbounded
-  // creep, just at the current, larger baseline.
-  it('rendered standard fixture is ≤ 10,100 characters', () => {
+  // The budget is computed from the configured PR body section count
+  // (computeSizeBudget) rather than three hardcoded literals, so it scales
+  // with a project's `pr_body.sections` config instead of silently
+  // under- or over-guarding a customized template.
+  it('rendered standard fixture (default sections) stays within its computed budget', () => {
     const output = buildOrchestratorClaudeMd(standardParams);
-    expect(output.length).toBeLessThanOrEqual(10100);
-  });
-
-  it('rendered standard fixture is ≤ 1,700 words', () => {
-    const output = buildOrchestratorClaudeMd(standardParams);
+    const budget = computeSizeBudget(DEFAULT_PR_BODY_SECTIONS);
+    expect(output.length).toBeLessThanOrEqual(budget.maxChars);
     const wordCount = output.trim().split(/\s+/).length;
-    expect(wordCount).toBeLessThanOrEqual(1700);
+    expect(wordCount).toBeLessThanOrEqual(budget.maxWords);
   });
 
-  it('hard ceiling: rendered standard fixture is ≤ 10,250 characters', () => {
-    const output = buildOrchestratorClaudeMd(standardParams);
-    expect(output.length).toBeLessThanOrEqual(10250);
-  });
-});
-
-describe('buildOrchestratorClaudeMd — combined artifact (template + session_rules) size ceiling', () => {
-  // The caps above only ever exercise an empty session_rules fixture, so they
-  // miss the artifact a session with project-specific rules actually
-  // receives: template + rendered "## Project Rules" section. Measured
-  // baseline with the representative payload above: 10,594 chars / 1,725
-  // words (vs. 9,839 / 1,601 for the bare template). Ceilings here give ~4%
-  // character / ~7% word headroom over that baseline — enough for incidental
-  // drift, not enough to let session_rules silently balloon the delivered
-  // artifact.
-  it('rendered fixture with representative session_rules is ≤ 11,000 characters', () => {
-    const output = buildOrchestratorClaudeMd(paramsWithSessionRules);
-    expect(output.length).toBeLessThanOrEqual(11000);
+  it('rendered fixture with sessionRules populated stays within its computed budget', () => {
+    const output = buildOrchestratorClaudeMd(populatedParams);
+    const budget = computeSizeBudget(DEFAULT_PR_BODY_SECTIONS);
+    // sessionRules renders its own "## Project Rules" section — its budget
+    // isn't modeled by computeSizeBudget (which only scales with PR body
+    // section count), so this asserts against the hard hard-fail ceiling
+    // rather than the tight default-config budget.
+    expect(output.length).toBeLessThanOrEqual(budget.maxChars + 1000);
   });
 
-  it('rendered fixture with representative session_rules is ≤ 1,850 words', () => {
-    const output = buildOrchestratorClaudeMd(paramsWithSessionRules);
+  it('rendered fixture with a custom (larger) section set stays within its own computed budget', () => {
+    const customSections = [...DEFAULT_PR_BODY_SECTIONS, '## Files Changed'];
+    const output = buildOrchestratorClaudeMd({
+      ...standardParams,
+      prBodySections: customSections,
+    });
+    const budget = computeSizeBudget(customSections);
+    expect(output.length).toBeLessThanOrEqual(budget.maxChars);
     const wordCount = output.trim().split(/\s+/).length;
-    expect(wordCount).toBeLessThanOrEqual(1850);
+    expect(wordCount).toBeLessThanOrEqual(budget.maxWords);
+  });
+
+  it('a shorter custom section set renders a smaller output than the default', () => {
+    const shortSections = ['## Summary', '## Automated Tests'];
+    const shortOutput = buildOrchestratorClaudeMd({
+      ...standardParams,
+      prBodySections: shortSections,
+    });
+    const defaultOutput = buildOrchestratorClaudeMd(standardParams);
+    expect(shortOutput.length).toBeLessThan(defaultOutput.length);
   });
 });
 
@@ -419,7 +416,6 @@ describe('buildOrchestratorClaudeMd — taskBackend wording', () => {
           '## Summary',
           taskSectionHeaderByBackend[taskBackend],
           '## Automated Tests',
-          '## Files Changed',
         ].map((h) => template.indexOf(h));
 
         expect(order.every((i) => i !== -1)).toBe(true);

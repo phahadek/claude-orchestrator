@@ -137,6 +137,9 @@ vi.mock('../CliSessionRunner', () => ({
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { AgentSession } from '../AgentSession';
 import {
   upsertPullRequest,
@@ -609,6 +612,152 @@ describe('<pr-body> marker — validation failure path', () => {
     expect(upsertPullRequest).not.toHaveBeenCalled();
     expect(runner.sendMessage).toHaveBeenCalledWith(
       expect.stringContaining('## Summary'),
+    );
+  });
+
+  it('re-prompt names exactly the missing sections, with no fixed cardinality claim', async () => {
+    vi.mocked(validatePRBody).mockReturnValue({
+      valid: false,
+      missingSections: ['## Summary', '## Automated Tests'],
+      oversizedSections: [],
+    });
+
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    const runner = (
+      session as unknown as {
+        runner: { sendMessage: ReturnType<typeof vi.fn> };
+      }
+    ).runner;
+
+    emitAssistantWithMarker(session, 'incomplete body', 'msg_bad_2');
+    await new Promise((r) => setImmediate(r));
+
+    const [message] = runner.sendMessage.mock.calls[0] as [string];
+    expect(message).toContain('## Summary');
+    expect(message).toContain('## Automated Tests');
+    expect(message).not.toContain('## Notion Task');
+    expect(message).not.toContain('## Files Changed');
+    // No restated fixed-cardinality claim ("all four/three sections") —
+    // the message is derived purely from missingSections.
+    expect(message).not.toMatch(/all (two|three|four|\d+) sections/i);
+  });
+
+  it('re-prompt scales to a three-missing-section config with no hardcoded count', async () => {
+    vi.mocked(validatePRBody).mockReturnValue({
+      valid: false,
+      missingSections: [
+        '## Summary',
+        '## Automated Tests',
+        '## Deployment Notes',
+      ],
+      oversizedSections: [],
+    });
+
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    const runner = (
+      session as unknown as {
+        runner: { sendMessage: ReturnType<typeof vi.fn> };
+      }
+    ).runner;
+
+    emitAssistantWithMarker(session, 'incomplete body', 'msg_bad_3');
+    await new Promise((r) => setImmediate(r));
+
+    const [message] = runner.sendMessage.mock.calls[0] as [string];
+    expect(message).toContain('## Summary');
+    expect(message).toContain('## Automated Tests');
+    expect(message).toContain('## Deployment Notes');
+    expect(message).not.toMatch(/all (two|three|four|\d+) sections/i);
+  });
+});
+
+describe('<pr-body> marker — pr_body config wiring end-to-end', () => {
+  let tmpProjectDir: string;
+
+  beforeEach(() => {
+    tmpProjectDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'agent-session-pr-body-config-'),
+    );
+    vi.mocked(validatePRBody).mockReturnValue({
+      valid: true,
+      missingSections: [],
+      oversizedSections: [],
+    });
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpProjectDir, { recursive: true, force: true });
+    vi.mocked(getProjectById).mockReturnValue(undefined);
+  });
+
+  it('reads a real .claude-orchestrator.yml pr_body block and passes its sections/max_section_chars to validatePRBody', async () => {
+    fs.writeFileSync(
+      path.join(tmpProjectDir, '.claude-orchestrator.yml'),
+      [
+        'pr_body:',
+        '  sections:',
+        "    - '## Summary'",
+        "    - '## Automated Tests'",
+        '  max_section_chars:',
+        "    '## Summary': 400",
+      ].join('\n'),
+    );
+    vi.mocked(getProjectById).mockReturnValue({
+      id: 'proj-custom-pr-body',
+      projectDir: tmpProjectDir,
+    } as ReturnType<typeof getProjectById>);
+
+    const ghClient = makeGithubClient();
+    const taskBackend = {
+      attachPR: vi.fn().mockResolvedValue(undefined),
+      getTask: vi.fn().mockResolvedValue(null),
+    };
+    const session = new AgentSession(
+      'test-session-id-pr-body-config',
+      'https://notion.so/task',
+      'https://notion.so/project',
+      taskBackend as never,
+      '/tmp/worktree',
+      'task-123',
+      undefined,
+      undefined,
+      'standard',
+      undefined,
+      ghClient as never,
+      [],
+      undefined,
+      undefined,
+      'proj-custom-pr-body',
+    );
+
+    emitAssistantWithMarker(session, VALID_BODY, 'msg_custom_config');
+    await new Promise((r) => setImmediate(r));
+
+    expect(vi.mocked(validatePRBody)).toHaveBeenCalledWith(
+      VALID_BODY.trim(),
+      expect.objectContaining({
+        sections: ['## Summary', '## Automated Tests'],
+        maxSectionChars: { '## Summary': 400 },
+      }),
+    );
+  });
+
+  it('falls back to validatePRBody defaults when the project has no projectDir', async () => {
+    vi.mocked(getProjectById).mockReturnValue({
+      id: 'proj-no-dir',
+    } as ReturnType<typeof getProjectById>);
+
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+
+    emitAssistantWithMarker(session, VALID_BODY, 'msg_no_project_dir');
+    await new Promise((r) => setImmediate(r));
+
+    expect(vi.mocked(validatePRBody)).toHaveBeenCalledWith(
+      VALID_BODY.trim(),
+      undefined,
     );
   });
 });

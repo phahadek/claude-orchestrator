@@ -13,6 +13,23 @@ import type { WorktreeEscapeViolation, SessionEvent } from '../db/types';
 import { eventKind } from './eventKind';
 import { isCodeSession } from './sessionPredicates';
 import { sessionDidWork } from './sessionLifecycle';
+import { validatePRBody } from '../github/PRBodyValidator';
+import { loadOrchestratorConfig } from './orchestrator-config';
+
+/**
+ * Mirrors PRBodyValidator.ts's own DEFAULT_PR_BODY_SECTIONS literal rather
+ * than importing it — many pre-existing test files `vi.mock` PRBodyValidator
+ * with a partial factory (only `validatePRBody`/`buildValidationComment`),
+ * and vitest's module mocking replaces the resolved module for every
+ * importer in the graph, not just the mocking test file's own import
+ * statement. Keep these two literals in sync by hand; drift only affects
+ * this audit's fallback section list, not PRBodyValidator's own behavior.
+ */
+const DEFAULT_PR_BODY_SECTIONS_FALLBACK = [
+  '## Summary',
+  '## Notion Task',
+  '## Automated Tests',
+];
 
 // ── Public interfaces ────────────────────────────────────────────────────────
 
@@ -154,6 +171,19 @@ export class SessionAuditor {
     return 'dev';
   }
 
+  /** This session's project's configured PR body sections (`.claude-orchestrator.yml`'s `pr_body.sections`). Falls back to DEFAULT_PR_BODY_SECTIONS when there's no project (legacy TaskBackend injection) or no config file. */
+  private resolvePrBodySections(): readonly string[] {
+    if (typeof this.notionClientOrProjectId === 'string') {
+      const { getProjectById } =
+        require('../config.js') as typeof import('../config');
+      const project = getProjectById(this.notionClientOrProjectId);
+      if (project?.projectDir) {
+        return loadOrchestratorConfig(project.projectDir).pr_body.sections;
+      }
+    }
+    return DEFAULT_PR_BODY_SECTIONS_FALLBACK;
+  }
+
   /**
    * Run all post-session checks and return a SessionAudit record.
    * Non-blocking: GitHub/Notion failures are caught and skipped, not thrown.
@@ -220,16 +250,14 @@ export class SessionAuditor {
             violations.push('PR body contains escaped newlines');
           }
 
-          // 5. PR body has required sections?
-          const body = pr.body ?? '';
-          if (!body.includes('## Summary')) {
-            violations.push('PR body missing required section: ## Summary');
-          }
-          if (
-            !body.includes('## Test plan') &&
-            !body.includes('## Automated Tests')
-          ) {
-            violations.push('PR body missing required section: ## Test plan');
+          // 5. PR body has required sections? Sourced from this project's
+          // `pr_body.sections` config, so a project that shortens or renames
+          // its section set is audited against its own template, not a
+          // literal restating '## Summary'/'## Test plan' here.
+          const sections = this.resolvePrBodySections();
+          const bodyValidation = validatePRBody(pr.body, { sections });
+          for (const missing of bodyValidation.missingSections) {
+            violations.push(`PR body missing required section: ${missing}`);
           }
 
           // 6. PR content matches task spec? (informational only — not a re-prompt gate)

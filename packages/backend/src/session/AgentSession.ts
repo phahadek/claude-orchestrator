@@ -59,6 +59,7 @@ import type { GitHubClient } from '../github/GitHubClient';
 import {
   validatePRBody,
   buildValidationComment,
+  type PrBodySectionsConfig,
 } from '../github/PRBodyValidator';
 import { runFilePollutionCheck as filePollutionCheckFn } from './filePollutionCheck';
 import { computeWholeTreeContentHash } from './analyzeGating';
@@ -626,6 +627,23 @@ export class AgentSession extends EventEmitter {
   /** Resolve the per-project task backend, preferring the test override when present. */
   private taskBackend(): TaskBackend {
     return this.taskBackendOverride ?? getTaskBackend(this.projectId);
+  }
+
+  /**
+   * Resolve this session's project's configured PR body sections/length
+   * ceilings (`.claude-orchestrator.yml`'s `pr_body` block — see
+   * OrchestratorConfig.pr_body), for passing to validatePRBody. Undefined
+   * project → validatePRBody's own default (DEFAULT_PR_BODY_SECTIONS, no
+   * ceilings).
+   */
+  private getPrBodyConfig(): PrBodySectionsConfig | undefined {
+    const project = getProjectById(this.projectId);
+    if (!project?.projectDir) return undefined;
+    const orchConfig = loadOrchestratorConfig(project.projectDir);
+    return {
+      sections: orchConfig.pr_body.sections,
+      maxSectionChars: orchConfig.pr_body.max_section_chars,
+    };
   }
 
   async run(): Promise<void> {
@@ -2107,21 +2125,35 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     }
 
     // Validate before creating — invalid body re-prompts; no PR opened.
-    const validation = validatePRBody(body);
+    const validation = validatePRBody(body, this.getPrBodyConfig());
     if (!validation.valid) {
+      const oversizedSections = validation.oversizedSections ?? [];
       sessionLog(
         this.sessionId,
-        `PR creation failed: validation — missing required sections: ${validation.missingSections.join(', ')}`,
+        `PR creation failed: validation — missing required sections: ${validation.missingSections.join(', ')}` +
+          (oversizedSections.length > 0
+            ? `; oversized sections: ${oversizedSections.join(', ')}`
+            : ''),
       );
-      const missing = validation.missingSections
-        .map((s) => `\`${s}\``)
-        .join(', ');
-      this.sendMessage(
-        `The PR body is missing required sections: ${missing}.\n\n` +
-          `Please fix the body and re-emit it inside a <pr-body>…</pr-body> marker ` +
-          `in your next message. All four sections must be present: ` +
-          `\`## Summary\`, task-source section, \`## Automated Tests\`, \`## Files Changed\`.`,
+      const messageParts: string[] = [];
+      if (validation.missingSections.length > 0) {
+        const missing = validation.missingSections
+          .map((s) => `\`${s}\``)
+          .join(', ');
+        messageParts.push(
+          `The PR body is missing required sections: ${missing}.`,
+        );
+      }
+      if (oversizedSections.length > 0) {
+        const oversized = oversizedSections.map((s) => `\`${s}\``).join(', ');
+        messageParts.push(
+          `The following sections exceed their configured length limit: ${oversized}.`,
+        );
+      }
+      messageParts.push(
+        `Please fix the body and re-emit it inside a <pr-body>…</pr-body> marker in your next message.`,
       );
+      this.sendMessage(messageParts.join('\n\n'));
       return;
     }
 
@@ -2787,7 +2819,10 @@ The full task spec and all rules are in your system prompt. Begin implementing d
               setHeadSha(prNumber, repo, freshPR.headSha);
             }
             if (needsBodyValidation) {
-              const bodyValidation = validatePRBody(freshPR.body);
+              const bodyValidation = validatePRBody(
+                freshPR.body,
+                this.getPrBodyConfig(),
+              );
               if (!bodyValidation.valid) {
                 const isCorporate = getCorporateMode().gates.validatePRBody;
                 recordEvent({
@@ -2835,7 +2870,10 @@ The full task spec and all rules are in your system prompt. Begin implementing d
 
       // Validate PR body against required template (marker path: body present at detection time).
       if (prShape.body) {
-        const bodyValidation = validatePRBody(prShape.body);
+        const bodyValidation = validatePRBody(
+          prShape.body,
+          this.getPrBodyConfig(),
+        );
         if (!bodyValidation.valid) {
           const isCorporate = getCorporateMode().gates.validatePRBody;
           recordEvent({

@@ -1507,3 +1507,70 @@ describe("this repo's own .claude-orchestrator.yml capability_pre_grants", () =>
     }
   });
 });
+
+describe('loadOrchestratorConfig — pr_body', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-config-prbody-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('defaults to the standard section set with no length ceilings when omitted', () => {
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.pr_body.sections).toEqual([
+      '## Summary',
+      '## Notion Task',
+      '## Automated Tests',
+    ]);
+    expect(config.pr_body.max_section_chars).toEqual({});
+  });
+
+  it('parses a custom sections list', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      [
+        'pr_body:',
+        '  sections:',
+        '    - "## Summary"',
+        '    - "## Automated Tests"',
+      ].join('\n'),
+    );
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.pr_body.sections).toEqual([
+      '## Summary',
+      '## Automated Tests',
+    ]);
+  });
+
+  it('parses max_section_chars', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      [
+        'pr_body:',
+        '  sections:',
+        '    - "## Summary"',
+        '  max_section_chars:',
+        '    "## Summary": 500',
+      ].join('\n'),
+    );
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.pr_body.max_section_chars).toEqual({ '## Summary': 500 });
+  });
+
+  it('falls back to defaults for a malformed pr_body block', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      ['pr_body:', '  sections: "not-an-array"'].join('\n'),
+    );
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.pr_body.sections).toEqual([
+      '## Summary',
+      '## Notion Task',
+      '## Automated Tests',
+    ]);
+  });
+});
