@@ -26,6 +26,16 @@ async function isPostgresDataDir(dirPath: string): Promise<boolean> {
   }
 }
 
+// testing.postgresql lays clusters out at <entry>/data/PG_VERSION; older/manual
+// clusters may sit directly at <entry>/PG_VERSION. Check both shapes but do not
+// recurse further — this is a fixed two-shape check, not a directory walk.
+async function findClusterDir(entryPath: string): Promise<string | null> {
+  if (await isPostgresDataDir(entryPath)) return entryPath;
+  const dataDir = path.join(entryPath, 'data');
+  if (await isPostgresDataDir(dataDir)) return dataDir;
+  return null;
+}
+
 async function isLive(dirPath: string): Promise<boolean> {
   let contents: string;
   try {
@@ -54,35 +64,48 @@ async function isLive(dirPath: string): Promise<boolean> {
 async function reconcileBaseDir(baseDir: string): Promise<SweepStats> {
   const stats: SweepStats = { scanned: 0, removed: 0, failed: 0 };
 
-  let entries: string[];
+  // withFileTypes lets us discard non-directory entries using the same
+  // syscall as the listing itself, avoiding a stat() per entry across a
+  // /tmp that can hold tens of thousands of unrelated files.
+  let entries: import('node:fs').Dirent[];
   try {
-    entries = await fs.promises.readdir(baseDir);
+    entries = await fs.promises.readdir(baseDir, { withFileTypes: true });
   } catch {
     return stats;
   }
 
   const now = Date.now();
 
-  for (const entry of entries) {
-    const entryPath = path.join(baseDir, entry);
-
-    let dirStat: fs.Stats;
-    try {
-      dirStat = await fs.promises.stat(entryPath);
-    } catch {
-      continue;
-    }
-    if (!dirStat.isDirectory()) continue;
+  for (const dirent of entries) {
+    if (!dirent.isDirectory()) continue;
+    const entryPath = path.join(baseDir, dirent.name);
 
     // Any stat/read error below on a candidate is treated defensively as
     // "not orphaned" — skip it, never remove on an inconclusive read.
     try {
-      if (!(await isPostgresDataDir(entryPath))) continue;
+      const clusterDir = await findClusterDir(entryPath);
+      if (!clusterDir) continue;
 
       stats.scanned++;
 
-      if (await isLive(entryPath)) continue;
-      if (now - dirStat.mtimeMs < ORPHAN_AGE_MS) continue;
+      if (await isLive(clusterDir)) continue;
+
+      let entryStat: fs.Stats;
+      let clusterStat: fs.Stats;
+      try {
+        entryStat = await fs.promises.stat(entryPath);
+        clusterStat =
+          clusterDir === entryPath
+            ? entryStat
+            : await fs.promises.stat(clusterDir);
+      } catch {
+        continue;
+      }
+      const mostRecentMtimeMs = Math.max(
+        entryStat.mtimeMs,
+        clusterStat.mtimeMs,
+      );
+      if (now - mostRecentMtimeMs < ORPHAN_AGE_MS) continue;
 
       try {
         await fs.promises.rm(entryPath, { recursive: true, force: true });
