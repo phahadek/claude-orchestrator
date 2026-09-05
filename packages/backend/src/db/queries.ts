@@ -4540,19 +4540,6 @@ export function listTaskPauseReasons(): {
     .all() as { task_id: string; pause_reason: string }[];
 }
 
-/** Same as listTaskPauseReasons, scoped to the given exact task_id values (an IN filter, no normalization). */
-export function listTaskPauseReasonsForTaskIds(
-  taskIds: string[],
-): { task_id: string; pause_reason: string }[] {
-  if (taskIds.length === 0) return [];
-  const placeholders = taskIds.map(() => '?').join(',');
-  return db
-    .prepare(
-      `SELECT task_id, pause_reason FROM task_pause_reasons WHERE task_id IN (${placeholders})`,
-    )
-    .all(...taskIds) as { task_id: string; pause_reason: string }[];
-}
-
 /**
  * Bulk-deletes task_pause_reasons rows by exact task_id — the cleanup
  * sweep's write side (see milestoneResolver.ts's sweepStaleTaskPauseReasons).
