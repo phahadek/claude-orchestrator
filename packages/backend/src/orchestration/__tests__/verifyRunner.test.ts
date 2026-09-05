@@ -159,6 +159,81 @@ describe('runVerifyAsGate()', () => {
   });
 });
 
+describe('runVerifyAsGate() gate env scoping', () => {
+  it('spawns with cacheEnv vars pointed inside the worktree when declared', async () => {
+    const handlers = setupMockProc();
+    const os = await import('os');
+    const fs = await import('fs');
+    const path = await import('path');
+    const worktree = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'verifyrunner-cacheenv-'),
+    );
+
+    const promise = runVerifyAsGate(worktree, ['npm run lint'], undefined, {
+      cacheEnv: { ESLINT_CACHE_LOCATION: '.cache/eslint' },
+    });
+    handlers.procHandlers['close']?.(0);
+    await promise;
+
+    const expectedPath = path.join(worktree, '.cache/eslint');
+    expect(vi.mocked(spawn)).toHaveBeenCalledWith(
+      'npm run lint',
+      expect.objectContaining({
+        env: expect.objectContaining({ ESLINT_CACHE_LOCATION: expectedPath }),
+      }),
+    );
+    expect(fs.existsSync(expectedPath)).toBe(true);
+
+    fs.rmSync(worktree, { recursive: true, force: true });
+  });
+
+  it('spawns with today\'s inherited environment when no cache_env is declared', async () => {
+    const handlers = setupMockProc();
+    const promise = runVerifyAsGate('/repo', ['npm run lint']);
+    handlers.procHandlers['close']?.(0);
+    await promise;
+
+    expect(vi.mocked(spawn)).toHaveBeenCalledWith(
+      'npm run lint',
+      expect.objectContaining({ env: process.env }),
+    );
+  });
+
+  it('fails as a config failure, distinct from a code failure, on a toolchain version mismatch', async () => {
+    const handlers = setupMockProc();
+    const promise = runVerifyAsGate('/repo', ['npm run lint'], undefined, {
+      expectedToolVersions: [
+        { version_command: 'eslint --version', expected: 'v9.9.9' },
+      ],
+    });
+
+    // Drives the version-check subprocess (the only spawn call expected here).
+    handlers.stdoutHandlers['data']?.(Buffer.from('v1.0.0'));
+    handlers.procHandlers['close']?.(0);
+
+    const result = await promise;
+    expect(result.passed).toBe(false);
+    expect(result.isToolInfraFailure).toBe(true);
+    expect(result.toolFailureReason).toContain('toolchain version mismatch');
+    // The gate command itself must never be spawned once the toolchain check fails.
+    expect(vi.mocked(spawn)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(spawn)).toHaveBeenCalledWith(
+      'eslint --version',
+      expect.anything(),
+    );
+  });
+
+  it('skips the toolchain check entirely when no expected version is declared', async () => {
+    const handlers = setupMockProc();
+    const promise = runVerifyAsGate('/repo', ['npm run lint']);
+    handlers.procHandlers['close']?.(0);
+    const result = await promise;
+
+    expect(result.isToolInfraFailure).toBeUndefined();
+    expect(result.passed).toBe(true);
+  });
+});
+
 describe('tailOfLog()', () => {
   it('keeps the end of the log, not the head, so the two ci_failing writers agree', () => {
     const banner = 'startup banner\n' + 'plugin list\n'.repeat(100);

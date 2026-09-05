@@ -57,6 +57,14 @@ export interface TestRunOptions {
    * invocation still gets an isolated, verified-on-teardown cgroup.
    */
   runId?: string;
+  /**
+   * Env to spawn each command with, instead of `process.env` — used to
+   * scope tool caches (see gateEnv.ts's buildScopedEnv) to the invoking
+   * worktree. DB_PATH is still stripped regardless (see
+   * runCommandWithTimeout). Omitted (default) = today's inherited-environment
+   * behavior, unchanged.
+   */
+  env?: NodeJS.ProcessEnv;
 }
 
 const OUTPUT_CAP_CHARS = 50_000;
@@ -216,6 +224,7 @@ function runCommandWithTimeout(
   timeoutMs: number,
   maxRssMb: number,
   runId: string,
+  baseEnv: NodeJS.ProcessEnv = process.env,
 ): Promise<{
   exitCode: number;
   output: string;
@@ -231,7 +240,7 @@ function runCommandWithTimeout(
     // reads DB_PATH before its own in-memory-DB guard runs (or a subprocess
     // it spawns) could open and write to production data. See
     // CliSessionRunner.ts's identical strip for the session-spawn path.
-    const { DB_PATH: _productionDbPath, ...env } = process.env;
+    const { DB_PATH: _productionDbPath, ...env } = baseEnv;
     const spawnOpts =
       platform === 'win32'
         ? { shell: true, cwd, env }
@@ -434,7 +443,12 @@ export async function runTestCommands(
     return { passed: true, output: '' };
   }
 
-  const { maxRssMb = 0, failFast = false, runId = randomUUID() } = opts;
+  const {
+    maxRssMb = 0,
+    failFast = false,
+    runId = randomUUID(),
+    env,
+  } = opts;
   const timeoutMs = timeoutSec * 1000;
   const outputParts: string[] = [];
   let allPassed = true;
@@ -458,6 +472,7 @@ export async function runTestCommands(
       timeoutMs,
       maxRssMb,
       runId,
+      env,
     );
     outputParts.push(`$ ${cmd}\n${output}`);
 

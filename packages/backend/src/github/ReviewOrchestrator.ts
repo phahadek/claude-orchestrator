@@ -585,6 +585,10 @@ export class ReviewOrchestrator {
             logger.info(`[ReviewOrchestrator] autofix PR #${prNumber}: ${msg}`),
           prRow?.base_branch ?? project.baseBranch,
           autofixConfig.autofix_skip_ci,
+          {
+            cacheEnv: autofixConfig.cache_env,
+            expectedToolVersions: autofixConfig.expected_tool_versions,
+          },
         );
         autofixSuccess = result.success;
         autofixSummary = result.summary;
@@ -1012,6 +1016,10 @@ export class ReviewOrchestrator {
           job.worktreePath,
           config.verify,
           config.test_report_glob,
+          {
+            cacheEnv: config.cache_env,
+            expectedToolVersions: config.expected_tool_versions,
+          },
         ),
       );
       if (!verifyResult.passed) {
@@ -1028,6 +1036,10 @@ export class ReviewOrchestrator {
                 ),
               project.baseBranch,
               config.autofix_skip_ci,
+              {
+                cacheEnv: config.cache_env,
+                expectedToolVersions: config.expected_tool_versions,
+              },
             );
             if (autofixResult.commitSha) {
               recordEvent({

@@ -38,6 +38,11 @@ import {
 } from '../session/analyzeGating';
 import { validateAndRepairGitConfig } from '../orchestration/gitConfigIntegrity';
 import { runVerifyAsGate } from '../orchestration/verifyRunner';
+import {
+  buildScopedEnv,
+  checkToolchainVersions,
+  formatToolchainMismatch,
+} from '../orchestration/gateEnv';
 import { runTestCommands } from '../session/test-runner';
 import { runProjectTestRequest } from '../orchestration/testRequestLane';
 import type { TestRequestRunResult } from '../orchestration/testRequestLane';
@@ -165,6 +170,10 @@ export class PreReviewPipeline {
               getPRByNumber(ctx.prNumber, ctx.repo)?.base_branch ??
                 ctx.project.baseBranch,
               autofixCfg.autofix_skip_ci,
+              {
+                cacheEnv: autofixCfg.cache_env,
+                expectedToolVersions: autofixCfg.expected_tool_versions,
+              },
             );
 
             if (result.isGitInfraFailure) {
@@ -310,7 +319,18 @@ export class PreReviewPipeline {
           ctx.worktreePath,
           config.verify,
           config.test_report_glob,
+          {
+            cacheEnv: config.cache_env,
+            expectedToolVersions: config.expected_tool_versions,
+          },
         );
+        if (result.isToolInfraFailure) {
+          return {
+            summary: result.toolFailureReason ?? 'toolchain version mismatch',
+            isToolInfraFailure: true,
+            toolFailureReason: result.toolFailureReason,
+          };
+        }
         if (!result.passed) {
           let filtered: Awaited<
             ReturnType<typeof filterVerifyFailureByBaseHealth>
@@ -397,6 +417,23 @@ export class PreReviewPipeline {
           passed = cached?.passed === 1;
           output = cached?.output ?? '';
         } else {
+          const mismatch = await checkToolchainVersions(
+            ctx.worktreePath,
+            config.expected_tool_versions,
+          );
+          if (mismatch) {
+            const reason = formatToolchainMismatch(mismatch);
+            return {
+              summary: reason,
+              isToolInfraFailure: true,
+              toolFailureReason: reason,
+            };
+          }
+
+          const scopedEnv = buildScopedEnv(
+            ctx.worktreePath,
+            config.cache_env,
+          );
           const normalized = config.analyze.map(normalizeAnalyzeCommand);
           const diffPaths = await getChangedFiles(
             ctx.worktreePath,
@@ -457,6 +494,7 @@ export class PreReviewPipeline {
               {
                 maxRssMb: config.analyze_max_rss_mb,
                 failFast: config.analyze_fail_fast,
+                env: scopedEnv,
               },
             );
 
@@ -765,6 +803,7 @@ export class PreReviewPipeline {
     });
     deleteAnalyzeResult(prNumber, repo, headSha);
 
+    const scopedEnv = buildScopedEnv(worktreePath, config.cache_env);
     const normalized = config.analyze.map(normalizeAnalyzeCommand);
     const diffPaths = await getChangedFiles(
       worktreePath,
@@ -796,6 +835,7 @@ export class PreReviewPipeline {
         {
           maxRssMb: config.analyze_max_rss_mb,
           failFast: config.analyze_fail_fast,
+          env: scopedEnv,
         },
       );
 
