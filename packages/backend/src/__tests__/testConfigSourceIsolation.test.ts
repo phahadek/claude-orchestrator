@@ -89,6 +89,7 @@ describe('test-mode config source isolation', () => {
       configPath,
       JSON.stringify({ db: { path: '/tmp/should-be-read-now.db' } }),
     );
+    expect(fs.existsSync(configPath)).toBe(true);
 
     try {
       _clearConfigSourceForTesting();
@@ -111,6 +112,7 @@ describe('test-mode config source isolation', () => {
       configPath,
       JSON.stringify({ db: { path: '/tmp/should-still-be-ignored.db' } }),
     );
+    expect(fs.existsSync(configPath)).toBe(true);
 
     try {
       // No _clearConfigSourceForTesting() call — the default (unopted-out) path.

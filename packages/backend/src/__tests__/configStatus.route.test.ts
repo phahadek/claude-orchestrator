@@ -157,6 +157,7 @@ describe('GET /api/config/status', () => {
     try {
       const otherSrc = new DataDirConfigSource(otherDir);
       otherSrc.write({ github: { token: 'ghp-leaked-elsewhere' } });
+      expect(fs.existsSync(path.join(otherDir, 'config.json'))).toBe(true);
 
       // getDataDir/XDG_DATA_HOME for this test point at `tmpDir`, not
       // `otherDir` — the write above must be invisible here.

@@ -241,6 +241,7 @@ describe('setup writes bust the config cache', () => {
     try {
       const otherSrc = new DataDirConfigSource(otherDir);
       otherSrc.write({ github: { token: 'ghp-leaked-elsewhere' } });
+      expect(fs.existsSync(path.join(otherDir, 'config.json'))).toBe(true);
 
       // This block's own XDG_DATA_HOME points at `tmpDir`, not `otherDir` —
       // the write above must be invisible to this test's resolution.

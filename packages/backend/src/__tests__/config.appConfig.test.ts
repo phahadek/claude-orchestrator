@@ -516,6 +516,7 @@ describe('getConfigProvenance', () => {
     try {
       const otherSrc = new DataDirConfigSource(otherDir);
       otherSrc.write({ github: { repo: 'leaked-owner/leaked-repo' } });
+      expect(fs.existsSync(path.join(otherDir, 'config.json'))).toBe(true);
 
       // This block's own beforeEach pointed getDataDir/XDG_DATA_HOME at
       // `tmpDir`, a separate scratch dir from `otherDir` — the write above
