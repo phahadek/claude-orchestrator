@@ -1059,8 +1059,22 @@ export async function runStashRevertCheck(
     },
   );
 
-  for (const s of snapshots) {
-    writeOrDelete(s.absPath, readFileAtRef(worktreePath, baseRef, s.relPath));
+  try {
+    for (const s of snapshots) {
+      writeOrDelete(s.absPath, readFileAtRef(worktreePath, baseRef, s.relPath));
+    }
+  } catch (e) {
+    // A mid-loop failure (e.g. disk full, permission error) must not leave
+    // the files already reverted stuck in their baseRef content — restore
+    // every snapshot (including ones never touched, which is a harmless
+    // no-op rewrite) before surfacing the error.
+    for (const s of snapshots) {
+      writeOrDelete(s.absPath, s.currentContent);
+    }
+    return {
+      verdict: 'error',
+      detail: `failed to revert implementation files to ${baseRef}: ${(e as Error).message}`,
+    };
   }
 
   let withoutDiff: StashRevertRunOutcome;
