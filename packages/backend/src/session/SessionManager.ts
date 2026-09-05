@@ -129,7 +129,7 @@ import {
   setSessionTerminalCompletionReason,
   incrementSessionPokeRetryCount,
   resetSessionPokeRetryCount,
-  hasMcpConnectionEstablishedSince,
+  getLatestOrchestratorMcpStatusSince,
   countMcpUnreachableRespawnAttempts,
   getLatestMcpUnreachableRespawnTimestamp,
   hasMcpUnreachableExhaustedEvent,
@@ -4517,10 +4517,13 @@ export class SessionManager extends EventEmitter {
    * started_at, or its latest respawn attempt's timestamp once this
    * reconciler has already respawned it once (getLatestMcpUnreachableRespawnTimestamp).
    * That reference moves forward on every respawn, so the grace window
-   * restarts each time: a session that reconnects cleanly on its new
-   * process is never flagged again (hasMcpConnectionEstablishedSince finds
-   * a fresh event), and one that doesn't gets re-detected once the next
-   * window elapses, up to MAX_MCP_UNREACHABLE_RESPAWNS.
+   * restarts each time: a session whose new process's init reports the
+   * orchestrator server connected is never flagged again
+   * (getLatestOrchestratorMcpStatusSince finds that status), and one whose
+   * init still doesn't report connected — or hasn't reported at all once
+   * the grace window elapses — gets re-detected, up to
+   * MAX_MCP_UNREACHABLE_RESPAWNS before escalating to the operator instead
+   * of counting the respawn as a successful recovery.
    */
   async reconcileMcpUnreachableSessions(): Promise<{
     detected: string[];
@@ -4542,14 +4545,14 @@ export class SessionManager extends EventEmitter {
       const lastSpawnMs =
         getLatestMcpUnreachableRespawnTimestamp(row.session_id) ??
         row.started_at;
-      const hasConnectedSinceSpawn = hasMcpConnectionEstablishedSince(
+      const orchestratorMcpStatus = getLatestOrchestratorMcpStatusSince(
         row.session_id,
         lastSpawnMs,
       );
 
       if (
         !isMcpUnreachable({
-          hasConnectedSinceSpawn,
+          orchestratorMcpStatus,
           nowMs: now,
           lastSpawnMs,
           graceMs: MCP_UNREACHABLE_GRACE_MS,
