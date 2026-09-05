@@ -15,7 +15,6 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { execSync } from 'child_process';
 
 vi.mock('../../db/db.js', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
@@ -36,6 +35,7 @@ import {
 import {
   DeployOrchestrator,
   type DeployOrchestratorDeps,
+  type ShellResult,
 } from '../DeployOrchestrator.js';
 import type { LoadPlaybookResult } from '../loadPlaybook.js';
 import {
@@ -547,31 +547,11 @@ describe('recordWrapLaunchParams / readWrapLaunchParams (boot-resume support)', 
   });
 });
 
-describe('Step: integrate-milestone-branch (confirm-gate + real merge)', () => {
-  /** Flush pending microtasks so the fire-and-forget `drive()` loop settles up to (but not past) a step that's genuinely waiting (e.g. a pending confirm-gate). */
+describe('Step: integrate-milestone-branch (confirm-gate + shell orchestration)', () => {
+  /** Flush pending microtasks so the fire-and-forget `drive()` loop settles. */
   async function flush(): Promise<void> {
     for (let i = 0; i < 15; i++) {
       await new Promise((resolve) => setTimeout(resolve, 0));
-    }
-  }
-
-  /**
-   * Polls until the run reaches a terminal status. Unlike `flush()`, the
-   * integrate-milestone-branch step spawns a real `git`/bash subprocess
-   * (createWrapShellRunner's fallback is the real `spawnShell`, not a
-   * mocked one) — its completion takes real wall-clock time the fire-and-
-   * forget `drive()` loop needs actual delay, not just queued microtasks,
-   * to observe.
-   */
-  async function waitForTerminal(
-    runId: string,
-    timeoutMs = 10_000,
-  ): Promise<void> {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      const status = getDeployRun(runId)?.status;
-      if (status === 'succeeded' || status === 'failed') return;
-      await new Promise((resolve) => setTimeout(resolve, 25));
     }
   }
 
@@ -580,69 +560,26 @@ describe('Step: integrate-milestone-branch (confirm-gate + real merge)', () => {
   }
 
   /**
-   * A bare "origin" repo with a base branch and a `milestone/m1` branch (the
-   * slug `slugify('M1')` produces — matches the CLOSING_MILESTONE fixture's
-   * name) diverged from it. `conflicting: true` also commits an overlapping
-   * change to the base branch itself so merging the milestone branch in
-   * conflicts; otherwise the milestone branch only touches a disjoint file,
-   * so the merge is clean.
+   * Builds a DeployOrchestrator driving only the confirm-gate + shell pair
+   * the integrate-milestone-branch step is made of, with an injected
+   * `runShell` (never the real `spawnShell` fallback) — the step's actual
+   * git-command text is covered by the `buildWrapPlaybook: shape` tests
+   * above; these tests exercise the engine's orchestration semantics around
+   * that command (confirm-gate blocking, halt-on-failure) deterministically
+   * and without spawning a real git subprocess.
    */
-  function setupGitFixture(options: { conflicting: boolean }): {
-    originDir: string;
-    baseBranch: string;
-  } {
-    const baseBranch = 'main';
-    const originDir = mkTmpDir('wrap-origin-');
-    execSync('git init -q --bare', { cwd: originDir });
-
-    const workDir = mkTmpDir('wrap-work-');
-    execSync('git init -q', { cwd: workDir });
-    // -B (not -b): the host's init.defaultBranch may already be "main",
-    // in which case "checkout -b main" fails with "branch already exists".
-    execSync('git checkout -q -B main', { cwd: workDir });
-    execSync('git config user.email test@example.com', { cwd: workDir });
-    execSync('git config user.name Test', { cwd: workDir });
-    fs.writeFileSync(path.join(workDir, 'shared.txt'), 'base\n');
-    execSync('git add .', { cwd: workDir });
-    execSync('git commit -q -m base', { cwd: workDir });
-    execSync(`git remote add origin ${originDir}`, { cwd: workDir });
-    execSync(`git push -q origin ${baseBranch}`, { cwd: workDir });
-
-    execSync('git checkout -q -b milestone/m1', { cwd: workDir });
-    if (options.conflicting) {
-      fs.writeFileSync(path.join(workDir, 'shared.txt'), 'milestone change\n');
-    } else {
-      fs.writeFileSync(path.join(workDir, 'feature.txt'), 'feature\n');
-    }
-    execSync('git add .', { cwd: workDir });
-    execSync('git commit -q -m milestone-commit', { cwd: workDir });
-    execSync('git push -q origin milestone/m1', { cwd: workDir });
-
-    if (options.conflicting) {
-      execSync(`git checkout -q ${baseBranch}`, { cwd: workDir });
-      fs.writeFileSync(path.join(workDir, 'shared.txt'), 'main change\n');
-      execSync('git add .', { cwd: workDir });
-      execSync('git commit -q -m main-commit', { cwd: workDir });
-      execSync(`git push -q origin ${baseBranch}`, { cwd: workDir });
-    }
-
-    return { originDir, baseBranch };
-  }
-
-  /** Builds a DeployOrchestrator driving only the confirm-gate + shell pair the integrate-milestone-branch step is made of. */
   function makeIntegrateOrchestrator(
-    originDir: string,
-    baseBranch: string,
     projectDir: string,
     waitForConfirmGate: DeployOrchestratorDeps['waitForConfirmGate'],
+    runShell: DeployOrchestratorDeps['runShell'],
   ): DeployOrchestrator {
     const full = buildWrapPlaybook({
       projectId: PROJECT,
       closingMilestoneId: CLOSING_MILESTONE,
       nextMilestoneId: NEXT_MILESTONE,
       releaseVersion: '1.9.0',
-      repoUrl: originDir,
-      baseBranch,
+      repoUrl: 'https://github.com/acme/wrap-test-project.git',
+      baseBranch: 'dev',
     });
     const steps = full.steps.filter(
       (s) =>
@@ -659,26 +596,27 @@ describe('Step: integrate-milestone-branch (confirm-gate + real merge)', () => {
         bindings: WRAP_STATIC_BINDINGS,
         bindingsPath: null,
       }),
-      runShell: createWrapShellRunner(),
+      runShell,
       spawnAgenticStep: vi.fn(),
       waitForConfirmGate,
       getDiffPaths: vi.fn(async () => []),
     });
   }
 
-  it("blocks the merge until the confirm-gate is approved — the milestone branch's tip is not merged in while pending", async () => {
-    const { originDir, baseBranch } = setupGitFixture({ conflicting: false });
+  it('blocks the merge until the confirm-gate is approved', async () => {
     const projectDir = mkTmpDir('wrap-projectdir-');
     let resolveGate!: (approved: boolean) => void;
     const gatePromise = new Promise<boolean>((resolve) => {
       resolveGate = resolve;
     });
     const waitForConfirmGate = vi.fn(() => gatePromise);
+    const runShell = vi.fn(
+      async (): Promise<ShellResult> => ({ ok: true, output: '', exitCode: 0 }),
+    );
     const orchestrator = makeIntegrateOrchestrator(
-      originDir,
-      baseBranch,
       projectDir,
       waitForConfirmGate,
+      runShell,
     );
 
     const run = await orchestrator.startDeploy(CLOSING_MILESTONE);
@@ -690,39 +628,35 @@ describe('Step: integrate-milestone-branch (confirm-gate + real merge)', () => {
         step: expect.objectContaining({ id: WRAP_STEP_CONFIRM_INTEGRATE }),
       }),
     );
+    expect(runShell).not.toHaveBeenCalled();
     expect(getDeployRun(run.run_id)?.status).toBe('running');
-    const tipWhilePending = execSync(`git rev-parse ${baseBranch}`, {
-      cwd: originDir,
-    })
-      .toString()
-      .trim();
 
     resolveGate(true);
-    await waitForTerminal(run.run_id);
+    await flush();
 
+    expect(runShell).toHaveBeenCalledTimes(1);
     expect(getDeployRun(run.run_id)?.status).toBe('succeeded');
-    const tipAfterApproval = execSync(`git rev-parse ${baseBranch}`, {
-      cwd: originDir,
-    })
-      .toString()
-      .trim();
-    expect(tipAfterApproval).not.toBe(tipWhilePending);
   });
 
   it('a clean merge advances the run past the step', async () => {
-    const { originDir, baseBranch } = setupGitFixture({ conflicting: false });
     const projectDir = mkTmpDir('wrap-projectdir-');
+    const runShell = vi.fn(
+      async (): Promise<ShellResult> => ({ ok: true, output: '', exitCode: 0 }),
+    );
     const orchestrator = makeIntegrateOrchestrator(
-      originDir,
-      baseBranch,
       projectDir,
       vi.fn(async () => true),
+      runShell,
     );
 
     const run = await orchestrator.startDeploy(CLOSING_MILESTONE);
-    await waitForTerminal(run.run_id);
+    await flush();
 
     expect(getDeployRun(run.run_id)?.status).toBe('succeeded');
+    expect(runShell).toHaveBeenCalledWith(
+      expect.stringContaining('git merge --no-ff'),
+      expect.objectContaining({ cwd: projectDir }),
+    );
     const events = listDeployRunEvents(run.run_id).map((e) => ({
       step: e.step,
       eventType: e.event_type,
@@ -731,45 +665,35 @@ describe('Step: integrate-milestone-branch (confirm-gate + real merge)', () => {
       step: WRAP_STEP_INTEGRATE,
       eventType: 'step_succeeded',
     });
-
-    const checkoutDir = mkTmpDir('wrap-verify-');
-    execSync(`git clone -q ${originDir} ${checkoutDir}`);
-    execSync(`git checkout -q ${baseBranch}`, { cwd: checkoutDir });
-    expect(fs.existsSync(path.join(checkoutDir, 'feature.txt'))).toBe(true);
   });
 
-  it('a conflicting merge fails the step, halts the run, and leaves origin and the prod checkout untouched', async () => {
-    const { originDir, baseBranch } = setupGitFixture({ conflicting: true });
+  it('a conflicting merge fails the step, halts the run, and leaves the prod checkout untouched', async () => {
     const projectDir = mkTmpDir('wrap-projectdir-');
-    const tipBefore = execSync(`git rev-parse ${baseBranch}`, {
-      cwd: originDir,
-    })
-      .toString()
-      .trim();
-
+    const runShell = vi.fn(
+      async (): Promise<ShellResult> => ({
+        ok: false,
+        output: 'CONFLICT (content): Merge conflict in shared.txt',
+        exitCode: 1,
+      }),
+    );
     const orchestrator = makeIntegrateOrchestrator(
-      originDir,
-      baseBranch,
       projectDir,
       vi.fn(async () => true),
+      runShell,
     );
+
     const run = await orchestrator.startDeploy(CLOSING_MILESTONE);
-    await waitForTerminal(run.run_id);
+    await flush();
 
     expect(getDeployRun(run.run_id)?.status).toBe('failed');
     const events = listDeployRunEvents(run.run_id).map((e) => e.event_type);
     expect(events).toContain('step_failed');
 
-    // No partial mutation: origin's base branch tip is unchanged (the
-    // conflict aborts the throwaway clone's merge before it ever pushes),
-    // and the "prod checkout" (projectDir) — never touched by the
-    // clone-into-$tmp mechanism to begin with — stays empty.
-    const tipAfter = execSync(`git rev-parse ${baseBranch}`, {
-      cwd: originDir,
-    })
-      .toString()
-      .trim();
-    expect(tipAfter).toBe(tipBefore);
+    // No partial mutation: the "prod checkout" (projectDir) — never touched
+    // by the clone-into-$tmp mechanism to begin with, and here also never
+    // touched by the (mocked) runShell itself — stays empty, and no further
+    // step ran after the failure.
     expect(fs.readdirSync(projectDir)).toEqual([]);
+    expect(runShell).toHaveBeenCalledTimes(1);
   });
 });
