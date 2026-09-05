@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import fs from 'node:fs';
 import type { ProjectConfig } from '../../config';
 import type { TaskBackend } from '../../tasks/TaskBackend';
 
@@ -22,13 +23,19 @@ vi.mock('../../projects/ProjectService.js', () => ({
   },
 }));
 
+vi.mock('../../logger.js', () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+
 import { getAllProjects } from '../../config.js';
 import { getTaskBackend } from '../../tasks/TaskBackend.js';
 import { ProjectService } from '../../projects/ProjectService.js';
 import { TaskCacheRefresher } from '../TaskCacheRefresher.js';
 import { JiraApiError } from '../../tasks/JiraClient.js';
+import { MilestoneNotFoundError } from '../../tasks/LocalTaskBackend.js';
 import { upsertTaskCache, getTaskCache } from '../../db/queries.js';
 import { Scheduler, DEGRADED_TICK_THRESHOLD_MS } from '../Scheduler.js';
+import { logger } from '../../logger.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -752,6 +759,192 @@ describe('TaskCacheRefresher', () => {
       await refresher.refreshOnce();
 
       expect(getTaskCache('notion:surviving')).toBeDefined();
+    });
+  });
+
+  describe('unresolvable milestone suppression', () => {
+    function mockStatMtime(mtimeMsByPath: () => number) {
+      vi.spyOn(fs, 'statSync').mockImplementation(
+        () => ({ mtimeMs: mtimeMsByPath() }) as fs.Stats,
+      );
+    }
+
+    it('logs exactly once via logger.error across many consecutive failing cycles, not once per cycle', async () => {
+      const project = makeProject({ id: 'p1' });
+      vi.mocked(getAllProjects).mockReturnValue([project]);
+      vi.mocked(ProjectService.listMilestones).mockReturnValue([
+        makeMilestone('m1', 'src-1'),
+      ]);
+      mockStatMtime(() => 100);
+
+      const backend = makeBackend({
+        fetchReadyTasks: vi
+          .fn()
+          .mockRejectedValue(
+            new MilestoneNotFoundError('/fake/project/tasks.yaml', 'm1'),
+          ),
+      });
+      vi.mocked(getTaskBackend).mockReturnValue(backend);
+
+      const refresher = new TaskCacheRefresher(undefined, {
+        listProjects: getAllProjects,
+        resolveBackend: getTaskBackend,
+      });
+
+      // 3 failures condemns the milestone; run several more cycles beyond
+      // that to prove the suppression actually holds over time, not just
+      // for one extra tick.
+      for (let i = 0; i < 8; i++) {
+        await refresher.refreshOnce();
+      }
+
+      expect(logger.error).toHaveBeenCalledTimes(1);
+      // Once condemned, the milestone is skipped outright rather than
+      // re-fetched and re-failed every cycle.
+      expect(backend.fetchReadyTasks).toHaveBeenCalledTimes(3);
+    });
+
+    it('keys suppression per (project, milestone) — two different unresolvable milestones each log once', async () => {
+      const project = makeProject({ id: 'p1' });
+      vi.mocked(getAllProjects).mockReturnValue([project]);
+      vi.mocked(ProjectService.listMilestones).mockReturnValue([
+        makeMilestone('m1', 'src-1'),
+        makeMilestone('m2', 'src-2'),
+      ]);
+      mockStatMtime(() => 100);
+
+      const backend = makeBackend({
+        fetchReadyTasks: vi.fn().mockImplementation(async (fetchId: string) => {
+          throw new MilestoneNotFoundError('/fake/project/tasks.yaml', fetchId);
+        }),
+      });
+      vi.mocked(getTaskBackend).mockReturnValue(backend);
+
+      const refresher = new TaskCacheRefresher(undefined, {
+        listProjects: getAllProjects,
+        resolveBackend: getTaskBackend,
+      });
+
+      for (let i = 0; i < 5; i++) {
+        await refresher.refreshOnce();
+      }
+
+      expect(logger.error).toHaveBeenCalledTimes(2);
+      const messages = vi.mocked(logger.error).mock.calls.map((c) => c[0]);
+      expect(messages.some((m) => String(m).includes('milestone=m1'))).toBe(
+        true,
+      );
+      expect(messages.some((m) => String(m).includes('milestone=m2'))).toBe(
+        true,
+      );
+    });
+
+    it('names the project, the milestone id, and the searched file in the single log line', async () => {
+      const project = makeProject({ id: 'p1', name: 'Widgets Project' });
+      vi.mocked(getAllProjects).mockReturnValue([project]);
+      vi.mocked(ProjectService.listMilestones).mockReturnValue([
+        makeMilestone('m1', 'src-1'),
+      ]);
+      mockStatMtime(() => 100);
+
+      const backend = makeBackend({
+        fetchReadyTasks: vi
+          .fn()
+          .mockRejectedValue(
+            new MilestoneNotFoundError('/fake/project/tasks.yaml', 'src-1'),
+          ),
+      });
+      vi.mocked(getTaskBackend).mockReturnValue(backend);
+
+      const refresher = new TaskCacheRefresher(undefined, {
+        listProjects: getAllProjects,
+        resolveBackend: getTaskBackend,
+      });
+
+      for (let i = 0; i < 3; i++) {
+        await refresher.refreshOnce();
+      }
+
+      expect(logger.error).toHaveBeenCalledTimes(1);
+      const message = String(vi.mocked(logger.error).mock.calls[0][0]);
+      expect(message).toContain('p1');
+      expect(message).toContain('Widgets Project');
+      expect(message).toContain('m1');
+      expect(message).toContain('/fake/project/tasks.yaml');
+    });
+
+    it('clears suppression when the source file mtime changes, and logs again on a later failure', async () => {
+      const project = makeProject({ id: 'p1' });
+      vi.mocked(getAllProjects).mockReturnValue([project]);
+      vi.mocked(ProjectService.listMilestones).mockReturnValue([
+        makeMilestone('m1', 'src-1'),
+      ]);
+
+      let currentMtime = 100;
+      mockStatMtime(() => currentMtime);
+
+      const backend = makeBackend({
+        fetchReadyTasks: vi
+          .fn()
+          .mockRejectedValue(
+            new MilestoneNotFoundError('/fake/project/tasks.yaml', 'm1'),
+          ),
+      });
+      vi.mocked(getTaskBackend).mockReturnValue(backend);
+
+      const refresher = new TaskCacheRefresher(undefined, {
+        listProjects: getAllProjects,
+        resolveBackend: getTaskBackend,
+      });
+
+      // 3 consecutive failures condemns the milestone.
+      for (let i = 0; i < 3; i++) {
+        await refresher.refreshOnce();
+      }
+      expect(logger.error).toHaveBeenCalledTimes(1);
+      expect(backend.fetchReadyTasks).toHaveBeenCalledTimes(3);
+
+      // File unchanged — condemnation holds, no re-fetch.
+      await refresher.refreshOnce();
+      expect(backend.fetchReadyTasks).toHaveBeenCalledTimes(3);
+
+      // File changed — condemnation clears; a genuine mtime change gives the
+      // registration another chance.
+      currentMtime = 200;
+
+      // 3 more consecutive failures after the reset condemns it again.
+      for (let i = 0; i < 3; i++) {
+        await refresher.refreshOnce();
+      }
+
+      expect(backend.fetchReadyTasks).toHaveBeenCalledTimes(6);
+      expect(logger.error).toHaveBeenCalledTimes(2);
+    });
+
+    it('logs nothing extra and condemns nothing for a project whose milestones all resolve', async () => {
+      const project = makeProject({ id: 'p1' });
+      vi.mocked(getAllProjects).mockReturnValue([project]);
+      vi.mocked(ProjectService.listMilestones).mockReturnValue([
+        makeMilestone('m1', 'src-1'),
+      ]);
+
+      const backend = makeBackend({
+        fetchReadyTasks: vi.fn().mockResolvedValue([]),
+      });
+      vi.mocked(getTaskBackend).mockReturnValue(backend);
+
+      const refresher = new TaskCacheRefresher(undefined, {
+        listProjects: getAllProjects,
+        resolveBackend: getTaskBackend,
+      });
+
+      for (let i = 0; i < 5; i++) {
+        await refresher.refreshOnce();
+      }
+
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(logger.warn).not.toHaveBeenCalled();
+      expect(backend.fetchReadyTasks).toHaveBeenCalledTimes(5);
     });
   });
 });
