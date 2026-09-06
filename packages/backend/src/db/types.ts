@@ -1607,8 +1607,9 @@ export interface FlakyRemediationTrackingRow {
 
 /**
  * One row per (project_id, test_id) ever confirmed failing on the base tree
- * itself (partial_fail outcome) — see queries.ts's
- * tryClaimBaseHealthRemediationTestFiling / audit/baseHealthRemediationFiling.ts.
+ * itself (partial_fail outcome) — historical rows from the now-removed
+ * audit/baseHealthRemediationFiling.ts producer; read-only via queries.ts's
+ * getBaseHealthRemediationTestTracking.
  */
 export interface BaseHealthRemediationTestTrackingRow {
   project_id: string;
@@ -1621,8 +1622,10 @@ export interface BaseHealthRemediationTestTrackingRow {
 
 /**
  * One row per (project_id, failure_reason) ever confirmed as a whole-process
- * base-branch crash (total_fail outcome) — see queries.ts's
- * tryClaimBaseHealthRemediationReasonFiling / audit/baseHealthRemediationFiling.ts.
+ * base-branch crash (total_fail outcome) — historical rows from the
+ * now-removed audit/baseHealthRemediationFiling.ts producer; read-only via
+ * queries.ts's getBaseHealthRemediationReasonTrackingByOpenTaskId /
+ * hasOpenBaseHealthRemediation.
  */
 export interface BaseHealthRemediationReasonTrackingRow {
   project_id: string;
