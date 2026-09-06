@@ -1,9 +1,11 @@
 /**
- * Base-attributable-failures exemption for session_test_request_cycles —
- * see baseAttribution.ts. maybeAutoApproveTestRequest skips the cycle-count
- * charge when the run that prompted this test.request cycle failed for a
- * confirmed base-attributable reason: an iterate-on-red loop forced entirely
- * by a broken base branch must not burn this budget. Unlike
+ * Breadth-attributable-failures exemption for session_test_request_cycles —
+ * replaces the retired whole-tree base-health check (baseAttribution.ts,
+ * deleted) with db/queries.ts's isRunFailureBreadthAttributable.
+ * maybeAutoApproveTestRequest skips the cycle-count charge when the run that
+ * prompted this test.request cycle failed for a reason that clears the
+ * cross-SHA breadth bar: an iterate-on-red loop forced entirely by a
+ * widely-failing test must not burn this budget. Unlike
  * stalled_pr_retry_count/flake_recovery_attempts, no reset primitive exists
  * for this counter — an already-exhausted session always requires a fresh
  * dispatch (verified below: this exemption never resets, only skips future
@@ -22,13 +24,13 @@ const {
   mockLoadOrchestratorConfig,
   mockComputeHash,
   mockAdmitTestRequest,
-  mockIsRunFailureBaseAttributable,
+  mockIsRunFailureBreadthAttributable,
 } = vi.hoisted(() => ({
   mockGetProjectById: vi.fn(),
   mockLoadOrchestratorConfig: vi.fn(),
   mockComputeHash: vi.fn(),
   mockAdmitTestRequest: vi.fn(),
-  mockIsRunFailureBaseAttributable: vi.fn(),
+  mockIsRunFailureBreadthAttributable: vi.fn(),
 }));
 
 vi.mock('../../config', async (importOriginal) => {
@@ -52,9 +54,13 @@ vi.mock('../../orchestration/testRequestLane', () => ({
   admitTestRequest: mockAdmitTestRequest,
 }));
 
-vi.mock('../../orchestration/baseAttribution', () => ({
-  isRunFailureBaseAttributable: mockIsRunFailureBaseAttributable,
-}));
+vi.mock('../../db/queries', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../db/queries')>();
+  return {
+    ...actual,
+    isRunFailureBreadthAttributable: mockIsRunFailureBreadthAttributable,
+  };
+});
 
 import { db } from '../../db/db';
 import { stageIntent, routeStageTimeBlock } from '../stagedIntents';
@@ -94,7 +100,7 @@ beforeEach(() => {
   mockLoadOrchestratorConfig.mockReset();
   mockComputeHash.mockReset();
   mockAdmitTestRequest.mockReset();
-  mockIsRunFailureBaseAttributable.mockReset();
+  mockIsRunFailureBreadthAttributable.mockReset();
   db.prepare('DELETE FROM staged_intent').run();
   db.prepare('DELETE FROM staged_intent_group').run();
   db.prepare('DELETE FROM sessions').run();
@@ -126,9 +132,9 @@ beforeEach(() => {
   typedSetSetting('test_request_cycle_limit', 3);
 });
 
-describe('session_test_request_cycles base-attributable-failures exemption', () => {
-  it('does not increment the cycle counter when the prior failing run is confirmed base-attributable', async () => {
-    mockIsRunFailureBaseAttributable.mockResolvedValue(true);
+describe('session_test_request_cycles breadth-attributable-failures exemption', () => {
+  it('does not increment the cycle counter when the prior failing run is breadth-attributable', async () => {
+    mockIsRunFailureBreadthAttributable.mockReturnValue(true);
     setUpSession('session-base-fail');
     insertTestRequestRun(
       'run-1',
@@ -145,8 +151,8 @@ describe('session_test_request_cycles base-attributable-failures exemption', () 
     expect(getSessionTestRequestCycleCount('session-base-fail')).toBe(0);
   });
 
-  it('increments the cycle counter normally when the prior failing run is not base-attributable', async () => {
-    mockIsRunFailureBaseAttributable.mockResolvedValue(false);
+  it('increments the cycle counter normally when the prior failing run is not breadth-attributable', async () => {
+    mockIsRunFailureBreadthAttributable.mockReturnValue(false);
     setUpSession('session-own-fail');
     insertTestRequestRun(
       'run-2',
@@ -170,11 +176,11 @@ describe('session_test_request_cycles base-attributable-failures exemption', () 
     await routeStageTimeBlock(intent, undefined);
 
     expect(getSessionTestRequestCycleCount('session-first-cycle')).toBe(1);
-    expect(mockIsRunFailureBaseAttributable).not.toHaveBeenCalled();
+    expect(mockIsRunFailureBreadthAttributable).not.toHaveBeenCalled();
   });
 
-  it('has no reset primitive: a session already exhausted before base-attributability was confirmed stays exhausted (a fresh dispatch is required)', async () => {
-    mockIsRunFailureBaseAttributable.mockResolvedValue(false);
+  it('has no reset primitive: a session already exhausted before breadth-attributability was confirmed stays exhausted (a fresh dispatch is required)', async () => {
+    mockIsRunFailureBreadthAttributable.mockReturnValue(false);
     setUpSession('session-exhausted');
     for (let i = 0; i < 3; i++) {
       const intent = stageTestRequest('session-exhausted');
@@ -185,7 +191,7 @@ describe('session_test_request_cycles base-attributable-failures exemption', () 
     // Even once a later cycle's prior failure is confirmed base-attributable
     // (so this 4th cycle itself would not have been charged), the count
     // accumulated before that confirmation is never rolled back.
-    mockIsRunFailureBaseAttributable.mockResolvedValue(true);
+    mockIsRunFailureBreadthAttributable.mockReturnValue(true);
     insertTestRequestRun(
       'run-3',
       'proj-1',

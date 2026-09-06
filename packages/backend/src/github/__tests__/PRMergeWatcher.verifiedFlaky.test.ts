@@ -28,6 +28,12 @@ vi.mock('../../db/queries', () => ({
   incrementFlakeRecoveryAttempts: vi.fn(),
   resetFlakeRecoveryAttempts: vi.fn(),
   setFlakeRecoveryBaseExhausted: vi.fn(),
+  // Never breadth-attributable in this suite (no latest run to find) —
+  // preserves this file's pre-exemption assertions untouched. See
+  // PRMergeWatcher.baseAttribution.test.ts for the exemption/restore
+  // behavior itself.
+  getLatestTestRequestRunForSession: vi.fn().mockReturnValue(undefined),
+  isRunFailureBreadthAttributable: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock('../../config', () => ({
@@ -61,16 +67,6 @@ vi.mock('../conflictNudge', () => ({ sendConflictNudge: vi.fn() }));
 
 vi.mock('../pollUtils', () => ({
   isTerminalStalePR: vi.fn().mockReturnValue(false),
-}));
-
-// Never base-attributable / never base-healthy in this suite — preserves
-// this file's pre-exemption assertions untouched. See
-// PRMergeWatcher.baseAttribution.test.ts for the exemption/restore behavior
-// itself.
-vi.mock('../../orchestration/baseAttribution', () => ({
-  isBaseTotalFail: vi.fn().mockResolvedValue(false),
-  isProjectBaseHealthy: vi.fn().mockResolvedValue(false),
-  hasBaseTotalFailSince: vi.fn().mockResolvedValue(false),
 }));
 
 // db/pauseReason is left un-mocked — real parse/serialize logic exercises the

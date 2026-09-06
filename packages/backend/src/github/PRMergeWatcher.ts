@@ -88,12 +88,9 @@ import {
   resetFlakeRecoveryAttempts,
   setFlakeRecoveryBaseExhausted,
   recordMergeCommitForSession,
+  getLatestTestRequestRunForSession,
+  isRunFailureBreadthAttributable,
 } from '../db/queries';
-import {
-  isBaseTotalFail,
-  isProjectBaseHealthy,
-  hasBaseTotalFailSince,
-} from '../orchestration/baseAttribution';
 import { emitTaskUpdated } from '../routes/tasks';
 import { logger } from '../logger';
 import { buildTestResultDigest } from '../session/testResultDigest';
@@ -167,6 +164,31 @@ function isSessionTerminal(status: string | null | undefined): boolean {
 /** Per-PR key for in-flight guards, matching AutoMerger's own key shape. */
 function flakeRecoveryKey(prNumber: number, repo: string): string {
   return `${repo}#${prNumber}`;
+}
+
+/**
+ * Replacement for the retired whole-tree base-attributability check: true
+ * when `pr`'s own most recent test-request run's failures are all
+ * breadth-attributable (see db/queries.ts's isRunFailureBreadthAttributable)
+ * right now — a run with no failing tests, or one with a failure unique to
+ * it, is never attributable. Shared by both flake-recovery call sites
+ * (handleVerifiedFlakyDisposition/tryF2LaneAutoDisposition's budget-restore
+ * check, and applyFlakeRecoveryOutcome's charge-exemption check) so they
+ * can't drift on what "base-attributable" means.
+ */
+function isPrLatestRunBreadthAttributable(
+  project: ProjectConfig,
+  pr: Pick<PullRequestRow, 'session_id'>,
+): boolean {
+  if (!pr.session_id) return false;
+  const run = getLatestTestRequestRunForSession(project.id, pr.session_id);
+  if (!run) return false;
+  return isRunFailureBreadthAttributable(
+    run.id,
+    typedGetSetting('flip_rate_breadth_n'),
+    typedGetSetting('flip_rate_breadth_window_hours'),
+    Date.now(),
+  );
 }
 
 export class PRMergeWatcher extends EventEmitter {
@@ -1193,17 +1215,11 @@ export class PRMergeWatcher extends EventEmitter {
     const maxRetries = typedGetSetting('flake_recovery_max_retries');
     if (pr.flake_recovery_attempts >= maxRetries) {
       // Restore, once — scoped to this PR alone — if its most recent
-      // exhaustion was itself confirmed base-attributable and the base
-      // branch has since recovered. Never a blanket reset of every open
-      // PR's counter.
+      // exhaustion was itself confirmed base-attributable and its latest
+      // test-request run's failures are breadth-attributable right now.
+      // Never a blanket reset of every open PR's counter.
       if (pr.flake_recovery_base_exhausted && project) {
-        const healthy = await isProjectBaseHealthy(
-          project,
-          pr.head_sha ?? undefined,
-        );
-        const corroborated =
-          healthy &&
-          (await hasBaseTotalFailSince(project, pr.pause_reason_set_at ?? 0));
+        const corroborated = isPrLatestRunBreadthAttributable(project, pr);
         if (corroborated) {
           resetFlakeRecoveryAttempts(pr.pr_number, pr.repo);
           recordEvent({
@@ -1403,25 +1419,21 @@ export class PRMergeWatcher extends EventEmitter {
       return;
     }
 
-    // A 'failed' re-run confirmed base-attributable (live check, right now)
-    // never charges the budget — the PR's own change isn't what's failing.
-    // Never affects GitHub's own check-run conclusion, only this internal
-    // counter. Arming flake_recovery_base_exhausted is unconditional on any
-    // 'failed' outcome, independent of that live check — mirrors
-    // StalledPRReconciler's stalled_retry_base_exhausted: the live check
-    // only ever samples a possibly-transient verdict at this one instant,
-    // so the actual base-attributability verdict for a later budget-restore
-    // is deferred to hasBaseTotalFailSince's recovery-time history
-    // comparison instead.
+    // A 'failed' re-run confirmed breadth-attributable (live check, right
+    // now) never charges the budget — the PR's own change isn't what's
+    // failing. Never affects GitHub's own check-run conclusion, only this
+    // internal counter. Arming flake_recovery_base_exhausted is
+    // unconditional on any 'failed' outcome, independent of that live
+    // check — mirrors StalledPRReconciler's stalled_retry_base_exhausted:
+    // the live check only ever samples a possibly-transient verdict at this
+    // one instant, so a later budget-restore re-checks fresh rather than
+    // trusting this sample.
     let baseAttributable = false;
     if (outcome === 'failed') {
       setFlakeRecoveryBaseExhausted(pr.pr_number, pr.repo, true);
       const project = getProjectByGithubRepo(pr.repo);
       if (project) {
-        baseAttributable = await isBaseTotalFail(
-          project,
-          pr.head_sha ?? undefined,
-        );
+        baseAttributable = isPrLatestRunBreadthAttributable(project, pr);
       }
     }
     if (!baseAttributable) {
@@ -1547,12 +1559,12 @@ export class PRMergeWatcher extends EventEmitter {
     const maxRetries = typedGetSetting('flake_recovery_max_retries');
     if (pr.flake_recovery_attempts >= maxRetries) {
       // Restore, scoped to this PR alone, if its most recent exhaustion was
-      // itself confirmed base-attributable and the base branch has since
-      // recovered — mirrors handleVerifiedFlakyDisposition's own restore.
+      // itself confirmed base-attributable and its latest test-request
+      // run's failures are breadth-attributable right now — mirrors
+      // handleVerifiedFlakyDisposition's own restore.
       if (
         pr.flake_recovery_base_exhausted &&
-        (await isProjectBaseHealthy(project, pr.head_sha ?? undefined)) &&
-        (await hasBaseTotalFailSince(project, pr.pause_reason_set_at ?? 0))
+        isPrLatestRunBreadthAttributable(project, pr)
       ) {
         resetFlakeRecoveryAttempts(pr.pr_number, pr.repo);
         recordEvent({

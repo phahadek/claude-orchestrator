@@ -243,6 +243,52 @@ describe('boot chain — gate_verify_reattachment step', () => {
   });
 });
 
+// ── base_branch_broken_pause_clear step ───────────────────────────────────────
+
+describe('boot chain — base_branch_broken_pause_clear step', () => {
+  it('clears a pre-existing base_branch_broken task pause at boot', async () => {
+    const { deps } = makeDeps();
+    db.prepare(
+      `INSERT OR REPLACE INTO task_pause_reasons (task_id, pause_reason, detail, set_at) VALUES (?, ?, ?, ?)`,
+    ).run(
+      'stale-task',
+      JSON.stringify({
+        reason: 'base_branch_broken',
+        source: 'launch',
+        severity: 'recoverable',
+        retry_strategy: 'automatic',
+        blocks_merge: true,
+      }),
+      '',
+      Date.now(),
+    );
+
+    await runAndDrain(deps);
+
+    const row = db
+      .prepare(`SELECT * FROM task_pause_reasons WHERE task_id = ?`)
+      .get('stale-task');
+    expect(row).toBeUndefined();
+  });
+
+  it('includes base_branch_broken_pause_clear in the announced boot steps', async () => {
+    const { deps, broadcast } = makeDeps();
+
+    await runAndDrain(deps);
+
+    const startedCall = vi
+      .mocked(broadcast)
+      .mock.calls.find(([msg]) => msg.type === 'boot_reconciliation_started');
+    const steps = (
+      startedCall![0] as Extract<
+        ServerMessage,
+        { type: 'boot_reconciliation_started' }
+      >
+    ).steps;
+    expect(steps).toContain('base_branch_broken_pause_clear');
+  });
+});
+
 // ── token_backfill and session_events_pruner_at_boot are fully awaited ────────
 
 describe('boot chain — token_backfill and session_events_pruner_at_boot are awaited', () => {

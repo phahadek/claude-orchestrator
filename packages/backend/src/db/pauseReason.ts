@@ -32,7 +32,6 @@ export type CanonicalPauseReason =
   | 'stalled_idle'
   | 'notion_done_update_stuck'
   | 'launch_failed'
-  | 'base_branch_broken'
   | 'diverged_branch'
   | 'diverged_branch_unresolved'
   | 'analyze_failing'
@@ -214,15 +213,6 @@ export const PAUSE_REASON_REGISTRY: Record<
     source: 'launch',
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
-  },
-  // Base branch itself is broken at a whole-suite/build level (total_fail —
-  // no per-test breakdown, e.g. a crash or OOM-kill before any report was
-  // written). Clears itself the moment a subsequent base-health check comes
-  // back clean/partial — never requires a human, unlike launch_failed above.
-  base_branch_broken: {
-    source: 'launch',
-    severity: 'recoverable',
-    retry_strategy: 'automatic',
   },
   diverged_branch: {
     source: 'merge',
@@ -525,8 +515,8 @@ export interface RecoveryDescriptor {
 // 'merge'-sourced merge_conflict is 'resume' and 'merge'-sourced
 // pr_creation_failed is 'redispatch'. The one capability-derivable slice —
 // every severity:'recoverable' + retry_strategy:'automatic' reason
-// (stuck_timeout, api_overloaded, base_branch_broken, rate_limit,
-// depth_review_pending, usage_limit_deferred) maps to 'none' below, since a
+// (stuck_timeout, api_overloaded, rate_limit, depth_review_pending,
+// usage_limit_deferred) maps to 'none' below, since a
 // self-healing pause never has a manual click to offer — is still listed
 // explicitly per-reason rather than derived, to preserve the exhaustiveness
 // guarantee against a reason moving between (severity, retry_strategy) pairs
@@ -578,7 +568,6 @@ const RECOVERY_ACTION_MAP: Record<
   api_overloaded: 'none', // recoverable+automatic: auto-retries via in-place kill+respawn before ever reaching *_exhausted
   awaiting_human_approval: 'none', // cleared by approving the PR on GitHub, not by this map
   notion_done_update_stuck: 'none', // PR is already merged; a redispatch would incorrectly reset an already-completed task
-  base_branch_broken: 'none', // clears itself the moment a subsequent base-health check comes back clean/partial
   rate_limit: 'none', // recoverable+automatic: auto-clears the moment the rate_limit_event status flips to 'resumed'
   workflow_scope_denied: 'none', // fix is retyping the task as Tooling for an interactive session — a routing change outside this session
   review_rules_escalation: 'none', // resolve manually; no dedicated auto-discharge route

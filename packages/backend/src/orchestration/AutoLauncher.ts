@@ -25,8 +25,6 @@ import {
   resetTaskCrashCount,
   getTaskRepoAssignment,
   isNoOpSuppressed,
-  hasOpenBaseHealthRemediation,
-  getBaseHealthRemediationReasonTrackingByOpenTaskId,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { runWithConcurrency, yieldToEventLoop } from '../utils/concurrency';
@@ -38,7 +36,6 @@ import {
   isUsageThresholdAdmitted,
   parseThresholdPercent,
 } from './usageAdmission';
-import type { BaseHealthCheckResult } from './baseHealthCheck';
 import { probeBranchLocally, deriveBranchSlug } from '../session/branchModel';
 
 const READY_STATUS = '🗂️ Ready';
@@ -153,10 +150,6 @@ export class AutoLauncher {
       resolveBackend?: (projectId: string) => TaskBackend;
       /** Whether to immediately run a poll cycle when start() is called. Defaults to true. */
       pollOnStart?: boolean;
-      /** Base-branch health checker — defaulted to checkBaseBranchHealth for production. */
-      checkBaseHealth?: (
-        project: ProjectConfig,
-      ) => Promise<BaseHealthCheckResult>;
     } = {},
   ) {
     // Subscribe to SessionManager events so launch_failed notifications trigger
@@ -490,27 +483,6 @@ export class AutoLauncher {
       this.maybeClearStaleReadyTransitionPauses(resolved.task.id);
     }
 
-    // Base-health gate: only evaluated on-demand — never a proactive poller.
-    // checkBaseBranchHealth is only invoked once some task's own test-request
-    // failure has already triggered an on-demand confirmation (see
-    // baseAttributableFilter.ts), which is what leaves an open total_fail
-    // remediation tracking row for this project, or once a task is already
-    // sitting under a base_branch_broken pause from an earlier tick that
-    // needs to be maintained/cleared. A project no task has ever failed a
-    // test-request against never calls checkBaseHealth at all.
-    const readyCodeTasks = allTasks.filter((t) => this.isReadyCodeCandidate(t));
-    if (readyCodeTasks.length > 0) {
-      const hasActiveOrPendingBreak =
-        hasOpenBaseHealthRemediation(project.id) ||
-        readyCodeTasks.some(
-          ({ task }) =>
-            getTaskPauseReason(task.id)?.reason === 'base_branch_broken',
-        );
-      if (hasActiveOrPendingBreak) {
-        await this.applyBaseHealthGate(project, readyCodeTasks);
-      }
-    }
-
     const candidates = allTasks.filter((t) => this.isLaunchCandidate(t));
     if (candidates.length === 0)
       return { eligible: 0, launched: 0, skipped: 0, readyTaskIds };
@@ -723,86 +695,6 @@ export class AutoLauncher {
       };
     }
     return { allowed: true };
-  }
-
-  /**
-   * Holds new dispatch for a project when its base branch is broken at a
-   * whole-suite/build level (checkBaseBranchHealth's `total_fail` outcome —
-   * a crash/OOM-kill with no per-test breakdown), and lifts the hold as soon
-   * as a subsequent check comes back anything else. `partial_fail` (an
-   * ordinary per-test breakdown, however large) and `unknown` (provisioning
-   * failure/timeout) must never block — both fall through to the else branch
-   * below, matching today's pre-this-design behavior. Applied per-task via
-   * the existing task_pause_reasons mechanism so isLaunchCandidate's
-   * pre-existing pause check does the actual blocking.
-   */
-  private async applyBaseHealthGate(
-    project: ProjectConfig,
-    readyCodeTasks: ResolvedTask[],
-  ): Promise<void> {
-    // Dynamically imported rather than statically — baseHealthCheck.ts pulls
-    // in ScheduledAuditSweep.ts, whose module-level defaultDeps reads
-    // getAllProjects from '../config' at import time. A static import here
-    // would make every existing test's `vi.mock('../config.js', ...)`
-    // — most of them intentionally partial, since they never needed
-    // getAllProjects before — throw at module-load time. Deferring to a
-    // dynamic import keeps that failure (if it ever happens) inside this
-    // function's own try/catch, which already treats a thrown check as
-    // fail-open.
-    const checkBaseHealth =
-      this.options.checkBaseHealth ??
-      (async (p: ProjectConfig) => {
-        const { checkBaseBranchHealth } = await import('./baseHealthCheck');
-        return checkBaseBranchHealth(p);
-      });
-    let result: BaseHealthCheckResult;
-    try {
-      result = await checkBaseHealth(project);
-    } catch (err) {
-      logger.warn(
-        `[AutoLauncher] project ${project.id}: base-health check threw — treating as unknown (fail-open): ${err}`,
-      );
-      return;
-    }
-
-    if (result.outcome === 'total_fail') {
-      for (const { task } of readyCodeTasks) {
-        // Never pause (and always clear) the task that is itself the linked
-        // open remediation task for this exact break — it's the one task
-        // capable of ever landing the fix that clears this gate. Pausing it
-        // would deadlock the project: no commit could ever land on base, so
-        // no subsequent check could ever come back non-total_fail.
-        if (getBaseHealthRemediationReasonTrackingByOpenTaskId(task.id)) {
-          if (getTaskPauseReason(task.id)?.reason === 'base_branch_broken') {
-            clearTaskPauseReason(task.id);
-            logger.info(
-              `[AutoLauncher] project ${project.id}: task ${task.id} is the open base-health remediation task for this break — clearing its dispatch hold`,
-            );
-          }
-          continue;
-        }
-        if (getTaskPauseReason(task.id)?.reason === 'base_branch_broken')
-          continue;
-        setTaskPauseReason(
-          task.id,
-          'base_branch_broken',
-          result.contentHash ?? '',
-        );
-        logger.warn(
-          `[AutoLauncher] project ${project.id}: base branch total_fail (contentHash=${result.contentHash}) — holding task ${task.id} from dispatch`,
-        );
-      }
-      return;
-    }
-
-    for (const { task } of readyCodeTasks) {
-      if (getTaskPauseReason(task.id)?.reason !== 'base_branch_broken')
-        continue;
-      clearTaskPauseReason(task.id);
-      logger.info(
-        `[AutoLauncher] project ${project.id}: base-health cleared (${result.outcome}) — resuming dispatch for task ${task.id}`,
-      );
-    }
   }
 
   /**

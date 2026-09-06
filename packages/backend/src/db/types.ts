@@ -414,12 +414,13 @@ export interface PullRequestRow {
   flake_recovery_attempts: number;
   /** 0 | 1 — set when stalled_pr_retry_count's most recent exhaustion (the
    *  gate_failed stall that triggered a reconcile_exhausted escalation) was
-   *  confirmed base-attributable (see baseAttribution.ts) — the sole scoping
-   *  signal the base-recovery reset consults; cleared on any reset. */
+   *  confirmed breadth-attributable (see db/queries.ts's
+   *  isRunFailureBreadthAttributable) — the sole scoping signal the
+   *  base-recovery reset consults; cleared on any reset. */
   stalled_retry_base_exhausted: number;
   /** 0 | 1 — the flake_recovery_attempts counterpart to
    *  stalled_retry_base_exhausted, set when the most recent flake-recovery
-   *  re-run failure was confirmed base-attributable. */
+   *  re-run failure was confirmed breadth-attributable. */
   flake_recovery_base_exhausted: number;
   /** 0 | 1 — the docs execution flow's never-auto-merged output gate: set at
    *  PR-open for repo-file docs PRs. Excluded from getApprovedOpenPRs and
@@ -441,9 +442,8 @@ export interface PullRequestRow {
    *  recording or discharging a live pause-reason entry for the same PR. */
   reconcile_exhausted: number;
   /** Unix ms timestamp of when reconcile_exhausted was last set to true; null
-   *  when clear. The base-recovery escape (hasBaseTotalFailSince) uses this
-   *  as this PR's own escalation timestamp — pause_reason_set_at no longer
-   *  moves on escalation now that the flag is decoupled from pause_reason. */
+   *  when clear. pause_reason_set_at no longer moves on escalation now that
+   *  the flag is decoupled from pause_reason. */
   reconcile_exhausted_set_at: number | null;
 }
 
@@ -1214,8 +1214,9 @@ export type RunOrigin = 'base_health_probe' | 'pr_pipeline' | null;
  * RunOrigin (which distinguishes a base-health probe from a PR-branch worktree
  * run, both session_id: null): 'session_request' is a test.request staged
  * intent (routes/stagedIntents.ts), 'pr_gate' is the PR pre-review/review test
- * pass (PreReviewPipeline.ts/ReviewOrchestrator.ts), 'base_health' is
- * baseHealthCheck.ts's own probe. Null only for rows predating this column.
+ * pass (PreReviewPipeline.ts/ReviewOrchestrator.ts), 'base_health' was the
+ * now-deleted baseHealthCheck.ts's own probe (historical rows only). Null
+ * only for rows predating this column.
  */
 export type TestRunProducer = 'session_request' | 'pr_gate' | 'base_health';
 
@@ -1243,7 +1244,7 @@ export interface TestRequestRunRow {
    * run (i.e. the project declared test_report_glob) — independent of
    * whether that attempt matched anything. Null for `running` rows and for
    * rows predating this column. See PRMergeWatcher's acquisition-failure
-   * gate and baseHealthCheck's classifyFailedRun for the consumers this
+   * gate and testRequestLane.ts's classifyFailedRun for the consumers this
    * disambiguates for.
    */
   test_report_acquisition_attempted: number | null;
@@ -1328,7 +1329,7 @@ export interface StructuredTestResult {
    * partial multi-command glob merge from a genuinely complete result so a
    * missing suite is never silently indistinguishable from a full pass. See
    * collectStructuredTestResult in session/test-runner.ts and
-   * classifyFailedRun in orchestration/baseHealthCheck.ts.
+   * classifyFailedRun in orchestration/testRequestLane.ts.
    */
   incomplete?: boolean;
 }
@@ -1614,22 +1615,6 @@ export interface FlakyRemediationTrackingRow {
 export interface BaseHealthRemediationTestTrackingRow {
   project_id: string;
   test_id: string;
-  remediation_task_id: string | null;
-  remediation_task_open: number;
-  created_at: string;
-  updated_at: string;
-}
-
-/**
- * One row per (project_id, failure_reason) ever confirmed as a whole-process
- * base-branch crash (total_fail outcome) — historical rows from the
- * now-removed audit/baseHealthRemediationFiling.ts producer; read-only via
- * queries.ts's getBaseHealthRemediationReasonTrackingByOpenTaskId /
- * hasOpenBaseHealthRemediation.
- */
-export interface BaseHealthRemediationReasonTrackingRow {
-  project_id: string;
-  failure_reason: string;
   remediation_task_id: string | null;
   remediation_task_open: number;
   created_at: string;

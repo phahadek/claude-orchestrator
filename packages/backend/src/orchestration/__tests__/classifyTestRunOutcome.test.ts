@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { classifyTestRunOutcome } from '../baseHealthCheck';
+import { classifyTestRunOutcome } from '../testRequestLane';
 import type { TestRequestRunRow } from '../../db/types';
 
 function makeRun(

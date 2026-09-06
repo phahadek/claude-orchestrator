@@ -1,13 +1,15 @@
 /**
- * Base-attributable-failures exemption for PRMergeWatcher's
- * flake_recovery_attempts — see baseAttribution.ts.
- *  - a verified-flaky re-run that still fails, confirmed base-attributable
- *    (base tree total_fail), never charges the counter, and marks
- *    flake_recovery_base_exhausted.
+ * Breadth-attributable-failures exemption for PRMergeWatcher's
+ * flake_recovery_attempts — replaces the retired whole-tree base-health
+ * check (baseAttribution.ts, deleted) with a per-run check against the PR's
+ * own latest test-request run.
+ *  - a verified-flaky re-run that still fails, whose latest run's failures
+ *    are all breadth-attributable right now, never charges the counter, and
+ *    marks flake_recovery_base_exhausted.
  *  - once already exhausted (paused with flake-recovery-exhausted), a PR
  *    whose flake_recovery_base_exhausted flag is set has resetFlakeRecoveryAttempts()
  *    called — the same reset a passing re-run already uses — the next time
- *    base comes back clean_pass, scoped to that PR alone.
+ *    its latest run is breadth-attributable, scoped to that PR alone.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -28,6 +30,8 @@ vi.mock('../../db/queries', () => ({
   setPRReviewResult: vi.fn(),
   setPendingPush: vi.fn(),
   getLatestTestRequestRun: vi.fn().mockReturnValue(undefined),
+  getLatestTestRequestRunForSession: vi.fn(),
+  isRunFailureBreadthAttributable: vi.fn(),
   markSessionDone: vi.fn(),
   updateSessionStatus: vi.fn(),
   setPreReviewStage: vi.fn(),
@@ -73,12 +77,6 @@ vi.mock('../pollUtils', () => ({
   isTerminalStalePR: vi.fn().mockReturnValue(false),
 }));
 
-vi.mock('../../orchestration/baseAttribution', () => ({
-  isBaseTotalFail: vi.fn(),
-  isProjectBaseHealthy: vi.fn(),
-  hasBaseTotalFailSince: vi.fn(),
-}));
-
 import { PRMergeWatcher } from '../PRMergeWatcher';
 import {
   getPRByNumber,
@@ -87,15 +85,12 @@ import {
   incrementFlakeRecoveryAttempts,
   resetFlakeRecoveryAttempts,
   setFlakeRecoveryBaseExhausted,
+  getLatestTestRequestRunForSession,
+  isRunFailureBreadthAttributable,
 } from '../../db/queries';
 import { recordEvent } from '../../audit/AuditLog';
 import { getProjectByGithubRepo } from '../../config';
 import { typedGetSetting } from '../../config/settings';
-import {
-  isBaseTotalFail,
-  isProjectBaseHealthy,
-  hasBaseTotalFailSince,
-} from '../../orchestration/baseAttribution';
 import {
   pauseReasonFromCanonical,
   serializePauseReason,
@@ -109,6 +104,7 @@ import type { VerifiedFlakyDispositionPayload } from '../types';
 const PR_NUMBER = 1715;
 const REPO = 'owner/repo';
 const HEAD_SHA = 'sha-flaky-1';
+const LATEST_RUN = { id: 'run-latest' };
 
 const CI_FAILING_PAUSE = serializePauseReason(
   pauseReasonFromCanonical('ci_failing'),
@@ -232,11 +228,14 @@ beforeEach(() => {
   vi.mocked(getSession).mockReturnValue({
     worktree_path: '/tmp/worktree',
   } as any);
+  vi.mocked(getLatestTestRequestRunForSession).mockReturnValue(
+    LATEST_RUN as any,
+  );
 });
 
-describe('PRMergeWatcher — flake_recovery_attempts base-attributable exemption', () => {
-  it('does not charge flake_recovery_attempts when a same-SHA re-run still fails for a confirmed base-attributable reason', async () => {
-    vi.mocked(isBaseTotalFail).mockResolvedValue(true);
+describe('PRMergeWatcher — flake_recovery_attempts breadth-attributable exemption', () => {
+  it('does not charge flake_recovery_attempts when a same-SHA re-run still fails and its latest run is breadth-attributable', async () => {
+    vi.mocked(isRunFailureBreadthAttributable).mockReturnValue(true);
     const github = makeMockGitHub();
     const { watcher } = makeWatcher(github);
     const pr = makePRRow({ flake_recovery_attempts: 1 });
@@ -250,14 +249,21 @@ describe('PRMergeWatcher — flake_recovery_attempts base-attributable exemption
       REPO,
       true,
     );
-    // The PR's own head_sha is threaded through as isBaseTotalFail's
-    // reference commit — attribution keys on this PR's merge-base, not the
-    // base branch's own tip.
-    expect(isBaseTotalFail).toHaveBeenCalledWith(expect.anything(), HEAD_SHA);
+    // The PR's own session id is threaded through to find its latest run.
+    expect(getLatestTestRequestRunForSession).toHaveBeenCalledWith(
+      'project-1',
+      'coding-session',
+    );
+    expect(isRunFailureBreadthAttributable).toHaveBeenCalledWith(
+      'run-latest',
+      2,
+      2,
+      expect.any(Number),
+    );
   });
 
-  it('charges flake_recovery_attempts normally when a re-run failure is not base-attributable live, but still arms the flag unconditionally on any failed re-run', async () => {
-    vi.mocked(isBaseTotalFail).mockResolvedValue(false);
+  it('charges flake_recovery_attempts normally when a re-run failure is not breadth-attributable, but still arms the flag unconditionally on any failed re-run', async () => {
+    vi.mocked(isRunFailureBreadthAttributable).mockReturnValue(false);
     const github = makeMockGitHub();
     const { watcher } = makeWatcher(github);
     const pr = makePRRow({ flake_recovery_attempts: 1 });
@@ -270,8 +276,7 @@ describe('PRMergeWatcher — flake_recovery_attempts base-attributable exemption
       REPO,
     );
     // Arming is decoupled from the live "charge this attempt or not" check —
-    // the actual base-attributability verdict for a later budget-restore is
-    // deferred to hasBaseTotalFailSince's recovery-time history comparison.
+    // the actual verdict for a later budget-restore is re-checked fresh.
     expect(setFlakeRecoveryBaseExhausted).toHaveBeenCalledWith(
       PR_NUMBER,
       REPO,
@@ -279,9 +284,8 @@ describe('PRMergeWatcher — flake_recovery_attempts base-attributable exemption
     );
   });
 
-  it('restores the budget via resetFlakeRecoveryAttempts once base recovers for a PR whose exhaustion was base-attributable, then proceeds with the re-run normally', async () => {
-    vi.mocked(isProjectBaseHealthy).mockResolvedValue(true);
-    vi.mocked(hasBaseTotalFailSince).mockResolvedValue(true);
+  it('restores the budget via resetFlakeRecoveryAttempts once its latest run is breadth-attributable for a PR whose exhaustion was base-attributable, then proceeds with the re-run normally', async () => {
+    vi.mocked(isRunFailureBreadthAttributable).mockReturnValue(true);
     const github = makeMockGitHub();
     const { watcher } = makeWatcher(github);
     // Mutable PR row shared across the initial lookup and the post-reset
@@ -305,12 +309,6 @@ describe('PRMergeWatcher — flake_recovery_attempts base-attributable exemption
         event_type: 'flake_recovery_base_recovery_reset',
       }),
     );
-    // The PR's own head_sha is threaded through as isProjectBaseHealthy's
-    // reference commit.
-    expect(isProjectBaseHealthy).toHaveBeenCalledWith(
-      expect.anything(),
-      HEAD_SHA,
-    );
     // Restored budget means this re-run proceeds instead of staying
     // exhausted — the re-run (still ci_failed per the mock) increments once
     // rather than re-exhausting immediately.
@@ -326,8 +324,8 @@ describe('PRMergeWatcher — flake_recovery_attempts base-attributable exemption
     );
   });
 
-  it('never restores an exhausted PR whose exhaustion was not base-attributable, even once base recovers', async () => {
-    vi.mocked(isProjectBaseHealthy).mockResolvedValue(true);
+  it('never restores an exhausted PR whose exhaustion was not base-attributable, even once its latest run would clear breadth', async () => {
+    vi.mocked(isRunFailureBreadthAttributable).mockReturnValue(true);
     const github = makeMockGitHub();
     const { watcher } = makeWatcher(github);
     const pr = makePRRow({
@@ -347,9 +345,8 @@ describe('PRMergeWatcher — flake_recovery_attempts base-attributable exemption
     );
   });
 
-  it('never restores a base-attributable-exhausted PR while base-health history shows no total_fail since exhaustion, even though the live snapshot is clean_pass', async () => {
-    vi.mocked(isProjectBaseHealthy).mockResolvedValue(true);
-    vi.mocked(hasBaseTotalFailSince).mockResolvedValue(false);
+  it('never restores a base-attributable-exhausted PR while its latest run is not breadth-attributable', async () => {
+    vi.mocked(isRunFailureBreadthAttributable).mockReturnValue(false);
     const github = makeMockGitHub();
     const { watcher } = makeWatcher(github);
     const pr = makePRRow({

@@ -1,23 +1,24 @@
 /**
- * Base-attributable-failures exemption for StalledPRReconciler's
- * stalled_pr_retry_count — see baseAttribution.ts. gate_failed, session_inert,
- * and pre_review_interrupted stalls (BASE_ATTRIBUTABLE_ESCALATION_KINDS) may
- * all plausibly trace back to a broken base branch:
- *  - a gate_failed stall confirmed base-attributable live (base tree
- *    total_fail right now) is still re-driven, but never charges the
- *    counter, and marks stalled_retry_base_exhausted so a later
+ * Breadth-attributable-failures exemption for StalledPRReconciler's
+ * stalled_pr_retry_count — replaces the retired whole-tree base-health
+ * check (baseAttribution.ts, deleted) with a per-run check against the PR's
+ * own latest test-request run: gate_failed, session_inert, and
+ * pre_review_interrupted stalls (BASE_ATTRIBUTABLE_ESCALATION_KINDS) may all
+ * plausibly trace back to a widely-failing test rather than the PR's own
+ * change:
+ *  - a gate_failed stall whose latest run's failures are all
+ *    breadth-attributable right now is still re-driven, but never charges
+ *    the counter, and marks stalled_retry_base_exhausted so a later
  *    base-recovery pass knows this PR (and only this PR) is a candidate for
  *    a budget restore.
  *  - on escalation (retry cap reached), any of the three eligible kinds arms
- *    stalled_retry_base_exhausted unconditionally — no live health check at
- *    this instant, since a total_fail window is often short-lived and may
- *    not coincide with the exact moment of escalation.
+ *    stalled_retry_base_exhausted unconditionally — no live check at this
+ *    instant.
  *  - once already escalated (reconcile_exhausted), a PR whose
  *    stalled_retry_base_exhausted flag is set has its budget restored (and
- *    pause cleared via the base_recovery trigger) once the base branch is
- *    clean_pass again AND base-health history corroborates a total_fail
- *    verdict occurred at/after this PR's own escalation timestamp — scoped
- *    to that PR alone, never every open PR.
+ *    pause cleared via the base_recovery trigger) once its latest run's
+ *    failures are breadth-attributable right now — scoped to that PR alone,
+ *    never every open PR.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -40,6 +41,8 @@ vi.mock('../db/queries.js', () => ({
   linkPRTaskAndSession: vi.fn(),
   setPendingPush: vi.fn(),
   getSessionLastActivityMs: vi.fn(() => null),
+  getLatestTestRequestRunForSession: vi.fn(),
+  isRunFailureBreadthAttributable: vi.fn(),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -52,18 +55,16 @@ vi.mock('../config.js', () => ({
 }));
 
 vi.mock('../config/settings.js', () => ({
-  typedGetSetting: vi.fn(() => 5),
+  typedGetSetting: vi.fn((key: string) => {
+    if (key === 'flip_rate_breadth_n') return 3;
+    if (key === 'flip_rate_breadth_window_hours') return 24;
+    return 5;
+  }),
 }));
 
 vi.mock('../session/sessionLifecycle.js', () => ({
   sessionBusyInFlightToolCall: vi.fn(() => false),
   sessionAwaitingOperatorDecision: vi.fn(() => false),
-}));
-
-vi.mock('../orchestration/baseAttribution.js', () => ({
-  isBaseTotalFail: vi.fn(),
-  isProjectBaseHealthy: vi.fn(),
-  hasBaseTotalFailSince: vi.fn(),
 }));
 
 import {
@@ -75,18 +76,16 @@ import {
   setReconcileExhausted,
   clearTerminalPRFlags,
   getSessionLastActivityMs,
+  getLatestTestRequestRunForSession,
+  isRunFailureBreadthAttributable,
 } from '../db/queries.js';
 import { recordEvent } from '../audit/AuditLog.js';
 import { getProjectByGithubRepo } from '../config.js';
-import {
-  isBaseTotalFail,
-  isProjectBaseHealthy,
-  hasBaseTotalFailSince,
-} from '../orchestration/baseAttribution.js';
 import { StalledPRReconciler } from '../orchestration/StalledPRReconciler.js';
 import type { ServerMessage } from '../ws/types.js';
 
 const PROJECT = { id: 'proj-1', projectDir: '/proj' };
+const LATEST_RUN = { id: 'run-latest' };
 
 function makePR(overrides: Record<string, unknown> = {}) {
   return {
@@ -146,15 +145,18 @@ function makeSessionManager() {
   return { relaunchFixerForPR: vi.fn().mockResolvedValue('session-1') };
 }
 
-describe('StalledPRReconciler base-attributable-failures exemption', () => {
+describe('StalledPRReconciler breadth-attributable-failures exemption', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getProjectByGithubRepo).mockReturnValue(PROJECT as any);
     vi.mocked(incrementStalledPRRetryCount).mockReturnValue(1);
+    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue(
+      LATEST_RUN as any,
+    );
   });
 
-  it('does not charge stalled_pr_retry_count for a gate_failed stall confirmed base-attributable live (base tree total_fail), but still re-drives the fixer', async () => {
-    vi.mocked(isBaseTotalFail).mockResolvedValue(true);
+  it('does not charge stalled_pr_retry_count for a gate_failed stall whose latest run is breadth-attributable right now, but still re-drives the fixer', async () => {
+    vi.mocked(isRunFailureBreadthAttributable).mockReturnValue(true);
     const pr = makePR({ stalled_pr_retry_count: 1 });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
 
@@ -172,14 +174,21 @@ describe('StalledPRReconciler base-attributable-failures exemption', () => {
       'org/repo',
       true,
     );
-    // The PR's own head_sha is threaded through as isBaseTotalFail's
-    // reference commit — attribution keys on this PR's merge-base, not the
-    // base branch's own tip.
-    expect(isBaseTotalFail).toHaveBeenCalledWith(expect.anything(), 'sha1');
+    // The PR's own session id is threaded through to find its latest run.
+    expect(getLatestTestRequestRunForSession).toHaveBeenCalledWith(
+      'proj-1',
+      'session-1',
+    );
+    expect(isRunFailureBreadthAttributable).toHaveBeenCalledWith(
+      'run-latest',
+      3,
+      24,
+      expect.any(Number),
+    );
   });
 
-  it('charges stalled_pr_retry_count normally for a gate_failed stall not base-attributable live', async () => {
-    vi.mocked(isBaseTotalFail).mockResolvedValue(false);
+  it('charges stalled_pr_retry_count normally for a gate_failed stall not breadth-attributable', async () => {
+    vi.mocked(isRunFailureBreadthAttributable).mockReturnValue(false);
     const pr = makePR({ stalled_pr_retry_count: 1 });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
 
@@ -239,13 +248,13 @@ describe('StalledPRReconciler base-attributable-failures exemption', () => {
   describe.each(ARMING_CASES)(
     'arming on escalation for kind=$kind (BASE_ATTRIBUTABLE_ESCALATION_KINDS)',
     ({ overrides, configureMocks }) => {
-      it('arms stalled_retry_base_exhausted unconditionally on escalation, without consulting the live base-health check', async () => {
+      it('arms stalled_retry_base_exhausted unconditionally on escalation, without consulting the live breadth check', async () => {
         configureMocks?.();
-        // isBaseTotalFail is never even resolved usefully here — rejects to
-        // prove arming does not depend on it.
-        vi.mocked(isBaseTotalFail).mockRejectedValue(
-          new Error('must not be called at escalation time'),
-        );
+        // isRunFailureBreadthAttributable is never even consulted here — a
+        // throw would surface as a test failure if arming depended on it.
+        vi.mocked(isRunFailureBreadthAttributable).mockImplementation(() => {
+          throw new Error('must not be called at escalation time');
+        });
         const pr = makePR({ stalled_pr_retry_count: 2, ...overrides }); // already at cap
         vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
 
@@ -271,9 +280,8 @@ describe('StalledPRReconciler base-attributable-failures exemption', () => {
     },
   );
 
-  it('takes the base-recovery escape (kind=session_inert) once the base recovers — a kind that could never arm the escape before this change', async () => {
-    vi.mocked(isProjectBaseHealthy).mockResolvedValue(true);
-    vi.mocked(hasBaseTotalFailSince).mockResolvedValue(true);
+  it('takes the base-recovery escape (kind=session_inert) once its latest run is breadth-attributable — a kind that could never arm the escape before this change', async () => {
+    vi.mocked(isRunFailureBreadthAttributable).mockReturnValue(true);
     const pr = makePR({
       stalled_pr_retry_count: 2,
       stalled_retry_base_exhausted: 1,
@@ -287,8 +295,10 @@ describe('StalledPRReconciler base-attributable-failures exemption', () => {
 
     await reconciler.reconcileOnce();
 
-    expect(hasBaseTotalFailSince).toHaveBeenCalledWith(PROJECT, 1000);
-    expect(isProjectBaseHealthy).toHaveBeenCalledWith(PROJECT, 'sha1');
+    expect(getLatestTestRequestRunForSession).toHaveBeenCalledWith(
+      'proj-1',
+      'session-1',
+    );
     expect(resetStalledPRRetryCountForBaseRecovery).toHaveBeenCalledWith(
       1715,
       'org/repo',
@@ -306,32 +316,8 @@ describe('StalledPRReconciler base-attributable-failures exemption', () => {
     expect(messages.find((m) => m.type === 'pr_pause_cleared')).toBeDefined();
   });
 
-  it('takes the escape when the PR escalated before a total_fail verdict existed and is still escalated once history shows base recovery — recovery-time comparison, not just the live cached verdict', async () => {
-    // The live snapshot at recovery time is clean_pass (isProjectBaseHealthy
-    // true) — the escape must still be taken because history shows a
-    // total_fail run landed after this PR's own escalation timestamp.
-    vi.mocked(isProjectBaseHealthy).mockResolvedValue(true);
-    vi.mocked(hasBaseTotalFailSince).mockResolvedValue(true);
-    const pr = makePR({
-      stalled_pr_retry_count: 2,
-      stalled_retry_base_exhausted: 1,
-      reconcile_exhausted: 1,
-      reconcile_exhausted_set_at: 500, // escalated before the total_fail window opened
-    });
-    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
-
-    const { fn: broadcast } = makeBroadcast();
-    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
-
-    await reconciler.reconcileOnce();
-
-    expect(hasBaseTotalFailSince).toHaveBeenCalledWith(PROJECT, 500);
-    expect(resetStalledPRRetryCountForBaseRecovery).toHaveBeenCalled();
-  });
-
-  it('does not take the escape when the base is clean_pass now but history shows no total_fail since escalation', async () => {
-    vi.mocked(isProjectBaseHealthy).mockResolvedValue(true);
-    vi.mocked(hasBaseTotalFailSince).mockResolvedValue(false);
+  it('does not take the escape when the latest run is not breadth-attributable', async () => {
+    vi.mocked(isRunFailureBreadthAttributable).mockReturnValue(false);
     const pr = makePR({
       stalled_pr_retry_count: 2,
       stalled_retry_base_exhausted: 1,
@@ -349,9 +335,8 @@ describe('StalledPRReconciler base-attributable-failures exemption', () => {
     expect(clearTerminalPRFlags).not.toHaveBeenCalled();
   });
 
-  it('never restores an escalated PR whose exhaustion was for a reason unrelated to base health, even once base recovers', async () => {
-    vi.mocked(isProjectBaseHealthy).mockResolvedValue(true);
-    vi.mocked(hasBaseTotalFailSince).mockResolvedValue(true);
+  it('never restores an escalated PR whose exhaustion was for a reason unrelated to base health, even once its latest run would clear breadth', async () => {
+    vi.mocked(isRunFailureBreadthAttributable).mockReturnValue(true);
     const pr = makePR({
       stalled_pr_retry_count: 2,
       stalled_retry_base_exhausted: 0, // exhausted for an unrelated reason — never armed
@@ -366,16 +351,16 @@ describe('StalledPRReconciler base-attributable-failures exemption', () => {
 
     expect(resetStalledPRRetryCountForBaseRecovery).not.toHaveBeenCalled();
     expect(clearTerminalPRFlags).not.toHaveBeenCalled();
-    expect(hasBaseTotalFailSince).not.toHaveBeenCalled();
+    expect(isRunFailureBreadthAttributable).not.toHaveBeenCalled();
   });
 
-  it('never restores a base-attributable-exhausted PR while base is still unhealthy', async () => {
-    vi.mocked(isProjectBaseHealthy).mockResolvedValue(false);
-    vi.mocked(hasBaseTotalFailSince).mockResolvedValue(true);
+  it('never restores a base-attributable-exhausted PR with no session to check a latest run for', async () => {
+    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue(undefined);
     const pr = makePR({
       stalled_pr_retry_count: 2,
       stalled_retry_base_exhausted: 1,
       reconcile_exhausted: 1,
+      session_id: null,
     });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
 

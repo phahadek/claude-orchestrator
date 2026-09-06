@@ -66,24 +66,6 @@ vi.mock('../session/analyzeGating.js', () => ({
   computeTriggerContentHash: vi.fn().mockResolvedValue(null),
 }));
 
-// filterBaseAttributableFailures (via checkBaseBranchHealth) provisions a real
-// git worktree when unmocked — never available in this unit-test sandbox
-// (spawn git ENOENT), and its 'unknown' outcome would otherwise silently
-// replace every raw ci_failing digest below with a base-health-unavailable
-// message. Default to clean_pass ("base is healthy") so filterBaseAttributableFailures
-// collapses to 'unfiltered' and F2-gate tests see the raw testResult output
-// they assert on; tests exercising the base-attributable filter itself
-// override this mock directly.
-vi.mock('../orchestration/baseHealthCheck.js', () => ({
-  checkBaseBranchHealth: vi.fn().mockResolvedValue({
-    outcome: 'clean_pass',
-    projectId: 'proj-1',
-    contentHash: 'content-hash-x',
-    cacheHit: false,
-    run: null,
-  }),
-}));
-
 // runProjectTestRequest performs real work when unmocked (spawns the
 // project's test: commands, writes to test_request_runs) — never safe to
 // let through in this unit-test sandbox. evaluateF2LaneFlakyDisposition is

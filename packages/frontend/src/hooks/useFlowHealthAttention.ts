@@ -5,7 +5,6 @@ type AttentionTier2Type =
   | 'aging'
   | 'blocked'
   | 'flat'
-  | 'base_break'
   | 'flow_health_regression';
 
 interface AttentionTier2Signal {

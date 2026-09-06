@@ -1,227 +1,176 @@
 /**
- * Unit tests for the shared base-attributability logic (baseAttribution.ts)
- * that the three retry/cycle budgets (session_test_request_cycles,
- * stalled_pr_retry_count, flake_recovery_attempts) all consult before
- * charging a failure or restoring an exhausted budget.
+ * Regression + unit tests for the retirement of whole-tree base-health
+ * attribution:
+ *  - baseHealthCheck.ts and baseAttribution.ts are deleted outright — no
+ *    module provisions a base-health worktree, and getBaseHealthWorktreePath/
+ *    isBaseTotalFail/isProjectBaseHealthy/hasBaseTotalFailSince no longer
+ *    exist anywhere in the tree.
+ *  - their replacement, db/queries.ts's isRunFailureBreadthAttributable, is a
+ *    per-run breadth-attributability check: a run's failures are
+ *    attributable only when EVERY one of them is flagged across
+ *    flip_rate_breadth_n+ distinct content hashes within the lookback
+ *    window — never when a failure is unique to that run.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import fs from 'fs';
+import path from 'path';
 
-vi.mock('../../db/db', async () => {
+vi.mock('../../db/db.js', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
   return { db: setupTestDb() };
 });
 
-const { mockCheckBaseBranchHealth } = vi.hoisted(() => ({
-  mockCheckBaseBranchHealth: vi.fn(),
-}));
-
-vi.mock('../baseHealthCheck.js', () => ({
-  checkBaseBranchHealth: mockCheckBaseBranchHealth,
-}));
-
 import { db } from '../../db/db';
-import {
-  isBaseTotalFail,
-  isRunFailureBaseAttributable,
-  isProjectBaseHealthy,
-} from '../baseAttribution';
-import {
-  insertTestRequestRun,
-  insertTestRunResults,
-  insertSession,
-  updateSessionWorktreePath,
-} from '../../db/queries';
+import { isRunFailureBreadthAttributable } from '../../db/queries';
 
-const PROJECT = { id: 'proj-1', projectDir: '/proj' } as any;
+let seq = 0;
+
+function insertRunWithFailure(opts: {
+  testId: string;
+  contentHash: string;
+  createdAt: number;
+}): string {
+  seq += 1;
+  const runId = `run-${seq}`;
+  db.prepare(
+    `INSERT INTO test_request_runs
+       (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at)
+     VALUES (@id, 'proj-1', @content_hash, NULL, 'failed', '', 0, 0, 0)`,
+  ).run({ id: runId, content_hash: opts.contentHash });
+  db.prepare(
+    `INSERT INTO test_run_results
+       (test_request_run_id, project_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
+     VALUES (@run_id, 'proj-1', @test_id, @test_id, 'failed', 1, 0, 0, @created_at)`,
+  ).run({ run_id: runId, test_id: opts.testId, created_at: opts.createdAt });
+  return runId;
+}
 
 beforeEach(() => {
-  mockCheckBaseBranchHealth.mockReset();
   db.prepare('DELETE FROM test_run_results').run();
   db.prepare('DELETE FROM test_request_runs').run();
-  db.prepare('DELETE FROM sessions').run();
+  seq = 0;
 });
 
-describe('isBaseTotalFail', () => {
-  it('is true when the base tree total_fail-s', async () => {
-    mockCheckBaseBranchHealth.mockResolvedValue({ outcome: 'total_fail' });
-    expect(await isBaseTotalFail(PROJECT)).toBe(true);
+describe('base-health module deletion', () => {
+  it('deletes baseHealthCheck.ts and baseAttribution.ts entirely', () => {
+    expect(fs.existsSync(path.join(__dirname, '../baseHealthCheck.ts'))).toBe(
+      false,
+    );
+    expect(fs.existsSync(path.join(__dirname, '../baseAttribution.ts'))).toBe(
+      false,
+    );
   });
 
-  it.each(['clean_pass', 'partial_fail', 'unknown'])(
-    'is false for base outcome %s',
-    async (outcome) => {
-      mockCheckBaseBranchHealth.mockResolvedValue({ outcome });
-      expect(await isBaseTotalFail(PROJECT)).toBe(false);
-    },
-  );
+  it('no source file declares isBaseTotalFail/isProjectBaseHealthy/hasBaseTotalFailSince', () => {
+    const searchDirs = [
+      '../../orchestration',
+      '../../github',
+      '../../audit',
+      '../../routes',
+      '../../db',
+    ];
+    const retiredNames =
+      /\b(isBaseTotalFail|isProjectBaseHealthy|hasBaseTotalFailSince)\b/;
+    for (const dir of searchDirs) {
+      const abs = path.join(__dirname, dir);
+      for (const file of fs.readdirSync(abs)) {
+        const filePath = path.join(abs, file);
+        if (!file.endsWith('.ts') || file.endsWith('.test.ts')) continue;
+        if (fs.statSync(filePath).isDirectory()) continue;
+        const src = fs.readFileSync(filePath, 'utf8');
+        expect(src).not.toMatch(retiredNames);
+      }
+    }
+  });
 
-  it("forwards the caller's referenceCommit to checkBaseBranchHealth", async () => {
-    mockCheckBaseBranchHealth.mockResolvedValue({ outcome: 'total_fail' });
-    await isBaseTotalFail(PROJECT, 'pr-head-sha');
-    expect(mockCheckBaseBranchHealth).toHaveBeenCalledWith(
-      PROJECT,
-      'pr-head-sha',
-    );
+  it('no module in the tree provisions a base-health worktree', () => {
+    const searchDirs = ['../../orchestration', '../../github', '../../audit'];
+    for (const dir of searchDirs) {
+      const abs = path.join(__dirname, dir);
+      for (const file of fs.readdirSync(abs)) {
+        const filePath = path.join(abs, file);
+        if (!file.endsWith('.ts') || file.endsWith('.test.ts')) continue;
+        if (fs.statSync(filePath).isDirectory()) continue;
+        const src = fs.readFileSync(filePath, 'utf8');
+        expect(src).not.toMatch(/getBaseHealthWorktreePath/);
+      }
+    }
   });
 });
 
-describe('isProjectBaseHealthy', () => {
-  it('is true only for clean_pass', async () => {
-    mockCheckBaseBranchHealth.mockResolvedValue({ outcome: 'clean_pass' });
-    expect(await isProjectBaseHealthy(PROJECT)).toBe(true);
-
-    mockCheckBaseBranchHealth.mockResolvedValue({ outcome: 'total_fail' });
-    expect(await isProjectBaseHealthy(PROJECT)).toBe(false);
-  });
-
-  it("forwards the caller's referenceCommit to checkBaseBranchHealth", async () => {
-    mockCheckBaseBranchHealth.mockResolvedValue({ outcome: 'clean_pass' });
-    await isProjectBaseHealthy(PROJECT, 'pr-head-sha');
-    expect(mockCheckBaseBranchHealth).toHaveBeenCalledWith(
-      PROJECT,
-      'pr-head-sha',
-    );
-  });
-});
-
-describe('isRunFailureBaseAttributable', () => {
-  it('is true on a total_fail base regardless of the run', async () => {
-    mockCheckBaseBranchHealth.mockResolvedValue({ outcome: 'total_fail' });
-    expect(
-      await isRunFailureBaseAttributable(PROJECT, {
-        id: 'run-x',
-        session_id: null,
-      }),
-    ).toBe(true);
-  });
-
-  it('is false on an unknown base outcome (defaults to charge normally)', async () => {
-    mockCheckBaseBranchHealth.mockResolvedValue({ outcome: 'unknown' });
-    expect(
-      await isRunFailureBaseAttributable(PROJECT, {
-        id: 'run-x',
-        session_id: null,
-      }),
-    ).toBe(false);
-  });
-
-  it('is false on a clean_pass base', async () => {
-    mockCheckBaseBranchHealth.mockResolvedValue({ outcome: 'clean_pass' });
-    expect(
-      await isRunFailureBaseAttributable(PROJECT, {
-        id: 'run-x',
-        session_id: null,
-      }),
-    ).toBe(false);
-  });
-
-  it("resolves the run's own session worktree path and forwards it as the checkBaseBranchHealth reference", async () => {
-    insertSession({
-      session_id: 'session-with-worktree',
-      task_id: null,
-      task_url: null,
-      project_context_url: null,
-      status: 'idle',
-      started_at: Date.now(),
-    } as any);
-    updateSessionWorktreePath('session-with-worktree', '/tmp/session-worktree');
-    mockCheckBaseBranchHealth.mockResolvedValue({ outcome: 'clean_pass' });
-
-    await isRunFailureBaseAttributable(PROJECT, {
-      id: 'run-x',
-      session_id: 'session-with-worktree',
+describe('isRunFailureBreadthAttributable', () => {
+  it('attributes a run whose only failing test is breadth-flagged across enough distinct trees', () => {
+    // The run under test, plus enough other trees failing the same test id
+    // within the window to clear breadthN=3.
+    const runId = insertRunWithFailure({
+      testId: 'test-a',
+      contentHash: 'hash-this-run',
+      createdAt: 1000,
+    });
+    insertRunWithFailure({
+      testId: 'test-a',
+      contentHash: 'hash-2',
+      createdAt: 900,
+    });
+    insertRunWithFailure({
+      testId: 'test-a',
+      contentHash: 'hash-3',
+      createdAt: 800,
     });
 
-    expect(mockCheckBaseBranchHealth).toHaveBeenCalledWith(
-      PROJECT,
-      '/tmp/session-worktree',
-    );
+    expect(isRunFailureBreadthAttributable(runId, 3, 24, 2000)).toBe(true);
   });
 
-  it("is true on a partial_fail base whose failing tests are a superset of the run's own failing tests", async () => {
-    insertTestRequestRun('run-own', 'proj-1', 'hash-a', null, Date.now());
-    insertTestRunResults(
-      'run-own',
-      'proj-1',
-      [{ test_id: 't1', name: 'test one', outcome: 'failed', duration_ms: 1 }],
-      null,
-      false,
-    );
-    insertTestRequestRun('run-base', 'proj-1', 'hash-base', null, Date.now());
-    insertTestRunResults(
-      'run-base',
-      'proj-1',
-      [
-        { test_id: 't1', name: 'test one', outcome: 'failed', duration_ms: 1 },
-        { test_id: 't2', name: 'test two', outcome: 'failed', duration_ms: 1 },
-      ],
-      null,
-      false,
-    );
-    mockCheckBaseBranchHealth.mockResolvedValue({
-      outcome: 'partial_fail',
-      run: { id: 'run-base' },
+  it('does not attribute a run whose failure is unique to it (not seen on any other tree)', () => {
+    const runId = insertRunWithFailure({
+      testId: 'test-b',
+      contentHash: 'hash-this-run',
+      createdAt: 1000,
     });
 
-    expect(
-      await isRunFailureBaseAttributable(PROJECT, {
-        id: 'run-own',
-        session_id: null,
-      }),
-    ).toBe(true);
+    expect(isRunFailureBreadthAttributable(runId, 3, 24, 2000)).toBe(false);
   });
 
-  it("is false on a partial_fail base that does not cover all of the run's own failing tests", async () => {
-    insertTestRequestRun('run-own-2', 'proj-1', 'hash-a', null, Date.now());
-    insertTestRunResults(
-      'run-own-2',
-      'proj-1',
-      [
-        { test_id: 't1', name: 'test one', outcome: 'failed', duration_ms: 1 },
-        {
-          test_id: 't-real-bug',
-          name: 'a real bug in the PR',
-          outcome: 'failed',
-          duration_ms: 1,
-        },
-      ],
-      null,
-      false,
-    );
-    insertTestRequestRun('run-base-2', 'proj-1', 'hash-base', null, Date.now());
-    insertTestRunResults(
-      'run-base-2',
-      'proj-1',
-      [{ test_id: 't1', name: 'test one', outcome: 'failed', duration_ms: 1 }],
-      null,
-      false,
-    );
-    mockCheckBaseBranchHealth.mockResolvedValue({
-      outcome: 'partial_fail',
-      run: { id: 'run-base-2' },
-    });
+  it('does not attribute a run with no failing tests', () => {
+    seq += 1;
+    const runId = `run-${seq}`;
+    db.prepare(
+      `INSERT INTO test_request_runs
+         (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at)
+       VALUES (@id, 'proj-1', 'hash-clean', NULL, 'passed', '', 0, 0, 0)`,
+    ).run({ id: runId });
 
-    expect(
-      await isRunFailureBaseAttributable(PROJECT, {
-        id: 'run-own-2',
-        session_id: null,
-      }),
-    ).toBe(false);
+    expect(isRunFailureBreadthAttributable(runId, 3, 24, 2000)).toBe(false);
   });
 
-  it('is false when the run has no failing tests recorded (nothing to attribute)', async () => {
-    insertTestRequestRun('run-empty', 'proj-1', 'hash-a', null, Date.now());
-    mockCheckBaseBranchHealth.mockResolvedValue({
-      outcome: 'partial_fail',
-      run: { id: 'run-base' },
+  it('requires every failing test to clear the breadth bar — one unflagged failure blocks attribution', () => {
+    seq += 1;
+    const runId = `run-${seq}`;
+    db.prepare(
+      `INSERT INTO test_request_runs
+         (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at)
+       VALUES (@id, 'proj-1', 'hash-mixed', NULL, 'failed', '', 0, 0, 0)`,
+    ).run({ id: runId });
+    db.prepare(
+      `INSERT INTO test_run_results
+         (test_request_run_id, project_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
+       VALUES (@run_id, 'proj-1', 'test-flagged', 'test-flagged', 'failed', 1, 0, 0, 1000),
+              (@run_id, 'proj-1', 'test-unique', 'test-unique', 'failed', 1, 0, 0, 1000)`,
+    ).run({ run_id: runId });
+    // test-flagged also fails on two other trees — clears breadthN=3
+    // (this run + 2 others). test-unique fails nowhere else.
+    insertRunWithFailure({
+      testId: 'test-flagged',
+      contentHash: 'hash-2',
+      createdAt: 900,
+    });
+    insertRunWithFailure({
+      testId: 'test-flagged',
+      contentHash: 'hash-3',
+      createdAt: 800,
     });
 
-    expect(
-      await isRunFailureBaseAttributable(PROJECT, {
-        id: 'run-empty',
-        session_id: null,
-      }),
-    ).toBe(false);
+    expect(isRunFailureBreadthAttributable(runId, 3, 24, 2000)).toBe(false);
   });
 });
