@@ -3381,6 +3381,52 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // idx_sessions_feature_branch: backs lookupSessionByBranch's primary
+  // lookup (WHERE feature_branch = ?) — previously that function read every
+  // sessions row with task_name IS NOT NULL and matched the branch in JS. A
+  // partial index scoped to feature_branch IS NULL backs the legacy
+  // fallback (rows predating the feature_branch column), keeping the
+  // re-derive loop bounded to that much smaller set instead of the whole
+  // table.
+  target.exec(`
+    CREATE INDEX IF NOT EXISTS idx_sessions_feature_branch
+      ON sessions(feature_branch);
+  `);
+  target.exec(`
+    CREATE INDEX IF NOT EXISTS idx_sessions_legacy_branch_lookup
+      ON sessions(session_id) WHERE feature_branch IS NULL AND task_name IS NOT NULL;
+  `);
+
+  // task_cache.cached_status: a VIRTUAL generated column mirroring
+  // getTasksByStatusFromCache's JSON_EXTRACT(raw_json, '$.status') match
+  // expression, so the table can carry a real index on the extracted
+  // status. The prior query applied JSON_EXTRACT to every row inside WHERE,
+  // which SQLite cannot use an index to satisfy. The JSON_VALID guard is
+  // required, not cosmetic: SQLite's JSON_EXTRACT raises "malformed JSON"
+  // rather than returning NULL, and a generated column evaluates on every
+  // INSERT/UPDATE, so a plain JSON_EXTRACT expression here would turn any
+  // malformed raw_json write into a hard insert failure instead of the
+  // read-time failure the un-indexed query used to risk. Same shape as
+  // sessions.task_id_norm above: the dependent CREATE INDEX lives inside
+  // this same try so it's never attempted against a column that was never
+  // created, and the catch re-throws anything that isn't SQLite's own
+  // duplicate-column wording.
+  try {
+    target.exec(
+      `ALTER TABLE task_cache ADD COLUMN cached_status TEXT GENERATED ALWAYS AS (
+        CASE WHEN JSON_VALID(raw_json) THEN JSON_EXTRACT(raw_json,'$.status') ELSE NULL END
+      ) VIRTUAL`,
+    );
+    target.exec(`
+      CREATE INDEX IF NOT EXISTS idx_task_cache_status ON task_cache(cached_status, task_id);
+    `);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!message.includes('duplicate column name')) {
+      throw err;
+    }
+  }
 }
 
 // ─── test_run_results → test_perf_baselines digest backfill ────────────────
