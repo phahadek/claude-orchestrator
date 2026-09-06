@@ -22,9 +22,12 @@ import {
   setStalledRetryBaseExhausted,
   resetStalledPRRetryCountForBaseRecovery,
   setReconcileExhausted,
+  getLatestTestRequestRunForSession,
+  isRunFailureBreadthAttributable,
 } from '../db/queries';
 import { isManualActionPause } from '../db/pauseReason';
 import { getProjectByGithubRepo } from '../config';
+import type { ProjectConfig } from '../config';
 import { typedGetSetting } from '../config/settings';
 import {
   recordEvent,
@@ -39,14 +42,35 @@ import {
   sessionAwaitingOperatorDecision,
 } from '../session/sessionLifecycle';
 import {
-  isBaseTotalFail,
-  isProjectBaseHealthy,
-  hasBaseTotalFailSince,
-} from './baseAttribution';
-import {
   formatCIFailureFeedback,
   formatMergeConflictFeedback,
 } from '../github/reviewUtils';
+
+/**
+ * Replacement for the retired whole-tree base-attributability check: true
+ * when `pr`'s own most recent test-request run's failures are all
+ * breadth-attributable (see db/queries.ts's isRunFailureBreadthAttributable)
+ * right now — a run with no failing tests, or one with a failure unique to
+ * it, is never attributable. Evaluated live (beforeMs = now), same as the
+ * retired isBaseTotalFail/isProjectBaseHealthy's live-sample semantics —
+ * this project no longer distinguishes a "corroborated at recovery time"
+ * pass from a live sample, since there's no separate probe history left to
+ * corroborate against.
+ */
+function isPrLatestRunBreadthAttributable(
+  project: ProjectConfig,
+  pr: Pick<PullRequestRow, 'session_id'>,
+): boolean {
+  if (!pr.session_id) return false;
+  const run = getLatestTestRequestRunForSession(project.id, pr.session_id);
+  if (!run) return false;
+  return isRunFailureBreadthAttributable(
+    run.id,
+    typedGetSetting('flip_rate_breadth_n'),
+    typedGetSetting('flip_rate_breadth_window_hours'),
+    Date.now(),
+  );
+}
 
 const DEFAULT_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 // Exported so callers that report on a PR's stall state (e.g.
@@ -61,8 +85,8 @@ export const DEFAULT_RETRY_CAP = 2;
  * can itself be caused by a broken base hanging/crashing it), and
  * pre_review_interrupted (the pre-review pipeline never got a slot/verdict,
  * which a broken base can also cause). Arming stalled_retry_base_exhausted
- * for one of these kinds is unconditional — see hasBaseTotalFailSince for
- * why the actual base-attributability verdict is deferred to recovery time
+ * for one of these kinds is unconditional — the actual base-attributability
+ * verdict is deferred to recovery time (isPrLatestRunBreadthAttributable)
  * rather than sampled live at escalation.
  */
 const BASE_ATTRIBUTABLE_ESCALATION_KINDS: ReadonlySet<StalledPRKind> = new Set([
@@ -156,25 +180,16 @@ export class StalledPRReconciler {
 
       // Skip PRs already escalated to the human-attention queue — unless
       // this PR's own most recent exhaustion was confirmed base-attributable
-      // (stalled_retry_base_exhausted) and the base branch has since
-      // recovered AND base-health history corroborates a total_fail verdict
-      // actually occurred at/after this PR's own escalation timestamp (not
-      // just the live cached verdict — see hasBaseTotalFailSince), in which
-      // case restore the budget via the same reset primitive setHeadSha's
-      // head_sha-change trigger already uses, then fall through to
-      // reconcile this PR fresh this cycle. Scoped to this PR alone — never
-      // a blanket reset of every escalated PR's counter.
+      // (stalled_retry_base_exhausted) and its latest test-request run's
+      // failures are breadth-attributable right now, in which case restore
+      // the budget via the same reset primitive setHeadSha's head_sha-change
+      // trigger already uses, then fall through to reconcile this PR fresh
+      // this cycle. Scoped to this PR alone — never a blanket reset of every
+      // escalated PR's counter.
       if (pr.reconcile_exhausted) {
         if (pr.stalled_retry_base_exhausted) {
           const project = getProjectByGithubRepo(pr.repo);
-          if (
-            project &&
-            (await isProjectBaseHealthy(project, pr.head_sha ?? undefined)) &&
-            (await hasBaseTotalFailSince(
-              project,
-              pr.reconcile_exhausted_set_at ?? 0,
-            ))
-          ) {
+          if (project && isPrLatestRunBreadthAttributable(project, pr)) {
             resetStalledPRRetryCountForBaseRecovery(pr.pr_number, pr.repo);
             clearTerminalPRFlags(pr.pr_number, pr.repo, 'base_recovery');
             recordEvent({
@@ -709,7 +724,7 @@ export class StalledPRReconciler {
     const project = getProjectByGithubRepo(repo);
     const baseAttributable =
       kind === 'gate_failed' && project
-        ? await isBaseTotalFail(project, pr.head_sha ?? undefined)
+        ? isPrLatestRunBreadthAttributable(project, pr)
         : false;
     if (baseAttributable) {
       setStalledRetryBaseExhausted(prNumber, repo, true);
@@ -888,7 +903,7 @@ export class StalledPRReconciler {
     setPendingPush(prNumber, repo, 0);
 
     const baseAttributable = project
-      ? await isBaseTotalFail(project, pr.head_sha ?? undefined)
+      ? isPrLatestRunBreadthAttributable(project, pr)
       : false;
     if (baseAttributable) {
       setStalledRetryBaseExhausted(prNumber, repo, true);

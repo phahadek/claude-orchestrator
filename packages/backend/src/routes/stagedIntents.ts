@@ -207,7 +207,6 @@ import {
   type TestRequestAdmission,
   type TestRequestAdmissionStatus,
 } from '../orchestration/testRequestLane';
-import { isRunFailureBaseAttributable } from '../orchestration/baseAttribution';
 import {
   getSessionTestRequestCycleCount,
   incrementSessionTestRequestCycleCount,
@@ -222,8 +221,9 @@ import {
   listTestRunResultsForRun,
   countTestRunResultsForRun,
   getTaskTestFlipRateFlags,
+  isRunFailureBreadthAttributable,
 } from '../db/queries';
-import { classifyTestRunOutcome } from '../orchestration/baseHealthCheck';
+import { classifyTestRunOutcome } from '../orchestration/testRequestLane';
 import type { TestRequestPayload, TestRequestRunRow } from '../db/types';
 import { buildTestResultDigest } from '../session/testResultDigest';
 import {
@@ -6643,9 +6643,11 @@ async function maybeAutoApproveTestRequest(
   const priorCount = getSessionTestRequestCycleCount(intent.sessionId);
   if (!admission.reused && !admission.unchangedReplay) {
     // Skip the charge when the run that prompted this cycle failed for a
-    // confirmed base-attributable reason (see baseAttribution.ts) — the
+    // reason that's breadth-attributable — flagged across
+    // flip_rate_breadth_n distinct content hashes within the lookback
+    // window (see db/queries.ts's isRunFailureBreadthAttributable) — the
     // session's own change isn't what's failing, so an iterate-on-red loop
-    // forced entirely by a broken base branch must not burn this budget.
+    // forced entirely by a widely-failing test must not burn this budget.
     // Unlike stalled_pr_retry_count/flake_recovery_attempts, no reset
     // primitive exists for this counter — an already-exhausted session always
     // requires a fresh dispatch, per the locked design. A reused (already
@@ -6658,7 +6660,12 @@ async function maybeAutoApproveTestRequest(
       : undefined;
     const priorFailureBaseAttributable =
       project && priorRun?.state === 'failed'
-        ? await isRunFailureBaseAttributable(project, priorRun)
+        ? isRunFailureBreadthAttributable(
+            priorRun.id,
+            typedGetSetting('flip_rate_breadth_n'),
+            typedGetSetting('flip_rate_breadth_window_hours'),
+            Date.now(),
+          )
         : false;
     if (!priorFailureBaseAttributable) {
       incrementSessionTestRequestCycleCount(intent.sessionId);

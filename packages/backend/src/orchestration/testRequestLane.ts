@@ -57,6 +57,7 @@ import {
   listTestRequestRunsNeedingExtraction,
   countTestRequestRunsNeedingExtraction,
   hasTestRunSummary,
+  getTestRunSummary,
   ingestTestRunResultsTx,
   listRecentValidTestDurations,
   upsertTestPerfBaseline,
@@ -105,12 +106,13 @@ export interface TestRequestRunSpec {
   sessionId: string | null;
   /**
    * Explicit identity the caller states about the run it's originating —
-   * 'base_health_probe' for baseHealthCheck.ts, 'pr_pipeline' for
-   * PreReviewPipeline.ts/ReviewOrchestrator.ts, null for an ordinary
-   * session-attributed test.request. Required so every call site states its
-   * own identity rather than relying on sessionId's absence — sessionId is
-   * null for both a historical base-probe row and a PR-branch run, and only
-   * run_origin distinguishes them.
+   * 'base_health_probe' is historical only (the now-deleted baseHealthCheck.ts
+   * was its sole producer), 'pr_pipeline' for PreReviewPipeline.ts/
+   * ReviewOrchestrator.ts, null for an ordinary session-attributed
+   * test.request. Required so every call site states its own identity
+   * rather than relying on sessionId's absence — sessionId is null for both
+   * a historical base-probe row and a PR-branch run, and only run_origin
+   * distinguishes them.
    */
   runOrigin: RunOrigin;
   /** Which lane call site is originating this run — set at insert time onto every row; see TestRunProducer in db/types.ts. */
@@ -828,7 +830,7 @@ export function ingestTestRunResults(run: TestRequestRunRow): void {
   // a test_run_summaries row even with zero extracted tests — otherwise the
   // incomplete signal is lost the moment structured_result is nulled, with
   // nothing durable left to distinguish it from a genuine per-test
-  // breakdown. See baseHealthCheck.ts's classifyFailedRun.
+  // breakdown. See this module's own classifyFailedRun, below.
   if (tests.length === 0 && !parsed.incomplete) return;
 
   ingestTestRunResultsTx(
@@ -847,6 +849,129 @@ export function ingestTestRunResults(run: TestRequestRunRow): void {
     computeTestPerfBaseline(testId);
   }
   recomputeFlipRateFlags(touchedTestIds);
+}
+
+/**
+ * A failed run has a per-test breakdown (`partial_fail`) only when one
+ * exists for it AND that breakdown is complete — otherwise (no breakdown at
+ * all, or a partial multi-command merge missing an expected suite's report
+ * entirely, e.g. an OOM-kill before that report was written) it's
+ * `total_fail`. Relocated from the deleted baseHealthCheck.ts (this was its
+ * classifyFailedRun) — classifyTestRunOutcome (below) is its sole surviving
+ * consumer.
+ *
+ * The durable source of the breakdown is test_run_summaries/test_run_results
+ * (this module's own extraction output), not test_request_runs.structured_result
+ * — that column is cleared once extraction has consumed it
+ * (clearExtractedStructuredResultsBatch), so a null structured_result on an
+ * already-extracted run means "already processed", never "crashed". The
+ * extraction summary's own `incomplete` flag (mirroring
+ * StructuredTestResult.incomplete, see db/schema.ts) is what survives that
+ * clear and lets an incomplete merge still classify as total_fail
+ * post-sweep. structured_result is only consulted as a fallback for a run
+ * that hasn't been swept (or extracted) yet.
+ */
+function classifyFailedRun(
+  run: TestRequestRunRow,
+): 'partial_fail' | 'total_fail' {
+  const summary = getTestRunSummary(run.id);
+  if (summary) {
+    if (summary.incomplete) return 'total_fail';
+    return summary.total_count > 0 ? 'partial_fail' : 'total_fail';
+  }
+
+  if (!run.structured_result) return 'total_fail';
+  try {
+    const parsed = JSON.parse(run.structured_result) as StructuredTestResult;
+    // A merge missing one or more expected report files (e.g. a command
+    // crashed/OOM-killed before writing its report) is never a mere partial
+    // failure of the suites it did capture — an entire suite never ran, so
+    // this must not look identical to an ordinary named-test failure.
+    if (parsed.incomplete) return 'total_fail';
+    const totalTests =
+      (parsed.totals?.passed ?? 0) +
+      (parsed.totals?.failed ?? 0) +
+      (parsed.totals?.skipped ?? 0) +
+      (parsed.totals?.errors ?? 0);
+    if (totalTests > 0) return 'partial_fail';
+  } catch {
+    // Unparseable structured_result carries no usable per-test breakdown.
+  }
+  return 'total_fail';
+}
+
+/**
+ * The Tests tab's run outcome taxonomy — reuses classifyFailedRun's
+ * clean/partial/total split, splitting `total_fail` further via
+ * failure_reason and oom_killed (both already recorded per run) into its
+ * three distinct causes. Each outcome carries its own next-action string
+ * for the tab to render alongside the run.
+ *
+ * `passed-scoped` is its own outcome, not `passed` — a scoped run (run_kind
+ * = 'scoped', see TestRunKind) only ever exercised the tests its base-diff
+ * scoping selected, so a clean result from it is not the same confirmation
+ * a full-suite `passed` is. Collapsing the two would let a scoped pass read
+ * as "the whole suite is green" when it never ran the whole suite.
+ */
+type TestRunOutcome =
+  | 'passed'
+  | 'passed-scoped'
+  | 'failed-with-named-tests'
+  | 'failed-with-no-report-acquired'
+  | 'crashed-oom'
+  | 'timed-out'
+  | 'execution-failed'
+  | 'running'
+  | 'queued';
+
+export interface TestRunOutcomeInfo {
+  outcome: TestRunOutcome;
+  nextAction: string;
+}
+
+const TEST_RUN_NEXT_ACTIONS: Record<TestRunOutcome, string> = {
+  passed: 'No action needed — all tests passed.',
+  'passed-scoped':
+    'The tests scoped to this diff passed — this is not a full-suite confirmation.',
+  'failed-with-named-tests':
+    'Review the named failing tests below and fix them.',
+  'failed-with-no-report-acquired':
+    'No per-test report was produced — check the raw run output for a crash before any report was written.',
+  'crashed-oom':
+    'The test run was OOM-killed — reduce test memory usage/parallelism, or retry.',
+  'timed-out':
+    'The test run exceeded its time limit — investigate a hang or split the run.',
+  'execution-failed':
+    'The test runner could not be started (e.g. spawn failure) — no test ever ran. This is an infrastructure failure, not a test result; retry.',
+  running: 'Run is still in progress — wait for it to finish.',
+  queued: 'Run is queued — waiting for a lane concurrency slot to open.',
+};
+
+export function classifyTestRunOutcome(
+  run: TestRequestRunRow,
+): TestRunOutcomeInfo {
+  let outcome: TestRunOutcome;
+  if (run.state === 'queued') {
+    outcome = 'queued';
+  } else if (run.state === 'running') {
+    outcome = 'running';
+  } else if (run.state === 'passed') {
+    outcome = run.run_kind === 'scoped' ? 'passed-scoped' : 'passed';
+  } else if (
+    run.failure_reason === 'execution_failed' ||
+    run.failure_reason === 'interrupted_queued'
+  ) {
+    outcome = 'execution-failed';
+  } else if (run.oom_killed || run.failure_reason === 'oom_killed') {
+    outcome = 'crashed-oom';
+  } else if (run.failure_reason === 'timeout') {
+    outcome = 'timed-out';
+  } else if (classifyFailedRun(run) === 'partial_fail') {
+    outcome = 'failed-with-named-tests';
+  } else {
+    outcome = 'failed-with-no-report-acquired';
+  }
+  return { outcome, nextAction: TEST_RUN_NEXT_ACTIONS[outcome] };
 }
 
 /**

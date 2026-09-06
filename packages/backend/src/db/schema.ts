@@ -1143,9 +1143,10 @@ export function runMigrations(target: Database.Database): void {
   }
   // stalled_retry_base_exhausted / flake_recovery_base_exhausted: set when a
   // PR's most recent stalled_pr_retry_count / flake_recovery_attempts
-  // exhaustion was confirmed base-attributable (see baseAttribution.ts) —
-  // the sole scoping signal the base-recovery reset trigger consults, so
-  // recovery never blanket-resets every open PR's counter.
+  // exhaustion was confirmed breadth-attributable (see db/queries.ts's
+  // isRunFailureBreadthAttributable) — the sole scoping signal the
+  // base-recovery reset trigger consults, so recovery never blanket-resets
+  // every open PR's counter.
   try {
     target.exec(
       `ALTER TABLE pull_requests ADD COLUMN stalled_retry_base_exhausted INTEGER NOT NULL DEFAULT 0`,
@@ -2709,7 +2710,7 @@ export function runMigrations(target: Database.Database): void {
   // structured_result itself gets nulled once extraction runs (see
   // clearExtractedStructuredResultsBatch below), so without this column the
   // "missing an expected report file" signal is lost the moment extraction
-  // completes, and baseHealthCheck.ts's classifyFailedRun (reading this
+  // completes, and testRequestLane.ts's classifyFailedRun (reading this
   // table post-sweep) could no longer tell an incomplete multi-command merge
   // apart from a genuine per-test breakdown.
   try {
@@ -2806,14 +2807,16 @@ export function runMigrations(target: Database.Database): void {
 
   // base_health_remediation_test_tracking: one row per (project_id, test_id)
   // ever confirmed failing on the base tree itself (partial_fail outcome —
-  // see orchestration/baseHealthCheck.ts). Mirrors flaky_remediation_tracking's
-  // atomic-claim/dedup shape exactly (remediation_task_open flipped 0 -> 1 by
-  // a single guarded UPDATE, reopened once the linked task reaches a
-  // terminal status) — keyed per test id rather than content hash, so a
-  // recurring break with the SAME failing tests but a DIFFERENT content hash
-  // (e.g. an unrelated file changed on the base branch) dedupes against the
-  // still-open remediation instead of filing again. See
-  // audit/baseHealthRemediationFiling.ts.
+  // historical rows only; the now-deleted orchestration/baseHealthCheck.ts
+  // and audit/baseHealthRemediationFiling.ts were its producers). Mirrors
+  // flaky_remediation_tracking's atomic-claim/dedup shape exactly
+  // (remediation_task_open flipped 0 -> 1 by a single guarded UPDATE,
+  // reopened once the linked task reaches a terminal status) — keyed per
+  // test id rather than content hash, so a recurring break with the SAME
+  // failing tests but a DIFFERENT content hash (e.g. an unrelated file
+  // changed on the base branch) dedupes against the still-open remediation
+  // instead of filing again. Still read via queries.ts's
+  // getBaseHealthRemediationTestTracking (mcp/tools/testHealthReadTools.ts).
   target.exec(`
     CREATE TABLE IF NOT EXISTS base_health_remediation_test_tracking (
       project_id               TEXT    NOT NULL,
@@ -2826,11 +2829,13 @@ export function runMigrations(target: Database.Database): void {
     );
   `);
 
-  // base_health_remediation_reason_tracking: one row per (project_id,
-  // failure_reason) ever confirmed as a whole-process base-branch crash
-  // (total_fail outcome — no per-test breakdown to key off of, so the crash's
-  // failure_reason is the closest identity available). Same atomic-claim/
-  // reopen-on-close shape as base_health_remediation_test_tracking.
+  // base_health_remediation_reason_tracking: historical rows only — one row
+  // per (project_id, failure_reason) ever confirmed as a whole-process
+  // base-branch crash (total_fail outcome). Its producer
+  // (audit/baseHealthRemediationFiling.ts) and last reader
+  // (AutoLauncher.ts's whole-tree dispatch gate) are both deleted; kept
+  // as-is rather than dropped since it carries no live write path to worry
+  // about migrating.
   target.exec(`
     CREATE TABLE IF NOT EXISTS base_health_remediation_reason_tracking (
       project_id               TEXT    NOT NULL,

@@ -4,6 +4,7 @@ import { GitHubClient } from './github/GitHubClient';
 import { runPRBootSweep } from './github/PRBootSweep';
 import { runBootIdleReconciliation } from './session/bootIdleReconciliation';
 import { sweepStaleTaskPauseReasons } from './projects/milestoneResolver';
+import { clearTaskPauseReasonsByReason } from './db/queries';
 import { runGitConfigIntegrityCheck } from './orchestration/gitConfigIntegrity';
 import {
   recoverInterruptedTestRequestRuns,
@@ -288,6 +289,7 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
     'auto_merger_rehydrate',
     'pr_boot_sweep',
     'stale_task_pause_reasons_sweep',
+    'base_branch_broken_pause_clear',
     'boot_idle_reconciliation',
     'feedback_inbox_reconciliation',
     'stalled_pr_reconciliation',
@@ -340,6 +342,12 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   );
   await tracker.runStep('stale_task_pause_reasons_sweep', () => {
     sweepStaleTaskPauseReasons();
+  });
+  // base_branch_broken's sole producer (AutoLauncher's whole-tree dispatch
+  // gate) was removed — clear any pause left over from before that removal
+  // so a task doesn't stay stuck on a reason nothing can ever clear again.
+  await tracker.runStep('base_branch_broken_pause_clear', () => {
+    clearTaskPauseReasonsByReason('base_branch_broken');
   });
   await tracker.runStep('boot_idle_reconciliation', () =>
     runBootIdleReconciliation((sessionId) =>

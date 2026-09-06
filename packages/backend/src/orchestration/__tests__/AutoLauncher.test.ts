@@ -43,10 +43,6 @@ vi.mock('../../db/queries.js', () =>
     resetTaskCrashCount: vi.fn(),
     getTaskRepoAssignment: vi.fn().mockReturnValue(undefined),
     isNoOpSuppressed: vi.fn().mockReturnValue(false),
-    hasOpenBaseHealthRemediation: vi.fn().mockReturnValue(false),
-    getBaseHealthRemediationReasonTrackingByOpenTaskId: vi
-      .fn()
-      .mockReturnValue(undefined),
   }),
 );
 
@@ -81,8 +77,6 @@ import {
   clearPausedPrReasonForTask,
   resetTaskCrashCount,
   isNoOpSuppressed,
-  hasOpenBaseHealthRemediation,
-  getBaseHealthRemediationReasonTrackingByOpenTaskId,
 } from '../../db/queries.js';
 import { recordEvent } from '../../audit/AuditLog.js';
 import { hasMemoryHeadroom } from '../memoryAdmission.js';
@@ -2699,306 +2693,45 @@ describe('AutoLauncher — sustained admission-block signal', () => {
   });
 });
 
-describe('AutoLauncher — base-health dispatch gate', () => {
-  // Stand in for the persisted task_pause_reasons row: setTaskPauseReason
-  // writes it, clearTaskPauseReason removes it, getTaskPauseReason reads it
-  // back — so isLaunchCandidate's pause check (evaluated later in the same
-  // poll) reflects the gate's own writes, same as the real DB-backed
-  // helpers do. A bare mockReturnValue(null) would let a task the gate just
-  // paused still read back as unpaused within the same tick.
-  let persistedPauses: Map<string, string>;
-
-  beforeEach(async () => {
+describe('AutoLauncher — base-health dispatch gate removed', () => {
+  // Regression guard for the retired whole-tree base-health dispatch gate
+  // (AutoLauncher.applyBaseHealthGate, checkBaseBranchHealth's total_fail
+  // outcome): a Ready Code task must never be paused with base_branch_broken
+  // by AutoLauncher itself, regardless of what any pre-existing pause state
+  // says — there's no producer left to gate on.
+  beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
     vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
     vi.mocked(getMergedPRForTask).mockReturnValue(null);
-    persistedPauses = new Map();
-    vi.mocked(setTaskPauseReason).mockImplementation((taskId, reason) => {
-      persistedPauses.set(taskId, reason);
-    });
-    vi.mocked(clearTaskPauseReason).mockImplementation((taskId) => {
-      persistedPauses.delete(taskId);
-    });
-    vi.mocked(getTaskPauseReason).mockImplementation((taskId) => {
-      const reason = persistedPauses.get(taskId);
-      return reason ? ({ reason } as never) : null;
-    });
-    // Simulates an on-demand base-health confirmation having already fired
-    // (a task somewhere in the project failed a test-request and triggered
-    // filterBaseAttributableFailures) — the signal AutoLauncher now gates its
-    // checkBaseHealth call on. Tests asserting the proactive-poller behavior
-    // was removed override this back to false.
-    vi.mocked(hasOpenBaseHealthRemediation).mockReturnValue(true);
-    vi.mocked(
-      getBaseHealthRemediationReasonTrackingByOpenTaskId,
-    ).mockReturnValue(undefined);
+    vi.mocked(getTaskPauseReason).mockReturnValue(null);
     (
       runtimeSettings as { auto_launch_concurrency: number }
     ).auto_launch_concurrency = 2;
-    const { registerUsagePoller } = await import('../usageAdmission.js');
-    const { clearUsageDeferral } = await import('../../db/queries.js');
-    registerUsagePoller({ getCache: () => ({ available: false }) });
-    clearUsageDeferral('five_hour');
-    clearUsageDeferral('seven_day');
   });
 
-  function makeBaseHealthResult(
-    outcome: 'clean_pass' | 'partial_fail' | 'total_fail' | 'unknown',
-    contentHash: string | null = 'hash-1',
-  ) {
-    return {
-      outcome,
-      projectId: 'proj-1',
-      contentHash,
-      cacheHit: false,
-      run: null,
-    };
-  }
-
-  it('a total_fail base-health result blocks dispatch and sets base_branch_broken on the ready task', async () => {
+  it('never pauses a Ready Code task with base_branch_broken', async () => {
     const task = makeResolvedTask({ id: 'task-1' });
     const backend = {
       type: 'notion' as const,
       fetchReadyTasks: vi.fn().mockResolvedValue([task]),
     };
     const sessionManager = makeSessionManager(0);
-    const checkBaseHealth = vi
-      .fn()
-      .mockResolvedValue(makeBaseHealthResult('total_fail'));
 
     const launcher = new AutoLauncher(sessionManager as never, undefined, {
       listProjects: () => [makeProject()],
       resolveBackend: () => backend as never,
       pollOnStart: false,
-      checkBaseHealth,
     });
 
     await launcher.pollOnce();
 
-    expect(checkBaseHealth).toHaveBeenCalledOnce();
-    expect(setTaskPauseReason).toHaveBeenCalledWith(
-      'task-1',
-      'base_branch_broken',
-      'hash-1',
-    );
-    expect(sessionManager.start).not.toHaveBeenCalled();
-  });
-
-  it('a partial_fail base-health result never blocks dispatch', async () => {
-    const task = makeResolvedTask({ id: 'task-2' });
-    const backend = {
-      type: 'notion' as const,
-      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
-    };
-    const sessionManager = makeSessionManager(0);
-    const checkBaseHealth = vi
-      .fn()
-      .mockResolvedValue(makeBaseHealthResult('partial_fail'));
-
-    const launcher = new AutoLauncher(sessionManager as never, undefined, {
-      listProjects: () => [makeProject()],
-      resolveBackend: () => backend as never,
-      pollOnStart: false,
-      checkBaseHealth,
-    });
-
-    await launcher.pollOnce();
-
-    expect(checkBaseHealth).toHaveBeenCalledOnce();
-    expect(setTaskPauseReason).not.toHaveBeenCalled();
-    expect(sessionManager.start).toHaveBeenCalledOnce();
-  });
-
-  it('an unknown base-health result never blocks dispatch', async () => {
-    const task = makeResolvedTask({ id: 'task-3' });
-    const backend = {
-      type: 'notion' as const,
-      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
-    };
-    const sessionManager = makeSessionManager(0);
-    const checkBaseHealth = vi
-      .fn()
-      .mockResolvedValue(makeBaseHealthResult('unknown', null));
-
-    const launcher = new AutoLauncher(sessionManager as never, undefined, {
-      listProjects: () => [makeProject()],
-      resolveBackend: () => backend as never,
-      pollOnStart: false,
-      checkBaseHealth,
-    });
-
-    await launcher.pollOnce();
-
-    expect(checkBaseHealth).toHaveBeenCalledOnce();
-    expect(setTaskPauseReason).not.toHaveBeenCalled();
-    expect(sessionManager.start).toHaveBeenCalledOnce();
-  });
-
-  it('resumes dispatch once a subsequent base-health check clears a total_fail hold', async () => {
-    const task = makeResolvedTask({ id: 'task-4' });
-    const backend = {
-      type: 'notion' as const,
-      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
-    };
-    const sessionManager = makeSessionManager(0);
-    const checkBaseHealth = vi
-      .fn()
-      .mockResolvedValueOnce(makeBaseHealthResult('total_fail'))
-      .mockResolvedValueOnce(makeBaseHealthResult('clean_pass'));
-
-    const launcher = new AutoLauncher(sessionManager as never, undefined, {
-      listProjects: () => [makeProject()],
-      resolveBackend: () => backend as never,
-      pollOnStart: false,
-      checkBaseHealth,
-    });
-
-    // First poll: total_fail — held, no dispatch.
-    await launcher.pollOnce();
-    expect(sessionManager.start).not.toHaveBeenCalled();
-    expect(setTaskPauseReason).toHaveBeenCalledWith(
-      'task-4',
-      'base_branch_broken',
-      'hash-1',
-    );
-    expect(persistedPauses.get('task-4')).toBe('base_branch_broken');
-
-    // Second poll: clean_pass — hold clears, dispatch resumes.
-    await launcher.pollOnce();
-    expect(clearTaskPauseReason).toHaveBeenCalledWith('task-4');
-    expect(sessionManager.start).toHaveBeenCalledOnce();
-  });
-
-  it('never invokes checkBaseHealth on a tick where no task has ever experienced a test-request failure', async () => {
-    const task = makeResolvedTask({ id: 'task-5' });
-    const backend = {
-      type: 'notion' as const,
-      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
-    };
-    const sessionManager = makeSessionManager(0);
-    const checkBaseHealth = vi
-      .fn()
-      .mockResolvedValue(makeBaseHealthResult('total_fail'));
-    // No prior on-demand confirmation for this project, and no existing
-    // base_branch_broken pause on this task — nothing has ever failed.
-    vi.mocked(hasOpenBaseHealthRemediation).mockReturnValue(false);
-
-    const launcher = new AutoLauncher(sessionManager as never, undefined, {
-      listProjects: () => [makeProject()],
-      resolveBackend: () => backend as never,
-      pollOnStart: false,
-      checkBaseHealth,
-    });
-
-    await launcher.pollOnce();
-
-    expect(checkBaseHealth).not.toHaveBeenCalled();
-    expect(setTaskPauseReason).not.toHaveBeenCalled();
-    expect(sessionManager.start).toHaveBeenCalledOnce();
-  });
-
-  it('never pauses (and clears any existing pause on) the task that is itself the open base-health remediation task for this break', async () => {
-    // The remediation task itself, plus another ordinary ready Code task in
-    // the same project.
-    const remediationTask = makeResolvedTask({ id: 'remediation-task' });
-    const otherTask = makeResolvedTask({ id: 'other-task' });
-    const backend = {
-      type: 'notion' as const,
-      fetchReadyTasks: vi.fn().mockResolvedValue([remediationTask, otherTask]),
-    };
-    const sessionManager = makeSessionManager(0);
-    const checkBaseHealth = vi
-      .fn()
-      .mockResolvedValue(makeBaseHealthResult('total_fail'));
-    vi.mocked(hasOpenBaseHealthRemediation).mockReturnValue(true);
-    vi.mocked(
-      getBaseHealthRemediationReasonTrackingByOpenTaskId,
-    ).mockImplementation((taskId: string) =>
-      taskId === 'remediation-task'
-        ? ({
-            project_id: 'proj-1',
-            failure_reason: 'generic',
-            remediation_task_id: 'remediation-task',
-            remediation_task_open: 1,
-          } as never)
-        : undefined,
-    );
-
-    const launcher = new AutoLauncher(sessionManager as never, undefined, {
-      listProjects: () => [makeProject()],
-      resolveBackend: () => backend as never,
-      pollOnStart: false,
-      checkBaseHealth,
-    });
-
-    await launcher.pollOnce();
-
-    // The remediation task itself is never paused and gets dispatched.
     expect(setTaskPauseReason).not.toHaveBeenCalledWith(
-      'remediation-task',
+      expect.anything(),
       'base_branch_broken',
       expect.anything(),
     );
-    expect(sessionManager.start).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.anything(),
-      expect.objectContaining({ taskId: 'remediation-task' }),
-    );
-    // The rest of the project's ready Code tasks remain held.
-    expect(setTaskPauseReason).toHaveBeenCalledWith(
-      'other-task',
-      'base_branch_broken',
-      'hash-1',
-    );
-  });
-
-  it('reproduces the deadlock: a filed total_fail remediation task, once promoted to Ready, still dispatches despite an active base_branch_broken hold for the rest of the project', async () => {
-    const remediationTask = makeResolvedTask({ id: 'remediation-task-2' });
-    const otherTask = makeResolvedTask({ id: 'blocked-task' });
-    const backend = {
-      type: 'notion' as const,
-      fetchReadyTasks: vi.fn().mockResolvedValue([remediationTask, otherTask]),
-    };
-    const sessionManager = makeSessionManager(0);
-    const checkBaseHealth = vi
-      .fn()
-      .mockResolvedValue(makeBaseHealthResult('total_fail'));
-    // hasOpenBaseHealthRemediation: an earlier on-demand confirmation
-    // already filed the remediation task for this exact break.
-    vi.mocked(hasOpenBaseHealthRemediation).mockReturnValue(true);
-    vi.mocked(
-      getBaseHealthRemediationReasonTrackingByOpenTaskId,
-    ).mockImplementation((taskId: string) =>
-      taskId === 'remediation-task-2'
-        ? ({
-            project_id: 'proj-1',
-            failure_reason: 'generic',
-            remediation_task_id: 'remediation-task-2',
-            remediation_task_open: 1,
-          } as never)
-        : undefined,
-    );
-
-    const launcher = new AutoLauncher(sessionManager as never, undefined, {
-      listProjects: () => [makeProject()],
-      resolveBackend: () => backend as never,
-      pollOnStart: false,
-      checkBaseHealth,
-    });
-
-    await launcher.pollOnce();
-
-    // The rest of the project stays held...
-    expect(persistedPauses.get('blocked-task')).toBe('base_branch_broken');
-    // ...but the remediation task — the only task capable of ever landing
-    // the fix that clears the break — is dispatched, not deadlocked.
-    expect(persistedPauses.get('remediation-task-2')).toBeUndefined();
-    expect(sessionManager.start).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.anything(),
-      expect.objectContaining({ taskId: 'remediation-task-2' }),
-    );
+    expect(sessionManager.start).toHaveBeenCalledOnce();
   });
 });
 

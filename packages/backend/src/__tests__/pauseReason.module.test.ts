@@ -15,8 +15,8 @@ const ALL_REASONS = Object.keys(
 ) as CanonicalPauseReason[];
 
 describe('PAUSE_REASON_REGISTRY', () => {
-  it('contains exactly 50 canonical reasons', () => {
-    expect(ALL_REASONS).toHaveLength(50);
+  it('contains exactly 49 canonical reasons', () => {
+    expect(ALL_REASONS).toHaveLength(49);
   });
 
   it('includes depth_review_pending as a recoverable, automatic reason, distinct from depth_review_escalation', () => {
@@ -317,7 +317,6 @@ describe('deriveRecoveryDescriptor', () => {
     'api_overloaded',
     'awaiting_human_approval',
     'notion_done_update_stuck',
-    'base_branch_broken',
     'rate_limit',
     'workflow_scope_denied',
     'review_rules_escalation',

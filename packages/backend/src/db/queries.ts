@@ -68,7 +68,6 @@ import type {
   NewCapabilityDisqualificationRow,
   FlakyRemediationTrackingRow,
   BaseHealthRemediationTestTrackingRow,
-  BaseHealthRemediationReasonTrackingRow,
   GateItemRow,
   GateItemSourceRow,
   NewGateItemSourceRow,
@@ -3269,11 +3268,12 @@ export function setStalledRetryBaseExhausted(
 }
 
 /**
- * Resets stalled_pr_retry_count to 0 once the project's base branch
- * recovers, for a PR whose most recent exhaustion was itself confirmed
- * base-attributable (see baseAttribution.ts) — the head_sha-change reset
- * (setHeadSha) is this counter's other, pre-existing reset trigger. Always
- * clears stalled_retry_base_exhausted alongside the count.
+ * Resets stalled_pr_retry_count to 0 once a PR's latest test-request run is
+ * confirmed breadth-attributable (see isRunFailureBreadthAttributable),
+ * for a PR whose most recent exhaustion was itself confirmed
+ * base-attributable — the head_sha-change reset (setHeadSha) is this
+ * counter's other, pre-existing reset trigger. Always clears
+ * stalled_retry_base_exhausted alongside the count.
  */
 export function resetStalledPRRetryCountForBaseRecovery(
   prNumber: number,
@@ -4194,7 +4194,7 @@ export type ClearTerminalPRFlagsTrigger =
  * unpark/recovery action, a session-initiated-close reconcile (the PR was
  * never really abandoned — the close was the session's own churn), or a
  * confirmed base-branch recovery (StalledPRReconciler's own trusted signal —
- * see hasBaseTotalFailSince/resetStalledPRRetryCountForBaseRecovery — first-
+ * see resetStalledPRRetryCountForBaseRecovery — first-
  * class here rather than an inline setPauseReason(null) special case in the
  * reconciler). A bare automated 'review_verdict' is deliberately excluded:
  * an approved verdict does not guarantee the PR is mergeable, and clearing
@@ -4556,6 +4556,23 @@ export function deleteTaskPauseReasonsForTaskIds(taskIds: string[]): number {
     return count;
   });
   return txn(taskIds);
+}
+
+/**
+ * Bulk-clears every task_pause_reasons row whose parsed reason matches
+ * `reason` — used at boot to retire a pause reason whose producer was
+ * removed (e.g. base_branch_broken, once AutoLauncher's whole-tree dispatch
+ * gate was deleted) so a task doesn't stay stuck on a reason nothing can
+ * ever clear again. Returns the number of rows removed.
+ */
+export function clearTaskPauseReasonsByReason(reason: string): number {
+  const rows = db
+    .prepare(`SELECT task_id, pause_reason FROM task_pause_reasons`)
+    .all() as { task_id: string; pause_reason: string }[];
+  const taskIds = rows
+    .filter((r) => parsePauseReason(r.pause_reason)?.reason === reason)
+    .map((r) => r.task_id);
+  return deleteTaskPauseReasonsForTaskIds(taskIds);
 }
 
 /**
@@ -7726,44 +7743,6 @@ export function getBaseHealthRemediationTestTracking(
   }) as BaseHealthRemediationTestTrackingRow | undefined;
 }
 
-let _stmtGetBaseHealthRemediationReasonTrackingByOpenTaskId: Database.Statement | null =
-  null;
-
-/** The open tracking row currently linked to `taskId` as its remediation task, or undefined. */
-export function getBaseHealthRemediationReasonTrackingByOpenTaskId(
-  taskId: string,
-): BaseHealthRemediationReasonTrackingRow | undefined {
-  _stmtGetBaseHealthRemediationReasonTrackingByOpenTaskId ??= db.prepare<{
-    remediation_task_id: string;
-  }>(
-    `SELECT * FROM base_health_remediation_reason_tracking WHERE remediation_task_id = @remediation_task_id AND remediation_task_open = 1`,
-  );
-  return _stmtGetBaseHealthRemediationReasonTrackingByOpenTaskId.get({
-    remediation_task_id: taskId,
-  }) as BaseHealthRemediationReasonTrackingRow | undefined;
-}
-
-let _stmtHasOpenBaseHealthRemediation: Database.Statement | null = null;
-
-/**
- * True when `projectId` has at least one total_fail remediation tracking row
- * currently linked to an open remediation task — the on-demand signal that a
- * task somewhere in this project already confirmed the base branch broken
- * (via filterBaseAttributableFailures/recordAndMaybeFileBaseHealthRemediation).
- * AutoLauncher gates its (cached, cheap) checkBaseBranchHealth call on this so
- * it only ever runs on-demand, never proactively on a project no task has
- * failed a test-request against yet.
- */
-export function hasOpenBaseHealthRemediation(projectId: string): boolean {
-  _stmtHasOpenBaseHealthRemediation ??= db.prepare<{ project_id: string }>(
-    `SELECT 1 FROM base_health_remediation_reason_tracking WHERE project_id = @project_id AND remediation_task_open = 1 LIMIT 1`,
-  );
-  return (
-    _stmtHasOpenBaseHealthRemediation.get({ project_id: projectId }) !==
-    undefined
-  );
-}
-
 // ─── gate_item ────────────────────────────────────────────────────────────
 // Statements are cached lazily (prepared on first use, not at module load) so
 // importing this module doesn't fail on a not-yet-migrated db handle.
@@ -9132,62 +9111,6 @@ export function getLatestTestRequestRun(
 }
 
 /**
- * The project's own established base-health suite size — the maximum
- * total_count reported across its recent base-health-probe runs (run_origin
- * = 'base_health_probe'), so a legitimately growing suite raises this
- * baseline on its own rather than needing a hand-maintained threshold.
- * Bounded to the most recent `sampleLimit` finished probes so a suite that
- * has permanently shrunk isn't pinned to a stale high-water mark forever.
- * Returns null when no base-health-probe run for this project has ever
- * produced a summary — callers must treat that as "no baseline available"
- * rather than a floor of zero.
- */
-export function getBaseHealthSuiteSizeBaseline(
-  projectId: string,
-  sampleLimit: number = 50,
-): number | null {
-  const row = db
-    .prepare<{ project_id: string; sample_limit: number }>(
-      `SELECT MAX(total_count) as max_total FROM (
-         SELECT trs.total_count as total_count
-         FROM test_run_summaries trs
-         JOIN test_request_runs r ON r.id = trs.test_request_run_id
-         WHERE r.project_id = @project_id AND r.run_origin = 'base_health_probe'
-         ORDER BY r.finished_at DESC
-         LIMIT @sample_limit
-       )`,
-    )
-    .get({ project_id: projectId, sample_limit: sampleLimit }) as
-    | { max_total: number | null }
-    | undefined;
-  return row?.max_total ?? null;
-}
-
-/**
- * Every base-health-probe run (run_origin = 'base_health_probe') for a
- * project finished at or after `sinceTs` — the history a base-recovery
- * escape check compares a PR's escalation timestamp against, rather than
- * sampling only the live cached verdict (checkBaseBranchHealth's
- * content-hash cache reflects whatever tree was probed most recently, which
- * may have never coincided with the PR's own escalation window). See
- * baseAttribution.ts's hasBaseTotalFailSince.
- */
-export function getBaseHealthProbeRunsSince(
-  projectId: string,
-  sinceTs: number,
-): TestRequestRunRow[] {
-  return db
-    .prepare<{ project_id: string; since: number }>(
-      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
-       FROM test_request_runs
-       WHERE project_id = @project_id AND run_origin = 'base_health_probe'
-         AND state NOT IN ('running', 'queued') AND finished_at >= @since
-       ORDER BY finished_at DESC`,
-    )
-    .all({ project_id: projectId, since: sinceTs }) as TestRequestRunRow[];
-}
-
-/**
  * Single run by id — used to fetch a just-completed run's structured_result
  * for delivery digest rendering (see testResultDigest.ts) once
  * runProjectTestRequest resolves with only the run's id in hand.
@@ -10217,6 +10140,35 @@ export function computeTestFailureBreadthFlag(
     distinctContentHashCount,
     flagged: distinctContentHashCount >= breadthN,
   };
+}
+
+/**
+ * Per-run base-attributability replacement for the retired whole-tree
+ * checkBaseBranchHealth verdict: `runId`'s own failing tests are
+ * attributable — not to any single diff — only when EVERY one of them
+ * clears computeTestFailureBreadthFlag (failed across `breadthN`+ distinct
+ * content hashes within `windowHours` of `beforeMs`). A run with no
+ * per-test breakdown (nothing failed, or none was ever recorded) is never
+ * attributable — there's nothing to attribute, so this fails closed to
+ * false rather than treating an empty set as vacuously true.
+ */
+export function isRunFailureBreadthAttributable(
+  runId: string,
+  breadthN: number,
+  breadthWindowHours: number,
+  beforeMs: number,
+): boolean {
+  const failing = getFailingTestIdsForRun(runId);
+  if (failing.length === 0) return false;
+  return failing.every(
+    (t) =>
+      computeTestFailureBreadthFlag(
+        t.test_id,
+        breadthWindowHours,
+        breadthN,
+        beforeMs,
+      ).flagged,
+  );
 }
 
 export interface TestFlakinessCorpusVerdict {
