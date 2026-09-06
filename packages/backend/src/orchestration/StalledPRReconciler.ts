@@ -52,7 +52,7 @@ import {
  * breadth-attributable (see db/queries.ts's isRunFailureBreadthAttributable)
  * right now — a run with no failing tests, or one with a failure unique to
  * it, is never attributable. Evaluated live (beforeMs = now), same as the
- * retired isBaseTotalFail/isProjectBaseHealthy's live-sample semantics —
+ * retired whole-tree base-health checks' live-sample semantics —
  * this project no longer distinguishes a "corroborated at recovery time"
  * pass from a live sample, since there's no separate probe history left to
  * corroborate against.

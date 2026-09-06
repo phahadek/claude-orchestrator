@@ -15,6 +15,7 @@ import { mockDbQueries } from './helpers/mockDbQueries';
 vi.mock('child_process', () => ({
   execSync: vi.fn().mockReturnValue(''),
   exec: vi.fn(),
+  execFile: vi.fn(),
 }));
 
 vi.mock('../config', () => ({

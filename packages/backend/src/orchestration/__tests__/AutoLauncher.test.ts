@@ -2699,7 +2699,7 @@ describe('AutoLauncher — base-health dispatch gate removed', () => {
   // outcome): a Ready Code task must never be paused with base_branch_broken
   // by AutoLauncher itself, regardless of what any pre-existing pause state
   // says — there's no producer left to gate on.
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
     vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
@@ -2708,6 +2708,26 @@ describe('AutoLauncher — base-health dispatch gate removed', () => {
     (
       runtimeSettings as { auto_launch_concurrency: number }
     ).auto_launch_concurrency = 2;
+    // The preceding describe block's last test leaves both the module-level
+    // usage poller singleton (registerUsagePoller has no per-test reset) and
+    // a persisted five_hour usage_deferral row (checkUsageAdmission consults
+    // that DB row before ever looking at the poller) registered as
+    // exhausted — clear/re-register both so this block's dispatch isn't
+    // deferred by that leaked state.
+    const { registerUsagePoller } = await import('../usageAdmission.js');
+    const { clearUsageDeferral } = await import('../../db/queries.js');
+    registerUsagePoller({
+      getCache: () => ({
+        available: true,
+        fiveHour: {
+          percent: 10,
+          resetsAt: '2099-01-01T00:00:00Z',
+          severity: 'normal',
+        },
+      }),
+    });
+    clearUsageDeferral('five_hour');
+    clearUsageDeferral('seven_day');
   });
 
   it('never pauses a Ready Code task with base_branch_broken', async () => {
@@ -2736,7 +2756,7 @@ describe('AutoLauncher — base-health dispatch gate removed', () => {
 });
 
 describe('AutoLauncher — items_processed reporting via Scheduler', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
     vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
@@ -2745,6 +2765,23 @@ describe('AutoLauncher — items_processed reporting via Scheduler', () => {
     (
       runtimeSettings as { auto_launch_concurrency: number }
     ).auto_launch_concurrency = 2;
+    // See the previous describe block's beforeEach: both the usage poller
+    // singleton and the persisted usage_deferral row leak across describe
+    // blocks with no reset of their own.
+    const { registerUsagePoller } = await import('../usageAdmission.js');
+    const { clearUsageDeferral } = await import('../../db/queries.js');
+    registerUsagePoller({
+      getCache: () => ({
+        available: true,
+        fiveHour: {
+          percent: 10,
+          resetsAt: '2099-01-01T00:00:00Z',
+          severity: 'normal',
+        },
+      }),
+    });
+    clearUsageDeferral('five_hour');
+    clearUsageDeferral('seven_day');
   });
 
   it('reports items_processed matching the number of sessions launched', async () => {
