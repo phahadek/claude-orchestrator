@@ -31,7 +31,7 @@ import {
 } from '../../deploy/deployService.js';
 import {
   recordWrapLaunchParams,
-  WRAP_STEP_CONFIRM_REPOINT,
+  WRAP_STEP_CONFIRM_INTEGRATE,
 } from '../../deploy/wrapPlaybook.js';
 
 const PROJECT = 'wrap-resume-project';
@@ -98,6 +98,7 @@ describe('resumeActiveWrapRuns', () => {
         nextMilestoneId: NEXT_MILESTONE,
         releaseVersion: '1.9.0',
         repoUrl: 'https://github.com/acme/wrap-resume-project.git',
+        baseBranch: 'dev',
       },
       '2026-08-24T00:00:00.000Z',
     );
@@ -116,7 +117,7 @@ describe('resumeActiveWrapRuns', () => {
 
     const resumed = getDeployRun(run.run_id);
     expect(resumed?.status).toBe('running');
-    expect(resumed?.current_step).toBe(WRAP_STEP_CONFIRM_REPOINT);
+    expect(resumed?.current_step).toBe(WRAP_STEP_CONFIRM_INTEGRATE);
     expect(getActiveDeployRun(PROJECT, 'wrap')?.run_id).toBe(run.run_id);
   });
 
@@ -167,6 +168,7 @@ describe('resumeActiveWrapRuns', () => {
         nextMilestoneId: NEXT_MILESTONE,
         releaseVersion: '1.9.0',
         repoUrl: 'https://github.com/acme/wrap-resume-project.git',
+        baseBranch: 'dev',
       },
       '2026-08-24T00:00:00.000Z',
     );

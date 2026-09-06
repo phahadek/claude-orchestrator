@@ -12,6 +12,9 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 vi.mock('../../db/db.js', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
@@ -24,7 +27,17 @@ import {
   insertMilestone,
   insertGateItem,
 } from '../../db/queries.js';
-import { startDeployRun } from '../deployService.js';
+import {
+  startDeployRun,
+  getDeployRun,
+  listDeployRunEvents,
+} from '../deployService.js';
+import {
+  DeployOrchestrator,
+  type DeployOrchestratorDeps,
+  type ShellResult,
+} from '../DeployOrchestrator.js';
+import type { LoadPlaybookResult } from '../loadPlaybook.js';
 import {
   buildWrapPlaybook,
   markMilestoneWrapped,
@@ -34,8 +47,11 @@ import {
   createWrapShellRunner,
   recordWrapLaunchParams,
   readWrapLaunchParams,
+  WRAP_STATIC_BINDINGS,
   WRAP_STEP_MARK_WRAPPED,
   WRAP_STEP_CARRY_GATE_ITEMS,
+  WRAP_STEP_CONFIRM_INTEGRATE,
+  WRAP_STEP_INTEGRATE,
   WRAP_STEP_CONFIRM_REPOINT,
   WRAP_STEP_REPOINT,
   WRAP_STEP_ADVANCE_MAIN,
@@ -102,18 +118,21 @@ function insertGateItemFixture(input: {
 }
 
 describe('buildWrapPlaybook: shape', () => {
-  it('produces the 5-action, 7-step playbook — a confirm-gate ahead of each of the two prod-mutating gated actions', () => {
+  it('produces the 6-action, 9-step playbook — a confirm-gate ahead of each of the three prod-mutating gated actions', () => {
     const playbook = buildWrapPlaybook({
       projectId: PROJECT,
       closingMilestoneId: CLOSING_MILESTONE,
       nextMilestoneId: NEXT_MILESTONE,
       releaseVersion: '1.9.0',
       repoUrl: 'https://github.com/acme/wrap-test-project.git',
+      baseBranch: 'dev',
     });
 
     expect(playbook.steps.map((s) => s.id)).toEqual([
       WRAP_STEP_MARK_WRAPPED,
       WRAP_STEP_CARRY_GATE_ITEMS,
+      WRAP_STEP_CONFIRM_INTEGRATE,
+      WRAP_STEP_INTEGRATE,
       WRAP_STEP_CONFIRM_REPOINT,
       WRAP_STEP_REPOINT,
       WRAP_STEP_ADVANCE_MAIN,
@@ -125,19 +144,39 @@ describe('buildWrapPlaybook: shape', () => {
       'shell',
       'confirm-gate',
       'shell',
+      'confirm-gate',
+      'shell',
       'shell',
       'confirm-gate',
       'shell',
     ]);
-    // The two hard-to-reverse actions (repoint auto-launch, cut the
-    // release) are prod-mutating; both confirm-gates precede them and are
-    // themselves non-mutating (they only gate).
+    // The three hard-to-reverse actions (integrating the milestone branch,
+    // repointing auto-launch, cutting the release) are prod-mutating; all
+    // three confirm-gates precede them and are themselves non-mutating (they
+    // only gate).
     const byId = Object.fromEntries(playbook.steps.map((s) => [s.id, s]));
+    expect(byId[WRAP_STEP_CONFIRM_INTEGRATE].is_prod_mutating).toBe(false);
+    expect(byId[WRAP_STEP_INTEGRATE].is_prod_mutating).toBe(true);
     expect(byId[WRAP_STEP_CONFIRM_REPOINT].is_prod_mutating).toBe(false);
     expect(byId[WRAP_STEP_REPOINT].is_prod_mutating).toBe(true);
     expect(byId[WRAP_STEP_CONFIRM_RELEASE].is_prod_mutating).toBe(false);
     expect(byId[WRAP_STEP_CUT_RELEASE].is_prod_mutating).toBe(true);
     expect(byId[WRAP_STEP_ADVANCE_MAIN].is_prod_mutating).toBe(true);
+  });
+
+  it('bakes the milestone branch and base branch into the integrate-milestone-branch command', () => {
+    const playbook = buildWrapPlaybook({
+      projectId: PROJECT,
+      closingMilestoneId: CLOSING_MILESTONE,
+      nextMilestoneId: NEXT_MILESTONE,
+      releaseVersion: '1.9.0',
+      repoUrl: 'https://github.com/acme/wrap-test-project.git',
+      baseBranch: 'main',
+    });
+    const integrate = playbook.steps.find((s) => s.id === WRAP_STEP_INTEGRATE);
+    expect(integrate?.command_or_prompt).toContain('git merge --no-ff');
+    expect(integrate?.command_or_prompt).toContain('origin/milestone/m1');
+    expect(integrate?.command_or_prompt).toContain('origin/main');
   });
 
   it('bakes the release tag into the advance-main/cut-release commands', () => {
@@ -147,6 +186,7 @@ describe('buildWrapPlaybook: shape', () => {
       nextMilestoneId: NEXT_MILESTONE,
       releaseVersion: '2.0.0',
       repoUrl: 'https://github.com/acme/wrap-test-project.git',
+      baseBranch: 'dev',
     });
     const cutRelease = playbook.steps.find(
       (s) => s.id === WRAP_STEP_CUT_RELEASE,
@@ -322,6 +362,7 @@ describe('createWrapShellRunner: directive dispatch', () => {
       nextMilestoneId: NEXT_MILESTONE,
       releaseVersion: '1.9.0',
       repoUrl: 'https://github.com/acme/wrap-test-project.git',
+      baseBranch: 'dev',
     });
     const markWrappedStep = playbook.steps.find(
       (s) => s.id === WRAP_STEP_MARK_WRAPPED,
@@ -347,6 +388,7 @@ describe('createWrapShellRunner: directive dispatch', () => {
       nextMilestoneId: NEXT_MILESTONE,
       releaseVersion: '1.9.0',
       repoUrl: 'https://github.com/acme/wrap-test-project.git',
+      baseBranch: 'dev',
     });
     const markWrappedStep = playbook.steps.find(
       (s) => s.id === WRAP_STEP_MARK_WRAPPED,
@@ -370,6 +412,7 @@ describe('createWrapShellRunner: directive dispatch', () => {
       nextMilestoneId: NEXT_MILESTONE,
       releaseVersion: '1.9.0',
       repoUrl: 'https://github.com/acme/wrap-test-project.git',
+      baseBranch: 'dev',
     });
     const markWrappedStep = playbook.steps.find(
       (s) => s.id === WRAP_STEP_MARK_WRAPPED,
@@ -396,6 +439,7 @@ describe('createWrapShellRunner: directive dispatch', () => {
       nextMilestoneId: NEXT_MILESTONE,
       releaseVersion: '1.9.0',
       repoUrl: 'https://github.com/acme/wrap-test-project.git',
+      baseBranch: 'dev',
     });
     const carryStep = playbook.steps.find(
       (s) => s.id === WRAP_STEP_CARRY_GATE_ITEMS,
@@ -419,6 +463,7 @@ describe('createWrapShellRunner: directive dispatch', () => {
       nextMilestoneId: NEXT_MILESTONE,
       releaseVersion: '1.9.0',
       repoUrl: 'https://github.com/acme/wrap-test-project.git',
+      baseBranch: 'dev',
     });
     const repointStep = playbook.steps.find((s) => s.id === WRAP_STEP_REPOINT)!;
 
@@ -446,6 +491,7 @@ describe('createWrapShellRunner: directive dispatch', () => {
       nextMilestoneId: NEXT_MILESTONE,
       releaseVersion: '1.9.0',
       repoUrl: 'https://github.com/acme/wrap-test-project.git',
+      baseBranch: 'dev',
     });
     const advanceMainStep = playbook.steps.find(
       (s) => s.id === WRAP_STEP_ADVANCE_MAIN,
@@ -476,6 +522,7 @@ describe('recordWrapLaunchParams / readWrapLaunchParams (boot-resume support)', 
       nextMilestoneId: NEXT_MILESTONE,
       releaseVersion: '1.9.0',
       repoUrl: 'https://github.com/acme/wrap-test-project.git',
+      baseBranch: 'dev',
     };
 
     recordWrapLaunchParams(run.run_id, params, '2026-08-24T00:00:00.000Z');
@@ -495,5 +542,156 @@ describe('recordWrapLaunchParams / readWrapLaunchParams (boot-resume support)', 
 
   it('returns null for an unknown run id', () => {
     expect(readWrapLaunchParams('no-such-run')).toBeNull();
+  });
+});
+
+describe('Step: integrate-milestone-branch (confirm-gate + shell orchestration)', () => {
+  /** Flush pending microtasks so the fire-and-forget `drive()` loop settles. */
+  async function flush(): Promise<void> {
+    for (let i = 0; i < 15; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+
+  function mkTmpDir(prefix: string): string {
+    return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  }
+
+  /**
+   * Builds a DeployOrchestrator driving only the confirm-gate + shell pair
+   * the integrate-milestone-branch step is made of, with an injected
+   * `runShell` (never the real `spawnShell` fallback) — the step's actual
+   * git-command text is covered by the `buildWrapPlaybook: shape` tests
+   * above; these tests exercise the engine's orchestration semantics around
+   * that command (confirm-gate blocking, halt-on-failure) deterministically
+   * and without spawning a real git subprocess.
+   */
+  function makeIntegrateOrchestrator(
+    projectDir: string,
+    waitForConfirmGate: DeployOrchestratorDeps['waitForConfirmGate'],
+    runShell: DeployOrchestratorDeps['runShell'],
+  ): DeployOrchestrator {
+    const full = buildWrapPlaybook({
+      projectId: PROJECT,
+      closingMilestoneId: CLOSING_MILESTONE,
+      nextMilestoneId: NEXT_MILESTONE,
+      releaseVersion: '1.9.0',
+      repoUrl: 'https://github.com/acme/wrap-test-project.git',
+      baseBranch: 'dev',
+    });
+    const steps = full.steps.filter(
+      (s) =>
+        s.id === WRAP_STEP_CONFIRM_INTEGRATE || s.id === WRAP_STEP_INTEGRATE,
+    );
+    const loadResult: LoadPlaybookResult = {
+      ok: true,
+      playbook: { steps, hazards: [], failure_diagnoses: [], companions: [] },
+    };
+    return new DeployOrchestrator(PROJECT, projectDir, {
+      loadPlaybook: () => loadResult,
+      loadDeployBindings: () => ({
+        ok: true,
+        bindings: WRAP_STATIC_BINDINGS,
+        bindingsPath: null,
+      }),
+      runShell,
+      spawnAgenticStep: vi.fn(),
+      waitForConfirmGate,
+      getDiffPaths: vi.fn(async () => []),
+    });
+  }
+
+  it('blocks the merge until the confirm-gate is approved', async () => {
+    const projectDir = mkTmpDir('wrap-projectdir-');
+    let resolveGate!: (approved: boolean) => void;
+    const gatePromise = new Promise<boolean>((resolve) => {
+      resolveGate = resolve;
+    });
+    const waitForConfirmGate = vi.fn(() => gatePromise);
+    const runShell = vi.fn(
+      async (): Promise<ShellResult> => ({ ok: true, output: '', exitCode: 0 }),
+    );
+    const orchestrator = makeIntegrateOrchestrator(
+      projectDir,
+      waitForConfirmGate,
+      runShell,
+    );
+
+    const run = await orchestrator.startDeploy(CLOSING_MILESTONE);
+    await flush();
+
+    expect(waitForConfirmGate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: run.run_id,
+        step: expect.objectContaining({ id: WRAP_STEP_CONFIRM_INTEGRATE }),
+      }),
+    );
+    expect(runShell).not.toHaveBeenCalled();
+    expect(getDeployRun(run.run_id)?.status).toBe('running');
+
+    resolveGate(true);
+    await flush();
+
+    expect(runShell).toHaveBeenCalledTimes(1);
+    expect(getDeployRun(run.run_id)?.status).toBe('succeeded');
+  });
+
+  it('a clean merge advances the run past the step', async () => {
+    const projectDir = mkTmpDir('wrap-projectdir-');
+    const runShell = vi.fn(
+      async (): Promise<ShellResult> => ({ ok: true, output: '', exitCode: 0 }),
+    );
+    const orchestrator = makeIntegrateOrchestrator(
+      projectDir,
+      vi.fn(async () => true),
+      runShell,
+    );
+
+    const run = await orchestrator.startDeploy(CLOSING_MILESTONE);
+    await flush();
+
+    expect(getDeployRun(run.run_id)?.status).toBe('succeeded');
+    expect(runShell).toHaveBeenCalledWith(
+      expect.stringContaining('git merge --no-ff'),
+      expect.objectContaining({ cwd: projectDir }),
+    );
+    const events = listDeployRunEvents(run.run_id).map((e) => ({
+      step: e.step,
+      eventType: e.event_type,
+    }));
+    expect(events).toContainEqual({
+      step: WRAP_STEP_INTEGRATE,
+      eventType: 'step_succeeded',
+    });
+  });
+
+  it('a conflicting merge fails the step, halts the run, and leaves the prod checkout untouched', async () => {
+    const projectDir = mkTmpDir('wrap-projectdir-');
+    const runShell = vi.fn(
+      async (): Promise<ShellResult> => ({
+        ok: false,
+        output: 'CONFLICT (content): Merge conflict in shared.txt',
+        exitCode: 1,
+      }),
+    );
+    const orchestrator = makeIntegrateOrchestrator(
+      projectDir,
+      vi.fn(async () => true),
+      runShell,
+    );
+
+    const run = await orchestrator.startDeploy(CLOSING_MILESTONE);
+    await flush();
+
+    expect(getDeployRun(run.run_id)?.status).toBe('failed');
+    const events = listDeployRunEvents(run.run_id).map((e) => e.event_type);
+    expect(events).toContain('step_failed');
+
+    // No partial mutation: the "prod checkout" (projectDir) — never touched
+    // by the clone-into-$tmp mechanism to begin with, and here also never
+    // touched by the (mocked) runShell itself — stays empty, and no further
+    // step ran after the failure.
+    expect(fs.readdirSync(projectDir)).toEqual([]);
+    expect(runShell).toHaveBeenCalledTimes(1);
   });
 });
