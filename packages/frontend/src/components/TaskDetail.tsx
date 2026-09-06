@@ -296,7 +296,9 @@ export function TaskDetail({
     let cancelled = false;
     setDetailFields(null);
     authedFetch(`/api/tasks/${encodeURIComponent(task.taskId)}/detail-fields`)
-      .then((res) => (res.ok ? (res.json() as Promise<TaskDetailFields>) : null))
+      .then((res) =>
+        res.ok ? (res.json() as Promise<TaskDetailFields>) : null,
+      )
       .then((fields) => {
         if (!cancelled) setDetailFields(fields);
       })
@@ -854,8 +856,8 @@ export function TaskDetail({
         {selectedStage === 'review' &&
           !task.review &&
           !detailFields?.depthReview && (
-          <p className={styles.noTranscript}>No review for this task yet.</p>
-        )}
+            <p className={styles.noTranscript}>No review for this task yet.</p>
+          )}
         {selectedStage === 'review' && task.review && (
           <div
             className={styles.reviewSection}

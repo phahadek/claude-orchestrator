@@ -288,7 +288,11 @@ async function buildTaskView(notionTaskId: string): Promise<TaskView | null> {
 
 export interface TaskDetailFields {
   pr: { title: string; headBranch: string; baseBranch: string } | null;
-  depthReview: { sessionId: string; status: string; verdict: string | null } | null;
+  depthReview: {
+    sessionId: string;
+    status: string;
+    verdict: string | null;
+  } | null;
 }
 
 /**

@@ -624,7 +624,11 @@ describe('GET /api/tasks/:taskId/detail-fields', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
-      pr: { title: 'Some PR title', headBranch: 'feature/x', baseBranch: 'dev' },
+      pr: {
+        title: 'Some PR title',
+        headBranch: 'feature/x',
+        baseBranch: 'dev',
+      },
       depthReview: {
         sessionId: 'depth-task-1',
         status: 'done',
