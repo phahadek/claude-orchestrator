@@ -54,12 +54,12 @@ beforeEach(() => {
 
 describe('base-health module deletion', () => {
   it('deletes baseHealthCheck.ts and baseAttribution.ts entirely', () => {
-    expect(
-      fs.existsSync(path.join(__dirname, '../baseHealthCheck.ts')),
-    ).toBe(false);
-    expect(
-      fs.existsSync(path.join(__dirname, '../baseAttribution.ts')),
-    ).toBe(false);
+    expect(fs.existsSync(path.join(__dirname, '../baseHealthCheck.ts'))).toBe(
+      false,
+    );
+    expect(fs.existsSync(path.join(__dirname, '../baseAttribution.ts'))).toBe(
+      false,
+    );
   });
 
   it('no source file declares isBaseTotalFail/isProjectBaseHealthy/hasBaseTotalFailSince', () => {
