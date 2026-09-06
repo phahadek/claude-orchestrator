@@ -52,7 +52,9 @@ describe('lookupSessionByBranch — indexable branch lookup', () => {
       )
       .all('feature/some-branch') as Array<{ detail: string }>;
     const detail = plan.map((row) => row.detail).join(' | ');
-    expect(detail).toMatch(/SEARCH sessions USING INDEX idx_sessions_feature_branch/);
+    expect(detail).toMatch(
+      /SEARCH sessions USING INDEX idx_sessions_feature_branch/,
+    );
     expect(detail).not.toMatch(/SCAN sessions\b/);
   });
 
@@ -67,7 +69,11 @@ describe('lookupSessionByBranch — indexable branch lookup', () => {
   });
 
   it('resolves a legacy row (feature_branch IS NULL) via the derived slug', () => {
-    insertSession({ taskId: 'task-2', taskName: 'Legacy Task', featureBranch: null });
+    insertSession({
+      taskId: 'task-2',
+      taskName: 'Legacy Task',
+      featureBranch: null,
+    });
     const slug = deriveBranchSlug('Legacy Task', 'task-2');
     const result = lookupSessionByBranch(slug);
     expect(result).toEqual({ session_id: 'sess-1', task_id: 'task-2' });
@@ -81,7 +87,11 @@ describe('lookupSessionByBranch — indexable branch lookup', () => {
     });
     // A legacy row whose derived slug would also match "feature/primary-task"
     // if the fallback ran — proves the fallback is skipped once primary hits.
-    insertSession({ taskId: 'task-4', taskName: 'primary task', featureBranch: null });
+    insertSession({
+      taskId: 'task-4',
+      taskName: 'primary task',
+      featureBranch: null,
+    });
 
     const result = lookupSessionByBranch('feature/primary-task');
     expect(result).toEqual({ session_id: 'sess-1', task_id: 'task-3' });

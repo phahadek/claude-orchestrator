@@ -48,35 +48,56 @@ describe('getTasksByStatusFromCache — indexable status lookup', () => {
       )
       .all('In Progress', 'notion:%') as Array<{ detail: string }>;
     const detail = plan.map((row) => row.detail).join(' | ');
-    expect(detail).toMatch(/SEARCH task_cache USING INDEX idx_task_cache_status/);
+    expect(detail).toMatch(
+      /SEARCH task_cache USING INDEX idx_task_cache_status/,
+    );
     expect(detail).not.toMatch(/SCAN task_cache\b/);
   });
 
   it('returns rows identical to the previous JSON_EXTRACT implementation for matching, non-matching, and wrong-prefix rows', () => {
-    insertTaskCache('notion:1', JSON.stringify({ status: 'In Progress', name: 'A' }));
+    insertTaskCache(
+      'notion:1',
+      JSON.stringify({ status: 'In Progress', name: 'A' }),
+    );
     insertTaskCache('notion:2', JSON.stringify({ status: 'Done', name: 'B' }));
-    insertTaskCache('notion:3', JSON.stringify({ status: 'In Progress', name: 'C' }));
-    insertTaskCache('yaml:4', JSON.stringify({ status: 'In Progress', name: 'D' }));
+    insertTaskCache(
+      'notion:3',
+      JSON.stringify({ status: 'In Progress', name: 'C' }),
+    );
+    insertTaskCache(
+      'yaml:4',
+      JSON.stringify({ status: 'In Progress', name: 'D' }),
+    );
 
     const actual = getTasksByStatusFromCache('In Progress', 'notion:');
     const expected = legacyGetTasksByStatusFromCache('In Progress', 'notion:');
 
     expect(
       actual.slice().sort((a, b) => a.task_id.localeCompare(b.task_id)),
-    ).toEqual(expected.slice().sort((a, b) => a.task_id.localeCompare(b.task_id)));
-    expect(actual.map((r) => r.task_id).sort()).toEqual(['notion:1', 'notion:3']);
+    ).toEqual(
+      expected.slice().sort((a, b) => a.task_id.localeCompare(b.task_id)),
+    );
+    expect(actual.map((r) => r.task_id).sort()).toEqual([
+      'notion:1',
+      'notion:3',
+    ]);
   });
 
   it('excludes a malformed-JSON row rather than throwing — an improvement over the previous implementation, which raised "malformed JSON" the moment JSON_EXTRACT scanned a matching-prefix row with invalid raw_json', () => {
-    insertTaskCache('notion:1', JSON.stringify({ status: 'In Progress', name: 'A' }));
+    insertTaskCache(
+      'notion:1',
+      JSON.stringify({ status: 'In Progress', name: 'A' }),
+    );
     insertTaskCache('notion:2', '{not valid json');
 
-    expect(() => getTasksByStatusFromCache('In Progress', 'notion:')).not.toThrow();
+    expect(() =>
+      getTasksByStatusFromCache('In Progress', 'notion:'),
+    ).not.toThrow();
     const actual = getTasksByStatusFromCache('In Progress', 'notion:');
     expect(actual.map((r) => r.task_id)).toEqual(['notion:1']);
 
-    expect(() => legacyGetTasksByStatusFromCache('In Progress', 'notion:')).toThrow(
-      /malformed JSON/,
-    );
+    expect(() =>
+      legacyGetTasksByStatusFromCache('In Progress', 'notion:'),
+    ).toThrow(/malformed JSON/);
   });
 });
