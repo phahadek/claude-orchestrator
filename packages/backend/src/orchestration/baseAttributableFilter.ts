@@ -76,7 +76,10 @@ const UNFILTERED = (passed: boolean): BaseAttributableFilterResult => ({
  * their own breadth. Falls back to `run.started_at` itself when the run
  * carries no session (nothing else to look up against).
  */
-function firstRunCutoffMs(project: ProjectConfig, run: TestRequestRunRow): number {
+function firstRunCutoffMs(
+  project: ProjectConfig,
+  run: TestRequestRunRow,
+): number {
   if (!run.session_id) return run.started_at;
   const sessionRuns = listTestRequestRunsForSession(
     project.id,
@@ -137,9 +140,14 @@ function attributeFailingTests(
   const breadthN = typedGetSetting('flip_rate_breadth_n');
   const breadthWindowHours = typedGetSetting('flip_rate_breadth_window_hours');
 
-  const excludedTests = sessionFailing.filter((t) =>
-    computeTestFailureBreadthFlag(t.test_id, breadthWindowHours, breadthN, beforeMs)
-      .flagged,
+  const excludedTests = sessionFailing.filter(
+    (t) =>
+      computeTestFailureBreadthFlag(
+        t.test_id,
+        breadthWindowHours,
+        breadthN,
+        beforeMs,
+      ).flagged,
   );
   const excludedIds = new Set(excludedTests.map((t) => t.test_id));
   const notBreadthAttributable = sessionFailing.filter(
