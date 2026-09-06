@@ -173,9 +173,7 @@ describe('buildWrapPlaybook: shape', () => {
       repoUrl: 'https://github.com/acme/wrap-test-project.git',
       baseBranch: 'main',
     });
-    const integrate = playbook.steps.find(
-      (s) => s.id === WRAP_STEP_INTEGRATE,
-    );
+    const integrate = playbook.steps.find((s) => s.id === WRAP_STEP_INTEGRATE);
     expect(integrate?.command_or_prompt).toContain('git merge --no-ff');
     expect(integrate?.command_or_prompt).toContain('origin/milestone/m1');
     expect(integrate?.command_or_prompt).toContain('origin/main');
