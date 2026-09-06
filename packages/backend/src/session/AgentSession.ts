@@ -41,7 +41,6 @@ import {
   listUndeliveredInboxItems,
   markInboxItemsDelivered,
   getSession,
-  getSessionMilestoneId,
   markSessionInitiatedPRClose,
   getGrantedCapabilities,
   setTaskPauseReason,
@@ -102,7 +101,6 @@ import {
   serializePauseReason,
 } from '../db/pauseReason';
 import { matchesWorkflowScopeDenylist } from './workflowScopeDenylist';
-import { resolveStartingPoint } from './branchModel';
 import type {
   ParsedDispositionItem,
   DispositionsParsedPayload,
@@ -2201,14 +2199,13 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     let baseBranch = 'dev';
     try {
       const project = getProjectById(this.projectId);
-      baseBranch = project
-        ? resolveStartingPoint(
-            project,
-            getSessionMilestoneId(this.sessionId) ?? null,
-          ).startingPoint
-        : 'dev';
+      // The PR's base must always be the project's actual integration branch
+      // (dev/main), never resolveStartingPoint's two_tier milestone starting
+      // point (e.g. "milestone/<slug>") — that value is where a *session*
+      // starts work from, not where its PR should land.
+      baseBranch = project?.baseBranch ?? 'dev';
     } catch {
-      // project/milestone lookup failed — keep 'dev' default
+      // project lookup failed — keep 'dev' default
     }
 
     let branch: string;
