@@ -17,6 +17,7 @@ import type { TaskView } from '../../types/taskView';
 
 vi.mock('../../hooks/stagedIntentBus', () => ({
   subscribeStagedIntentChange: () => () => {},
+  subscribeSessionCompletenessChange: () => () => {},
 }));
 
 function makeTask(overrides: Partial<TaskView> & { taskId: string }): TaskView {
