@@ -2942,10 +2942,10 @@ export function getTasksByStatusFromCache(
   return db
     .prepare(
       `SELECT task_id, raw_json FROM task_cache
-       WHERE task_id LIKE ?
-         AND JSON_EXTRACT(raw_json, '$.status') = ?`,
+       WHERE cached_status = ?
+         AND task_id LIKE ?`,
     )
-    .all(`${prefix}%`, status) as { task_id: string; raw_json: string }[];
+    .all(status, `${prefix}%`) as { task_id: string; raw_json: string }[];
 }
 
 export function setContextOccupancy(sessionId: string, tokens: number): void {
@@ -3788,34 +3788,37 @@ export interface SessionBranchMatch {
 export function lookupSessionByBranch(
   headBranch: string,
 ): SessionBranchMatch | null {
-  const candidates = db
-    .prepare(
-      `SELECT session_id, task_id, task_name, feature_branch FROM sessions
-       WHERE task_name IS NOT NULL`,
-    )
-    .all() as Array<{
-    session_id: string;
-    task_id: string | null;
-    task_name: string;
-    feature_branch: string | null;
-  }>;
-
   const rows: SessionBranchMatch[] = [];
-  for (const c of candidates) {
-    if (c.feature_branch != null) {
-      // Match the branch actually created — never re-derive when we recorded
-      // it, since a uniquified name (`<base>-2`) would otherwise never match.
-      if (headBranch === c.feature_branch) {
+
+  const primaryMatches = db
+    .prepare(
+      `SELECT session_id, task_id FROM sessions WHERE feature_branch = ?`,
+    )
+    .all(headBranch) as Array<{ session_id: string; task_id: string | null }>;
+  for (const m of primaryMatches) {
+    rows.push({ session_id: m.session_id, task_id: m.task_id });
+  }
+
+  if (rows.length === 0) {
+    // Legacy rows predating the feature_branch column — fall back to
+    // re-deriving both the current and pre-task-id-suffix names, over the
+    // much smaller set of rows that never got a feature_branch recorded.
+    const legacyCandidates = db
+      .prepare(
+        `SELECT session_id, task_id, task_name FROM sessions
+         WHERE feature_branch IS NULL AND task_name IS NOT NULL`,
+      )
+      .all() as Array<{
+      session_id: string;
+      task_id: string | null;
+      task_name: string;
+    }>;
+    for (const c of legacyCandidates) {
+      const current = deriveBranchSlug(c.task_name, c.task_id);
+      const legacy = deriveBranchSlug(c.task_name, null);
+      if (headBranch === current || headBranch === legacy) {
         rows.push({ session_id: c.session_id, task_id: c.task_id });
       }
-      continue;
-    }
-    // Legacy row predating the feature_branch column — fall back to
-    // re-deriving both the current and pre-task-id-suffix names.
-    const current = deriveBranchSlug(c.task_name, c.task_id);
-    const legacy = deriveBranchSlug(c.task_name, null);
-    if (headBranch === current || headBranch === legacy) {
-      rows.push({ session_id: c.session_id, task_id: c.task_id });
     }
   }
 
