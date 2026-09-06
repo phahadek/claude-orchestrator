@@ -60,9 +60,9 @@ let livePid: number;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockedReaddir.mockResolvedValue([] as unknown as ReturnType<
-    typeof fs.readdirSync
-  >);
+  mockedReaddir.mockResolvedValue(
+    [] as unknown as ReturnType<typeof fs.readdirSync>,
+  );
   // A pid that is virtually guaranteed to be alive during the test run.
   livePid = process.pid;
 });
@@ -328,9 +328,7 @@ describe('TempClusterReconciler', () => {
       );
     }
     for (const f of nonCandidateFiles) {
-      expect(mockedStat).not.toHaveBeenCalledWith(
-        `${BASE_DIR}/${f.name}`,
-      );
+      expect(mockedStat).not.toHaveBeenCalledWith(`${BASE_DIR}/${f.name}`);
       expect(mockedAccess).not.toHaveBeenCalledWith(
         expect.stringContaining(f.name),
       );
