@@ -38,17 +38,45 @@ import type { PullRequest } from '../github/types';
 import { NotionApiError } from '../notion/types';
 
 /**
- * True for a revert-write failure that can never succeed on retry — the
- * source page is archived/trashed, so every identical retry reproduces the
- * exact same 400 forever. Distinguishes this from a transient failure
- * (network blip, rate limit) that's still worth retrying next tick.
+ * True for a revert-write failure that can never succeed on retry:
+ * - 400 with an "archived" body — the source page is archived/trashed.
+ * - 404 object_not_found — the page was deleted or unshared from the
+ *   integration.
+ * Every identical retry reproduces the exact same error forever.
+ * Distinguishes this from a transient failure (network blip, rate limit)
+ * that's still worth retrying next tick.
  */
 function isPermanentRevertFailure(err: unknown): boolean {
-  return (
-    err instanceof NotionApiError &&
-    err.statusCode === 400 &&
-    /archived/i.test(err.message)
+  if (!(err instanceof NotionApiError)) return false;
+  if (err.statusCode === 400 && /archived/i.test(err.message)) return true;
+  if (err.statusCode === 404 && /object_not_found/i.test(err.message)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Strips volatile per-request fields (request ids, UUIDs) from a Notion
+ * error's message so two failures that differ only by nonce compare equal.
+ */
+function stripVolatileFields(message: string): string {
+  return message.replace(
+    /[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}/gi,
+    '<id>',
   );
+}
+
+/**
+ * Stable projection of a revert-check failure used to detect repeats across
+ * ticks — status code plus a nonce-stripped message, rather than the raw
+ * message (which embeds a fresh Notion request_id every call).
+ */
+function failureReasonKey(err: unknown): string {
+  if (err instanceof NotionApiError) {
+    return `notion:${err.statusCode}:${stripVolatileFields(err.message)}`;
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return `error:${stripVolatileFields(message)}`;
 }
 
 /** Task types the orchestrator moves to In Progress itself on dispatch — eligible for orphan sweep. */
@@ -101,12 +129,15 @@ export class OrphanedTaskSweeper {
   private readonly permanentlyFailedTaskIds = new Set<string>();
 
   /**
-   * Last non-permanent revert-check failure message per task id — used
-   * only to suppress repeat logging for a task that fails identically
-   * tick after tick. Cleared once the task reverts cleanly, so a later
-   * failure logs again as a fresh transition.
+   * Last non-permanent revert-check failure reason key per task id — used
+   * to suppress repeat logging and repeat audit rows for a task that fails
+   * identically tick after tick. Keyed on a nonce-stripped projection of
+   * the failure (see failureReasonKey), not the raw message, so failures
+   * differing only by an embedded request id still count as a repeat.
+   * Cleared once the task reverts cleanly, so a later failure logs and
+   * audits again as a fresh transition.
    */
-  private readonly lastRevertFailureMessage = new Map<string, string>();
+  private readonly lastRevertFailureReason = new Map<string, string>();
 
   constructor(
     private readonly broadcast: (msg: ServerMessage) => void,
@@ -194,7 +225,7 @@ export class OrphanedTaskSweeper {
             resolved.task.type,
             backend,
           );
-          this.lastRevertFailureMessage.delete(taskId);
+          this.lastRevertFailureReason.delete(taskId);
         } catch (err) {
           // A single task's revert check failing must not throw the whole
           // tick — that would mark every other task's work (which already
@@ -203,32 +234,43 @@ export class OrphanedTaskSweeper {
           // still succeeds.
           failedTaskIds.push(taskId);
           const message = (err as Error).message;
-          if (isPermanentRevertFailure(err)) {
+          const permanent = isPermanentRevertFailure(err);
+          if (permanent) {
             this.permanentlyFailedTaskIds.add(taskId);
-            this.lastRevertFailureMessage.delete(taskId);
+            this.lastRevertFailureReason.delete(taskId);
             logger.error(
-              `[OrphanedTaskSweeper] revert check for ${taskId} failed permanently (source page archived/trashed) — giving up, will not retry: ${message}`,
+              `[OrphanedTaskSweeper] revert check for ${taskId} failed permanently (source page archived/trashed or no longer accessible) — giving up, will not retry: ${message}`,
             );
+            recordEvent({
+              event_type: 'task_revert_check_failed',
+              actor_type: 'system',
+              project_id: project.id,
+              task_id: taskId,
+              payload: { message, permanent: true },
+            });
           } else {
-            // Log only on the first occurrence or when the failure reason
-            // changes — an unrevertable task otherwise logs identically
-            // every tick forever.
+            // Log and audit only on the first occurrence or when the
+            // failure reason changes — an unrevertable task otherwise logs
+            // and audits identically every tick forever. Keyed on a
+            // nonce-stripped reason, not the raw message, since the raw
+            // message embeds a fresh Notion request_id every call.
+            const reasonKey = failureReasonKey(err);
             const isRepeat =
-              this.lastRevertFailureMessage.get(taskId) === message;
-            this.lastRevertFailureMessage.set(taskId, message);
+              this.lastRevertFailureReason.get(taskId) === reasonKey;
+            this.lastRevertFailureReason.set(taskId, reasonKey);
             if (!isRepeat) {
               logger.warn(
                 `[OrphanedTaskSweeper] revert check failed for ${taskId}: ${message}`,
               );
+              recordEvent({
+                event_type: 'task_revert_check_failed',
+                actor_type: 'system',
+                project_id: project.id,
+                task_id: taskId,
+                payload: { message, permanent: false },
+              });
             }
           }
-          recordEvent({
-            event_type: 'task_revert_check_failed',
-            actor_type: 'system',
-            project_id: project.id,
-            task_id: taskId,
-            payload: { message, permanent: isPermanentRevertFailure(err) },
-          });
         }
       }
     }

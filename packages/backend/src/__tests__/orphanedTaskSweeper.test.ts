@@ -2344,7 +2344,8 @@ describe('OrphanedTaskSweeper', () => {
         '🗂️ Ready',
       );
 
-      // Not a permanent failure — retried (and still surfaced) on the next tick.
+      // Not a permanent failure — retried on the next tick, but since it
+      // fails identically, no additional audit row is recorded.
       vi.mocked(backend.updateStatus).mockClear();
       vi.mocked(recordEvent).mockClear();
       await expect(sweeper.sweepOnce()).resolves.toEqual({
@@ -2354,12 +2355,155 @@ describe('OrphanedTaskSweeper', () => {
         'notion:abc',
         '🗂️ Ready',
       );
-      expect(recordEvent).toHaveBeenCalledWith(
+      expect(recordEvent).not.toHaveBeenCalledWith(
         expect.objectContaining({
           event_type: 'task_revert_check_failed',
           task_id: 'notion:abc',
         }),
       );
+    });
+
+    it('treats a 404 object_not_found revert failure as permanent', async () => {
+      const backend = makeBackend([makeTask('notion:abc')]);
+      vi.mocked(backend.updateStatus).mockRejectedValueOnce(
+        new NotionApiError(
+          404,
+          JSON.stringify({
+            object: 'error',
+            status: 404,
+            code: 'object_not_found',
+            message:
+              'Could not find page with ID: 3b022f91-52f3-813d-8106-fa8740e6d09c. Make sure the relevant pages and databases are shared with your integration.',
+          }),
+        ),
+      );
+
+      const sweeper = new OrphanedTaskSweeper(broadcast, {
+        listProjects: () => [
+          { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+        ],
+        resolveBackend: () => backend,
+      });
+
+      await expect(sweeper.sweepOnce()).resolves.toEqual({
+        items_processed: 1,
+      });
+      expect(recordEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: 'task_revert_check_failed',
+          task_id: 'notion:abc',
+          payload: expect.objectContaining({ permanent: true }),
+        }),
+      );
+
+      // Second tick sees the same In-Progress task again — the permanent
+      // failure must not be retried.
+      vi.mocked(backend.updateStatus).mockClear();
+      await sweeper.sweepOnce();
+      expect(backend.updateStatus).not.toHaveBeenCalled();
+    });
+
+    it('treats a genuinely transient failure (5xx) as non-permanent and retries it', async () => {
+      const backend = makeBackend([makeTask('notion:abc')]);
+      vi.mocked(backend.updateStatus).mockRejectedValue(
+        new NotionApiError(503, 'Service Unavailable'),
+      );
+
+      const sweeper = new OrphanedTaskSweeper(broadcast, {
+        listProjects: () => [
+          { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+        ],
+        resolveBackend: () => backend,
+      });
+
+      await sweeper.sweepOnce();
+      vi.mocked(backend.updateStatus).mockClear();
+      await sweeper.sweepOnce();
+      expect(backend.updateStatus).toHaveBeenCalledWith(
+        'notion:abc',
+        '🗂️ Ready',
+      );
+    });
+
+    it('treats two failures differing only by an embedded request id as a repeat (one log line)', async () => {
+      const backend = makeBackend([makeTask('notion:abc')]);
+      let call = 0;
+      const requestIds = [
+        '6dac56a1-ffff-4a1a-9c1a-1234567890ab',
+        'ddc1fce1-aaaa-4b2b-8d2b-0987654321cd',
+      ];
+      vi.mocked(backend.updateStatus).mockImplementation(async () => {
+        const requestId = requestIds[call] ?? requestIds[requestIds.length - 1];
+        call += 1;
+        throw new NotionApiError(
+          500,
+          `Internal error. request_id: ${requestId}`,
+        );
+      });
+      const warnSpy = vi
+        .spyOn(logger, 'warn')
+        .mockImplementation(() => undefined);
+
+      const sweeper = new OrphanedTaskSweeper(broadcast, {
+        listProjects: () => [
+          { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+        ],
+        resolveBackend: () => backend,
+      });
+
+      await sweeper.sweepOnce();
+      await sweeper.sweepOnce();
+
+      const matchingCalls = warnSpy.mock.calls.filter((c) =>
+        String(c[0]).includes('revert check failed for notion:abc'),
+      ).length;
+      expect(matchingCalls).toBe(1);
+
+      warnSpy.mockRestore();
+    });
+
+    it('records exactly one audit row across N identical-failure ticks, and a fresh row per distinct reason', async () => {
+      const backend = makeBackend([
+        makeTask('notion:abc'),
+        makeTask('notion:def'),
+      ]);
+      vi.mocked(backend.updateStatus).mockImplementation(async (taskId) => {
+        if (taskId === 'notion:abc') {
+          throw new NotionApiError(500, 'Internal error. request_id: aaaa1111');
+        }
+        if (taskId === 'notion:def') {
+          throw new NotionApiError(500, 'A different failure reason entirely');
+        }
+      });
+
+      const sweeper = new OrphanedTaskSweeper(broadcast, {
+        listProjects: () => [
+          { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+        ],
+        resolveBackend: () => backend,
+      });
+
+      await sweeper.sweepOnce();
+      await sweeper.sweepOnce();
+      await sweeper.sweepOnce();
+
+      const abcRows = vi
+        .mocked(recordEvent)
+        .mock.calls.filter(
+          (c) =>
+            c[0].event_type === 'task_revert_check_failed' &&
+            c[0].task_id === 'notion:abc',
+        );
+      expect(abcRows.length).toBe(1);
+
+      const defRows = vi
+        .mocked(recordEvent)
+        .mock.calls.filter(
+          (c) =>
+            c[0].event_type === 'task_revert_check_failed' &&
+            c[0].task_id === 'notion:def',
+        );
+      expect(defRows.length).toBe(1);
     });
 
     it('logs a repeated identical revert failure once, not on every tick', async () => {
