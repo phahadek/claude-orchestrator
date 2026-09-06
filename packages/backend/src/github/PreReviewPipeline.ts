@@ -164,7 +164,7 @@ export class PreReviewPipeline {
                 ),
               getPRByNumber(ctx.prNumber, ctx.repo)?.base_branch ??
                 ctx.project.baseBranch,
-              autofixCfg.autofix_skip_ci,
+              autofixCfg.autofix_skip_ci ?? false,
             );
 
             if (result.isGitInfraFailure) {
@@ -239,7 +239,7 @@ export class PreReviewPipeline {
                     getPRByNumber(ctx.prNumber, ctx.repo)?.session_id ?? null,
                   projectId: ctx.project.id,
                   taskId: ctx.job.taskId,
-                  skipCi: autofixCfg.autofix_skip_ci,
+                  skipCi: autofixCfg.autofix_skip_ci ?? false,
                   onReverted: (files) => {
                     const row = getPRByNumber(ctx.prNumber, ctx.repo);
                     if (row?.session_id) {

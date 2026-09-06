@@ -149,6 +149,7 @@ vi.mock('../CliSessionRunner', () => ({
     sendMessage: vi.fn(),
     endSession: vi.fn(),
   })),
+  PreSpawnConfigError: class PreSpawnConfigError extends Error {},
 }));
 
 vi.mock('../ApiSessionRunner', () => ({

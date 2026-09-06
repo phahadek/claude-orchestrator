@@ -25,6 +25,16 @@ let seq = 0;
 /** Shared across most fixtures below so pre-existing window/exclusion assertions (which predate hash-scoping) keep testing what they test. */
 const SHARED_HASH = 'shared-hash';
 
+/**
+ * test_request_runs.content_hash is NOT NULL in the real schema (every
+ * requested run always carries the tree hash it was requested against) — a
+ * "legacy sample with no content hash" is a test_perf_baselines digest-entry
+ * concept (a sample recorded before the `h` field existed), never a
+ * test_request_runs row. So this helper always writes a real placeholder
+ * hash to satisfy the table's NOT NULL constraint; callers that want to
+ * simulate an absent digest hash pass `null` to recordTestPerfDigestSample
+ * directly (see insertSample below), not here.
+ */
 function insertRun(contentHash: string | null): string {
   seq += 1;
   const id = `run-${seq}`;
@@ -32,7 +42,7 @@ function insertRun(contentHash: string | null): string {
     `INSERT INTO test_request_runs
        (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at)
      VALUES (@id, 'proj-1', @content_hash, NULL, 'passed', '', 0, 0, 0)`,
-  ).run({ id, content_hash: contentHash });
+  ).run({ id, content_hash: contentHash ?? `placeholder-${id}` });
   return id;
 }
 

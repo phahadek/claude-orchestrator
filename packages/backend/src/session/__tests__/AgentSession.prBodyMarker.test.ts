@@ -133,6 +133,7 @@ vi.mock('../CliSessionRunner', () => ({
     kill: vi.fn().mockResolvedValue(undefined),
     hasSpawnError: false,
   })),
+  PreSpawnConfigError: class PreSpawnConfigError extends Error {},
 }));
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────────

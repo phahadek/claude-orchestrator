@@ -2895,12 +2895,8 @@ export class SessionManager extends EventEmitter {
         // notify the frontend so the session doesn't stay stuck at 'running'.
         if (!session.hasEnded) {
           const detail = err instanceof Error ? err.message : String(err);
-          this.markSessionErrored(
-            sessionId,
-            'error',
-            classifySessionRunError(err),
-            detail,
-          );
+          const pauseReason = classifySessionRunError(err);
+          this.markSessionErrored(sessionId, 'error', pauseReason, detail);
         }
         this.applyPendingDoneForSettledSession(sessionId);
         if (

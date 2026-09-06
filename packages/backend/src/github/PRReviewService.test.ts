@@ -1569,6 +1569,7 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
           ),
         ),
       );
+      return true;
     });
 
     const service = new PRReviewService(
@@ -1603,18 +1604,36 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
     (mockSM.isAlive as ReturnType<typeof vi.fn>).mockReturnValue(true);
 
     const sendMock = mockSM.send as ReturnType<typeof vi.fn>;
-    sendMock.mockImplementationOnce(() => {
-      setImmediate(() =>
-        mockSM.emit(
-          'message',
-          makeSessionEventMessage(
-            'existing-review-session-id',
-            JSON.stringify(claudePayload),
+    // First attempt: delivery unconfirmed (return false) — triggers the
+    // session_nudge_delivery_failed audit event under test. Second attempt
+    // (the recursive retry): delivery confirmed, so the retry loop resolves
+    // instead of running out the exhaustion guard (see the dedicated
+    // "bounds the !delivered fallback" test below for that behavior).
+    sendMock
+      .mockImplementationOnce(() => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(
+              'existing-review-session-id',
+              JSON.stringify(claudePayload),
+            ),
           ),
-        ),
-      );
-      return false;
-    });
+        );
+        return false;
+      })
+      .mockImplementationOnce(() => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(
+              'existing-review-session-id',
+              JSON.stringify(claudePayload),
+            ),
+          ),
+        );
+        return true;
+      });
 
     const service = new PRReviewService(
       makeMockGitHub(),
@@ -1902,6 +1921,7 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
           ),
         ),
       );
+      return true;
     });
 
     const service = new PRReviewService(
@@ -1951,6 +1971,7 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
           ),
         ),
       );
+      return true;
     });
 
     const service = new PRReviewService(
@@ -1986,6 +2007,7 @@ describe('PRReviewService.reReviewPR()', () => {
       review_session_id: 'existing-review-session-abc',
     };
     vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
 
     const mockSM = makeMockSessionManager();
     (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
@@ -2055,6 +2077,7 @@ describe('PRReviewService.reReviewPR()', () => {
       review_iteration: 1,
     };
     vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
 
     const mockSM = makeMockSessionManager();
     (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
@@ -2090,6 +2113,7 @@ describe('PRReviewService.reReviewPR()', () => {
       review_session_id: 'old-review-session',
     };
     vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
 
     const mockSM = makeMockSessionManager();
     (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
@@ -2130,6 +2154,7 @@ describe('PRReviewService.reReviewPR()', () => {
       task_id: 'notion:task-abc123',
     };
     vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
 
     const mockGH = makeMockGitHub();
     const mockSM = makeMockSessionManager();
@@ -2172,6 +2197,7 @@ describe('PRReviewService.reReviewPR()', () => {
       review_session_id: 'review-session-rearm',
     };
     vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
     vi.mocked(getCachedType).mockReturnValue('🔧 Operational');
 
     const mockSM = makeMockSessionManager();
@@ -2212,6 +2238,7 @@ describe('PRReviewService.reReviewPR()', () => {
       review_session_id: 'review-session-needs-changes',
     };
     vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
 
     const needsChangesPayload = {
       verdict: 'needs_changes',
@@ -2263,6 +2290,7 @@ describe('PRReviewService.reReviewPR()', () => {
       review_session_id: 'review-session-abc',
     };
     vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
 
     const mockSM = makeMockSessionManager();
     (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
@@ -2396,6 +2424,7 @@ describe('PRReviewService — verdict persisted before side effects', () => {
           ),
         ),
       );
+      return true;
     });
 
     const service = new PRReviewService(
@@ -2473,6 +2502,7 @@ describe('PRReviewService — verdict persisted before side effects', () => {
       draft: 1,
     };
     vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
 
     const callOrder: string[] = [];
     const mockGH = makeMockGitHub();
@@ -2828,6 +2858,7 @@ describe('PRReviewService.reReviewPR() — same-SHA dedup guard', () => {
     vi.mocked(getPRByNumber)
       .mockReturnValueOnce(prRowFirstCall as any)
       .mockReturnValue(prRowSecondCall as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
 
     const mockSM = makeMockSessionManager();
     (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
@@ -2907,6 +2938,7 @@ describe('PRReviewService.reReviewPR() — same-SHA dedup guard', () => {
       review_result: null,
     };
     vi.mocked(getPRByNumber).mockReturnValue(prRowDifferentSha as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
 
     const mockSM = makeMockSessionManager();
     (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(

@@ -40,6 +40,7 @@ function makeReport(
     source: 'operator',
     origin_session_id: null,
     origin_task_id: null,
+    image_path: null,
     created_at: new Date(0).toISOString(),
     updated_at: new Date(0).toISOString(),
     ...overrides,

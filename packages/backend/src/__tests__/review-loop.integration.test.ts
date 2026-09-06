@@ -619,6 +619,14 @@ describe('review iteration counter', () => {
       head_sha: HEAD_SHA,
     });
     vi.mocked(queries.getPRByNumber).mockReturnValue(prRow);
+    // reReviewPR treats a terminal/missing review session as "resurrect a
+    // dead session" and routes to a fresh reviewPR() instead of the
+    // increment-and-follow-up path under test — the review session here is
+    // still live, so getSession() must reflect that (see PRReviewService's
+    // isSessionTerminal guard).
+    vi.mocked(queries.getSession).mockReturnValue({
+      status: 'idle',
+    } as ReturnType<typeof queries.getSession>);
 
     await reviewService.reReviewPR(PR_NUMBER, REPO);
 

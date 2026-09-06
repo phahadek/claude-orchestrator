@@ -9058,6 +9058,10 @@ export function countTestRequestRunsNeedingExtraction(): number {
  * with neither is a crash record, not a verdict — it stays in the table but
  * is invisible here, so a fresh run is triggered instead of the crash being
  * served forever.
+ *
+ * `includeUnsettledCrashRows` opts a caller back into seeing those crash
+ * rows — base-health classification (baseHealthCheck.ts) is the only one
+ * that needs the crash itself as its verdict rather than a fresh run.
  */
 export function getLatestTestRequestRun(
   projectId: string,
@@ -9079,6 +9083,18 @@ export function getLatestTestRequestRun(
    * base. Omitted (the default) skips this filter entirely.
    */
   baseSha?: string | null,
+  /**
+   * Base-branch health classification (baseHealthCheck.ts's
+   * checkBaseBranchHealth) is the one caller that must see a crashed
+   * (structured_result-less, report-less) failed row rather than have it
+   * hidden by the squat-guard above: classifyRun/classifyTestRunOutcome are
+   * specifically built to read that shape as a genuine total_fail/timeout/
+   * oom verdict. Every other caller wants the squat-guard's normal
+   * behavior — a crash row must never be replayed as a cache-hit verdict —
+   * so this defaults to false and only base-health classification passes
+   * true.
+   */
+  includeUnsettledCrashRows = false,
 ): TestRequestRunRow | undefined {
   const baseShaProvided = baseSha !== undefined;
   return db
@@ -9088,6 +9104,7 @@ export function getLatestTestRequestRun(
       run_kind: string | null;
       base_sha_provided: number;
       base_sha: string | null;
+      include_unsettled_crash_rows: number;
     }>(
       `SELECT ${TEST_REQUEST_RUN_COLUMNS}
        FROM test_request_runs
@@ -9095,7 +9112,8 @@ export function getLatestTestRequestRun(
          AND (@run_kind IS NULL OR run_kind = @run_kind)
          AND (@base_sha_provided = 0 OR base_sha IS @base_sha)
          AND (
-           state != 'failed'
+           @include_unsettled_crash_rows = 1
+           OR state != 'failed'
            OR structured_result IS NOT NULL
            OR EXISTS (
              SELECT 1 FROM test_run_results
@@ -9110,6 +9128,7 @@ export function getLatestTestRequestRun(
       run_kind: runKind ?? null,
       base_sha_provided: baseShaProvided ? 1 : 0,
       base_sha: baseSha ?? null,
+      include_unsettled_crash_rows: includeUnsettledCrashRows ? 1 : 0,
     }) as TestRequestRunRow | undefined;
 }
 

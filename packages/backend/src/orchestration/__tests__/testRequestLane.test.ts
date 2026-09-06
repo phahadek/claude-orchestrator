@@ -143,7 +143,15 @@ function insertSample(
   );
 }
 
-/** Like insertSample, but with a caller-chosen outcome — for flip-rate digest tests. */
+/**
+ * Like insertSample, but with a caller-chosen outcome — for flip-rate digest
+ * tests. contentHash defaults to one value shared per testId (rather than a
+ * fresh value per call) so a caller exercising transition-counting across
+ * several calls for the same testId gets same-tree pairs by default, as
+ * computeTestFlipRateFlag requires — matching how a real flapping test's
+ * re-runs of unchanged code would share a content hash. Pass an explicit
+ * contentHash to simulate distinct trees instead.
+ */
 function insertOutcomeSample(
   testId: string,
   outcome: 'passed' | 'failed',
@@ -152,10 +160,19 @@ function insertOutcomeSample(
     concurrentRunCount: number;
     oomKilled?: boolean;
     foreignConcurrentRunCount?: number | null;
+    contentHash?: string | null;
   },
 ): void {
   const runId = `flip-run-${testId}-${sampleSeq++}`;
-  insertTestRequestRun(runId, 'proj-1', `flip-hash-${runId}`, null, Date.now());
+  const contentHash =
+    opts.contentHash === undefined ? `flip-hash-${testId}` : opts.contentHash;
+  insertTestRequestRun(
+    runId,
+    'proj-1',
+    contentHash ?? `flip-hash-${runId}`,
+    null,
+    Date.now(),
+  );
   ingestTestRunResultsTx(
     runId,
     'proj-1',
@@ -164,6 +181,7 @@ function insertOutcomeSample(
     opts.oomKilled ?? false,
     false,
     opts.foreignConcurrentRunCount,
+    contentHash,
   );
 }
 
@@ -1256,8 +1274,32 @@ describe('concurrent_run_count validity signal — end-to-end through the produc
       'passed',
       'failed',
     ];
+    // Flakiness is an alternation *within one tree* — every sample below
+    // shares this single content hash, matching computeTestFlipRateFlag's
+    // same-tree-pair requirement. A repeat request against an already-
+    // settled hash would otherwise be served from the unchangedReplay cache
+    // rather than re-executing, so each iteration after the first clears the
+    // prior settled row via the same sanctioned flaky-path deletion the
+    // "deleteTestRequestRunsForContentHash" tests above exercise.
+    const contentHash = 'hash-e2e-flip';
 
     for (const [i, outcome] of outcomes.entries()) {
+      if (i > 0) {
+        // deleteTestRequestRunsForContentHash alone would violate the
+        // test_run_results/test_run_summaries FK against the row it's
+        // about to delete, once ingestTestRunResults has already extracted
+        // it (as this loop does every iteration) — clear the extracted
+        // rows first, same as a real flaky.confirm actuation would need a
+        // prior run with no extraction pending.
+        const priorRun = getLatestTestRequestRun('proj-1', contentHash)!;
+        db.prepare(
+          `DELETE FROM test_run_results WHERE test_request_run_id = ?`,
+        ).run(priorRun.id);
+        db.prepare(
+          `DELETE FROM test_run_summaries WHERE test_request_run_id = ?`,
+        ).run(priorRun.id);
+        deleteTestRequestRunsForContentHash('proj-1', contentHash);
+      }
       mockRunTestCommands.mockResolvedValueOnce({
         passed: outcome === 'passed',
         output: 'ok',
@@ -1265,7 +1307,6 @@ describe('concurrent_run_count validity signal — end-to-end through the produc
       mockCollectStructuredTestResult.mockReturnValueOnce(
         structuredResultFor(testId, outcome, 10),
       );
-      const contentHash = `hash-e2e-flip-${i}`;
       await runProjectTestRequest(baseSpec({ contentHash }));
       const run = getLatestTestRequestRun('proj-1', contentHash)!;
       expect(run.concurrent_run_count).toBe(0);

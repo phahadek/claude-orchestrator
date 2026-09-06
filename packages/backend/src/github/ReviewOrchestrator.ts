@@ -584,7 +584,7 @@ export class ReviewOrchestrator {
           (msg) =>
             logger.info(`[ReviewOrchestrator] autofix PR #${prNumber}: ${msg}`),
           prRow?.base_branch ?? project.baseBranch,
-          autofixConfig.autofix_skip_ci,
+          autofixConfig.autofix_skip_ci ?? false,
         );
         autofixSuccess = result.success;
         autofixSummary = result.summary;
@@ -606,7 +606,7 @@ export class ReviewOrchestrator {
               sessionId: prRow?.session_id ?? null,
               projectId: project.id,
               taskId,
-              skipCi: autofixConfig.autofix_skip_ci,
+              skipCi: autofixConfig.autofix_skip_ci ?? false,
               onReverted: (files) => {
                 if (prRow?.session_id) {
                   this.sessionManager.addToRevertLock(prRow.session_id, files);
@@ -1027,7 +1027,7 @@ export class ReviewOrchestrator {
                   `[ReviewOrchestrator] autofix local branch ${job.branchName}: ${msg}`,
                 ),
               project.baseBranch,
-              config.autofix_skip_ci,
+              config.autofix_skip_ci ?? false,
             );
             if (autofixResult.commitSha) {
               recordEvent({

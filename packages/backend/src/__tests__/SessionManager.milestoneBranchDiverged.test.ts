@@ -148,6 +148,7 @@ vi.mock('../tasks/TaskStatusEngine', () => ({
 
 vi.mock('../session/CliSessionRunner', () => ({
   CliSessionRunner: vi.fn(),
+  PreSpawnConfigError: class PreSpawnConfigError extends Error {},
 }));
 
 vi.mock('../session/ApiSessionRunner', () => ({

@@ -28,6 +28,10 @@ vi.mock('../db/queries.js', () => ({
   getLocalBranchById: vi.fn(),
   getSession: vi.fn().mockReturnValue(undefined),
   getPRIntentForPR: vi.fn().mockReturnValue(null),
+  getTaskCache: vi.fn().mockReturnValue(undefined),
+  setPauseReason: vi.fn(),
+  getMergedPRForTask: vi.fn().mockReturnValue(undefined),
+  getMergedLocalBranchForTaskId: vi.fn().mockReturnValue(undefined),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({

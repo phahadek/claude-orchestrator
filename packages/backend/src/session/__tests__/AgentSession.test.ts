@@ -110,6 +110,7 @@ vi.mock('../CliSessionRunner', () => ({
     endSession: vi.fn(),
     kill: vi.fn().mockResolvedValue(undefined),
   })),
+  PreSpawnConfigError: class PreSpawnConfigError extends Error {},
 }));
 
 vi.mock('../SessionAuditor', () => ({
