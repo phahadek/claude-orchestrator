@@ -69,9 +69,6 @@ export interface TaskView {
   pr: {
     prNumber: number;
     prUrl: string;
-    title: string;
-    headBranch: string;
-    baseBranch: string;
     state: string;
     draft: boolean;
     mergeState: string | null;
@@ -81,16 +78,9 @@ export interface TaskView {
     sessionId: string;
     status: string;
     verdict: string | null;
-    summary: string | null;
     iterationCount: number;
     inputTokens: number;
     outputTokens: number;
-  } | null;
-  /** Depth-review (post-conformance) session for this task's PR — null when the PR has no depth_review session. */
-  depthReview: {
-    sessionId: string;
-    status: string;
-    verdict: string | null;
   } | null;
   totalTokens: { input: number; output: number };
   /** Assigned target repo slug for multi-repo projects. Null when unassigned. */

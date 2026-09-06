@@ -2,7 +2,10 @@ import { useState, useEffect, useCallback } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
-import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
+import type {
+  TaskView,
+  TaskDetailFields,
+} from '@claude-orchestrator/backend/src/routes/tasks';
 import type { DisplayStatus } from '@claude-orchestrator/backend/src/tasks/TaskStatusEngine';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import type { SessionState } from '../hooks/useSessionStore';
@@ -252,6 +255,9 @@ export function TaskDetail({
     task.assignedRepo,
   );
   const [assignRepoInFlight, setAssignRepoInFlight] = useState(false);
+  const [detailFields, setDetailFields] = useState<TaskDetailFields | null>(
+    null,
+  );
   const [showMoveDialog, setShowMoveDialog] = useState(false);
   const [moveIntent, setMoveIntent] = useState<StagedIntent | null>(null);
   const {
@@ -284,6 +290,24 @@ export function TaskDetail({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task.taskId, task.assignedRepo]);
 
+  // Fields trimmed from the list-fetched TaskView (pr.title/headBranch/baseBranch,
+  // depthReview) — fetched on demand for the selected task only.
+  useEffect(() => {
+    let cancelled = false;
+    setDetailFields(null);
+    authedFetch(`/api/tasks/${encodeURIComponent(task.taskId)}/detail-fields`)
+      .then((res) => (res.ok ? (res.json() as Promise<TaskDetailFields>) : null))
+      .then((fields) => {
+        if (!cancelled) setDetailFields(fields);
+      })
+      .catch(() => {
+        if (!cancelled) setDetailFields(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [task.taskId]);
+
   // Look up live session state
   const codeSession = task.codeSession
     ? (sessions.find((s) => s.sessionId === task.codeSession!.sessionId) ??
@@ -292,7 +316,7 @@ export function TaskDetail({
   const { session: reviewSession, fetchState: reviewFetchState } =
     useResolvedSession(task.review?.sessionId, sessions);
   const { session: depthReviewSession, fetchState: depthReviewFetchState } =
-    useResolvedSession(task.depthReview?.sessionId, sessions);
+    useResolvedSession(detailFields?.depthReview?.sessionId, sessions);
   const { session: planningSession, fetchState: planningFetchState } =
     useResolvedSession(task.planningSession?.sessionId, sessions);
 
@@ -351,7 +375,7 @@ export function TaskDetail({
     if (!task.pr) return;
     if (
       !confirm(
-        `Merge PR #${task.pr.prNumber} '${task.pr.title}' into ${task.pr.baseBranch}? This cannot be undone.`,
+        `Merge PR #${task.pr.prNumber}${detailFields?.pr ? ` '${detailFields.pr.title}'` : ''}${detailFields?.pr ? ` into ${detailFields.pr.baseBranch}` : ''}? This cannot be undone.`,
       )
     )
       return;
@@ -827,7 +851,9 @@ export function TaskDetail({
         )}
 
         {/* ── Review stage ── */}
-        {selectedStage === 'review' && !task.review && !task.depthReview && (
+        {selectedStage === 'review' &&
+          !task.review &&
+          !detailFields?.depthReview && (
           <p className={styles.noTranscript}>No review for this task yet.</p>
         )}
         {selectedStage === 'review' && task.review && (
@@ -898,7 +924,7 @@ export function TaskDetail({
           </div>
         )}
 
-        {selectedStage === 'review' && task.depthReview && (
+        {selectedStage === 'review' && detailFields?.depthReview && (
           <div
             className={styles.reviewSection}
             data-expanded={showDepthReviewSection}
@@ -914,15 +940,15 @@ export function TaskDetail({
                 {showDepthReviewSection ? '▼' : '▶'}
               </span>
               <span className={styles.sectionTitle}>Depth Review</span>
-              {task.depthReview.verdict ? (
+              {detailFields.depthReview.verdict ? (
                 <span
-                  className={`${styles.verdictPill} ${styles[VERDICT_CSS_KEYS[task.depthReview.verdict] ?? 'verdict--error']}`}
+                  className={`${styles.verdictPill} ${styles[VERDICT_CSS_KEYS[detailFields.depthReview.verdict] ?? 'verdict--error']}`}
                 >
-                  {VERDICT_LABELS[task.depthReview.verdict] ??
-                    task.depthReview.verdict}
+                  {VERDICT_LABELS[detailFields.depthReview.verdict] ??
+                    detailFields.depthReview.verdict}
                 </span>
-              ) : task.depthReview.status === 'running' ||
-                task.depthReview.status === 'starting' ? (
+              ) : detailFields.depthReview.status === 'running' ||
+                detailFields.depthReview.status === 'starting' ? (
                 <span
                   className={`${styles.verdictPill} ${styles['verdict--pending']}`}
                 >
@@ -1012,7 +1038,9 @@ export function TaskDetail({
             <div className={styles.prTitleRow}>
               <div className={styles.prTitleLeft}>
                 <span className={styles.prNumber}>#{task.pr.prNumber}</span>
-                <span className={styles.prTitleText}>{task.pr.title}</span>
+                <span className={styles.prTitleText}>
+                  {detailFields?.pr?.title ?? ''}
+                </span>
               </div>
               <span
                 className={`${styles.prStateBadge} ${styles[`prState--${task.pr.state}${task.pr.draft ? '-draft' : ''}`]}`}
@@ -1024,7 +1052,8 @@ export function TaskDetail({
             {/* Line 2: branch info + GitHub link */}
             <div className={styles.prBranchRow}>
               <span className={styles.prBranch}>
-                {task.pr.headBranch} → {task.pr.baseBranch}
+                {detailFields?.pr?.headBranch ?? ''} →{' '}
+                {detailFields?.pr?.baseBranch ?? ''}
               </span>
               <a
                 href={task.pr.prUrl}

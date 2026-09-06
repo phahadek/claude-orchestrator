@@ -560,10 +560,7 @@ describe('GET /api/tasks/active — shape param', () => {
 
     // Done task: heavy fields trimmed
     expect(done.pr.prNumber).toBe(42);
-    expect(done.pr.title).toBeUndefined();
-    expect(done.pr.headBranch).toBeUndefined();
     expect(done.review).toBeNull();
-    expect(done.depthReview).toBeNull();
     expect(done.pauseDetail == null).toBe(true);
     expect(done.recoveryDescriptor).toBeUndefined();
     expect(done.totalTokens).toBeUndefined();
@@ -573,12 +570,8 @@ describe('GET /api/tasks/active — shape param', () => {
 
     // Non-Done task: full fidelity preserved
     expect(inProgress.pr.prNumber).toBe(42);
-    expect(inProgress.pr.title).toBe('Some PR title');
-    expect(inProgress.pr.headBranch).toBe('feature/x');
     expect(inProgress.review).not.toBeNull();
-    expect(inProgress.review.summary).toBe('looks good');
-    expect(inProgress.depthReview).not.toBeNull();
-    expect(inProgress.depthReview.verdict).toBe('pass');
+    expect(inProgress.review.verdict).toBe('approve');
     expect(inProgress.totalTokens).toEqual({ input: 144, output: 266 });
     expect(inProgress.codeSession.status).toBe('done');
     expect(inProgress.codeSession.lastMessage).toBe('wrapping up');
@@ -598,12 +591,69 @@ describe('GET /api/tasks/active — shape param', () => {
     const done = noParamRes.body.tasks.find(
       (t: { taskId: string }) => t.taskId === 'task-done',
     );
-    expect(done.pr.title).toBe('Some PR title');
-    expect(done.review.summary).toBe('looks good');
-    expect(done.depthReview.verdict).toBe('pass');
+    expect(done.pr.prNumber).toBe(42);
+    expect(done.review.verdict).toBe('approve');
+    expect(done.pr.title).toBeUndefined();
+    expect(done.depthReview).toBeUndefined();
     expect(done.totalTokens).toEqual({ input: 144, output: 266 });
     expect(done.codeSession.status).toBe('done');
     expect(done.codeSession.lastMessage).toBe('wrapping up');
+  });
+});
+
+// ── GET /api/tasks/:taskId/detail-fields ──────────────────────────────────────
+
+describe('GET /api/tasks/:taskId/detail-fields', () => {
+  it('returns pr title/branches and depthReview for a single task', async () => {
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-1', '🔄 In Progress', {
+        pr_number: 42,
+        pr_url: 'https://github.com/org/repo/pull/42',
+        pr_title: 'Some PR title',
+        pr_head_branch: 'feature/x',
+        pr_base_branch: 'dev',
+        depth_review_session_id: 'depth-task-1',
+        depth_review_session_status: 'done',
+        depth_review_verdict: 'pass',
+      } as Partial<TaskAggregateRow>),
+    ]);
+
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/task-1/detail-fields',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      pr: { title: 'Some PR title', headBranch: 'feature/x', baseBranch: 'dev' },
+      depthReview: {
+        sessionId: 'depth-task-1',
+        status: 'done',
+        verdict: 'pass',
+      },
+    });
+  });
+
+  it('returns null pr/depthReview when the task has neither', async () => {
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-2', '🔄 In Progress'),
+    ]);
+
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/task-2/detail-fields',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ pr: null, depthReview: null });
+  });
+
+  it('404s when the task is not found', async () => {
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([]);
+
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/missing/detail-fields',
+    );
+
+    expect(res.status).toBe(404);
   });
 });
 
