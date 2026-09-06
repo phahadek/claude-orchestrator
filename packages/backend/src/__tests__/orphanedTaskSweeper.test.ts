@@ -2435,7 +2435,10 @@ describe('OrphanedTaskSweeper', () => {
       vi.mocked(backend.updateStatus).mockImplementation(async () => {
         const requestId = requestIds[call] ?? requestIds[requestIds.length - 1];
         call += 1;
-        throw new NotionApiError(500, `Internal error. request_id: ${requestId}`);
+        throw new NotionApiError(
+          500,
+          `Internal error. request_id: ${requestId}`,
+        );
       });
       const warnSpy = vi
         .spyOn(logger, 'warn')
