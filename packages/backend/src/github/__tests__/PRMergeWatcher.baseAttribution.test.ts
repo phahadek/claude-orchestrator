@@ -324,6 +324,42 @@ describe('PRMergeWatcher — flake_recovery_attempts breadth-attributable exempt
     );
   });
 
+  it('the just-restored charge exemption is scoped to that one call — a later disposition on the same still-exhausted-armed PR is exempted again normally', async () => {
+    vi.mocked(isRunFailureBreadthAttributable).mockReturnValue(true);
+    const github = makeMockGitHub();
+    const { watcher } = makeWatcher(github);
+    const pr = makePRRow({
+      flake_recovery_attempts: 2, // at cap (typedGetSetting mocked to 2)
+      flake_recovery_base_exhausted: 1,
+    });
+    vi.mocked(getPRByNumber).mockImplementation(() => pr);
+    vi.mocked(resetFlakeRecoveryAttempts).mockImplementation(() => {
+      pr.flake_recovery_attempts = 0;
+      pr.flake_recovery_base_exhausted = 0;
+    });
+    vi.mocked(incrementFlakeRecoveryAttempts).mockImplementation(() => {
+      pr.flake_recovery_attempts += 1;
+    });
+
+    // First disposition: restores the budget, then charges this call's own
+    // re-run at face value (attempts 0 -> 1) — the same behavior asserted
+    // above.
+    await watcher.handleVerifiedFlakyDisposition(makePayload());
+    expect(resetFlakeRecoveryAttempts).toHaveBeenCalledTimes(1);
+    expect(incrementFlakeRecoveryAttempts).toHaveBeenCalledTimes(1);
+    expect(pr.flake_recovery_attempts).toBe(1);
+
+    // Second, independent disposition on the same PR: attempts (1) is below
+    // the cap (2), so no restore fires this time — justRestored must not
+    // have stuck from the previous call, so the exemption is derived fresh
+    // and (breadth still attributable) exempts this charge instead of
+    // incrementing again.
+    await watcher.handleVerifiedFlakyDisposition(makePayload());
+    expect(resetFlakeRecoveryAttempts).toHaveBeenCalledTimes(1);
+    expect(incrementFlakeRecoveryAttempts).toHaveBeenCalledTimes(1);
+    expect(pr.flake_recovery_attempts).toBe(1);
+  });
+
   it('never restores an exhausted PR whose exhaustion was not base-attributable, even once its latest run would clear breadth', async () => {
     vi.mocked(isRunFailureBreadthAttributable).mockReturnValue(true);
     const github = makeMockGitHub();
