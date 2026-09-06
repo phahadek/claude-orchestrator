@@ -42,6 +42,7 @@ import {
   getFailingTestIdsForRun,
   getFlaggedFlakyTestIds,
   getSession,
+  getFailureContentForRunTest,
 } from '../db/queries';
 import { checkBaseBranchHealth } from './baseHealthCheck';
 import { recordAndMaybeFileBaseHealthRemediation } from '../audit/baseHealthRemediationFiling';
@@ -333,17 +334,16 @@ export async function filterVerifyFailureByBaseHealth(
 }
 
 /**
- * Extracts the failure content JUnit recorded for `testId` in a run's
- * structured_result JSON — the raw acquisition artifact test_run_results
- * extraction (ingestTestRunResults) only partially denormalizes today (see
- * this module's masking-guard-2 usage). Returns null when the run has no
- * structured_result, the JSON fails to parse, the test id isn't present, or
- * the matched test carries neither a failureMessage nor a
- * failureTraceExcerpt — every one of those is a "no usable signature" case
- * a caller must treat identically (fail closed), so they're collapsed here
- * rather than distinguished.
+ * Extracts the failure content recorded for `testId` in `run`'s
+ * structured_result JSON — the raw acquisition artifact before
+ * test_run_results extraction (ingestTestRunResults) denormalizes and
+ * clears it. Returns null when the run has no structured_result, the JSON
+ * fails to parse, the test id isn't present, or the matched test carries
+ * neither a failureMessage nor a failureTraceExcerpt — every one of those
+ * is a "no usable signature" case a caller must treat identically (fail
+ * closed), so they're collapsed here rather than distinguished.
  */
-function extractFailureSignature(
+function extractFailureSignatureFromStructuredResult(
   structuredResultJson: string | null,
   testId: string,
 ): string | null {
@@ -362,6 +362,31 @@ function extractFailureSignature(
     }
   }
   return null;
+}
+
+/**
+ * Extracts the failure content recorded for `testId` in `run` — the
+ * signature masking-guard-2 (below) compares between a PR run and the base
+ * probe run to tell "same failure as base" from "a different failure that
+ * happens to share a test id". Reads the durable test_run_results content
+ * (failure_message/failure_trace_excerpt via getFailureContentForRunTest)
+ * first, since run.structured_result is a transient acquisition artifact —
+ * cleared by clearExtractedStructuredResultsBatch once extraction has
+ * consumed it, so by the time a gate/session-side caller runs, it is null
+ * for nearly every run. Falls back to structured_result only when no
+ * test_run_results row exists at all for this run+test (an unswept run —
+ * extraction hasn't run yet, so the durable copy doesn't exist yet either).
+ */
+export function extractFailureSignature(
+  run: TestRequestRunRow,
+  testId: string,
+): string | null {
+  const durable = getFailureContentForRunTest(run.id, testId);
+  if (durable !== undefined) return durable;
+  return extractFailureSignatureFromStructuredResult(
+    run.structured_result,
+    testId,
+  );
 }
 
 /**
@@ -405,9 +430,9 @@ export function applyF2GateMaskingGuards(
       blocked.push(t);
       continue;
     }
-    const prSig = extractFailureSignature(prRun.structured_result, t.test_id);
+    const prSig = extractFailureSignature(prRun, t.test_id);
     const baseSig = result.baseRun
-      ? extractFailureSignature(result.baseRun.structured_result, t.test_id)
+      ? extractFailureSignature(result.baseRun, t.test_id)
       : null;
     if (!prSig || !baseSig || prSig !== baseSig) {
       blocked.push(t);

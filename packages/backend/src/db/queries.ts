@@ -10576,6 +10576,43 @@ export function getFailingTestIdsForRun(
   }) as FailingTestForRun[];
 }
 
+let _stmtFailureContentForRunTest: Database.Statement | null = null;
+
+/**
+ * The durable failure content (failure_message + failure_trace_excerpt)
+ * test_run_results recorded for one test in one run — the signature source
+ * the f2-gate masking guard's extractFailureSignature (baseAttributableFilter.ts)
+ * reads, since a run's own structured_result is a transient acquisition
+ * artifact cleared once extraction has consumed it.
+ *
+ * Returns `undefined` when no test_run_results row exists at all for this
+ * run+test (an unswept run — the caller falls back to structured_result in
+ * that case only). Returns `null` when a row exists but carries no usable
+ * content — a fail-closed "no signature" case distinct from "not yet swept".
+ */
+export function getFailureContentForRunTest(
+  testRequestRunId: string,
+  testId: string,
+): string | null | undefined {
+  _stmtFailureContentForRunTest ??= db.prepare<{
+    run_id: string;
+    test_id: string;
+  }>(`
+    SELECT failure_message, failure_trace_excerpt FROM test_run_results
+    WHERE test_request_run_id = @run_id AND test_id = @test_id
+    LIMIT 1
+  `);
+  const row = _stmtFailureContentForRunTest.get({
+    run_id: testRequestRunId,
+    test_id: testId,
+  }) as
+    | { failure_message: string | null; failure_trace_excerpt: string | null }
+    | undefined;
+  if (!row) return undefined;
+  if (!row.failure_message && !row.failure_trace_excerpt) return null;
+  return `${row.failure_message ?? ''}\n${row.failure_trace_excerpt ?? ''}`;
+}
+
 export interface FlaggedFlakyTest {
   testId: string;
   name: string;
