@@ -443,12 +443,7 @@ export async function runTestCommands(
     return { passed: true, output: '' };
   }
 
-  const {
-    maxRssMb = 0,
-    failFast = false,
-    runId = randomUUID(),
-    env,
-  } = opts;
+  const { maxRssMb = 0, failFast = false, runId = randomUUID(), env } = opts;
   const timeoutMs = timeoutSec * 1000;
   const outputParts: string[] = [];
   let allPassed = true;

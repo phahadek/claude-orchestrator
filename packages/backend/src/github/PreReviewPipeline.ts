@@ -430,10 +430,7 @@ export class PreReviewPipeline {
             };
           }
 
-          const scopedEnv = buildScopedEnv(
-            ctx.worktreePath,
-            config.cache_env,
-          );
+          const scopedEnv = buildScopedEnv(ctx.worktreePath, config.cache_env);
           const normalized = config.analyze.map(normalizeAnalyzeCommand);
           const diffPaths = await getChangedFiles(
             ctx.worktreePath,

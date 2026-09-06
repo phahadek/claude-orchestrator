@@ -187,7 +187,7 @@ describe('runVerifyAsGate() gate env scoping', () => {
     fs.rmSync(worktree, { recursive: true, force: true });
   });
 
-  it('spawns with today\'s inherited environment when no cache_env is declared', async () => {
+  it("spawns with today's inherited environment when no cache_env is declared", async () => {
     const handlers = setupMockProc();
     const promise = runVerifyAsGate('/repo', ['npm run lint']);
     handlers.procHandlers['close']?.(0);
