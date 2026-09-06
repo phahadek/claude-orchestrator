@@ -1,12 +1,52 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+
+// Mock child_process.spawn before importing the module under test — the
+// helpers under test (checkToolchainVersions) shell out, and a unit test
+// must never depend on a real subprocess actually running.
+const mockProc = {
+  stdout: { on: vi.fn() },
+  stderr: { on: vi.fn() },
+  on: vi.fn(),
+};
+
+vi.mock('child_process', () => ({
+  spawn: vi.fn(() => mockProc),
+}));
+
+import { spawn } from 'child_process';
 import {
   buildScopedEnv,
   checkToolchainVersions,
   formatToolchainMismatch,
 } from '../gateEnv';
+
+type CloseCallback = (code: number | null) => void;
+type DataCallback = (data: Buffer) => void;
+
+function setupMockProc() {
+  const stdoutHandlers: Record<string, DataCallback> = {};
+  const stderrHandlers: Record<string, DataCallback> = {};
+  const procHandlers: Record<string, CloseCallback> = {};
+
+  mockProc.stdout.on = vi.fn((event: string, handler: DataCallback) => {
+    stdoutHandlers[event] = handler;
+  });
+  mockProc.stderr.on = vi.fn((event: string, handler: DataCallback) => {
+    stderrHandlers[event] = handler;
+  });
+  mockProc.on = vi.fn((event: string, handler: CloseCallback) => {
+    procHandlers[event] = handler;
+  });
+
+  return { stdoutHandlers, stderrHandlers, procHandlers };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 describe('buildScopedEnv()', () => {
   let worktreeA: string;
@@ -59,24 +99,56 @@ describe('checkToolchainVersions()', () => {
   it('returns null when no checks are declared', async () => {
     expect(await checkToolchainVersions('/tmp', undefined)).toBeNull();
     expect(await checkToolchainVersions('/tmp', [])).toBeNull();
+    expect(vi.mocked(spawn)).not.toHaveBeenCalled();
   });
 
   it('returns null when the version command output contains the expected string', async () => {
-    const result = await checkToolchainVersions(process.cwd(), [
-      { version_command: 'node -e "console.log(\'v9.9.9\')"', expected: 'v9.9.9' },
+    const handlers = setupMockProc();
+    const promise = checkToolchainVersions(process.cwd(), [
+      { version_command: 'eslint --version', expected: 'v9.9.9' },
     ]);
+    handlers.stdoutHandlers['data']?.(Buffer.from('v9.9.9'));
+    handlers.procHandlers['close']?.(0);
+
+    const result = await promise;
     expect(result).toBeNull();
+    expect(vi.mocked(spawn)).toHaveBeenCalledWith(
+      'eslint --version',
+      expect.objectContaining({ shell: true, cwd: process.cwd() }),
+    );
   });
 
   it('reports a mismatch when the version command output lacks the expected string', async () => {
-    const result = await checkToolchainVersions(process.cwd(), [
-      { version_command: 'node -e "console.log(\'v1.0.0\')"', expected: 'v9.9.9' },
+    const handlers = setupMockProc();
+    const promise = checkToolchainVersions(process.cwd(), [
+      { version_command: 'eslint --version', expected: 'v9.9.9' },
     ]);
+    handlers.stdoutHandlers['data']?.(Buffer.from('v1.0.0'));
+    handlers.procHandlers['close']?.(0);
+
+    const result = await promise;
     expect(result).not.toBeNull();
     expect(result?.expected).toBe('v9.9.9');
     expect(result?.actual).toContain('v1.0.0');
+    expect(result?.versionCommand).toBe('eslint --version');
   });
 
+  it('stops at the first mismatch and does not run subsequent checks', async () => {
+    const handlers = setupMockProc();
+    const promise = checkToolchainVersions(process.cwd(), [
+      { version_command: 'eslint --version', expected: 'v9.9.9' },
+      { version_command: 'ruff --version', expected: 'v1.0.0' },
+    ]);
+    handlers.stdoutHandlers['data']?.(Buffer.from('v1.0.0'));
+    handlers.procHandlers['close']?.(0);
+
+    const result = await promise;
+    expect(result?.versionCommand).toBe('eslint --version');
+    expect(vi.mocked(spawn)).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('formatToolchainMismatch()', () => {
   it('formats a mismatch distinctly from a code failure', () => {
     const msg = formatToolchainMismatch({
       versionCommand: 'eslint --version',
