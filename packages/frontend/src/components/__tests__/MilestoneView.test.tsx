@@ -194,15 +194,11 @@ describe('MilestoneView', () => {
     pr: {
       prNumber: 915,
       prUrl: 'https://github.com/org/repo/pull/915',
-      title: 'Fix the thing',
-      headBranch: 'feature/fix',
-      baseBranch: 'dev',
       state: 'open',
       draft: false,
       mergeState: null,
     },
     review: null,
-    depthReview: null,
     totalTokens: { input: 0, output: 0 },
     assignedRepo: null,
   };

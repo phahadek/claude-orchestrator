@@ -35,7 +35,6 @@ function makeTask(overrides: Partial<TaskView> = {}): TaskView {
     planningSession: null,
     pr: null,
     review: null,
-    depthReview: null,
     totalTokens: { input: 0, output: 0 },
     assignedRepo: null,
     hasAwaitingDispositionIntent: false,

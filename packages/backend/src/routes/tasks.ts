@@ -286,6 +286,40 @@ async function buildTaskView(notionTaskId: string): Promise<TaskView | null> {
   return view;
 }
 
+export interface TaskDetailFields {
+  pr: { title: string; headBranch: string; baseBranch: string } | null;
+  depthReview: {
+    sessionId: string;
+    status: string;
+    verdict: string | null;
+  } | null;
+}
+
+/**
+ * Fields cut from buildTaskViewFromRow's list-shaped output — served
+ * on-demand for a single task via GET /api/tasks/:taskId/detail-fields.
+ */
+function buildTaskDetailFields(row: TaskAggregateRow): TaskDetailFields {
+  const pr =
+    row.pr_number != null && row.pr_url
+      ? {
+          title: row.pr_title ?? '',
+          headBranch: row.pr_head_branch ?? '',
+          baseBranch: row.pr_base_branch ?? '',
+        }
+      : null;
+
+  const depthReview = row.depth_review_session_id
+    ? {
+        sessionId: row.depth_review_session_id,
+        status: row.depth_review_session_status ?? '',
+        verdict: row.depth_review_verdict ?? null,
+      }
+    : null;
+
+  return { pr, depthReview };
+}
+
 // ── Row → TaskView mapping ───────────────────────────────────────────────────
 
 function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
@@ -338,9 +372,6 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     pr = {
       prNumber: row.pr_number,
       prUrl: row.pr_url,
-      title: row.pr_title ?? '',
-      headBranch: row.pr_head_branch ?? '',
-      baseBranch: row.pr_base_branch ?? '',
       state: row.pr_state ?? '',
       draft: row.pr_draft === 1,
       mergeState: row.pr_merge_state ?? null,
@@ -350,7 +381,6 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
 
   let review: TaskView['review'] = null;
   let reviewVerdict: string | null = null;
-  let reviewSummary: string | null = null;
   if (row.review_session_id) {
     // Prefer PR-level review result (GitHub flow); fall back to session-level (local-only).
     const rawReviewResult = row.pr_review_result ?? row.review_session_result;
@@ -358,7 +388,6 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
       try {
         const result = JSON.parse(rawReviewResult) as PRReviewResult;
         reviewVerdict = result.verdict ?? null;
-        reviewSummary = result.summary ?? null;
       } catch {
         // ignore
       }
@@ -367,19 +396,9 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
       sessionId: row.review_session_id,
       status: row.review_session_status ?? '',
       verdict: reviewVerdict,
-      summary: reviewSummary,
       iterationCount: row.pr_review_iteration ?? 0,
       inputTokens: row.review_session_input_tokens ?? 0,
       outputTokens: row.review_session_output_tokens ?? 0,
-    };
-  }
-
-  let depthReview: TaskView['depthReview'] = null;
-  if (row.depth_review_session_id) {
-    depthReview = {
-      sessionId: row.depth_review_session_id,
-      status: row.depth_review_session_status ?? '',
-      verdict: row.depth_review_verdict ?? null,
     };
   }
 
@@ -438,7 +457,6 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     planningSession,
     pr,
     review,
-    depthReview,
     totalTokens,
     assignedRepo: getTaskRepoAssignment(row.task_id)?.repo ?? null,
     hasAwaitingDispositionIntent: hasAwaitingDispositionIntentForTask(
@@ -473,7 +491,6 @@ function toSummaryShape(view: TaskView): TaskView {
       : null,
     pr: view.pr ? { prNumber: view.pr.prNumber } : null,
     review: null,
-    depthReview: null,
   };
   delete trimmed.totalTokens;
   delete trimmed.recoveryDescriptor;
@@ -996,6 +1013,23 @@ export function createTasksRouter(
             err instanceof Error ? err.message : `task not found: ${taskId}`,
         });
       }
+    }),
+  );
+
+  // ── GET /api/tasks/:taskId/detail-fields ────────────────────────────────
+  // On-demand fields trimmed from the list-shaped TaskView (see
+  // buildTaskViewFromRow) — fetched only when a task is opened in detail,
+  // reusing the same single-row aggregate lookup emitTaskUpdated uses.
+  router.get(
+    '/tasks/:taskId/detail-fields',
+    asyncHandler(async (req: Request, res: Response) => {
+      const taskId = String(req.params.taskId);
+      const rows = getActiveTaskAggregates([taskId]);
+      if (rows.length === 0) {
+        res.status(404).json({ error: `task not found: ${taskId}` });
+        return;
+      }
+      res.json(buildTaskDetailFields(rows[0]));
     }),
   );
 
