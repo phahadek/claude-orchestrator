@@ -174,8 +174,8 @@ describe('applyF2GateMaskingGuards', () => {
 
   it('blocks the exclusion when branch and base recorded different failure content', () => {
     const prRun = makeRun();
-    mockGetFailureContentForRunTest.mockImplementation(
-      (runId: string) => (runId === prRun.id ? 'branch failure' : 'base failure'),
+    mockGetFailureContentForRunTest.mockImplementation((runId: string) =>
+      runId === prRun.id ? 'branch failure' : 'base failure',
     );
 
     const { result, guardBlocked } = applyF2GateMaskingGuards(

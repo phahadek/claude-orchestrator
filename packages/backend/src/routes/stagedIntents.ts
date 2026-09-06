@@ -6501,9 +6501,7 @@ export async function triggerTestRequestExecution(
       ...(filterResult
         ? {
             excludedTestCount: filterResult.excludedTests.length,
-            excludedTestIds: filterResult.excludedTests.map(
-              (t) => t.test_id,
-            ),
+            excludedTestIds: filterResult.excludedTests.map((t) => t.test_id),
             flakyExcludedTestCount: filterResult.flakyExcludedTests.length,
             flakyExcludedTestIds: filterResult.flakyExcludedTests.map(
               (t) => t.test_id,
