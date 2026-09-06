@@ -7701,20 +7701,13 @@ export function getFlakyRemediationTrackingRowsByOpenTaskId(
 
 // ─── base_health_remediation_test_tracking / _reason_tracking / _reason_counts ──
 // Statements are cached lazily (prepared on first use, not at module load) so
-// importing this module doesn't fail on a not-yet-migrated db handle. Mirrors
-// flaky_remediation_tracking's atomic-claim/reopen-on-close shape, keyed by
-// (project_id, test_id) for a partial_fail breakdown and (project_id,
-// failure_reason) for a total_fail crash — see
-// audit/baseHealthRemediationFiling.ts.
+// importing this module doesn't fail on a not-yet-migrated db handle. The
+// producer that used to write these tables (audit/baseHealthRemediationFiling.ts)
+// has been removed — filterBaseAttributableFailures no longer files
+// remediation tasks — so only the read paths still consulted by
+// mcp/tools/testHealthReadTools.ts and AutoLauncher.ts remain here.
 
 let _stmtGetBaseHealthRemediationTestTracking: Database.Statement | null = null;
-let _stmtGetBaseHealthRemediationTestTrackingByOpenTaskId: Database.Statement | null =
-  null;
-let _stmtEnsureBaseHealthRemediationTestTrackingRow: Database.Statement | null =
-  null;
-let _stmtClaimBaseHealthRemediationTestFiling: Database.Statement | null = null;
-let _stmtSetBaseHealthRemediationTestLinkedTask: Database.Statement | null =
-  null;
 
 /** The current tracking row for one (project_id, test_id), or undefined if it was never confirmed base-failing. */
 export function getBaseHealthRemediationTestTracking(
@@ -7733,156 +7726,8 @@ export function getBaseHealthRemediationTestTracking(
   }) as BaseHealthRemediationTestTrackingRow | undefined;
 }
 
-/** Every open tracking row currently linked to `taskId` as its remediation task. */
-export function getBaseHealthRemediationTestTrackingByOpenTaskId(
-  taskId: string,
-): BaseHealthRemediationTestTrackingRow[] {
-  _stmtGetBaseHealthRemediationTestTrackingByOpenTaskId ??= db.prepare<{
-    remediation_task_id: string;
-  }>(
-    `SELECT * FROM base_health_remediation_test_tracking WHERE remediation_task_id = @remediation_task_id AND remediation_task_open = 1`,
-  );
-  return _stmtGetBaseHealthRemediationTestTrackingByOpenTaskId.all({
-    remediation_task_id: taskId,
-  }) as BaseHealthRemediationTestTrackingRow[];
-}
-
-/**
- * Atomically claims the right to file (or extend) a remediation task for
- * every id in `testIds` that isn't already covered by a currently-open
- * tracking row: ensures a row exists for each id (INSERT OR IGNORE, starting
- * closed), then flips remediation_task_open 0 -> 1 in a single UPDATE per id
- * guarded by `WHERE remediation_task_open = 0`, all inside one transaction —
- * mirrors tryClaimFlakyRemediationFiling's race-closing shape, extended to a
- * multi-row claim so two concurrent confirmations sharing some (but not all)
- * failing test ids can't double-claim the overlap. The caller must release
- * the claim for every id it successfully claimed
- * (setBaseHealthRemediationTestLinkedTask with open=false) if it fails to
- * actually finish filing. Returns the subset of `testIds` this call actually
- * claimed — empty if every id was already covered by an open row.
- */
-export function tryClaimBaseHealthRemediationTestFiling(
-  projectId: string,
-  testIds: string[],
-  nowIso: string,
-): string[] {
-  _stmtEnsureBaseHealthRemediationTestTrackingRow ??= db.prepare<{
-    project_id: string;
-    test_id: string;
-    created_at: string;
-    updated_at: string;
-  }>(`
-    INSERT OR IGNORE INTO base_health_remediation_test_tracking
-      (project_id, test_id, remediation_task_id, remediation_task_open, created_at, updated_at)
-    VALUES
-      (@project_id, @test_id, NULL, 0, @created_at, @updated_at)
-  `);
-  _stmtClaimBaseHealthRemediationTestFiling ??= db.prepare<{
-    project_id: string;
-    test_id: string;
-    updated_at: string;
-  }>(`
-    UPDATE base_health_remediation_test_tracking
-    SET remediation_task_open = 1, updated_at = @updated_at
-    WHERE project_id = @project_id AND test_id = @test_id AND remediation_task_open = 0
-  `);
-
-  const tx = db.transaction((ids: string[]) => {
-    const claimed: string[] = [];
-    for (const testId of ids) {
-      _stmtEnsureBaseHealthRemediationTestTrackingRow!.run({
-        project_id: projectId,
-        test_id: testId,
-        created_at: nowIso,
-        updated_at: nowIso,
-      });
-      const info = _stmtClaimBaseHealthRemediationTestFiling!.run({
-        project_id: projectId,
-        test_id: testId,
-        updated_at: nowIso,
-      });
-      if (info.changes > 0) claimed.push(testId);
-    }
-    return claimed;
-  });
-  return tx(testIds);
-}
-
-/**
- * Links (or unlinks) every one of `testIds`' tracking rows to a remediation
- * task, in a single transaction, and records whether that task is currently
- * open. Called once at filing time (open = true) for the ids just claimed,
- * once the linked task reaches a terminal status (open = false), or to
- * release a batch of failed claims (open = false, remediation_task_id null)
- * — see recordAndMaybeFileBaseHealthRemediation.
- */
-export function setBaseHealthRemediationTestLinkedTask(
-  projectId: string,
-  testIds: string[],
-  remediationTaskId: string | null,
-  open: boolean,
-  nowIso: string,
-): void {
-  _stmtSetBaseHealthRemediationTestLinkedTask ??= db.prepare<{
-    project_id: string;
-    test_id: string;
-    remediation_task_id: string | null;
-    remediation_task_open: number;
-    updated_at: string;
-  }>(`
-    INSERT INTO base_health_remediation_test_tracking
-      (project_id, test_id, remediation_task_id, remediation_task_open, created_at, updated_at)
-    VALUES
-      (@project_id, @test_id, @remediation_task_id, @remediation_task_open, @updated_at, @updated_at)
-    ON CONFLICT(project_id, test_id) DO UPDATE SET
-      remediation_task_id = @remediation_task_id,
-      remediation_task_open = @remediation_task_open,
-      updated_at = @updated_at
-  `);
-
-  const tx = db.transaction((ids: string[]) => {
-    for (const testId of ids) {
-      _stmtSetBaseHealthRemediationTestLinkedTask!.run({
-        project_id: projectId,
-        test_id: testId,
-        remediation_task_id: remediationTaskId,
-        remediation_task_open: open ? 1 : 0,
-        updated_at: nowIso,
-      });
-    }
-  });
-  tx(testIds);
-}
-
-let _stmtGetBaseHealthRemediationReasonTracking: Database.Statement | null =
-  null;
 let _stmtGetBaseHealthRemediationReasonTrackingByOpenTaskId: Database.Statement | null =
   null;
-let _stmtEnsureBaseHealthRemediationReasonTrackingRow: Database.Statement | null =
-  null;
-let _stmtClaimBaseHealthRemediationReasonFiling: Database.Statement | null =
-  null;
-let _stmtSetBaseHealthRemediationReasonLinkedTask: Database.Statement | null =
-  null;
-let _stmtInsertBaseHealthRemediationReasonCount: Database.Statement | null =
-  null;
-
-/** The current tracking row for one (project_id, failure_reason), or undefined if it was never confirmed as a total_fail crash. */
-export function getBaseHealthRemediationReasonTracking(
-  projectId: string,
-  failureReason: string,
-): BaseHealthRemediationReasonTrackingRow | undefined {
-  _stmtGetBaseHealthRemediationReasonTracking ??= db.prepare<{
-    project_id: string;
-    failure_reason: string;
-  }>(
-    `SELECT * FROM base_health_remediation_reason_tracking WHERE project_id = @project_id AND failure_reason = @failure_reason`,
-  );
-  return _stmtGetBaseHealthRemediationReasonTracking.get({
-    project_id: projectId,
-    failure_reason: failureReason,
-  }) as BaseHealthRemediationReasonTrackingRow | undefined;
-}
 
 /** The open tracking row currently linked to `taskId` as its remediation task, or undefined. */
 export function getBaseHealthRemediationReasonTrackingByOpenTaskId(
@@ -7917,127 +7762,6 @@ export function hasOpenBaseHealthRemediation(projectId: string): boolean {
     _stmtHasOpenBaseHealthRemediation.get({ project_id: projectId }) !==
     undefined
   );
-}
-
-/**
- * Atomically claims the right to file a remediation task for `(projectId,
- * failureReason)` — same single-row guarded-UPDATE shape as
- * tryClaimFlakyRemediationFiling. The caller must release the claim
- * (setBaseHealthRemediationReasonLinkedTask with open=false) if it fails to
- * actually finish filing. Returns false if another caller (or a still-open
- * previously filed task) already holds the claim.
- */
-export function tryClaimBaseHealthRemediationReasonFiling(
-  projectId: string,
-  failureReason: string,
-  nowIso: string,
-): boolean {
-  _stmtEnsureBaseHealthRemediationReasonTrackingRow ??= db.prepare<{
-    project_id: string;
-    failure_reason: string;
-    created_at: string;
-    updated_at: string;
-  }>(`
-    INSERT OR IGNORE INTO base_health_remediation_reason_tracking
-      (project_id, failure_reason, remediation_task_id, remediation_task_open, created_at, updated_at)
-    VALUES
-      (@project_id, @failure_reason, NULL, 0, @created_at, @updated_at)
-  `);
-  _stmtEnsureBaseHealthRemediationReasonTrackingRow.run({
-    project_id: projectId,
-    failure_reason: failureReason,
-    created_at: nowIso,
-    updated_at: nowIso,
-  });
-
-  _stmtClaimBaseHealthRemediationReasonFiling ??= db.prepare<{
-    project_id: string;
-    failure_reason: string;
-    updated_at: string;
-  }>(`
-    UPDATE base_health_remediation_reason_tracking
-    SET remediation_task_open = 1, updated_at = @updated_at
-    WHERE project_id = @project_id AND failure_reason = @failure_reason AND remediation_task_open = 0
-  `);
-  const info = _stmtClaimBaseHealthRemediationReasonFiling.run({
-    project_id: projectId,
-    failure_reason: failureReason,
-    updated_at: nowIso,
-  });
-  return info.changes > 0;
-}
-
-/**
- * Links (or unlinks) `(projectId, failureReason)`'s tracking row to a
- * remediation task, and records whether that task is currently open. Called
- * once at filing time (open = true), once the linked task reaches a
- * terminal status (open = false), or to release a failed claim (open =
- * false, remediation_task_id null) — see recordAndMaybeFileBaseHealthRemediation.
- */
-export function setBaseHealthRemediationReasonLinkedTask(
-  projectId: string,
-  failureReason: string,
-  remediationTaskId: string | null,
-  open: boolean,
-  nowIso: string,
-): void {
-  _stmtSetBaseHealthRemediationReasonLinkedTask ??= db.prepare<{
-    project_id: string;
-    failure_reason: string;
-    remediation_task_id: string | null;
-    remediation_task_open: number;
-    updated_at: string;
-  }>(`
-    INSERT INTO base_health_remediation_reason_tracking
-      (project_id, failure_reason, remediation_task_id, remediation_task_open, created_at, updated_at)
-    VALUES
-      (@project_id, @failure_reason, @remediation_task_id, @remediation_task_open, @updated_at, @updated_at)
-    ON CONFLICT(project_id, failure_reason) DO UPDATE SET
-      remediation_task_id = @remediation_task_id,
-      remediation_task_open = @remediation_task_open,
-      updated_at = @updated_at
-  `);
-  _stmtSetBaseHealthRemediationReasonLinkedTask.run({
-    project_id: projectId,
-    failure_reason: failureReason,
-    remediation_task_id: remediationTaskId,
-    remediation_task_open: open ? 1 : 0,
-    updated_at: nowIso,
-  });
-}
-
-/**
- * Records `triggeringTaskId`'s one-and-only attempt at a total_fail
- * remediation claim — mirrors flaky_remediation_pr_counts' per-triggering-
- * actor dedup gate (INSERT OR IGNORE), except keyed solely on the
- * triggering task id rather than (test_id, pr_number, repo): a task gets one
- * shot regardless of which (or how many different) failure_reason values
- * its own retries land on. Returns whether this call is the task's first.
- *
- * `triggeringTaskId` is run through normalizeTaskId (packages/backend/src/tasks/taskId.ts)
- * before it ever reaches the primary key: the caller has been observed
- * passing bare hyphenated, bare hyphenless, and `notion:`-prefixed spellings
- * of the same task id, and INSERT OR IGNORE only dedupes on an exact key
- * match — an unnormalized key let the same triggering task claim this guard
- * more than once. normalizeTaskId's canonical `source:externalId` form
- * (hyphenated, lowercased) is the sole form ever stored here.
- */
-export function recordBaseHealthTotalFailCount(
-  triggeringTaskId: string,
-  nowIso: string,
-): { countedThisTask: boolean } {
-  _stmtInsertBaseHealthRemediationReasonCount ??= db.prepare<{
-    triggering_task_id: string;
-    counted_at: string;
-  }>(`
-    INSERT OR IGNORE INTO base_health_remediation_reason_counts (triggering_task_id, counted_at)
-    VALUES (@triggering_task_id, @counted_at)
-  `);
-  const info = _stmtInsertBaseHealthRemediationReasonCount.run({
-    triggering_task_id: normalizeTaskId(triggeringTaskId),
-    counted_at: nowIso,
-  });
-  return { countedThisTask: info.changes > 0 };
 }
 
 // ─── gate_item ────────────────────────────────────────────────────────────
@@ -10574,43 +10298,6 @@ export function getFailingTestIdsForRun(
   return _stmtFailingTestIdsForRun.all({
     run_id: testRequestRunId,
   }) as FailingTestForRun[];
-}
-
-let _stmtFailureContentForRunTest: Database.Statement | null = null;
-
-/**
- * The durable failure content (failure_message + failure_trace_excerpt)
- * test_run_results recorded for one test in one run — the signature source
- * the f2-gate masking guard's extractFailureSignature (baseAttributableFilter.ts)
- * reads, since a run's own structured_result is a transient acquisition
- * artifact cleared once extraction has consumed it.
- *
- * Returns `undefined` when no test_run_results row exists at all for this
- * run+test (an unswept run — the caller falls back to structured_result in
- * that case only). Returns `null` when a row exists but carries no usable
- * content — a fail-closed "no signature" case distinct from "not yet swept".
- */
-export function getFailureContentForRunTest(
-  testRequestRunId: string,
-  testId: string,
-): string | null | undefined {
-  _stmtFailureContentForRunTest ??= db.prepare<{
-    run_id: string;
-    test_id: string;
-  }>(`
-    SELECT failure_message, failure_trace_excerpt FROM test_run_results
-    WHERE test_request_run_id = @run_id AND test_id = @test_id
-    LIMIT 1
-  `);
-  const row = _stmtFailureContentForRunTest.get({
-    run_id: testRequestRunId,
-    test_id: testId,
-  }) as
-    | { failure_message: string | null; failure_trace_excerpt: string | null }
-    | undefined;
-  if (!row) return undefined;
-  if (!row.failure_message && !row.failure_trace_excerpt) return null;
-  return `${row.failure_message ?? ''}\n${row.failure_trace_excerpt ?? ''}`;
 }
 
 export interface FlaggedFlakyTest {
