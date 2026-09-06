@@ -164,12 +164,12 @@ export function buildWrapPlaybook(input: WrapPlaybookInput): DeployPlaybook {
         'tmp=$(mktemp -d)',
         `git clone --quiet ${shellQuote(repoUrl)} "$tmp"`,
         'cd "$tmp"',
-        `git fetch --quiet origin ${baseBranch} ${milestoneBranch}`,
-        `git checkout -B ${baseBranch} origin/${baseBranch}`,
-        `git merge --no-ff --quiet origin/${milestoneBranch} -m ${shellQuote(
+        `git fetch --quiet origin ${shellQuote(baseBranch)} ${shellQuote(milestoneBranch)}`,
+        `git checkout -B ${shellQuote(baseBranch)} ${shellQuote(`origin/${baseBranch}`)}`,
+        `git merge --no-ff --quiet ${shellQuote(`origin/${milestoneBranch}`)} -m ${shellQuote(
           `chore(wrap): merge ${milestoneBranch} into ${baseBranch} for milestone close (${tag})`,
         )}`,
-        `git push --quiet origin ${baseBranch}`,
+        `git push --quiet origin ${shellQuote(baseBranch)}`,
         'rm -rf "$tmp"',
       ].join(' && '),
       is_prod_mutating: true,
