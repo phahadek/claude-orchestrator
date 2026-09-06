@@ -129,7 +129,7 @@ Fix the base branch bug.
 https://notion.so/task-123
 
 ## Automated Tests
-No test changes.
+Covered by AgentSession.markerPR.test.ts.
 
 ## Files Changed
 - packages/backend/src/session/AgentSession.ts`;

@@ -4682,9 +4682,20 @@ describe('ReviewOrchestrator — concurrent drain pool', () => {
     runtimeSettings.auto_review_concurrency = 20;
     new ReviewOrchestrator(rs, sm as any, true);
 
-    // Queue two jobs for the SAME PR
-    sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
-    sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
+    // Queue two jobs for the SAME PR. headSha must be forced back to
+    // undefined here rather than inherited from the shared `baseJob`
+    // fixture: admitJob() mutates job.headSha in place once resolved (so
+    // the queue/in-flight bookkeeping has it to compare against), and many
+    // other tests in this file emit `baseJob` directly (by reference, not
+    // spread) — so by the time this test runs, baseJob.headSha may already
+    // be permanently set to a stale value from an earlier test. Left as
+    // inherited, both jobs would resolve to the same already-mutated
+    // headSha instead of the two distinct ones getPRByNumber is mocked to
+    // return below, making admitJob's same-head dedup treat job 2 as a
+    // duplicate of job 1 and silently drop it before it ever reaches the
+    // queue.
+    sm.emit('pr_opened', { ...baseJob, prNumber: 1, headSha: undefined });
+    sm.emit('pr_opened', { ...baseJob, prNumber: 1, headSha: undefined });
 
     // Only the first should be running; the second is blocked
     await new Promise((r) => setTimeout(r, 30));

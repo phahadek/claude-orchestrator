@@ -61,6 +61,7 @@ const RUNNING_PLANNING_SESSION = {
 
 vi.mock('../../hooks/stagedIntentBus', () => ({
   subscribeStagedIntentChange: () => () => {},
+  subscribeSessionCompletenessChange: () => () => {},
 }));
 
 function makeTask(overrides: Partial<TaskView>): TaskView {

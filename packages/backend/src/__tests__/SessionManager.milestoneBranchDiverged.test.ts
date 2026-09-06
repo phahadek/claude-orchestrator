@@ -15,6 +15,7 @@ import { mockDbQueries } from './helpers/mockDbQueries';
 vi.mock('child_process', () => ({
   execSync: vi.fn().mockReturnValue(''),
   exec: vi.fn(),
+  execFile: vi.fn(),
 }));
 
 vi.mock('../config', () => ({
@@ -148,6 +149,7 @@ vi.mock('../tasks/TaskStatusEngine', () => ({
 
 vi.mock('../session/CliSessionRunner', () => ({
   CliSessionRunner: vi.fn(),
+  PreSpawnConfigError: class PreSpawnConfigError extends Error {},
 }));
 
 vi.mock('../session/ApiSessionRunner', () => ({

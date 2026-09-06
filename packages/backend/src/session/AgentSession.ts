@@ -634,16 +634,23 @@ export class AgentSession extends EventEmitter {
    * ceilings (`.claude-orchestrator.yml`'s `pr_body` block — see
    * OrchestratorConfig.pr_body), for passing to validatePRBody. Undefined
    * project → validatePRBody's own default (DEFAULT_PR_BODY_SECTIONS, no
-   * ceilings).
+   * ceilings). A project/config lookup failure (e.g. ProjectService not
+   * initialised) is caught the same way the base-branch resolution below
+   * tolerates it — falling back to the default rather than throwing out of
+   * handlePRBodyMarker before it ever reaches PR creation.
    */
   private getPrBodyConfig(): PrBodySectionsConfig | undefined {
-    const project = getProjectById(this.projectId);
-    if (!project?.projectDir) return undefined;
-    const orchConfig = loadOrchestratorConfig(project.projectDir);
-    return {
-      sections: orchConfig.pr_body.sections,
-      maxSectionChars: orchConfig.pr_body.max_section_chars,
-    };
+    try {
+      const project = getProjectById(this.projectId);
+      if (!project?.projectDir) return undefined;
+      const orchConfig = loadOrchestratorConfig(project.projectDir);
+      return {
+        sections: orchConfig.pr_body.sections,
+        maxSectionChars: orchConfig.pr_body.max_section_chars,
+      };
+    } catch {
+      return undefined;
+    }
   }
 
   async run(): Promise<void> {
@@ -2194,14 +2201,21 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     let baseBranch = 'dev';
     try {
       const project = getProjectById(this.projectId);
-      baseBranch = project
-        ? resolveStartingPoint(
-            project,
-            getSessionMilestoneId(this.sessionId) ?? null,
-          ).startingPoint
-        : 'dev';
+      baseBranch = project?.baseBranch ?? 'dev';
+      if (project) {
+        try {
+          // Resolved separately from the project lookup above so that a
+          // milestone-id lookup failure (e.g. no `sessions` row/table in a
+          // narrower test harness) falls back to the already-resolved
+          // project.baseBranch instead of clobbering it back to 'dev'.
+          const milestoneId = getSessionMilestoneId(this.sessionId) ?? null;
+          baseBranch = resolveStartingPoint(project, milestoneId).startingPoint;
+        } catch {
+          // milestone resolution failed — keep project.baseBranch above
+        }
+      }
     } catch {
-      // project/milestone lookup failed — keep 'dev' default
+      // project lookup failed — keep 'dev' default
     }
 
     let branch: string;

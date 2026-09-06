@@ -1213,6 +1213,7 @@ export class PRMergeWatcher extends EventEmitter {
     const projectId = project?.id ?? null;
 
     const maxRetries = typedGetSetting('flake_recovery_max_retries');
+    let justRestored = false;
     if (pr.flake_recovery_attempts >= maxRetries) {
       // Restore, once — scoped to this PR alone — if its most recent
       // exhaustion was itself confirmed base-attributable and its latest
@@ -1233,6 +1234,7 @@ export class PRMergeWatcher extends EventEmitter {
             `[PRMergeWatcher] PR #${pr.pr_number}: base recovered — restoring flake_recovery_attempts budget`,
           );
           pr = getPRByNumber(pr.pr_number, pr.repo) ?? pr;
+          justRestored = true;
         }
       }
     }
@@ -1363,7 +1365,7 @@ export class PRMergeWatcher extends EventEmitter {
       });
     }
 
-    await this.applyFlakeRecoveryOutcome(pr, outcome, maxRetries);
+    await this.applyFlakeRecoveryOutcome(pr, outcome, maxRetries, justRestored);
   }
 
   /**
@@ -1411,6 +1413,7 @@ export class PRMergeWatcher extends EventEmitter {
     pr: PullRequestRow,
     outcome: FlakeRecoveryOutcome,
     maxRetries: number,
+    justRestored = false,
   ): Promise<void> {
     if (outcome === 'inconclusive') {
       logger.info(
@@ -1428,11 +1431,17 @@ export class PRMergeWatcher extends EventEmitter {
     // the live check only ever samples a possibly-transient verdict at this
     // one instant, so a later budget-restore re-checks fresh rather than
     // trusting this sample.
+    //
+    // `justRestored` forces baseAttributable false the one time this runs
+    // right after a same-call budget restore: the restore already consulted
+    // this PR's latest run at this same instant, so re-querying it here
+    // would just reproduce the identical verdict and re-exempt forever,
+    // defeating "restore once, then charge the re-run normally".
     let baseAttributable = false;
     if (outcome === 'failed') {
       setFlakeRecoveryBaseExhausted(pr.pr_number, pr.repo, true);
       const project = getProjectByGithubRepo(pr.repo);
-      if (project) {
+      if (project && !justRestored) {
         baseAttributable = isPrLatestRunBreadthAttributable(project, pr);
       }
     }
@@ -1557,6 +1566,7 @@ export class PRMergeWatcher extends EventEmitter {
     baseExcusedTestIds: ReadonlySet<string> = new Set(),
   ): Promise<boolean> {
     const maxRetries = typedGetSetting('flake_recovery_max_retries');
+    let justRestored = false;
     if (pr.flake_recovery_attempts >= maxRetries) {
       // Restore, scoped to this PR alone, if its most recent exhaustion was
       // itself confirmed base-attributable and its latest test-request
@@ -1577,6 +1587,7 @@ export class PRMergeWatcher extends EventEmitter {
         logger.info(
           `[PRMergeWatcher] PR #${pr.pr_number}: base recovered — restoring flake_recovery_attempts budget (f2 lane)`,
         );
+        justRestored = true;
       } else {
         return false;
       }
@@ -1630,7 +1641,7 @@ export class PRMergeWatcher extends EventEmitter {
 
     const outcome = await this.actuateF2Rerun(pr, project);
     if (outcome === null) return false;
-    await this.applyFlakeRecoveryOutcome(pr, outcome, maxRetries);
+    await this.applyFlakeRecoveryOutcome(pr, outcome, maxRetries, justRestored);
     return outcome === 'passed';
   }
 

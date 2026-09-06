@@ -52,6 +52,10 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
   },
 
   // -- milestones.ts -------------------------------------------------------
+  'PATCH /api/milestones/:milestoneId': {
+    audience: 'operator',
+    reason: 'Settings > Milestones per-milestone edit (MilestonesSubPanel.tsx)',
+  },
   'PUT /api/milestones/:milestoneId/arm/:flow': {
     audience: 'operator',
     reason: 'gate-verify flow arm/disarm control',

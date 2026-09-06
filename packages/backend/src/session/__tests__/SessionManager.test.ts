@@ -57,6 +57,7 @@ vi.mock('../AgentSession', () => ({
 
 vi.mock('../CliSessionRunner', () => ({
   CliSessionRunner: vi.fn().mockImplementation(() => ({})),
+  PreSpawnConfigError: class PreSpawnConfigError extends Error {},
 }));
 vi.mock('../ApiSessionRunner', () => ({
   ApiSessionRunner: vi.fn().mockImplementation(() => ({})),

@@ -74,6 +74,7 @@ vi.mock('./CliSessionRunner', () => ({
     kill: vi.fn(),
     hasSpawnError: false,
   })),
+  PreSpawnConfigError: class PreSpawnConfigError extends Error {},
 }));
 vi.mock('./eventTypes', () => ({
   VALID_EVENT_TYPES: new Set([

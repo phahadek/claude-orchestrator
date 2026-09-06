@@ -38,7 +38,7 @@ describe('sessions.task_id_norm — indexable normalized task_id match', () => {
     db.prepare('DELETE FROM sessions').run();
   });
 
-  it('is a STORED generated column mirroring REPLACE(task_id, "-", "")', () => {
+  it('is a VIRTUAL generated column mirroring REPLACE(task_id, "-", "")', () => {
     insertSession('ab-cd-1234');
     const row = db
       .prepare(`SELECT task_id_norm FROM sessions WHERE task_id = 'ab-cd-1234'`)
@@ -91,10 +91,23 @@ describe('sessions.task_id_norm — indexable normalized task_id match', () => {
     // does the same inside its loop — preparing it once outside would give
     // the baseline an unfair per-call advantage and could make the indexed
     // path look relatively slower than it is.
+    //
+    // NOT INDEXED is required here: sessions also carries
+    // idx_sessions_archived_started_at (archived, started_at DESC), and
+    // since every row in this test has archived=0, SQLite's planner opts
+    // into a "SEARCH ... USING INDEX idx_sessions_archived_started_at
+    // (archived=?)" for the bare REPLACE()-in-WHERE query below even though
+    // it still has to walk (and REPLACE()-evaluate) every row — this
+    // incidental, unselective index usage doesn't defeat the O(n) cost this
+    // baseline is meant to model, but it does shrink its per-row constant
+    // enough to erase the margin against the real index-seek path, which is
+    // an artifact of this test's fixture, not of hasActiveSessionForTask's
+    // query. NOT INDEXED forces the true "SCAN sessions" plan the
+    // REPLACE()-in-WHERE regression actually produced.
     function runScanQuery(): unknown {
       return db
         .prepare(
-          `SELECT 1 FROM sessions
+          `SELECT 1 FROM sessions NOT INDEXED
            WHERE REPLACE(COALESCE(task_id, ''), '-', '') = @task_id_norm
              AND status NOT IN (${terminalList})
              AND (session_type = 'standard' OR session_type IS NULL)

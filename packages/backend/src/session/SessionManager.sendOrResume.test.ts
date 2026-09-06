@@ -75,7 +75,10 @@ vi.mock('./WorktreeSetupError.js', () => ({
   WorktreeSetupError: class extends Error {},
 }));
 
-vi.mock('./CliSessionRunner.js', () => ({ CliSessionRunner: vi.fn() }));
+vi.mock('./CliSessionRunner.js', () => ({
+  CliSessionRunner: vi.fn(),
+  PreSpawnConfigError: class PreSpawnConfigError extends Error {},
+}));
 
 vi.mock('./ApiSessionRunner.js', () => ({ ApiSessionRunner: vi.fn() }));
 

@@ -1228,6 +1228,7 @@ describe('loadOrchestratorConfig: verify/autofix/analyze vs allowed_tools reconc
         '  - go build ./...',
         'allowed_tools:',
         '  - Bash(golangci-lint:*)',
+        '  - Bash(go:*)',
       ].join('\n'),
     );
 
