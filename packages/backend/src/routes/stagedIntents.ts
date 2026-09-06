@@ -6402,21 +6402,21 @@ export async function triggerTestRequestExecution(
   // An execution failure (spawn ENOENT/EAGAIN/fork failure — the runner
   // never started) is an infrastructure outcome, not a test verdict: no
   // command ran, so base-attributable filtering (which reasons about
-  // whether *the tests that ran* are the base's fault) does not apply, and
-  // this must never be charged against the session's retry budget — mirrors
-  // the precedent below for the inconclusive/unknown base-attribution
-  // outcomes.
+  // whether *the tests that ran* are attributable to this diff) does not
+  // apply, and this must never be charged against the session's retry
+  // budget.
   const executionFailed = !!result.spawnFailed;
 
-  // Filter a raw failure against the project's current base-branch health
+  // Filter a raw failure against the cross-SHA failure-breadth corpus
   // before anything downstream (commit annotation, audit event, session
-  // feedback) sees `result.passed` — a confirmed base-attributable failure
-  // must never charge the session or read to it as its own fault. Routed
+  // feedback) sees `result.passed` — a failing test flagged across multiple
+  // distinct trees must never charge the session or read to it as its own
+  // fault. Routed
   // through the same guarded entry point PreReviewPipeline/PRMergeWatcher's
   // f2 gate use (filterBaseAttributableFailuresForF2Gate), so a candidate
   // exclusion here is also blocked when the session's own diff touches the
-  // test's file, or the branch/base failure signatures differ. See
-  // orchestration/baseAttributableFilter.ts.
+  // test's file, or the breadth signal no longer re-confirms at gate time.
+  // See orchestration/baseAttributableFilter.ts.
   let filterResult: BaseAttributableFilterResult | null = null;
   let guardBlocked: FailingTest[] = [];
   if (runId && !result.passed && !executionFailed) {
@@ -6459,12 +6459,7 @@ export async function triggerTestRequestExecution(
   if (filterResult && filterResult.outcome !== 'unfiltered') {
     result = { ...result, passed: filterResult.passed };
   }
-  if (
-    (executionFailed ||
-      filterResult?.outcome === 'inconclusive' ||
-      filterResult?.outcome === 'unknown') &&
-    intent.sessionId
-  ) {
+  if (executionFailed && intent.sessionId) {
     decrementSessionTestRequestCycleCount(intent.sessionId);
   }
   // A fully-excused failure must also flip the stored run's state — the
@@ -6537,9 +6532,6 @@ export async function triggerTestRequestExecution(
         passed: result.passed,
         output,
         ...(unchangedReplay ? { unchangedReplay: true } : {}),
-        ...(filterResult?.outcome === 'inconclusive'
-          ? { inconclusive: true }
-          : {}),
         ...(executionFailed ? { executionFailed: true } : {}),
       }),
     );
