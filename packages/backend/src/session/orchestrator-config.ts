@@ -84,6 +84,12 @@ interface AnalyzeCommandEntry {
 /** Backward-compatible: a bare string is a command with no path trigger (always runs, no content-hash caching). */
 export type AnalyzeCommand = string | AnalyzeCommandEntry;
 
+/** One declared toolchain-version expectation — see OrchestratorConfig.expected_tool_versions. */
+export interface ToolVersionCheck {
+  version_command: string;
+  expected: string;
+}
+
 export interface OrchestratorConfig {
   /**
    * Commands run in the worktree before opening the PR (mechanical fixes only).
@@ -156,6 +162,31 @@ export interface OrchestratorConfig {
   analyze_max_rss_mb: number;
   /** Stop running subsequent analyze commands after the first failure. Default true. */
   analyze_fail_fast: boolean;
+  /**
+   * Env var name -> path (relative to the invoking worktree) that
+   * verify/autofix/analyze commands should see that var pointing at, instead
+   * of inheriting the operator's global value (e.g. `{ RUFF_CACHE_DIR:
+   * '.orchestrator-cache/ruff', ESLINT_CACHE_LOCATION:
+   * '.orchestrator-cache/eslint.cache' }`). The directory is created if
+   * absent before the command spawns. Because the path lives inside the
+   * worktree, it is torn down along with it automatically — no separate
+   * cleanup step. Scopes a content-keyed tool cache per worktree so one
+   * session's findings (which embed that worktree's absolute paths) can
+   * never be replayed into a sibling session's gate verdict. Empty/omitted
+   * (default) = spawned commands inherit the operator's environment
+   * unchanged, today's behavior.
+   */
+  cache_env: Record<string, string>;
+  /**
+   * Toolchain versions a gate command expects. Each entry names a
+   * `version_command` to run (e.g. `'npx eslint --version'`) in the
+   * worktree and the `expected` substring its output must contain. A
+   * mismatch is reported as a configuration failure (distinct from a code
+   * failure) so a host running a different toolchain version than CI never
+   * prints as "your code failed lint" when the truth is a version skew.
+   * Empty/omitted (default) = no check performed.
+   */
+  expected_tool_versions: ToolVersionCheck[];
   /**
    * When true, orchestrator autofix and file-revert commits include [skip ci]
    * so GitHub skips pull_request workflows, saving CI minutes. Defaults to
@@ -277,6 +308,8 @@ const DEFAULTS: OrchestratorConfig = {
   analyze_timeout_sec: 300,
   analyze_max_rss_mb: 0,
   analyze_fail_fast: true,
+  cache_env: {},
+  expected_tool_versions: [],
   autofix_skip_ci: false,
   dependency_lock_paths: [],
   dependency_cache_dirs: [],
@@ -330,6 +363,29 @@ function parseCapabilityPreGrants(
     result[key] = value.filter((v): v is string => typeof v === 'string');
   }
   return result;
+}
+
+function parseCacheEnv(raw: unknown): Record<string, string> {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return DEFAULTS.cache_env;
+  }
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value === 'string') result[key] = value;
+  }
+  return result;
+}
+
+function parseExpectedToolVersions(raw: unknown): ToolVersionCheck[] {
+  if (!Array.isArray(raw)) return DEFAULTS.expected_tool_versions;
+  return raw.filter((v): v is ToolVersionCheck => {
+    return (
+      v !== null &&
+      typeof v === 'object' &&
+      typeof (v as Record<string, unknown>).version_command === 'string' &&
+      typeof (v as Record<string, unknown>).expected === 'string'
+    );
+  });
 }
 
 function isValidAnalyzeEntry(v: unknown): v is AnalyzeCommand {
@@ -590,6 +646,10 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
         typeof parsed.analyze_fail_fast === 'boolean'
           ? parsed.analyze_fail_fast
           : DEFAULTS.analyze_fail_fast,
+      cache_env: parseCacheEnv(parsed.cache_env),
+      expected_tool_versions: parseExpectedToolVersions(
+        parsed.expected_tool_versions,
+      ),
       autofix_skip_ci:
         typeof parsed.autofix_skip_ci === 'boolean'
           ? parsed.autofix_skip_ci
