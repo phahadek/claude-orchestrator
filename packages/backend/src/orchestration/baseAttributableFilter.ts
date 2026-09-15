@@ -28,6 +28,7 @@ import {
   getFlaggedFlakyTestIds,
   listTestRequestRunsForSession,
   computeTestFailureBreadthFlag,
+  markTestResultExcused,
 } from '../db/queries';
 import { typedGetSetting } from '../config/settings';
 import { isTestIdTouchedByChangedFiles } from '../session/test-runner';
@@ -76,7 +77,7 @@ const UNFILTERED = (passed: boolean): BaseAttributableFilterResult => ({
  * their own breadth. Falls back to `run.started_at` itself when the run
  * carries no session (nothing else to look up against).
  */
-function firstRunCutoffMs(
+export function firstRunCutoffMs(
   project: ProjectConfig,
   run: TestRequestRunRow,
 ): number {
@@ -120,6 +121,7 @@ export async function filterBaseAttributableFailures(
     project,
     sessionFailing,
     firstRunCutoffMs(project, run),
+    run.id,
   );
 }
 
@@ -130,12 +132,16 @@ export async function filterBaseAttributableFailures(
  * computeTestFailureBreadthFlag is evaluated before — see firstRunCutoffMs.
  * Used by both filterBaseAttributableFailures and
  * filterVerifyFailureByBaseHealth so the two call sites can never disagree
- * about how attribution is computed.
+ * about how attribution is computed. `runId`, when given (only
+ * filterBaseAttributableFailures has a persisted row to attach to), writes
+ * the same excused marker flaky.confirm(gate:'test_request') writes onto
+ * every excluded test's (runId, test_id) row — see markTestResultExcused.
  */
 function attributeFailingTests(
   project: ProjectConfig,
   sessionFailing: FailingTest[],
   beforeMs: number,
+  runId: string | null = null,
 ): BaseAttributableFilterResult {
   const breadthN = typedGetSetting('flip_rate_breadth_n');
   const breadthWindowHours = typedGetSetting('flip_rate_breadth_window_hours');
@@ -164,6 +170,15 @@ function attributeFailingTests(
 
   if (excludedTests.length === 0 && flakyExcludedTests.length === 0) {
     return UNFILTERED(false);
+  }
+
+  if (runId) {
+    for (const t of excludedTests) {
+      markTestResultExcused(runId, t.test_id, 'breadth_corpus');
+    }
+    for (const t of flakyExcludedTests) {
+      markTestResultExcused(runId, t.test_id, 'flaky_rollup');
+    }
   }
 
   if (remainingTests.length === 0) {

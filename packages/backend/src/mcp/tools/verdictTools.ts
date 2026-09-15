@@ -16,6 +16,8 @@ import {
 import {
   getPRBySessionId,
   evaluateTestFlakinessCorpus,
+  getLatestTestRequestRunForSession,
+  markTestResultExcused,
 } from '../../db/queries';
 import {
   isTestIdTouchedByChangedFiles,
@@ -23,6 +25,8 @@ import {
 } from '../../session/test-runner';
 import { getChangedFiles } from '../../session/autofix-runner';
 import { typedGetSetting } from '../../config/settings';
+import { getProjectById } from '../../config';
+import { firstRunCutoffMs } from '../../orchestration/baseAttributableFilter';
 import {
   findAutomaticGateRecoveryEntry,
   parsePauseReasonSet,
@@ -89,6 +93,59 @@ function findTouchedTestFile(
       noExt.endsWith(`/${candidatePath}`)
     );
   });
+}
+
+/**
+ * The corpus-eligibility + diff-touch adjudication flaky.confirm applies to
+ * a testId/testName pair, shared verbatim by the pre-PR ("test_request")
+ * and post-PR (ci/f2) code paths so the two can never drift apart in
+ * refusal wording. Returns an `invalid(...)` response to return as-is on
+ * refusal, or null when the pair clears both checks.
+ */
+async function checkTestCorpusAndDiff(
+  testId: string,
+  testName: string,
+  beforeMs: number,
+  worktreePath: string,
+  baseBranch: string,
+): Promise<ReturnType<typeof invalid> | null> {
+  const corpus = evaluateTestFlakinessCorpus(
+    testId,
+    beforeMs,
+    typedGetSetting('flip_rate_window_n'),
+    typedGetSetting('flip_rate_threshold_k'),
+    typedGetSetting('flip_rate_breadth_n'),
+    typedGetSetting('flip_rate_breadth_window_hours'),
+  );
+  if (!corpus.eligible) {
+    return invalid(`${testName} ${corpus.reason}`);
+  }
+
+  let changedFiles: string[];
+  try {
+    changedFiles = await getChangedFiles(worktreePath, baseBranch);
+  } catch (err) {
+    return invalid(
+      `could not resolve this session's changed files: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  const { touched, confident } = isTestIdTouchedByChangedFiles(
+    testId,
+    testName,
+    changedFiles,
+  );
+  if (!confident) {
+    return invalid(
+      `${testName} could not be confidently mapped to a source file to check against this session's diff`,
+    );
+  }
+  if (touched) {
+    const touchedFile = findTouchedTestFile(testId, testName, changedFiles);
+    return invalid(
+      `${touchedFile ?? `${testName}'s own file`} is in this session's diff — a session cannot wave through a failure it may have caused`,
+    );
+  }
+  return null;
 }
 
 /**
@@ -173,7 +230,7 @@ export function registerVerdictTools(
       {
         title: 'Confirm a verified-flaky CI/gate failure',
         description:
-          'Reports a failing CI/F2/analyze gate as flaky/unrelated to this diff, instead of pushing an empty commit. Call once with what you observed — do not re-run the suite yourself first: the backend adjudicates against its own cross-SHA outcome corpus and refuses if the test does not clear it or if its file is in your diff. For gate "ci"/"f2" pass testId and testName identifying the failing test (as reported by the failing run) — required for those gates. gate "analyze" (the orchestrator-run static-analysis gate) has no per-test id and is not checked against the corpus.',
+          "Reports a failing CI/F2/analyze gate — or, pre-PR, a failing test_request run — as flaky/unrelated to this diff, instead of pushing an empty commit. Call once with what you observed — do not re-run the suite yourself first: the backend adjudicates against its own cross-SHA outcome corpus and refuses if the test does not clear it or if its file is in your diff. For gate \"ci\"/\"f2\"/\"test_request\" pass testId and testName identifying the failing test (as reported by the failing run) — required for those gates. gate \"analyze\" (the orchestrator-run static-analysis gate) has no per-test id and is not checked against the corpus. gate \"test_request\" is scoped to the session's own current test_request run rather than a PR, and persists a per-test excused marker a later PR-creation gate consumes.",
         inputSchema: {
           gate: flakyGateSchema,
           reason: z.string(),
@@ -184,6 +241,36 @@ export function registerVerdictTools(
       async (args) => {
         const session = ctx.getSession();
         if (!session) return notLive();
+
+        if (args.gate === 'test_request') {
+          if (!args.testId || !args.testName) {
+            return invalid(
+              `gate "${args.gate}" requires testId and testName identifying the failing test so the backend can check it against the cross-SHA corpus`,
+            );
+          }
+          const run = getLatestTestRequestRunForSession(
+            session.projectId,
+            ctx.sessionId,
+          );
+          if (!run) {
+            return invalid('no active test_request run for this session');
+          }
+          const project = getProjectById(session.projectId);
+          const beforeMs = project
+            ? firstRunCutoffMs(project, run)
+            : run.started_at;
+          const refusal = await checkTestCorpusAndDiff(
+            args.testId,
+            args.testName,
+            beforeMs,
+            session.worktreePath,
+            project?.baseBranch ?? 'dev',
+          );
+          if (refusal) return refusal;
+
+          markTestResultExcused(run.id, args.testId, 'flaky_confirm');
+          return ok();
+        }
 
         // Confirmed session_id is the right lookup: flaky.confirm is only
         // ever called by the implementation session for its own PR/CI
@@ -204,49 +291,14 @@ export function registerVerdictTools(
               'this PR has no recorded creation time to scope the corpus check against',
             );
           }
-          const corpus = evaluateTestFlakinessCorpus(
-            args.testId,
-            beforeMs,
-            typedGetSetting('flip_rate_window_n'),
-            typedGetSetting('flip_rate_threshold_k'),
-            typedGetSetting('flip_rate_breadth_n'),
-            typedGetSetting('flip_rate_breadth_window_hours'),
-          );
-          if (!corpus.eligible) {
-            return invalid(`${args.testName} ${corpus.reason}`);
-          }
-
-          let changedFiles: string[];
-          try {
-            changedFiles = await getChangedFiles(
-              session.worktreePath,
-              pr.base_branch ?? 'dev',
-            );
-          } catch (err) {
-            return invalid(
-              `could not resolve this session's changed files: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-          const { touched, confident } = isTestIdTouchedByChangedFiles(
+          const refusal = await checkTestCorpusAndDiff(
             args.testId,
             args.testName,
-            changedFiles,
+            beforeMs,
+            session.worktreePath,
+            pr.base_branch ?? 'dev',
           );
-          if (!confident) {
-            return invalid(
-              `${args.testName} could not be confidently mapped to a source file to check against this session's diff`,
-            );
-          }
-          if (touched) {
-            const touchedFile = findTouchedTestFile(
-              args.testId,
-              args.testName,
-              changedFiles,
-            );
-            return invalid(
-              `${touchedFile ?? `${args.testName}'s own file`} is in this session's diff — a session cannot wave through a failure it may have caused`,
-            );
-          }
+          if (refusal) return refusal;
         }
 
         // The backend only ever actuates a disposition when the PR is

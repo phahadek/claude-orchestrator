@@ -59,6 +59,7 @@ import type {
   DependencyCacheEntryStatus,
   TestRunResultRow,
   NewTestRunResultRow,
+  TestExcusalSource,
   TestRunSummaryRow,
   TestOutcomeCounts,
   TestPerfBaselineRow,
@@ -10477,6 +10478,68 @@ export function getFailingTestIdsForRun(
   return _stmtFailingTestIdsForRun.all({
     run_id: testRequestRunId,
   }) as FailingTestForRun[];
+}
+
+let _stmtMarkTestResultExcused: Database.Statement | null = null;
+
+/**
+ * Writes the per-test excused marker onto the (test_request_run_id, test_id)
+ * row itself — see TestExcusalSource. Attaching it to the test_run_results
+ * row's own natural lifecycle (rather than a standalone claims table) means
+ * it needs no independent release condition: the marker dies exactly when
+ * its row does. Called by both flaky.confirm(gate:'test_request') and the
+ * fully-automatic base-attributable filter, so the two paths write the same
+ * marker shape. A row that doesn't exist (e.g. an unmapped test_id) is
+ * silently a no-op — nothing to attach the marker to.
+ */
+export function markTestResultExcused(
+  testRequestRunId: string,
+  testId: string,
+  source: TestExcusalSource,
+): void {
+  _stmtMarkTestResultExcused ??= db.prepare<{
+    test_request_run_id: string;
+    test_id: string;
+    excused_at: number;
+    excused_reason: string;
+  }>(`
+    UPDATE test_run_results
+    SET excused_at = @excused_at, excused_reason = @excused_reason
+    WHERE test_request_run_id = @test_request_run_id AND test_id = @test_id
+  `);
+  _stmtMarkTestResultExcused.run({
+    test_request_run_id: testRequestRunId,
+    test_id: testId,
+    excused_at: Date.now(),
+    excused_reason: source,
+  });
+}
+
+let _stmtGetTestResultExcusedMarker: Database.Statement | null = null;
+
+/**
+ * Reads back the marker markTestResultExcused writes — the sibling
+ * PR-creation-gate task's own read path, scoped to the exact
+ * (test_request_run_id, test_id) pair a session's current test_request run
+ * produced. Returns null when the row doesn't exist or was never excused.
+ */
+export function getTestResultExcusedMarker(
+  testRequestRunId: string,
+  testId: string,
+): { excused_at: number; excused_reason: TestExcusalSource } | null {
+  _stmtGetTestResultExcusedMarker ??= db.prepare<{
+    test_request_run_id: string;
+    test_id: string;
+  }>(`
+    SELECT excused_at, excused_reason FROM test_run_results
+    WHERE test_request_run_id = @test_request_run_id AND test_id = @test_id
+      AND excused_at IS NOT NULL
+  `);
+  const row = _stmtGetTestResultExcusedMarker.get({
+    test_request_run_id: testRequestRunId,
+    test_id: testId,
+  }) as { excused_at: number; excused_reason: TestExcusalSource } | undefined;
+  return row ?? null;
 }
 
 export interface FlaggedFlakyTest {
