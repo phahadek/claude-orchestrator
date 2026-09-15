@@ -1609,7 +1609,7 @@ describe('OrphanedTaskSweeper', () => {
     },
   );
 
-  it('still reverts a %s task whose ops_journal entry is still pending', async () => {
+  it('does not revert a %s task with no session row whose ops_journal entry is still pending but fresh (interactive-ops grace window)', async () => {
     const backend = makeBackend([
       makeTask('notion:abc', '🔄 In Progress', '🔎 Investigation'),
     ]);
@@ -1641,8 +1641,11 @@ describe('OrphanedTaskSweeper', () => {
 
     await sweeper.sweepOnce();
 
-    expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
+    expect(backend.updateStatus).not.toHaveBeenCalled();
     expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_skipped' }),
+    );
+    expect(recordEvent).not.toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'task_orphan_reverted' }),
     );
   });
@@ -1800,6 +1803,236 @@ describe('OrphanedTaskSweeper', () => {
     expect(backend.updateStatus).not.toHaveBeenCalled();
     expect(recordEvent).not.toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'task_orphan_reverted' }),
+    );
+  });
+
+  // ── Interactive /ops session with no session row (journal-only exemption) ──
+
+  function makeJournalEntry(
+    state: 'pending' | 'candidate' | 'blocked' | 'staged-proposal' | 'resolved',
+    updatedAt: string,
+    project = 'proj-1',
+  ) {
+    return {
+      task_id: 'notion:abc',
+      project,
+      milestone: 'm1',
+      state,
+      disposition: null,
+      worked_in: null,
+      evidence: null,
+      finding_or_proposal: null,
+      falsification: null,
+      filed_followons: null,
+      needs_from_operator: null,
+      resolution: null,
+      updated_at: updatedAt,
+    };
+  }
+
+  it.each(['candidate', 'blocked', 'staged-proposal'] as const)(
+    'does not revert a %s Investigation task with no session row but a worked ops_journal entry, and emits task_orphan_skipped once',
+    async (state) => {
+      const backend = makeBackend([
+        makeTask('notion:abc', '🔄 In Progress', '🔎 Investigation'),
+      ]);
+      vi.mocked(getLatestOpsSessionByTaskId).mockReturnValue(undefined);
+      vi.mocked(getOpsJournalEntry).mockReturnValue(
+        makeJournalEntry(state, new Date().toISOString()),
+      );
+
+      const sweeper = new OrphanedTaskSweeper(broadcast, {
+        listProjects: () => [
+          { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+        ],
+        resolveBackend: () => backend,
+      });
+
+      await sweeper.sweepOnce();
+
+      expect(backend.updateStatus).not.toHaveBeenCalled();
+      expect(recordEvent).not.toHaveBeenCalledWith(
+        expect.objectContaining({ event_type: 'task_orphan_reverted' }),
+      );
+      expect(recordEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: 'task_orphan_skipped',
+          task_id: 'notion:abc',
+          payload: expect.objectContaining({
+            reason: 'interactive_ops_journal',
+            state,
+          }),
+        }),
+      );
+    },
+  );
+
+  it('reverts the same task type with no session row and no ops_journal entry at all', async () => {
+    const backend = makeBackend([
+      makeTask('notion:abc', '🔄 In Progress', '🔎 Investigation'),
+    ]);
+    vi.mocked(getLatestOpsSessionByTaskId).mockReturnValue(undefined);
+    vi.mocked(getOpsJournalEntry).mockReturnValue(undefined);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_reverted' }),
+    );
+  });
+
+  it('skips a pending ops_journal entry updated 10 minutes ago (within grace window)', async () => {
+    const backend = makeBackend([
+      makeTask('notion:abc', '🔄 In Progress', '🔎 Investigation'),
+    ]);
+    vi.mocked(getLatestOpsSessionByTaskId).mockReturnValue(undefined);
+    vi.mocked(getOpsJournalEntry).mockReturnValue(
+      makeJournalEntry(
+        'pending',
+        new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+      ),
+    );
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_skipped' }),
+    );
+  });
+
+  it('reverts a pending ops_journal entry updated 7 hours ago (past grace window)', async () => {
+    const backend = makeBackend([
+      makeTask('notion:abc', '🔄 In Progress', '🔎 Investigation'),
+    ]);
+    vi.mocked(getLatestOpsSessionByTaskId).mockReturnValue(undefined);
+    vi.mocked(getOpsJournalEntry).mockReturnValue(
+      makeJournalEntry(
+        'pending',
+        new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString(),
+      ),
+    );
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_reverted' }),
+    );
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_skipped' }),
+    );
+  });
+
+  it('reverts a resolved ops_journal entry updated 7 hours ago (not a permanent shield)', async () => {
+    const backend = makeBackend([
+      makeTask('notion:abc', '🔄 In Progress', '🔎 Investigation'),
+    ]);
+    vi.mocked(getLatestOpsSessionByTaskId).mockReturnValue(undefined);
+    vi.mocked(getOpsJournalEntry).mockReturnValue(
+      makeJournalEntry(
+        'resolved',
+        new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString(),
+      ),
+    );
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_reverted' }),
+    );
+  });
+
+  it('does not emit a second task_orphan_skipped row on a repeated tick for an unchanged skipped task', async () => {
+    const backend = makeBackend([
+      makeTask('notion:abc', '🔄 In Progress', '🔎 Investigation'),
+    ]);
+    vi.mocked(getLatestOpsSessionByTaskId).mockReturnValue(undefined);
+    vi.mocked(getOpsJournalEntry).mockReturnValue(
+      makeJournalEntry('blocked', new Date().toISOString()),
+    );
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+    await sweeper.sweepOnce();
+
+    const skippedCalls = vi
+      .mocked(recordEvent)
+      .mock.calls.filter(
+        ([event]) => event.event_type === 'task_orphan_skipped',
+      );
+    expect(skippedCalls).toHaveLength(1);
+  });
+
+  it("attributes a reverted orphan to the ops_journal entry's project when no session or repo assignment resolves one", async () => {
+    const backend = makeBackend([
+      makeTask('notion:abc', '🔄 In Progress', '🔎 Investigation'),
+    ]);
+    vi.mocked(getLatestOpsSessionByTaskId).mockReturnValue(undefined);
+    vi.mocked(getTaskRepoAssignment).mockReturnValue(undefined);
+    // Encountered under the claude-dashboard loop's sweep pass, but the
+    // journal's own `project` field says this task actually belongs to
+    // polimarket-analyser.
+    vi.mocked(getOpsJournalEntry).mockReturnValue(
+      makeJournalEntry(
+        'resolved',
+        new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString(),
+        'polimarket-analyser',
+      ),
+    );
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'claude-dashboard' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'task_orphan_reverted',
+        payload: expect.objectContaining({
+          projectId: 'polimarket-analyser',
+        }),
+      }),
     );
   });
 

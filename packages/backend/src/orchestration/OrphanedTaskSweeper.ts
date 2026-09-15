@@ -24,7 +24,10 @@ import {
   upsertPullRequest,
   getTaskRepoAssignment,
 } from '../db/queries';
-import { sessionDidWork } from '../session/sessionLifecycle';
+import {
+  sessionDidWork,
+  checkInteractiveOpsJournal,
+} from '../session/sessionLifecycle';
 import { isMachineParkedIdle } from '../session/sessionPredicates';
 import { isUsageAdmitted } from './usageAdmission';
 import {
@@ -79,7 +82,16 @@ function failureReasonKey(err: unknown): string {
   return `error:${stripVolatileFields(message)}`;
 }
 
-/** Task types the orchestrator moves to In Progress itself on dispatch — eligible for orphan sweep. */
+/**
+ * Task types eligible for orphan sweep. 💻 Code and 📝 Docs are types the
+ * orchestrator itself moves to In Progress on dispatch, so a live session's
+ * absence is unambiguous. 🔧 Operational and 🔎 Investigation are also moved
+ * to In Progress by hand, by an interactive /ops session's own status
+ * protocol — for those, "sweepable" really means "no session AND no worked
+ * ops_journal entry claims them"; see the non-Code branch in
+ * maybeRevertTask, which consults sessionDidWork and, absent a session row,
+ * checkInteractiveOpsJournal before ever calling it an orphan.
+ */
 const SWEEPABLE_TYPES = new Set([
   '💻 Code',
   '🔧 Operational',
@@ -138,6 +150,16 @@ export class OrphanedTaskSweeper {
    * audits again as a fresh transition.
    */
   private readonly lastRevertFailureReason = new Map<string, string>();
+
+  /**
+   * Last ops_journal state a task_orphan_skipped audit row was emitted for,
+   * per task id — a Remote-Control /ops session binds no session row to the
+   * task, so there is nothing to persist the "already surfaced" bit on the
+   * way task_orphan_surfaced does via session.pause_reason. Re-emits only
+   * when the journal state actually changes, so an unchanged skipped task
+   * doesn't audit-log every sweep tick.
+   */
+  private readonly lastOrphanSkipState = new Map<string, string>();
 
   constructor(
     private readonly broadcast: (msg: ServerMessage) => void,
@@ -401,15 +423,36 @@ export class OrphanedTaskSweeper {
     const lastSeenAt =
       latestSession?.ended_at ?? latestSession?.started_at ?? null;
 
+    // A non-Code task's ops_journal entry (project set correctly per-project
+    // by opsLoad.ts's reconcileJournal, independent of which project's sweep
+    // loop encounters the task first) doubles as an attribution source below
+    // when neither a session nor a repo assignment resolves the project.
+    // ResolvedTask/NotionTask carries no milestone/board field to map back
+    // to a project, so this is the available substitute for that case.
+    const opsJournalCheck =
+      taskType !== '💻 Code' ? checkInteractiveOpsJournal(taskId) : undefined;
+
     // Resolve the authoritative project ID: prefer the session's own project_id
     // so that tasks from project "polimarket" aren't attributed to "claude-dashboard"
     // just because that project's loop encountered the task first. Once the
     // session row is gone (deleted anchor), fall back to the task's own
-    // durable repo assignment before the sweep loop's current project.
+    // durable repo assignment, then the ops_journal entry's own project,
+    // before the sweep loop's current project.
     const effectiveProjectId =
       latestSession?.project_id ??
       getTaskRepoAssignment(taskId)?.project_id ??
+      opsJournalCheck?.project ??
       projectId;
+
+    if (effectiveProjectId === projectId && opsJournalCheck === undefined) {
+      // No session, no repo assignment, no journal entry to attribute
+      // against — falling back to the sweep loop's own project is a guess,
+      // not a resolution. Not necessarily wrong (this may genuinely be the
+      // task's project), but worth a trace if attribution turns out stale.
+      logger.info(
+        `[OrphanedTaskSweeper] no session/assignment/journal to attribute ${taskId} — defaulting to loop project ${projectId}`,
+      );
+    }
 
     // Resolve the task's PR by the task's own id — not solely via
     // latestSession.session_id — so an open PR still protects the task once
@@ -522,6 +565,18 @@ export class OrphanedTaskSweeper {
           ? latestSession
           : getLatestOpsSessionByTaskId(taskId);
       if (nonCodeSession && sessionDidWork(nonCodeSession.session_id)) {
+        return;
+      }
+
+      // No session row bound to the task at all — the shape a Remote-Control
+      // interactive /ops session leaves, since its MCP writes bypass the
+      // backend entirely. Judge by the task's own ops_journal entry instead
+      // of falling through to "genuine orphan": a candidate/blocked/staged
+      // entry, or a still-fresh pending/resolved one (interactive-throughout
+      // sessions can go straight pending -> resolved), means the task is
+      // actively being worked even though nothing bound a session to it.
+      if (!nonCodeSession && opsJournalCheck?.worked) {
+        this.recordOrphanSkipped(taskId, effectiveProjectId, opsJournalCheck);
         return;
       }
     }
@@ -687,6 +742,39 @@ export class OrphanedTaskSweeper {
       `[OrphanedTaskSweeper] found open PR #${found.id} on GitHub for branch ${headBranch} — suppressing nudge and backfilling DB`,
     );
     return true;
+  }
+
+  /**
+   * Record that a non-Code orphan revert was skipped because the task's
+   * ops_journal entry shows it is being interactively worked — once per
+   * task per journal state, not per tick (mirrors the surface-once guard
+   * on task_orphan_surfaced, which persists on session.pause_reason
+   * instead since that path always has a session row to persist to).
+   */
+  private recordOrphanSkipped(
+    taskId: string,
+    effectiveProjectId: string,
+    check: { state: string; updatedAt: string },
+  ): void {
+    if (this.lastOrphanSkipState.get(taskId) === check.state) return;
+    this.lastOrphanSkipState.set(taskId, check.state);
+
+    recordEvent({
+      event_type: 'task_orphan_skipped',
+      actor_type: 'system',
+      project_id: effectiveProjectId,
+      task_id: taskId,
+      payload: {
+        taskId,
+        reason: 'interactive_ops_journal',
+        state: check.state,
+        updatedAt: check.updatedAt,
+      },
+    });
+
+    logger.info(
+      `[OrphanedTaskSweeper] skipped orphan revert for ${taskId} — ops_journal state '${check.state}' shows interactive work`,
+    );
   }
 
   /** Surface a stalled session to the operator (attention queue) without reverting the task. */

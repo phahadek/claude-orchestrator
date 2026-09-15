@@ -31,7 +31,7 @@ import {
 } from '../db/queries';
 import { isGateVerifySession } from './sessionPredicates';
 import type { SessionType } from './sessionPredicates';
-import type { StagedIntentState } from '../db/types';
+import type { StagedIntentState, OpsJournalState } from '../db/types';
 import { isSessionProcessAlive } from './processLiveness';
 
 /**
@@ -127,6 +127,49 @@ function hasStagedAnything(sessionId: string): boolean {
 function opsJournalAdvancedPastPending(taskId: string): boolean {
   const entry = getOpsJournalEntry(taskId);
   return entry !== undefined && entry.state !== 'pending';
+}
+
+/** Max age of a still-'pending' ops_journal entry that still counts as interactively worked. */
+const INTERACTIVE_OPS_GRACE_MS = 6 * 60 * 60 * 1000;
+
+export interface InteractiveOpsJournalCheck {
+  worked: boolean;
+  state: OpsJournalState;
+  updatedAt: string;
+  project: string;
+}
+
+/**
+ * Judges an ops/investigation/testing task's own ops_journal entry (not a
+ * session row — a Remote-Control interactive /ops session sets one without
+ * ever binding a sessions row to the task) as a signal that it is being
+ * actively worked, independent of sessionDidWork's session-anchored check
+ * above. A `pending` entry only counts within INTERACTIVE_OPS_GRACE_MS of
+ * its last update — the interactive-throughout path can go straight
+ * pending -> resolved without ever advancing state, so a *stale* pending
+ * entry is not a shield. A `resolved` entry is judged the same way: it
+ * gets trimmed by reconcileJournal on the next ops-context load, so a
+ * resolved entry whose task is still In Progress well past the grace
+ * window is a genuine orphan too, not a permanent shield. Returns
+ * undefined when there is no entry at all — a genuine orphan with nothing
+ * recorded against it.
+ */
+export function checkInteractiveOpsJournal(
+  taskId: string,
+): InteractiveOpsJournalCheck | undefined {
+  const entry = getOpsJournalEntry(taskId);
+  if (!entry) return undefined;
+  const recentlyUpdated =
+    Date.now() - Date.parse(entry.updated_at) < INTERACTIVE_OPS_GRACE_MS;
+  const worked =
+    (entry.state !== 'pending' && entry.state !== 'resolved') ||
+    recentlyUpdated;
+  return {
+    worked,
+    state: entry.state,
+    updatedAt: entry.updated_at,
+    project: entry.project,
+  };
 }
 
 /**
