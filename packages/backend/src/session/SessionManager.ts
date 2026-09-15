@@ -3550,9 +3550,7 @@ export class SessionManager extends EventEmitter {
    * since it's a handful of in-memory config reads and project config can
    * change between sweeps.
    */
-  private resolveVerifyChildBudgetSec = (
-    cmdline: string,
-  ): number | null => {
+  private resolveVerifyChildBudgetSec = (cmdline: string): number | null => {
     for (const project of getAllProjects()) {
       let cfg;
       try {

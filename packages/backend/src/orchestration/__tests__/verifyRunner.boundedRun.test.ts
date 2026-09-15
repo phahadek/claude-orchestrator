@@ -241,7 +241,8 @@ describe('reapStaleBackendChildProcesses', () => {
         listMainCgroupPids: () => [stalePid, freshPid],
         readPpid: () => ownPid,
         readCmdline: () => 'sh -c pytest -n 2 --dist loadfile',
-        getAgeSec: (pid) => (pid === stalePid ? budgetSec + 100 : budgetSec - 100),
+        getAgeSec: (pid) =>
+          pid === stalePid ? budgetSec + 100 : budgetSec - 100,
         kill: (pid) => killed.push(pid),
         ownPid,
       },
