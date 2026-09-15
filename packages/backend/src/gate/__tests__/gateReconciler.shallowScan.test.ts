@@ -12,7 +12,7 @@
  * GET / stalls" task.
  */
 
-import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('../../db/db.js', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
@@ -20,6 +20,7 @@ vi.mock('../../db/db.js', async () => {
 });
 
 import { db } from '../../db/db.js';
+import { runtimeSettings } from '../../config.js';
 import { ProjectService } from '../../projects/ProjectService.js';
 import { upsertArm } from '../../db/queries.js';
 import { Scheduler } from '../../orchestration/Scheduler.js';
@@ -48,7 +49,11 @@ beforeAll(() => {
   }).id;
 });
 
+let previousGateVerificationEnabled: boolean;
+
 beforeEach(() => {
+  previousGateVerificationEnabled = runtimeSettings.gate_verification_enabled;
+  runtimeSettings.gate_verification_enabled = true;
   db.prepare('DELETE FROM gate_item_event').run();
   db.prepare('DELETE FROM gate_item_source').run();
   db.prepare('DELETE FROM gate_item').run();
@@ -61,6 +66,10 @@ beforeEach(() => {
     stageMirror: vi.fn(),
     retireMirror: vi.fn(),
   });
+});
+
+afterEach(() => {
+  runtimeSettings.gate_verification_enabled = previousGateVerificationEnabled;
 });
 
 function seedItem(overrides: Partial<Parameters<typeof insertItem>[0]> = {}) {
