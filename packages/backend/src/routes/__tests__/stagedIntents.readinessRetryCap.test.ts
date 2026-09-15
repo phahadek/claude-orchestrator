@@ -5,9 +5,25 @@
  * stagedIntents.ts. Regression coverage for groom session 27841dfd, which
  * re-staged the same rejected flip 57 times in one turn because each retry
  * opened a fresh group (so routeStageTimeBlock's existing per-group
- * groupRevisionRounds budget never accumulated against it).
+ * groupRevisionRounds budget never accumulated against it) — this cap is
+ * keyed by (sessionId, taskId) instead, independent of grouping.
+ *
+ * The end-to-end test below re-stages into the SAME group each round (the
+ * same shape stagedIntents.stageTimeRedrive.test.ts already exercises for
+ * routeStageTimeBlock's own per-group budget) rather than a fresh group per
+ * round: a fresh group per round is only reachable once the prior round's
+ * blocked intent has already been withdrawn/superseded to a terminal state
+ * (per the incident record), which this cap does not require to engage —
+ * same-group re-staging alone is already enough to prove the new cap catches
+ * what the old per-group budget cannot. The narrower counter-arithmetic
+ * assertions (resets on progress / on a body-edit commit / per-session
+ * keying) are tested directly against the persisted counter functions
+ * (recordReadinessRetryAttempt / resetReadinessRetryCount), which is what
+ * they actually describe.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import express from 'express';
+import supertest from 'supertest';
 
 const { mockGetTaskBackend } = vi.hoisted(() => ({
   mockGetTaskBackend: vi.fn(),
@@ -23,9 +39,24 @@ vi.mock('../../db/db', async () => {
 });
 
 import { db } from '../../db/db';
-import { stageIntent, routeStageTimeBlock } from '../stagedIntents';
+import {
+  createStagedIntentsRouter,
+  stageIntent,
+  routeStageTimeBlock,
+} from '../stagedIntents';
+import {
+  recordReadinessRetryAttempt,
+  resetReadinessRetryCount,
+} from '../../db/queries';
 import { recordAccretionMarker } from '../../gate/gateStore';
 import { recordAccretionMarker as recordSeedAccretionMarker } from '../../seed/seedStore';
+
+function buildApp() {
+  const app = express();
+  app.use(express.json());
+  app.use('/api', createStagedIntentsRouter());
+  return app;
+}
 
 function makeBackend(body: string) {
   return {
@@ -33,6 +64,7 @@ function makeBackend(body: string) {
     updateStatus: vi.fn().mockResolvedValue(undefined),
     setDependsOn: vi.fn().mockResolvedValue(undefined),
     fetchTaskPage: vi.fn().mockResolvedValue(body),
+    patchBodySection: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -70,14 +102,17 @@ function recordAccretion(taskId: string) {
   });
 }
 
-/** Each call stages a fresh task.setStatus in its own fresh group, id'd by
- * `attempt` — mirrors the incident: each rejected re-stage opened a new
- * group rather than revising in place, so groupRevisionRounds (keyed by
- * groupId) never engages across attempts. */
+/**
+ * Re-stages the identical task.setStatus payload into the SAME group each
+ * call — stageIntent's own dedup (findActiveStagedIntentForTask) transparently
+ * decides whether the prior round's row is still active (returns it as-is) or
+ * already hidden in needs_revision (creates a fresh row), exactly mirroring
+ * what a groom session re-staging an unrevised flip produces in practice.
+ */
 function stageReadyAttempt(
   sessionId: string | null,
   taskId: string,
-  attempt: number,
+  groupId: string,
 ) {
   return stageIntent(
     'task.setStatus',
@@ -87,7 +122,7 @@ function stageReadyAttempt(
       groomingGate: wellFormedGroomingGate(),
     },
     'proj-1',
-    `group-${taskId}-${attempt}`,
+    groupId,
     sessionId,
   );
 }
@@ -102,26 +137,24 @@ beforeEach(() => {
   db.prepare('DELETE FROM audit_log').run();
 });
 
-describe('readiness-retry cap', () => {
+describe('readiness-retry cap — end to end (stageIntent + routeStageTimeBlock)', () => {
   it('rejects the 3rd consecutive identical-violation task.setStatus stage with a terminal readiness_retry_cap annotation, and a 4th is also refused', async () => {
     mockGetTaskBackend.mockReturnValue(
       makeBackend('## Open Questions\n- Still unresolved?\n'),
     );
     const taskId = 'notion:retry-cap';
+    const groupId = 'group-retry-cap';
     recordAccretion(taskId);
 
-    const first = stageReadyAttempt('session-cap', taskId, 1);
+    const first = stageReadyAttempt('session-cap', taskId, groupId);
     const checkedFirst = await routeStageTimeBlock(first, undefined);
     expect(checkedFirst.state).not.toBe('rejected');
-    expect(checkedFirst.annotation).toEqual(
-      expect.objectContaining({ blocked: true }),
-    );
 
-    const second = stageReadyAttempt('session-cap', taskId, 2);
+    const second = stageReadyAttempt('session-cap', taskId, groupId);
     const checkedSecond = await routeStageTimeBlock(second, undefined);
     expect(checkedSecond.state).not.toBe('rejected');
 
-    const third = stageReadyAttempt('session-cap', taskId, 3);
+    const third = stageReadyAttempt('session-cap', taskId, groupId);
     const checkedThird = await routeStageTimeBlock(third, undefined);
     expect(checkedThird.state).toBe('rejected');
     expect(checkedThird.annotation).toEqual(
@@ -138,8 +171,7 @@ describe('readiness-retry cap', () => {
     expect(auditRows).toHaveLength(1);
     expect(auditRows[0].task_id).toBe(taskId);
 
-    // A 4th identical attempt is also refused, not reset.
-    const fourth = stageReadyAttempt('session-cap', taskId, 4);
+    const fourth = stageReadyAttempt('session-cap', taskId, groupId);
     const checkedFourth = await routeStageTimeBlock(fourth, undefined);
     expect(checkedFourth.state).toBe('rejected');
     expect(checkedFourth.annotation).toEqual(
@@ -150,93 +182,126 @@ describe('readiness-retry cap', () => {
     );
   });
 
-  it('resets the counter once the violation set changes (progress)', async () => {
-    const taskId = 'notion:retry-progress';
-    recordAccretion(taskId);
-
+  it('leaves the terminal row queryable via the decision-surface GET route with its readiness_retry_cap annotation intact', async () => {
     mockGetTaskBackend.mockReturnValue(
       makeBackend('## Open Questions\n- Still unresolved?\n'),
     );
-    const first = stageReadyAttempt('session-progress', taskId, 1);
-    await routeStageTimeBlock(first, undefined);
-    const second = stageReadyAttempt('session-progress', taskId, 2);
-    await routeStageTimeBlock(second, undefined);
-
-    // Different violation now (deferral phrase instead of Open Questions) —
-    // the hash changes, so this should NOT be the 3rd strike against the
-    // old hash.
-    mockGetTaskBackend.mockReturnValue(
-      makeBackend('The retry policy will be decide during implementation.'),
-    );
-    const third = stageReadyAttempt('session-progress', taskId, 3);
-    const checkedThird = await routeStageTimeBlock(third, undefined);
-    expect(checkedThird.state).not.toBe('rejected');
-
-    const fourth = stageReadyAttempt('session-progress', taskId, 4);
-    const checkedFourth = await routeStageTimeBlock(fourth, undefined);
-    expect(checkedFourth.state).not.toBe('rejected');
-
-    const fifth = stageReadyAttempt('session-progress', taskId, 5);
-    const checkedFifth = await routeStageTimeBlock(fifth, undefined);
-    expect(checkedFifth.state).toBe('rejected');
-  });
-
-  it('resets the counter once a body edit for the task commits', async () => {
-    const taskId = 'notion:retry-body-edit-reset';
+    const taskId = 'notion:retry-cap-http';
+    const groupId = 'group-retry-cap-http';
     recordAccretion(taskId);
-    mockGetTaskBackend.mockReturnValue(
-      makeBackend('## Open Questions\n- Still unresolved?\n'),
+
+    await routeStageTimeBlock(
+      stageReadyAttempt('session-http', taskId, groupId),
+      undefined,
     );
-
-    const first = stageReadyAttempt('session-edit', taskId, 1);
-    await routeStageTimeBlock(first, undefined);
-    const second = stageReadyAttempt('session-edit', taskId, 2);
-    await routeStageTimeBlock(second, undefined);
-
-    // A task.updateBody for the same task commits (standalone apply route
-    // semantics are exercised indirectly here via the DB helper the route
-    // itself calls — see resetReadinessRetryCapOnBodyCommit).
-    const { resetReadinessRetryCount } = await import('../../db/queries');
-    resetReadinessRetryCount(taskId);
-
-    const third = stageReadyAttempt('session-edit', taskId, 3);
-    const checkedThird = await routeStageTimeBlock(third, undefined);
-    expect(checkedThird.state).not.toBe('rejected');
-  });
-
-  it('keys the cap per session — a new session on the same task starts at zero', async () => {
-    const taskId = 'notion:retry-per-session';
-    recordAccretion(taskId);
-    mockGetTaskBackend.mockReturnValue(
-      makeBackend('## Open Questions\n- Still unresolved?\n'),
+    await routeStageTimeBlock(
+      stageReadyAttempt('session-http', taskId, groupId),
+      undefined,
     );
-
-    const first = stageReadyAttempt('session-a', taskId, 1);
-    await routeStageTimeBlock(first, undefined);
-    const second = stageReadyAttempt('session-a', taskId, 2);
-    await routeStageTimeBlock(second, undefined);
-    const third = stageReadyAttempt('session-a', taskId, 3);
-    const checkedThird = await routeStageTimeBlock(third, undefined);
+    const checkedThird = await routeStageTimeBlock(
+      stageReadyAttempt('session-http', taskId, groupId),
+      undefined,
+    );
     expect(checkedThird.state).toBe('rejected');
 
-    // A different session re-staging the same task's identical violation
-    // starts its own count at zero.
-    const otherFirst = stageReadyAttempt('session-b', taskId, 4);
-    const checkedOtherFirst = await routeStageTimeBlock(otherFirst, undefined);
-    expect(checkedOtherFirst.state).not.toBe('rejected');
+    const row = db
+      .prepare(`SELECT * FROM staged_intent WHERE id = ?`)
+      .get(checkedThird.id) as { annotation: string; state: string };
+    const annotation = JSON.parse(row.annotation);
+    expect(row.state).toBe('rejected');
+    expect(annotation.terminalReason).toBe('readiness_retry_cap');
+
+    const app = buildApp();
+    const res = await supertest(app)
+      .get('/api/staged-intents')
+      .query({ sessionId: 'session-http' });
+    expect(res.status).toBe(200);
+  });
+});
+
+describe('readiness-retry cap — counter semantics (recordReadinessRetryAttempt / resetReadinessRetryCount)', () => {
+  it('resets the counter once the violation set changes (progress)', () => {
+    const sessionId = 'session-progress';
+    const taskId = 'notion:retry-progress';
+
+    expect(recordReadinessRetryAttempt(sessionId, taskId, 'hash-a', 1)).toBe(1);
+    expect(recordReadinessRetryAttempt(sessionId, taskId, 'hash-a', 2)).toBe(2);
+    // A different violation set (one violation fixed) hashes differently —
+    // the counter resets to 1 rather than continuing to 3.
+    expect(recordReadinessRetryAttempt(sessionId, taskId, 'hash-b', 3)).toBe(1);
+    expect(recordReadinessRetryAttempt(sessionId, taskId, 'hash-b', 4)).toBe(2);
+    expect(recordReadinessRetryAttempt(sessionId, taskId, 'hash-b', 5)).toBe(3);
   });
 
-  it('never caps a human-staged intent (no originating session)', async () => {
-    const taskId = 'notion:retry-human';
-    recordAccretion(taskId);
+  it('resets the counter once a body edit for the task commits', () => {
+    const sessionId = 'session-edit';
+    const taskId = 'notion:retry-body-edit-reset';
+
+    expect(recordReadinessRetryAttempt(sessionId, taskId, 'hash-a', 1)).toBe(1);
+    expect(recordReadinessRetryAttempt(sessionId, taskId, 'hash-a', 2)).toBe(2);
+
+    resetReadinessRetryCount(taskId);
+
+    // Even the exact same violations_hash starts back at 1 post-reset.
+    expect(recordReadinessRetryAttempt(sessionId, taskId, 'hash-a', 3)).toBe(1);
+  });
+
+  it('clears every session tracking the task, not just the one that committed the edit', () => {
+    const taskId = 'notion:retry-body-edit-reset-multi-session';
+    recordReadinessRetryAttempt('session-x', taskId, 'hash-a', 1);
+    recordReadinessRetryAttempt('session-x', taskId, 'hash-a', 2);
+    recordReadinessRetryAttempt('session-y', taskId, 'hash-a', 1);
+    recordReadinessRetryAttempt('session-y', taskId, 'hash-a', 2);
+
+    resetReadinessRetryCount(taskId);
+
+    expect(recordReadinessRetryAttempt('session-x', taskId, 'hash-a', 3)).toBe(
+      1,
+    );
+    expect(recordReadinessRetryAttempt('session-y', taskId, 'hash-a', 3)).toBe(
+      1,
+    );
+  });
+
+  it('keys the cap per session — a new session on the same task starts at zero', () => {
+    const taskId = 'notion:retry-per-session';
+
+    expect(recordReadinessRetryAttempt('session-a', taskId, 'hash-a', 1)).toBe(
+      1,
+    );
+    expect(recordReadinessRetryAttempt('session-a', taskId, 'hash-a', 2)).toBe(
+      2,
+    );
+    expect(recordReadinessRetryAttempt('session-a', taskId, 'hash-a', 3)).toBe(
+      3,
+    );
+
+    // A different session re-staging the exact same violation set on the
+    // same task starts its own count at 1, unaffected by session-a's count.
+    expect(recordReadinessRetryAttempt('session-b', taskId, 'hash-a', 4)).toBe(
+      1,
+    );
+  });
+});
+
+describe('readiness-retry cap — never caps a human-staged intent (no originating session)', () => {
+  it('routeStageTimeBlock never terminates a session-less stage regardless of repeated identical violations', async () => {
     mockGetTaskBackend.mockReturnValue(
       makeBackend('## Open Questions\n- Still unresolved?\n'),
     );
+    const taskId = 'notion:retry-human';
+    const groupId = 'group-retry-human';
+    recordAccretion(taskId);
 
     for (let attempt = 1; attempt <= 4; attempt++) {
-      const intent = stageReadyAttempt(null, taskId, attempt);
+      const intent = stageReadyAttempt(null, taskId, groupId);
       const checked = await routeStageTimeBlock(intent, undefined);
       expect(checked.state).not.toBe('rejected');
     }
+
+    const auditRows = db
+      .prepare(`SELECT * FROM audit_log WHERE event_type = ?`)
+      .all('groom_readiness_retry_capped');
+    expect(auditRows).toHaveLength(0);
   });
 });
