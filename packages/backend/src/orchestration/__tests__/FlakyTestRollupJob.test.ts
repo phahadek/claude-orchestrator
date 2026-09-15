@@ -58,6 +58,41 @@ describe('FlakyTestRollupJob', () => {
     );
   });
 
+  it('dispatches all projects concurrently instead of awaiting each worker spawn in turn', async () => {
+    // Regression test for the O(project count) serialized worker-thread
+    // spawn: each replaceFlaggedFlakyTestsRollup call here defers via a
+    // pending promise, so if runOnce awaited them one at a time (the old
+    // for-await loop), only the first project's call would ever fire before
+    // this test's own await on job.runOnce() hangs forever. Dispatching
+    // concurrently issues every project's call up front, letting all of
+    // them resolve together off a single flush.
+    const pending: Array<() => void> = [];
+    queriesMock.replaceFlaggedFlakyTestsRollup.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          pending.push(() => resolve({ itemsProcessed: 0 }));
+        }),
+    );
+
+    const projectIds = ['proj-1', 'proj-2', 'proj-3', 'proj-4'];
+    const job = new FlakyTestRollupJob({
+      listProjects: () => projectIds.map((id) => ({ id }) as any),
+    });
+
+    const resultPromise = job.runOnce();
+
+    // Let the synchronous dispatch phase run without resolving anything yet.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(replaceFlaggedFlakyTestsRollup).toHaveBeenCalledTimes(
+      projectIds.length,
+    );
+
+    pending.forEach((resolve) => resolve());
+    await resultPromise;
+  });
+
   it('continues refreshing remaining projects when one project fails', async () => {
     queriesMock.replaceFlaggedFlakyTestsRollup
       .mockImplementationOnce(() => {
