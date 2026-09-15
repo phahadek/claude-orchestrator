@@ -586,6 +586,26 @@ export function markSessionDone(
   const current = getStmtGetSession().get({ session_id: sessionId }) as
     | { status: string; task_id: string | null; session_type: SessionType }
     | undefined;
+  // Terminal guard: a row that already concluded via another path (error,
+  // killed, or superseded) must never be overwritten by a late-arriving
+  // markSessionDone — e.g. a kill that races a clean-exit write queued
+  // before the process was signaled. Without this, the row's status and
+  // terminal_completion_reason would silently flip to 'done' with the
+  // wrong reason, even though the session actually ended some other way.
+  // Mirrors markSessionErrored's identically-named guard (SessionManager.ts).
+  if (
+    current &&
+    TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED.has(current.status)
+  ) {
+    recordEvent({
+      event_type: 'session_done_write_skipped_terminal',
+      actor_type: 'system',
+      actor_id: sessionId,
+      task_id: current.task_id ?? null,
+      payload: { status_before: current.status, call_site: callSite ?? 'unknown' },
+    });
+    return;
+  }
   if (current?.status === 'running' && !opts?.skipInFlightGuard) {
     logger.warn(
       `[markSessionDone] deferring running→done for ${sessionId.slice(0, 8)} call_site=${callSite ?? 'unknown'} — turn still in flight`,
