@@ -10552,6 +10552,30 @@ export function getFailingTestIdsForRun(
   }) as FailingTestForRun[];
 }
 
+let _stmtUnexcusedFailingTestIdsForRun: Database.Statement | null = null;
+
+/**
+ * The subset of getFailingTestIdsForRun's rows that do NOT carry the
+ * per-test excused marker (excused_at IS NULL) — see markTestResultExcused
+ * and the pre-PR test_request gate (AgentSession.ts's
+ * testRequestRunSatisfiesGate), the sole caller: a run whose failing tests
+ * are all excused still satisfies the gate, while any test_id left in this
+ * result set still blocks PR creation.
+ */
+export function getUnexcusedFailingTestIdsForRun(
+  testRequestRunId: string,
+): FailingTestForRun[] {
+  _stmtUnexcusedFailingTestIdsForRun ??= db.prepare<{ run_id: string }>(`
+    SELECT test_id, name, failure_message, failure_trace_excerpt FROM test_run_results
+    WHERE test_request_run_id = @run_id
+      AND outcome IN ('failed', 'error')
+      AND excused_at IS NULL
+  `);
+  return _stmtUnexcusedFailingTestIdsForRun.all({
+    run_id: testRequestRunId,
+  }) as FailingTestForRun[];
+}
+
 let _stmtMarkTestResultExcused: Database.Statement | null = null;
 
 /**

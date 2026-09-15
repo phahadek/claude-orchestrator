@@ -152,6 +152,8 @@ import {
   getSessionMilestoneId,
   getMilestoneById,
   getLatestTestRequestRun,
+  insertTestRunResults,
+  markTestResultExcused,
 } from '../../db/queries';
 import { validatePRBody } from '../../github/PRBodyValidator';
 import { recordEvent } from '../../audit/AuditLog';
@@ -493,6 +495,104 @@ describe('<pr-body> marker — test.request cache gate', () => {
       started_at: 0,
       finished_at: 1,
     } as never);
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(ghClient.createPR).not.toHaveBeenCalled();
+  });
+
+  it('allows PR creation when the only failing test in a failed run is marked excused', async () => {
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-excused-1',
+      project_id: 'proj',
+      content_hash: 'hash',
+      state: 'failed',
+      output: '',
+      started_at: 0,
+      finished_at: 1,
+    } as never);
+    insertTestRunResults(
+      'run-excused-1',
+      'proj',
+      [{ test_id: 'test-a', name: 'test-a', outcome: 'failed', duration_ms: 1 }],
+      null,
+      false,
+    );
+    markTestResultExcused('run-excused-1', 'test-a', 'flaky_confirm');
+
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(ghClient.createPR).toHaveBeenCalledWith(
+      'owner/repo',
+      expect.objectContaining({
+        head: 'feature/my-task',
+        base: 'dev',
+      }),
+    );
+  });
+
+  it('still blocks PR creation when a failed run has an un-marked failing test', async () => {
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-unmarked-1',
+      project_id: 'proj',
+      content_hash: 'hash',
+      state: 'failed',
+      output: '',
+      started_at: 0,
+      finished_at: 1,
+    } as never);
+    insertTestRunResults(
+      'run-unmarked-1',
+      'proj',
+      [{ test_id: 'test-b', name: 'test-b', outcome: 'failed', duration_ms: 1 }],
+      null,
+      false,
+    );
+
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(ghClient.createPR).not.toHaveBeenCalled();
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'pr_creation_failed',
+        payload: expect.objectContaining({ stage: 'test_request_gate' }),
+      }),
+    );
+  });
+
+  it('still blocks PR creation when only some of a failed run\'s failing tests are marked excused', async () => {
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-partial-1',
+      project_id: 'proj',
+      content_hash: 'hash',
+      state: 'failed',
+      output: '',
+      started_at: 0,
+      finished_at: 1,
+    } as never);
+    insertTestRunResults(
+      'run-partial-1',
+      'proj',
+      [
+        { test_id: 'test-c', name: 'test-c', outcome: 'failed', duration_ms: 1 },
+        { test_id: 'test-d', name: 'test-d', outcome: 'failed', duration_ms: 1 },
+      ],
+      null,
+      false,
+    );
+    markTestResultExcused('run-partial-1', 'test-c', 'flaky_confirm');
+
     const ghClient = makeGithubClient();
     const session = makeSession(ghClient);
     emitAssistantWithMarker(session, VALID_BODY);
