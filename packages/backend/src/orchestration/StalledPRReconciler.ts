@@ -41,6 +41,7 @@ import {
   sessionBusyInFlightToolCall,
   sessionAwaitingOperatorDecision,
 } from '../session/sessionLifecycle';
+import { yieldToEventLoop } from '../utils/concurrency';
 import {
   formatCIFailureFeedback,
   formatMergeConflictFeedback,
@@ -171,6 +172,13 @@ export class StalledPRReconciler {
     let itemsProcessed = 0;
 
     for (const pr of openPRs) {
+      // The common case (a healthy, non-stalled PR) `continue`s below via
+      // nothing but synchronous DB reads and classifyStalledPR's pure
+      // computation — no I/O await at all. Across every open PR fleet-wide,
+      // that never yields to the event loop. Same fix pattern as
+      // TaskCacheRefresher's per-milestone loop.
+      await yieldToEventLoop();
+
       // The docs execution flow's never-auto-merged gate: an open
       // human_merge_only PR is legitimately waiting for a human merge —
       // never re-drive it (classifyStalledPR also excludes it, but skip the

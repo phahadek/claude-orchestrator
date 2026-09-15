@@ -1,4 +1,5 @@
 import { logger } from '../logger';
+import { yieldToEventLoop } from '../utils/concurrency';
 import {
   getSession,
   listStagedIntentsByGroup,
@@ -1248,7 +1249,9 @@ export class PlanningOrchestrator {
    * guard is untouched — a session this sweep terminalizes is reclaimed by
    * that archiver unchanged, on its own normal cadence.
    */
-  sweepIdleTerminalSessions(nowFn: () => number = () => Date.now()): number {
+  async sweepIdleTerminalSessions(
+    nowFn: () => number = () => Date.now(),
+  ): Promise<number> {
     const cutoffMs =
       nowFn() -
       runtimeSettings.idle_planning_terminal_sweep_age_floor_minutes * 60_000;
@@ -1257,6 +1260,13 @@ export class PlanningOrchestrator {
 
     const terminalizedIds: string[] = [];
     for (const row of candidates) {
+      // The common path below (isProcessAlive / isSessionCompleteForIdleSweep
+      // / markTerminal) is fully synchronous sqlite work with no I/O await —
+      // across every idle planning session fleet-wide, that never yields to
+      // the event loop. Same fix pattern as TaskCacheRefresher's
+      // per-milestone loop.
+      await yieldToEventLoop();
+
       // Defensive regression guard: status='idle' should already imply no
       // live process, but never destroy live work on that assumption
       // alone. Checked against the real OS process (isProcessAlive), not
@@ -1307,7 +1317,7 @@ export class PlanningOrchestrator {
       enabled: () => runtimeSettings.idle_planning_terminal_sweep_enabled,
       concurrency: 'skip-if-running',
       run: async () => {
-        const items_processed = this.sweepIdleTerminalSessions();
+        const items_processed = await this.sweepIdleTerminalSessions();
         return { items_processed };
       },
     });

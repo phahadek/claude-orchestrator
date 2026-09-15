@@ -175,6 +175,48 @@ describe('ConvergenceSnapshotJob per-milestone failure isolation', () => {
   });
 });
 
+describe('ConvergenceSnapshotJob event-loop yielding', () => {
+  it('interleaves with a macrotask scheduled mid-tick instead of running the whole milestone loop as one synchronous burst', async () => {
+    const milestones = [
+      milestone({ id: 'ms-1', name: 'M1', canonicalShortId: 'M1' }),
+      milestone({ id: 'ms-2', name: 'M2', canonicalShortId: 'M2' }),
+      milestone({ id: 'ms-3', name: 'M3', canonicalShortId: 'M3' }),
+    ];
+    projectServiceMock.ProjectService.listMilestones.mockReturnValue(
+      milestones,
+    );
+    (getLatestConvergenceSnapshot as any).mockReturnValue(undefined);
+
+    let sampledCount = 0;
+    (getMilestoneConvergence as any).mockImplementation(() => {
+      sampledCount++;
+      return convergence();
+    });
+
+    const job = new ConvergenceSnapshotJob({
+      listProjects: () => [{ id: 'proj-1' } as any],
+    });
+
+    const runPromise = job.runOnce();
+
+    // Scheduled with setImmediate right after starting the tick (but before
+    // awaiting it): if runOnce truly yields to the event loop per milestone,
+    // this fires interleaved mid-loop — some but not all milestones sampled.
+    // Pre-fix, the loop ran fully synchronously with no await point at all,
+    // so this would only ever observe 0 or milestones.length, never a
+    // partial count.
+    const midTickCount = await new Promise<number>((resolve) => {
+      setImmediate(() => resolve(sampledCount));
+    });
+
+    await runPromise;
+
+    expect(midTickCount).toBeGreaterThan(0);
+    expect(midTickCount).toBeLessThan(milestones.length);
+    expect(sampledCount).toBe(milestones.length);
+  });
+});
+
 describe('ConvergenceSnapshotJob ops axis key space', () => {
   it('queries getOpsReadiness and listOpsJournalEntries by the milestone UUID, not the display name', async () => {
     projectServiceMock.ProjectService.listMilestones.mockReturnValue([

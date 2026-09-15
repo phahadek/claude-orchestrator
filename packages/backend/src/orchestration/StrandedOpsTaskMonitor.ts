@@ -12,6 +12,7 @@ import {
   hasPendingDecisionForTask,
 } from '../db/queries';
 import { recordEvent, hasStrandedOpsSurfacedEvent } from '../audit/AuditLog';
+import { yieldToEventLoop } from '../utils/concurrency';
 
 /** Task types this monitor watches — the two non-Code types OrphanedTaskSweeper exempts once their ops_journal advances past pending. */
 const WATCHED_TYPES = new Set(['🔎 Investigation', '🔧 Operational']);
@@ -93,6 +94,12 @@ export class StrandedOpsTaskMonitor {
       }
 
       for (const resolved of tasks) {
+        // checkTask is fully synchronous (several sqlite lookups, no I/O
+        // await), so nothing in this loop otherwise ever returns control to
+        // the event loop across every In Progress task in every project.
+        // Same fix pattern as TaskCacheRefresher's per-milestone loop.
+        await yieldToEventLoop();
+
         const taskId = resolved.task.id;
         if (!taskId || seen.has(taskId)) continue;
         seen.add(taskId);
