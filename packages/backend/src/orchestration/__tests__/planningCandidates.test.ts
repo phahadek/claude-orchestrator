@@ -644,7 +644,10 @@ function insertGroomIntent(overrides: Partial<StagedIntentRow> = {}): void {
   const row: StagedIntentRow = {
     id: `intent-${Math.random()}`,
     kind: 'task.setStatus',
-    payload: JSON.stringify({ taskId: 'notion:task-open-group', status: '🗂️ Ready' }),
+    payload: JSON.stringify({
+      taskId: 'notion:task-open-group',
+      status: '🗂️ Ready',
+    }),
     payload_hash: `hash-${Math.random()}`,
     task_id: 'notion:task-open-group',
     project_id: 'proj-1',

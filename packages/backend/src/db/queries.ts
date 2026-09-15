@@ -11510,7 +11510,10 @@ function findSuppressingNoOpForTask(
     ) {
       break;
     }
-    if (predecessor.state === 'committed' || predecessor.state === 'superseded') {
+    if (
+      predecessor.state === 'committed' ||
+      predecessor.state === 'superseded'
+    ) {
       return predecessor;
     }
     current = predecessor;
