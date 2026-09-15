@@ -355,7 +355,11 @@ describe('reopenSeedItem', () => {
     appendSeedItemEvent(item.id, { outcome: 'applied', operator: 'pedro' });
     expect(getSeedItem(item.id)?.state).toBe('applied');
 
-    const updated = reopenSeedItem(item.id, 'pedro', 'recorded applied in error');
+    const updated = reopenSeedItem(
+      item.id,
+      'pedro',
+      'recorded applied in error',
+    );
     expect(updated.state).toBe('pending');
     expect(updated.events.map((e) => e.outcome)).toEqual([
       'applied',

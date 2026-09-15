@@ -180,7 +180,14 @@ export function rehomeSeedItem({ host, port, token, seedItemId, milestone }) {
   });
 }
 
-export function reopenSeedItem({ host, port, token, seedItemId, reason, operator }) {
+export function reopenSeedItem({
+  host,
+  port,
+  token,
+  seedItemId,
+  reason,
+  operator,
+}) {
   return requestSeedState({
     host,
     port,
