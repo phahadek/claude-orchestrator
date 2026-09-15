@@ -657,8 +657,16 @@ describe('checkReadiness — Declared writes section', () => {
 describe('hashReadinessViolations', () => {
   it('is order-independent — the same violation set in a different order hashes identically', () => {
     const a = [
-      { tier: 'structural' as const, detail: 'missing Deliverables', location: 'body' },
-      { tier: 'lexical' as const, detail: 'deferral phrase found', location: 'line 3' },
+      {
+        tier: 'structural' as const,
+        detail: 'missing Deliverables',
+        location: 'body',
+      },
+      {
+        tier: 'lexical' as const,
+        detail: 'deferral phrase found',
+        location: 'line 3',
+      },
     ];
     const b = [a[1], a[0]];
     expect(hashReadinessViolations(a)).toBe(hashReadinessViolations(b));
@@ -666,10 +674,18 @@ describe('hashReadinessViolations', () => {
 
   it('differs when the violation set actually differs', () => {
     const a = [
-      { tier: 'structural' as const, detail: 'missing Deliverables', location: 'body' },
+      {
+        tier: 'structural' as const,
+        detail: 'missing Deliverables',
+        location: 'body',
+      },
     ];
     const b = [
-      { tier: 'structural' as const, detail: 'Deliverables section is empty', location: 'body' },
+      {
+        tier: 'structural' as const,
+        detail: 'Deliverables section is empty',
+        location: 'body',
+      },
     ];
     expect(hashReadinessViolations(a)).not.toBe(hashReadinessViolations(b));
   });

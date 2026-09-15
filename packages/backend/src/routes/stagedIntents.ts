@@ -7325,7 +7325,10 @@ function evaluateReadinessRetryCap(
  * intent kind.
  */
 function resetReadinessRetryCapOnBodyCommit(intent: StagedIntent): void {
-  if (intent.kind !== 'task.updateBody' && intent.kind !== 'task.patchBodySection') {
+  if (
+    intent.kind !== 'task.updateBody' &&
+    intent.kind !== 'task.patchBodySection'
+  ) {
     return;
   }
   const taskId = (intent.payload as { taskId?: string })?.taskId;
