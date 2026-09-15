@@ -436,16 +436,29 @@ function resolveProjectTaskSource(
  * turn (sharing the same `message.id`) — first text, then tool_use — so we must
  * accumulate rather than replace.
  */
-function mergeAssistantContent(
+export function mergeAssistantContent(
   existing: Array<Record<string, unknown>>,
   incoming: Array<Record<string, unknown>>,
 ): Array<Record<string, unknown>> {
   const existingText = existing.filter((b) => b.type === 'text');
   const incomingText = incoming.filter((b) => b.type === 'text');
 
-  // Prefer incoming text blocks (they contain the most up-to-date streamed content).
   // If the incoming event has no text blocks, preserve the existing ones.
-  const textBlocks = incomingText.length > 0 ? incomingText : existingText;
+  // Otherwise, decide whether incoming text is a cumulative re-send of the
+  // in-progress text run (the common streaming case — replace the last
+  // segment) or a genuinely new, non-contiguous segment because a tool_use
+  // (or other non-text block) intervened since the last text arrived (keep
+  // both, in arrival order, so neither is lost).
+  let textBlocks: Array<Record<string, unknown>>;
+  if (incomingText.length === 0) {
+    textBlocks = existingText;
+  } else {
+    const lastExistingBlock = existing[existing.length - 1];
+    textBlocks =
+      lastExistingBlock?.type === 'text'
+        ? [...existingText.slice(0, -1), ...incomingText]
+        : [...existingText, ...incomingText];
+  }
 
   // Merge tool_use blocks by id so we don't duplicate them across streaming events.
   const toolUseById = new Map<string, Record<string, unknown>>();
