@@ -4,7 +4,11 @@ import fs from 'fs';
 import path from 'path';
 import { GITHUB_REPO, runtimeSettings, getProjectById } from '../config';
 import { getCorporateMode } from '../config/corporateMode';
-import type { GateItemClassification, StructuredTestResult } from '../db/types';
+import type {
+  GateItemClassification,
+  StructuredTestResult,
+  TestRequestRunRow,
+} from '../db/types';
 import { isVacuousResult } from './test-runner';
 import { getOrchestratorConfig } from '../config/appConfig';
 import { mintStageCredential } from '../auth/SessionStageAuth';
@@ -47,6 +51,8 @@ import {
   setTaskPauseReason,
   setHumanMergeOnly,
   getLatestTestRequestRun,
+  getFailingTestIdsForRun,
+  getUnexcusedFailingTestIdsForRun,
   setSessionLastErrorDetail,
   archiveSession,
   TERMINAL_SESSION_STATUSES,
@@ -166,6 +172,28 @@ export const MAX_REBASE_NUDGES = 3;
  */
 export function isWorkflowScopeDenied(msg: string): boolean {
   return /refusing to allow.*without `workflow` scope/.test(msg);
+}
+
+/**
+ * Whether a test_request run satisfies the pre-PR test gate: either it
+ * passed outright, or it failed but every one of its failing test_ids
+ * carries the excused marker (markTestResultExcused, written by
+ * flaky.confirm(gate:'test_request') or the base-attributable filter) —
+ * see the "Pre-PR flaky marking" design amendment. A failed run with no
+ * per-test detail at all (nothing recorded as failed/errored) never
+ * satisfies the gate through this path — there is nothing to have excused,
+ * so it falls back to requiring a genuine pass. Any single un-marked
+ * failing test still blocks. Exported for unit testing.
+ */
+export function testRequestRunSatisfiesGate(
+  run: TestRequestRunRow | undefined,
+): boolean {
+  if (!run) return false;
+  if (run.state === 'passed') return true;
+  if (run.state !== 'failed') return false;
+  const failing = getFailingTestIdsForRun(run.id);
+  if (failing.length === 0) return false;
+  return getUnexcusedFailingTestIdsForRun(run.id).length === 0;
 }
 
 /**
@@ -2300,6 +2328,8 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     const scopedRun = contentHash
       ? getLatestTestRequestRun(this.projectId, contentHash, 'scoped')
       : undefined;
+    const fullRunSatisfiesGate = testRequestRunSatisfiesGate(fullRun);
+    const scopedRunSatisfiesGate = testRequestRunSatisfiesGate(scopedRun);
     // A scoped pass whose base_sha is set (base-relative scoping) only
     // satisfies the gate if it still matches the branch's current base —
     // otherwise it was computed against a since-superseded base. A scoped
@@ -2307,7 +2337,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     // base drift. Best-effort: a failed lookup here just makes a base-sha'd
     // scoped row not satisfy the gate, falling back to requiring a full pass.
     let currentBaseSha: string | null = null;
-    if (scopedRun?.state === 'passed' && scopedRun.base_sha != null) {
+    if (scopedRunSatisfiesGate && scopedRun?.base_sha != null) {
       try {
         execSync(`git fetch origin ${baseBranch}`, {
           cwd: this.worktreePath,
@@ -2326,9 +2356,9 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       }
     }
     const scopedPasses =
-      scopedRun?.state === 'passed' &&
-      (scopedRun.base_sha == null || scopedRun.base_sha === currentBaseSha);
-    const gatePasses = fullRun?.state === 'passed' || scopedPasses;
+      scopedRunSatisfiesGate &&
+      (scopedRun?.base_sha == null || scopedRun?.base_sha === currentBaseSha);
+    const gatePasses = fullRunSatisfiesGate || scopedPasses;
     if (!gatePasses) {
       sessionLog(
         this.sessionId,
@@ -2364,7 +2394,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     // and that absence must not be conflated with an attempted-but-empty
     // acquisition (isVacuousResult(null) === true), or every project
     // without structured reporting would be permanently blocked here.
-    const winningRun = fullRun?.state === 'passed' ? fullRun : scopedRun;
+    const winningRun = fullRunSatisfiesGate ? fullRun : scopedRun;
     const acquisitionAttempted = Boolean(
       winningRun?.test_report_acquisition_attempted,
     );
