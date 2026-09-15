@@ -241,4 +241,47 @@ describe('testHealth.getFlakyHistory', () => {
       },
     ]);
   });
+
+  it('with no testId, still returns a tracking row for a test that has dropped out of the rollup', async () => {
+    insertRollupRow({
+      projectId: PROJECT_ID,
+      testId: 'test-still-flaky',
+      name: 'test-still-flaky.ts',
+      sampleCount: 10,
+      transitionCount: 4,
+    });
+    insertTrackingRow({
+      projectId: PROJECT_ID,
+      testId: 'test-fixed-and-unrolled',
+      remediationTaskId: 'notion:task-2',
+      remediationTaskOpen: false,
+    });
+
+    const { client, close } = await connectedClient();
+    const result = resultOf(
+      (await client.callTool({
+        name: 'testHealth.getFlakyHistory',
+        arguments: {},
+      })) as { content: Array<{ type: string; text?: string }> },
+    );
+    await close();
+
+    expect(result.rollup).toEqual([
+      {
+        testId: 'test-still-flaky',
+        name: 'test-still-flaky.ts',
+        sampleCount: 10,
+        transitionCount: 4,
+      },
+    ]);
+    expect(result.tracking).toEqual([
+      {
+        testId: 'test-fixed-and-unrolled',
+        remediationTaskId: 'notion:task-2',
+        remediationTaskOpen: false,
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-02T00:00:00Z',
+      },
+    ]);
+  });
 });
