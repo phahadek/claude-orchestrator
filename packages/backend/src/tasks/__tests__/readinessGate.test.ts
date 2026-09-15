@@ -90,7 +90,7 @@ describe('checkReadiness — Tier 2 (lexical)', () => {
   });
 
   it('flags "implementer\'s call" in prose', () => {
-    const body = 'The exact retry count is the implementer\'s call.';
+    const body = "The exact retry count is the implementer's call.";
     const violations = checkReadiness(body);
     expect(violations.some((v) => v.tier === 'lexical')).toBe(true);
   });
@@ -114,7 +114,8 @@ describe('checkReadiness — Tier 2 (lexical)', () => {
   });
 
   it('flags "implementer\'s-call punt" in prose', () => {
-    const body = 'This was an implementer\'s-call punt that should have been resolved at grooming.';
+    const body =
+      "This was an implementer's-call punt that should have been resolved at grooming.";
     const violations = checkReadiness(body);
     expect(violations.some((v) => v.tier === 'lexical')).toBe(true);
   });
