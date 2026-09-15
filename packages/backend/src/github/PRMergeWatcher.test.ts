@@ -42,7 +42,19 @@ vi.mock('../config.js', () => ({
     id: 'proj-1',
     projectDir: '/fake/project',
   }),
+  getProjectById: vi.fn().mockReturnValue({
+    id: 'proj-1',
+    projectDir: '/fake/project',
+  }),
   AUTO_REVIEW_ENABLED: true,
+  // Only consumed by the real AutoMerger constructed in the "becomes-clean
+  // re-drive — real AutoMerger eligibility gate" describe block below; every
+  // other test in this file drives AutoMerger via a spy double instead.
+  runtimeSettings: {
+    ci_poll_interval_seconds: 1,
+    ci_poll_max_minutes: 1,
+    auto_merge_failed_clear_minutes: 10,
+  },
 }));
 
 vi.mock('../session/orchestrator-config.js', () => ({
