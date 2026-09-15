@@ -2160,6 +2160,15 @@ describe('classifyWorktreeTeardownRefusal', () => {
     ).toEqual({ expected: true });
   });
 
+  it('classifies a review/depth_review session with no worktree of its own as expected', () => {
+    expect(
+      classifyWorktreeTeardownRefusal('review', PROJECT_DIR, PROJECT_DIR),
+    ).toEqual({ expected: true });
+    expect(
+      classifyWorktreeTeardownRefusal('depth_review', PROJECT_DIR, PROJECT_DIR),
+    ).toEqual({ expected: true });
+  });
+
   it('classifies a worktree-owning session type presenting a non-removable path as anomalous, with a reason', () => {
     const result = classifyWorktreeTeardownRefusal(
       'standard',

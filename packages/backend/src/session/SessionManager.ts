@@ -585,10 +585,7 @@ export function classifyWorktreeTeardownRefusal(
   projectDir: string,
   docsTargetSurface?: string,
 ): WorktreeTeardownRefusalClassification {
-  if (
-    isPlanningSession(sessionType) &&
-    !usesWorktree(sessionType, docsTargetSurface)
-  ) {
+  if (!usesWorktree(sessionType, docsTargetSurface)) {
     return { expected: true };
   }
   return {
