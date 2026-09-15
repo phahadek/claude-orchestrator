@@ -41,6 +41,7 @@ type EventType =
   | 'session_done_deferred_while_running'
   | 'session_done_deferred_applied'
   | 'session_idle_write_skipped_terminal'
+  | 'session_done_write_skipped_terminal'
   | 'session_errored_write_skipped_terminal'
   | 'session_errored_write_skipped_open_pr'
   | 'session_terminal_reopened'
