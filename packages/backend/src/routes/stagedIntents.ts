@@ -6313,7 +6313,8 @@ async function resolveTestCommandsForDiff(
   worktreePath: string,
   baseBranch: string,
 ): Promise<{ commands: string[]; runKind: 'scoped' | 'full' }> {
-  if (!config.test_scoped?.length) return { commands: config.test, runKind: 'full' };
+  if (!config.test_scoped?.length)
+    return { commands: config.test, runKind: 'full' };
   const diffPaths = await getChangedFiles(worktreePath, baseBranch);
   if (matchesPathDiff(config.test_full_run_paths, diffPaths)) {
     return { commands: config.test, runKind: 'full' };
