@@ -39,6 +39,7 @@ import {
   type FailingTest,
 } from '../orchestration/baseAttributableFilter';
 import { recordEvent } from '../audit/AuditLog';
+import { yieldToEventLoop } from '../utils/concurrency';
 import { closeFlakyRemediationTaskIfLinked } from '../audit/flakyRemediationFiling';
 import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow, TestRequestRunRow } from '../db/types';
@@ -428,7 +429,7 @@ export class PRMergeWatcher extends EventEmitter {
   async poll(): Promise<void> {
     if (isGitHubRateLimitActive(this.broadcast)) return;
     this.sweepStalePendingReReviews();
-    this.sweepPendingPushDeadLetters();
+    await this.sweepPendingPushDeadLetters();
     this.autoMerger?.clearStalePauses();
     const silentMerges = this.firstPollPending;
     const openPRs = getAllOpenPRs();
@@ -2076,10 +2077,16 @@ export class PRMergeWatcher extends EventEmitter {
    * review in flight (e.g. pushed after gate-failure, or after a backend restart
    * interrupted the consumption path). Consumes the flag and enqueues a review.
    */
-  private sweepPendingPushDeadLetters(): void {
+  private async sweepPendingPushDeadLetters(): Promise<void> {
     if (!AUTO_REVIEW_ENABLED || !this.reviewOrchestrator) return;
     const prs = getAllOpenPRs();
     for (const pr of prs) {
+      // Every open PR fleet-wide is checked here with no I/O await inside —
+      // purely synchronous sqlite/Map lookups and shouldAutoReview's pure
+      // computation. Same fix pattern as TaskCacheRefresher's per-milestone
+      // loop.
+      await yieldToEventLoop();
+
       if (!pr.pending_push) continue;
       if (this.reviewOrchestrator.isReviewInFlight(pr.pr_number, pr.repo))
         continue;
