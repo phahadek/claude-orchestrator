@@ -11463,25 +11463,81 @@ function getLatestNoOpForTask(taskId: string): StagedIntentRow | undefined {
     | undefined;
 }
 
+/** States in which a planning.noOp is still awaiting operator disposition — see findSuppressingNoOpForTask. */
+const NOOP_UNDISPOSITIONED_STATES: ReadonlySet<StagedIntentState> = new Set([
+  'staged',
+  'needs_revision',
+  'pending_verification',
+]);
+
+/**
+ * The planning.noOp that actually governs a task's suppression, walking
+ * past a fresh, still-undispositioned latest no-op to the standing
+ * conclusion it merely restages. A repeated groom/design/ops pass that finds
+ * nothing new to decide re-stages `planning.noOp`, which — via the dedup
+ * mechanism in stagedIntents.ts — auto-supersedes the task's prior *active*
+ * no-op (never a committed one; findActiveStagedIntentForTask only searches
+ * staged/approved). Taking the literal newest row by created_at would treat
+ * that fresh restage's own `staged` state as "nothing decided yet" and drop
+ * suppression, even though every pass so far reached the identical
+ * conclusion with no operator ever weighing in — exactly the pattern that
+ * let a dispatcher relaunch the same task over and over. So when the latest
+ * no-op is itself still undispositioned, this walks back one or more hops
+ * through its `supersedes` chain (only through other planning.noOp rows for
+ * the same task) to the most recent ancestor that represents a real
+ * standing conclusion — `committed`, or itself `superseded` (meaning some
+ * later no-op in the chain reaffirmed it) — and uses that ancestor instead.
+ * An explicit terminal disposition as the latest row (`rejected`,
+ * `withdrawn`) is never walked past: that is an operator (or the session
+ * itself) actively overriding the standing conclusion, not an automatic
+ * restage, so it must not fall back to an earlier no-op.
+ */
+function findSuppressingNoOpForTask(
+  taskId: string,
+): StagedIntentRow | undefined {
+  const latest = getLatestNoOpForTask(taskId);
+  if (!latest) return undefined;
+  if (latest.state === 'committed') return latest;
+  if (!NOOP_UNDISPOSITIONED_STATES.has(latest.state)) return undefined;
+
+  let current = latest;
+  while (current.supersedes) {
+    const predecessor = getStagedIntent(current.supersedes);
+    if (
+      !predecessor ||
+      predecessor.kind !== 'planning.noOp' ||
+      predecessor.task_id !== taskId
+    ) {
+      break;
+    }
+    if (predecessor.state === 'committed' || predecessor.state === 'superseded') {
+      return predecessor;
+    }
+    current = predecessor;
+  }
+  return undefined;
+}
+
 /**
  * True while a task's most recent planning.noOp still suppresses
  * auto-grooming candidacy AND re-dispatch/orphan-revert candidacy (see
  * orchestration/planningCandidates.ts, orchestration/AutoLauncher.ts, and
  * orchestration/OrphanedTaskSweeper.ts — the single predicate every
- * candidacy/revert check must consult, never a parallel one). Only a no-op
- * that reached `committed` represents an accepted decision — staged,
- * rejected and superseded carry no acceptance and never suppress.
- * Suppression is derived from the committed intent itself, not from the
- * staging session's status, so it holds after that session reaches a
- * terminal state (see isGroomCandidate). It retires the moment a
- * task_body_updated or task_deps_updated audit event lands for the task
- * after the no-op's commit timestamp (its `updated_at`) — the conditions the
- * no-op was reasoned against changing reopens candidacy with no operator
- * action required.
+ * candidacy/revert check must consult, never a parallel one). A no-op
+ * suppresses once it (or an ancestor it restages — see
+ * findSuppressingNoOpForTask) reached `committed`, or was `superseded` by a
+ * later no-op in the same chain; a standalone `staged`/`rejected` no-op with
+ * nothing behind it never suppresses. Suppression is derived from the
+ * governing intent itself, not from the staging session's status, so it
+ * holds after that session reaches a terminal state (see isGroomCandidate).
+ * It retires the moment a task_body_updated or task_deps_updated audit event
+ * lands for the task after the governing no-op's timestamp (its
+ * `updated_at`) — the conditions the no-op was reasoned against changing
+ * reopens candidacy with no operator action required.
  */
 export function isNoOpSuppressed(taskId: string): boolean {
-  const noOp = getLatestNoOpForTask(taskId);
-  if (!noOp || noOp.state !== 'committed') return false;
+  const noOp = findSuppressingNoOpForTask(taskId);
+  if (!noOp) return false;
   return !hasTaskEditSinceTimestamp(taskId, noOp.updated_at);
 }
 
@@ -12006,6 +12062,58 @@ export function findOpenGroupForTask(
     ...OPEN_DECISION_GROUP_STATES,
   ) as { group_id: string; session_id: string | null } | undefined;
   return row ? { groupId: row.group_id, sessionId: row.session_id } : null;
+}
+
+/** Staged-intent kinds a groom pass emits — task.setStatus/setDependsOn/updateBody/patchBodySection (the task-edit proposals), plus gate.accrete and seed.stage (the gate/seed groom sub-flows). */
+const GROOM_FLOW_INTENT_KINDS: readonly string[] = [
+  'task.setStatus',
+  'task.setDependsOn',
+  'task.updateBody',
+  'task.patchBodySection',
+  'gate.accrete',
+  'seed.stage',
+];
+
+/** States in which a groom decision group still awaits operator disposition — narrower than OPEN_DECISION_GROUP_STATES (excludes pending_verification, which isNoOpSuppressed-adjacent callers don't need here). */
+const OPEN_GROOM_GROUP_STATES: readonly StagedIntentState[] = [
+  'staged',
+  'approved',
+  'needs_revision',
+];
+
+let _stmtHasOpenGroomGroupForTask: Database.Statement | null = null;
+
+/**
+ * True while this task has any groom-flow staged_intent (see
+ * GROOM_FLOW_INTENT_KINDS) still awaiting operator disposition — regardless
+ * of the staging session's status. A groom session that stages a decision
+ * and then goes `done` (readiness-gate rejections, a closed turn, a crash)
+ * leaves that decision group open; only the operator closing it (commit,
+ * reject, or the session's own withdraw) releases the task, never the
+ * session reaching a terminal status. Consulted by isGroomCandidate so the
+ * dispatcher doesn't keep relaunching groom sessions against a task whose
+ * prior session already produced a decision nobody has acted on yet — each
+ * relaunch would only restage the same conclusion, or worse, a conflicting
+ * one, while the original group still sits unresolved. `taskId` is run
+ * through normalizeTaskId so a bare Notion UUID and its `notion:`-prefixed,
+ * canonically-hyphenated form both match the same persisted column value.
+ */
+export function hasOpenGroomGroupForTask(taskId: string): boolean {
+  const normalized = normalizeTaskId(taskId);
+  _stmtHasOpenGroomGroupForTask ??= db.prepare<unknown[]>(
+    `SELECT 1 FROM staged_intent
+     WHERE task_id = ?
+       AND kind IN (${GROOM_FLOW_INTENT_KINDS.map(() => '?').join(', ')})
+       AND state IN (${OPEN_GROOM_GROUP_STATES.map(() => '?').join(', ')})
+     LIMIT 1`,
+  );
+  return (
+    _stmtHasOpenGroomGroupForTask.get(
+      normalized,
+      ...GROOM_FLOW_INTENT_KINDS,
+      ...OPEN_GROOM_GROUP_STATES,
+    ) !== undefined
+  );
 }
 
 let _stmtFindOpenGroupOwnerSessions: Database.Statement | null = null;

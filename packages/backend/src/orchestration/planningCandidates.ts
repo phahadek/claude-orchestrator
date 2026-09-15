@@ -176,6 +176,15 @@ export interface GroomCandidateDeps {
    * despite the operator's explicit stop.
    */
   isKillSuppressed: (taskId: string) => boolean;
+  /**
+   * True while this task already has an open (undispositioned) groom
+   * decision group — see hasOpenGroomGroupForTask in db/queries.ts.
+   * Independent of the staging session's status: a `done` owner does not
+   * release the group, only an operator disposition (or the session's own
+   * withdraw) does, so this must be consulted even when hasActiveGroomSession
+   * is false.
+   */
+  hasOpenGroomGroup: (taskId: string) => boolean;
 }
 
 /**
@@ -184,8 +193,9 @@ export interface GroomCandidateDeps {
  * (running or parked idle) groom session already handles it, it isn't
  * within its crash-budget cooldown, its most recent planning.noOp (if any)
  * isn't a still-standing committed suppression, its most recent groom
- * session (if any) wasn't ended by an unresolved operator kill, and every
- * Depends-On clears the groom dep-gate.
+ * session (if any) wasn't ended by an unresolved operator kill, it has no
+ * open (undispositioned) groom decision group awaiting the operator, and
+ * every Depends-On clears the groom dep-gate.
  */
 export function isGroomCandidate(
   task: NotionTask,
@@ -197,6 +207,7 @@ export function isGroomCandidate(
   if (deps.inCrashCooldown(task.id)) return false;
   if (deps.isNoOpSuppressed(task.id)) return false;
   if (deps.isKillSuppressed(task.id)) return false;
+  if (deps.hasOpenGroomGroup(task.id)) return false;
   return passesGroomDepGate(task, deps.tasksById, deps.resolveDep);
 }
 

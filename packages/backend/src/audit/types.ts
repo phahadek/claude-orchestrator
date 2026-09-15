@@ -187,7 +187,8 @@ type EventType =
   | 'review_verdict_overwrite_suppressed'
   | 're_review_skipped_pr_terminal'
   | 'task_revert_check_failed'
-  | 'stale_task_pause_reasons_swept';
+  | 'stale_task_pause_reasons_swept'
+  | 'groom_candidate_suppressed';
 
 type ActorType = 'ai' | 'human' | 'system';
 
