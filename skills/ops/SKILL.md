@@ -199,6 +199,13 @@ filtered to two event types, dropping **489 of 571 events**, while the preceding
 printed the type histogram proving it — the number was generated, then ignored, and the remainder was
 reported as complete.
 
+**A fraction is a claim about what the excluded part *contains*, not only how many.** Stating "E
+only affects 9% of attribution segments" reads as low-impact until you check what's in that 9% —
+those 82 windows in a real run were exactly the stage-day parallel-stream slots, the live match
+chat, and the small percentage hid that entirely. Before citing a coverage/exclusion fraction as
+evidence of low impact, state what the excluded (or included) rows **are**, by value — never the
+count alone.
+
 **A zero or a thin result is a claim about the instrument before it is a claim about the world.**
 Before reporting any zero, confirm the comparison can be true at all: types match (an ISO string
 compared against **epoch-ms** columns matches nothing, ever), the filter value equals what the
@@ -321,6 +328,17 @@ conclusions.
   spends the operator's scrutiny defending a guess.
 - **Treat a registered number as a claim to re-derive, never a fact.** A prior task's stated
   figures, a "known" count — re-derive it from live data before you build on it.
+- **A degenerate/zero reading is attributed only after replicating the *producer's own predicate*
+  on one scope by value — never from the shape of the inputs.** A plausible-sounding input-side
+  explanation ("thin prices", "the destroyed tag corpus", "sparse tags on outrights") is not a
+  finding until you have run the producer's own query on one concrete scope — its CTE (e.g. a
+  stage1 `post_counts` CTE), its funnel counters, its run-duration/crash record — and read what it
+  says by value. Real run: three separate degenerate readings, each initially explained by a
+  plausible input-side cause, each turned out to be something else entirely once the producer's own
+  predicate was run — markets closed before the pairing window, a cohort fan-out that had replaced
+  the channel scope, sub-horizon burst slices, and a 10-hour actor crash loop a deploy-health check
+  reported as healthy. The tell that you're still guessing from input shape: you can name a cause but
+  not the producer's own query/counter that shows it.
 - **Read outputs by *value*, not by row-count/existence, and check provenance.** N rows of
   zero/degenerate output looks identical to real work; a row's presence never proves it's current
   or correct (version + timestamp vs the relevant deploy). **Before concluding 0 / dark / broken,
@@ -554,7 +572,13 @@ that actuation here.
    **consult the source-of-truth doc before interpreting any zero/anomaly** (Investigation
    discipline); then work it to its **mode's autonomous ceiling** (matrix above); journal the
    evidence + `state`. File Backlog tasks for gaps; freeze+capture incidents. Never let one blocker
-   stall the run.
+   stall the run. **Any "why only N rows?" / low-volume question is answered from the producer's own
+   run record FIRST** — run count, run-duration metrics, actor-crash/restart history (§ Evidence law,
+   "S's own record") — before it gets classified as a property of the analyzer/query itself. Do this
+   as the first move on the question, not as a check applied after a classification is already
+   drafted: a real run walked past `lead_lag_v1 = 70 rows` as an analyzer property, with deploy-health
+   reporting the service healthy, and only the run record (7 runs in 20h, a Postgres-restart wedge)
+   showed the true cause.
 
    > **GATE — do not start step 5 (resolving) until step 3 has advanced _every_ journal entry off
    > `pending`.** The ops-context load seeds one `ops_journal` row per eligible task at `pending`;
@@ -646,7 +670,11 @@ when the operator's prior reply was a terse "LGTM" / "good," do **not** fast-for
 done, on to the next": present the close, let them confirm. The operator wants that turn.
 **The close turn contains ONLY the current task's outcome + its filed follow-ons — never the next
 task, never a run-level summary.** Bundling the next task or a summary onto the close buries the
-review; the next task opens in its own message *after* this one is confirmed.
+review; the next task opens in its own message *after* this one is confirmed. **This also excludes
+arm-state / groom-mechanics narration** — e.g. "groom is armed on M15, so this will be picked up on
+its own." Whether some *other* task gets auto-dispatched is neither this task's outcome nor one of
+its filed follow-ons; it is not this session's to assert in a close, the same way arm state is not
+this session's to pre-flight before filing a task.
 
 **When is a task Done? (propose it — the operator confirms.)**
 - **🔎 Investigation** is Done only when the **root cause is proven** — the mechanism demonstrated

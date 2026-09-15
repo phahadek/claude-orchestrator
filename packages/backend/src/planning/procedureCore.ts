@@ -545,6 +545,61 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'on what the digest and the parts of the task reachable without it actually show.',
   },
   {
+    id: 'no-arm-state-narration-in-close',
+    title: 'No arm-state narration in a task close',
+    appliesTo: ['ops'],
+    text:
+      'The closing-synthesis `task.updateBody` (or journal note) for a {skillLabel} task ' +
+      "carries ONLY that task's own outcome and its filed follow-ons — the same scope a " +
+      'run-level summary is already excluded from. DO NOT add commentary on milestone/flow ' +
+      "arm state, groom-mechanics, or whether some other task 'will be picked up on its " +
+      "own' — that is neither this task's outcome nor one of its follow-ons, and is not " +
+      "this session's to assert. DO state the outcome and the filed follow-ons only; say " +
+      'nothing about what happens to other tasks next.',
+  },
+  {
+    id: 'replicate-producer-predicate-before-degeneracy',
+    title:
+      "Replicate the producer's own predicate before attributing a degenerate reading",
+    appliesTo: ['ops'],
+    text:
+      'DO attribute a degenerate or zero analyzer/pipeline reading to a cause ONLY after ' +
+      "replicating the producer's OWN predicate on one concrete scope, by value — its own " +
+      "CTE, its own funnel counters, its own run record — run the producer's actual " +
+      'query/counter against one scope before naming a mechanism. DO NOT accept a ' +
+      'plausible-sounding input-side explanation ("thin prices", "sparse tags", "a ' +
+      'destroyed corpus") as the finding merely because it fits the shape of the inputs — ' +
+      'three real cases tried exactly that and each hid a different, provable mechanism (a ' +
+      'pairing-window/closed-market timing bug, a cohort fan-out that replaced the channel ' +
+      'scope, a sub-horizon burst slice, and a crash loop) that only surfaced once the ' +
+      "producer's own predicate was run.",
+  },
+  {
+    id: 'denominators-by-content',
+    title: 'A fraction is a claim about content, not only count',
+    appliesTo: ['ops'],
+    text:
+      'DO state what the excluded or included part of a fraction *contains*, by value, ' +
+      'before citing it as evidence of impact — a coverage/exclusion fraction ("E affects ' +
+      '9% of segments") is a claim about content, not just magnitude. DO NOT report a ' +
+      'fraction as evidence of low impact without first checking by value what falls in ' +
+      "it — a real case's excluded rows were exactly the stage-day parallel-stream slots " +
+      '(the live match chat), which the count alone hid completely.',
+  },
+  {
+    id: 'run-record-first-for-volume-questions',
+    title: '"Why only N rows?" is answered from the run record first',
+    appliesTo: ['ops'],
+    text:
+      'DO answer any volume question ("why only N rows", "why so few") by reading the ' +
+      "producer's OWN run record — run count, run-duration metrics, actor-crash/restart " +
+      'history — as the FIRST step, before treating the count as a property of the ' +
+      'analyzer/query itself. DO NOT let a health/status field substitute for the run ' +
+      'record — a real case classified a 70-row analyzer output as an analyzer property ' +
+      'while deploy-health reported the service healthy, and only the run record (7 runs ' +
+      'in 20h, a Postgres-restart wedge) showed the true cause.',
+  },
+  {
     id: 'groom-deliverable-is-a-decision-about-the-task',
     title: "A groom session's deliverable is a decision about the task",
     appliesTo: ['groom'],
