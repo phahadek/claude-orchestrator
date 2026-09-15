@@ -16,6 +16,7 @@ import {
   getTaskCache,
   hasActivePlanningSessionForTask,
   hasActiveSessionForTask,
+  hasOpenGroomGroupForTask,
   isNoOpSuppressed,
   isPlanningKillSuppressed,
   listMilestonesByProject,
@@ -169,6 +170,9 @@ export class DispatchTriggerEvaluator {
     { rawJson: string; parsed: NotionTask[] }
   >();
 
+  /** Tasks already audited as groom_candidate_suppressed this tick — reset at the top of tickOnce, so a task scanned more than once in one tick (scan + any re-check) only ever emits once. */
+  private groomSuppressionAuditedThisTick = new Set<string>();
+
   constructor(
     private readonly sessionManager: SessionManager,
     private readonly launcher: OpsSessionLauncher,
@@ -197,6 +201,7 @@ export class DispatchTriggerEvaluator {
     const startedAt = Date.now();
     let eligibleCount = 0;
     let dispatched = 0;
+    this.groomSuppressionAuditedThisTick = new Set<string>();
     try {
       // Usage admission is an account-wide gate, independent of arm/capacity
       // accounting below: when the plan usage is exhausted, don't dispatch at
@@ -335,6 +340,10 @@ export class DispatchTriggerEvaluator {
         if (i > 0 && i % YIELD_EVERY_N_TASKS === 0) await yieldToEventLoop();
         const task = tasks[i];
         if (!groomArmed && !isDesignEligibleType(task.type)) continue;
+        const openGroomGroup = hasOpenGroomGroupForTask(task.id);
+        if (openGroomGroup) {
+          this.auditGroomCandidateSuppressed(task.id, 'open_groom_group');
+        }
         if (
           isGroomCandidate(task, {
             tasksById,
@@ -346,6 +355,7 @@ export class DispatchTriggerEvaluator {
             isNoOpSuppressed,
             isKillSuppressed: (taskId) =>
               isPlanningKillSuppressed(taskId, 'groom'),
+            hasOpenGroomGroup: () => openGroomGroup,
           })
         ) {
           candidates.push({ projectId, milestone, task });
@@ -353,6 +363,35 @@ export class DispatchTriggerEvaluator {
       }
     }
     return candidates;
+  }
+
+  /**
+   * Records groom_candidate_suppressed once per (tick, task) — the
+   * no_op_investigation_skipped-style audit trail for why an otherwise
+   * Backlog task didn't get scanned into groom candidacy this tick. Reason
+   * strings mirror the isGroomCandidate suppression they name; currently
+   * only `open_groom_group` is reported, since that's the one whose
+   * suppression an operator needs paged on (the others — active session,
+   * crash cooldown, kill, no-op — are either self-resolving or already
+   * surfaced elsewhere).
+   */
+  private auditGroomCandidateSuppressed(taskId: string, reason: string): void {
+    if (this.groomSuppressionAuditedThisTick.has(taskId)) return;
+    this.groomSuppressionAuditedThisTick.add(taskId);
+    try {
+      recordEvent({
+        event_type: 'groom_candidate_suppressed',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: null,
+        task_id: taskId,
+        payload: { taskId, reason },
+      });
+    } catch (e) {
+      logger.error(
+        `[DispatchTriggerEvaluator] recordEvent(groom_candidate_suppressed) failed: ${e}`,
+      );
+    }
   }
 
   /** All ops-armed, dependency-cleared (Done + deployed), un-dispatched Ready ops/investigation/testing tasks across a project's non-Done milestones, in board order. */
@@ -499,6 +538,7 @@ export class DispatchTriggerEvaluator {
       inCrashCooldown: (taskId) => this.crashBudget.inCooldown(taskId),
       isNoOpSuppressed,
       isKillSuppressed: (taskId) => isPlanningKillSuppressed(taskId, 'groom'),
+      hasOpenGroomGroup: hasOpenGroomGroupForTask,
     });
   }
 

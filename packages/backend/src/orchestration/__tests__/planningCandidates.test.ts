@@ -20,6 +20,7 @@ import {
   updateTaskStatusInBoardCaches,
   getTaskCache,
   hasActivePlanningSessionForTask,
+  hasOpenGroomGroupForTask,
   isNoOpSuppressed,
   isPlanningKillSuppressed,
   insertStagedIntent,
@@ -398,6 +399,7 @@ describe('isGroomCandidate', () => {
     inCrashCooldown: () => false,
     isNoOpSuppressed: () => false,
     isKillSuppressed: () => false,
+    hasOpenGroomGroup: () => false,
   };
 
   it('rejects a task that is not still 🔲 Backlog', () => {
@@ -487,6 +489,13 @@ describe('isGroomCandidate', () => {
     const t = task();
     expect(
       isGroomCandidate(t, { ...baseDeps, isKillSuppressed: () => true }),
+    ).toBe(false);
+  });
+
+  it('skips a task that already has an open groom decision group, regardless of the staging session status', () => {
+    const t = task();
+    expect(
+      isGroomCandidate(t, { ...baseDeps, hasOpenGroomGroup: () => true }),
     ).toBe(false);
   });
 });
@@ -598,6 +607,115 @@ describe('isNoOpSuppressed', () => {
     ).run(Date.now() - 10 * 60 * 1000, Date.now());
     insertNoOp();
     expect(isNoOpSuppressed('task-1')).toBe(true);
+  });
+
+  it('keeps suppressing when a second no-op auto-supersedes the first (an undispositioned restage), and lifts on a task edit after the chain', () => {
+    const firstId = 'noop-first';
+    insertNoOp({
+      id: firstId,
+      state: 'superseded',
+      supersedes: null,
+      created_at: 1000,
+      updated_at: 1500,
+    });
+    insertNoOp({
+      id: 'noop-second',
+      state: 'staged',
+      supersedes: firstId,
+      created_at: 2000,
+      updated_at: 2000,
+    });
+    expect(isNoOpSuppressed('task-1')).toBe(true);
+
+    recordEvent({
+      event_type: 'task_body_updated',
+      actor_type: 'system',
+      actor_id: null,
+      project_id: 'proj-1',
+      task_id: 'task-1',
+      payload: {},
+    });
+    expect(isNoOpSuppressed('task-1')).toBe(false);
+  });
+});
+
+function insertGroomIntent(overrides: Partial<StagedIntentRow> = {}): void {
+  const now = Date.now();
+  const row: StagedIntentRow = {
+    id: `intent-${Math.random()}`,
+    kind: 'task.setStatus',
+    payload: JSON.stringify({
+      taskId: 'notion:task-open-group',
+      status: '🗂️ Ready',
+    }),
+    payload_hash: `hash-${Math.random()}`,
+    task_id: 'notion:task-open-group',
+    project_id: 'proj-1',
+    session_id: 'sess-groom',
+    group_id: 'group-1',
+    milestone: null,
+    state: 'staged' as StagedIntentState,
+    supersedes: null,
+    annotation: null,
+    decision_proposal: null,
+    groom_proposal: null,
+    advisory: null,
+    disposition_reason: null,
+    answer: null,
+    created_at: now,
+    updated_at: now,
+    ...overrides,
+  };
+  insertStagedIntent(row);
+}
+
+describe('hasOpenGroomGroupForTask', () => {
+  beforeEach(() => {
+    db.prepare('DELETE FROM staged_intent').run();
+  });
+
+  it('is true while a done groom session left a staged task.setStatus for the task', () => {
+    insertGroomIntent();
+    expect(hasOpenGroomGroupForTask('notion:task-open-group')).toBe(true);
+  });
+
+  it('is false once the group is committed', () => {
+    insertGroomIntent({ state: 'committed' });
+    expect(hasOpenGroomGroupForTask('notion:task-open-group')).toBe(false);
+  });
+
+  it('is false once the group is rejected', () => {
+    insertGroomIntent({ state: 'rejected' });
+    expect(hasOpenGroomGroupForTask('notion:task-open-group')).toBe(false);
+  });
+
+  it('matches whether the task id is stored bare or notion:-prefixed', () => {
+    insertGroomIntent({ task_id: 'notion:task-open-group' });
+    expect(hasOpenGroomGroupForTask('task-open-group')).toBe(true);
+    expect(hasOpenGroomGroupForTask('notion:task-open-group')).toBe(true);
+  });
+
+  it('is false when there is no staged_intent for the task', () => {
+    expect(hasOpenGroomGroupForTask('notion:task-open-group')).toBe(false);
+  });
+
+  it('a Backlog task with an open groom group is not a groom candidate, and becomes one again once the group is dispositioned', () => {
+    insertGroomIntent({ session_id: 'sess-done-groom' });
+    const t = task({ id: 'notion:task-open-group' });
+    const deps = {
+      tasksById: new Map<string, NotionTask>(),
+      hasActiveSession: () => false,
+      hasActiveGroomSession: () => false,
+      inCrashCooldown: () => false,
+      isNoOpSuppressed: () => false,
+      isKillSuppressed: () => false,
+      hasOpenGroomGroup: hasOpenGroomGroupForTask,
+    };
+    expect(isGroomCandidate(t, deps)).toBe(false);
+
+    db.prepare('DELETE FROM staged_intent').run();
+    insertGroomIntent({ state: 'committed' });
+    expect(isGroomCandidate(t, deps)).toBe(true);
   });
 });
 
@@ -944,6 +1062,7 @@ describe('isGroomCandidate — post-write candidate suppression via the board-ca
     inCrashCooldown: () => false,
     isNoOpSuppressed: () => false,
     isKillSuppressed: () => false,
+    hasOpenGroomGroup: () => false,
   };
 
   it('a task read back after updateTaskStatusInBoardCaches(Backlog -> Ready) is no longer a groom candidate', () => {
@@ -1017,6 +1136,7 @@ describe('isDesignEligibleType — the shared predicate design-armed groom narro
       inCrashCooldown: () => false,
       isNoOpSuppressed: () => false,
       isKillSuppressed: () => false,
+      hasOpenGroomGroup: () => false,
     };
     expect(isGroomCandidate(t, baseDeps)).toBe(false);
   });
