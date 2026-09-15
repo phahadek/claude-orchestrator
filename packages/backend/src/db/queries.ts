@@ -4137,15 +4137,20 @@ export function updateMergeState(
  * the re-review pathway in routes/prs.ts; clearing pause_reason here is what
  * lets the stuck-session resume mechanism unblock auto-launch and auto-merge
  * via the same call that resets the iteration counter.
+ *
+ * Routes the pause_reason clear through setPauseReason rather than a raw
+ * UPDATE so the clear is audited (pr_pause_reason_changed) at this write
+ * path instead of needing a bespoke recordEvent call at every caller.
  */
 export function resetReviewIteration(prNumber: number, repo: string): void {
   db.prepare<{ pr_number: number; repo: string }>(
     `
     UPDATE pull_requests
-    SET review_iteration = 0, pause_reason = NULL
+    SET review_iteration = 0
     WHERE pr_number = @pr_number AND repo = @repo
   `,
   ).run({ pr_number: prNumber, repo });
+  setPauseReason(prNumber, repo, null);
 }
 
 export function setCiRemediationAttemptedSha(
@@ -4745,13 +4750,22 @@ export function clearTaskPauseReasonsByReason(reason: string): number {
  * Clear the pause_reason on all PRs associated with a task (used when the task
  * transitions back to Ready so the next launch attempt is not blocked by a
  * stale PR-level pause such as stuck_timeout).
+ *
+ * Routes each row's clear through setPauseReason rather than a bulk raw
+ * UPDATE so every clear is audited (pr_pause_reason_changed) at this write
+ * path instead of needing a bespoke recordEvent call at the caller.
  */
 export function clearPausedPrReasonForTask(taskId: string): void {
-  db.prepare<{ task_id: string }>(
-    `UPDATE pull_requests
-     SET pause_reason = NULL, pause_reason_set_at = NULL
-     WHERE task_id = @task_id AND pause_reason IS NOT NULL`,
-  ).run({ task_id: taskId });
+  const rows = db
+    .prepare<{
+      task_id: string;
+    }>(
+      `SELECT pr_number, repo FROM pull_requests WHERE task_id = @task_id AND pause_reason IS NOT NULL`,
+    )
+    .all({ task_id: taskId }) as Array<{ pr_number: number; repo: string }>;
+  for (const row of rows) {
+    setPauseReason(row.pr_number, row.repo, null);
+  }
 }
 
 /**

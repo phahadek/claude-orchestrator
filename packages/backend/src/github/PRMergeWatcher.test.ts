@@ -42,7 +42,19 @@ vi.mock('../config.js', () => ({
     id: 'proj-1',
     projectDir: '/fake/project',
   }),
+  getProjectById: vi.fn().mockReturnValue({
+    id: 'proj-1',
+    projectDir: '/fake/project',
+  }),
   AUTO_REVIEW_ENABLED: true,
+  // Only consumed by the real AutoMerger constructed in the "becomes-clean
+  // re-drive — real AutoMerger eligibility gate" describe block below; every
+  // other test in this file drives AutoMerger via a spy double instead.
+  runtimeSettings: {
+    ci_poll_interval_seconds: 1,
+    ci_poll_max_minutes: 1,
+    auto_merge_failed_clear_minutes: 10,
+  },
 }));
 
 vi.mock('../session/orchestrator-config.js', () => ({
@@ -118,6 +130,7 @@ import { db } from '../db/db';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { recordEvent } from '../audit/AuditLog';
 import { getProjectByGithubRepo } from '../config';
+import { AutoMerger as RealAutoMerger } from './AutoMerger';
 import type { AutoMerger } from './AutoMerger';
 import type { GitHubClient } from './GitHubClient';
 import type { SessionManager } from '../session/SessionManager';
@@ -5957,5 +5970,94 @@ describe('PRMergeWatcher.sweepStuckDraftApprovedPRs()', () => {
 
     expect(processed).toBe(0);
     expect(vi.mocked(updatePRDraftStatus)).not.toHaveBeenCalled();
+  });
+});
+
+// ── becomes-clean re-drive → real AutoMerger merge-eligibility gate ───────────
+// Regression coverage for the polimarket PR #1405 incident: a becomes-clean
+// transition drove AutoMerger.attempt() for a PR whose latest review verdict
+// was verify_failed and which never passed the orchestrator test gate —
+// AutoMerger merged it anyway because attemptMerge() trusted pause_reason
+// alone. This wires a REAL AutoMerger (not the attempt()-spy double used by
+// the rest of this suite) to PRMergeWatcher, so the transition hook's own
+// `this.autoMerger?.attempt(pr.pr_number, pr.repo)` call is exercised all
+// the way through run() → attemptMerge()'s eligibility gate.
+describe('PRMergeWatcher becomes-clean re-drive — real AutoMerger eligibility gate', () => {
+  function makeAutoMergeGitHub(): GitHubClient {
+    return {
+      ...makeMockGitHub(),
+      fetchPRStatusConditional: vi.fn().mockResolvedValue({
+        status: 'ok',
+        etag: null,
+        state: 'open',
+        mergeability: {
+          category: 'clean',
+          headSha: 'sha-abc',
+          failingChecks: [],
+        },
+      }),
+      mergePR: vi
+        .fn()
+        .mockResolvedValue({ merged: true, message: 'ok', sha: 'merged-sha' }),
+      markPRReady: vi.fn().mockResolvedValue(undefined),
+      categorizeMergeability: vi.fn().mockResolvedValue({
+        category: 'clean',
+        mergeState: 'clean',
+        rawMergeableState: 'clean',
+        failingChecks: [],
+      }),
+      getReviewState: vi.fn().mockResolvedValue(null),
+      detectBillingBlock: vi.fn().mockResolvedValue({ blocked: false }),
+      requestReviewers: vi.fn().mockResolvedValue(undefined),
+      fetchDiff: vi
+        .fn()
+        .mockResolvedValue({ prId: 42, diff: '', filesChanged: [] }),
+    } as unknown as GitHubClient;
+  }
+
+  it('does not merge a verify_failed PR when merge_state transitions to clean', async () => {
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/fake/project',
+      githubRepo: 'owner/repo',
+      autoMergeEnabled: true,
+    } as never);
+
+    const pr = makePRRow({
+      pause_reason: null,
+      merge_state: 'unstable',
+      review_result: JSON.stringify({ verdict: 'verify_failed' }),
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+
+    const github = makeAutoMergeGitHub();
+    vi.mocked(
+      (
+        github as unknown as {
+          categorizeMergeability: (n: number, r: string) => Promise<unknown>;
+        }
+      ).categorizeMergeability,
+    ).mockResolvedValue({
+      category: 'clean',
+      mergeState: 'clean',
+      rawMergeableState: 'clean',
+      failingChecks: [],
+    });
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    const autoMerger = new RealAutoMerger(github, watcher, () => {});
+    watcher.setAutoMerger(autoMerger);
+
+    await watcher.poll();
+    // Let AutoMerger's async attempt()/run()/attemptMerge() chain settle.
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(vi.mocked(github.mergePR)).not.toHaveBeenCalled();
   });
 });
