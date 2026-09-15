@@ -2605,6 +2605,7 @@ describe('ReviewOrchestrator — autofix WS messages', () => {
       expect.anything(),
       'release/1.0',
       expect.anything(),
+      expect.any(Object),
     );
   });
 
@@ -2633,6 +2634,7 @@ describe('ReviewOrchestrator — autofix WS messages', () => {
       expect.anything(),
       'dev',
       expect.anything(),
+      expect.any(Object),
     );
   });
 
