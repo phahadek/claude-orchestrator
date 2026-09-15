@@ -21,8 +21,7 @@ vi.mock('../../db/db.js', async () => {
 });
 
 vi.mock('../../groom/groomLoad', async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import('../../groom/groomLoad')>();
+  const actual = await importOriginal<typeof import('../../groom/groomLoad')>();
   return {
     ...actual,
     resolveConfigDir: vi.fn(actual.resolveConfigDir),

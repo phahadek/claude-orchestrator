@@ -6,9 +6,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 const execFileAsync = promisify(execFile);
-const scriptPath = fileURLToPath(
-  new URL('../ops-client.mjs', import.meta.url),
-);
+const scriptPath = fileURLToPath(new URL('../ops-client.mjs', import.meta.url));
 
 let server;
 
