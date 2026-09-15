@@ -6250,6 +6250,7 @@ async function resolveTestRequestExecutionInputs(intent: StagedIntent): Promise<
       ok: true;
       worktreePath: string;
       commands: string[];
+      runKind: 'scoped' | 'full';
       timeoutSec: number;
       maxRssMb: number;
     }
@@ -6278,7 +6279,7 @@ async function resolveTestRequestExecutionInputs(intent: StagedIntent): Promise<
     };
   }
   const pr = getPRBySessionId(intent.sessionId);
-  const commands = await resolveTestCommandsForDiff(
+  const { commands, runKind } = await resolveTestCommandsForDiff(
     config,
     worktreePath,
     pr?.base_branch ?? project.baseBranch,
@@ -6287,6 +6288,7 @@ async function resolveTestRequestExecutionInputs(intent: StagedIntent): Promise<
     ok: true,
     worktreePath,
     commands,
+    runKind,
     timeoutSec: config.test_timeout_sec,
     maxRssMb: config.test_max_rss_mb,
   };
@@ -6310,16 +6312,19 @@ async function resolveTestCommandsForDiff(
   config: OrchestratorConfig,
   worktreePath: string,
   baseBranch: string,
-): Promise<string[]> {
-  if (!config.test_scoped?.length) return config.test;
+): Promise<{ commands: string[]; runKind: 'scoped' | 'full' }> {
+  if (!config.test_scoped?.length)
+    return { commands: config.test, runKind: 'full' };
   const diffPaths = await getChangedFiles(worktreePath, baseBranch);
   if (matchesPathDiff(config.test_full_run_paths, diffPaths)) {
-    return config.test;
+    return { commands: config.test, runKind: 'full' };
   }
   const scoped = config.test_scoped
     .map((cmd) => expandAutofixCommand(cmd, diffPaths))
     .filter((cmd): cmd is string => cmd !== null);
-  return scoped.length > 0 ? scoped : config.test;
+  return scoped.length > 0
+    ? { commands: scoped, runKind: 'scoped' }
+    : { commands: config.test, runKind: 'full' };
 }
 
 /**
@@ -6370,6 +6375,8 @@ export async function triggerTestRequestExecution(
           contentHash,
           worktreePath: inputs.worktreePath,
           commands: inputs.commands,
+          runKind: inputs.runKind,
+          baseSha: null,
           timeoutSec: inputs.timeoutSec,
           maxRssMb: inputs.maxRssMb,
           sessionId: intent.sessionId ?? null,
@@ -6633,6 +6640,8 @@ async function maybeAutoApproveTestRequest(
     contentHash,
     worktreePath: inputs.worktreePath,
     commands: inputs.commands,
+    runKind: inputs.runKind,
+    baseSha: null,
     timeoutSec: inputs.timeoutSec,
     maxRssMb: inputs.maxRssMb,
     sessionId: intent.sessionId,

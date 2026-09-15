@@ -166,6 +166,7 @@ describe('resolveTestRequestExecutionInputs — test_scoped / test_full_run_path
     expect(mockAdmitTestRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         commands: ['npm run test -w packages/backend'],
+        runKind: 'full',
       }),
     );
   });
@@ -189,6 +190,7 @@ describe('resolveTestRequestExecutionInputs — test_scoped / test_full_run_path
     expect(mockAdmitTestRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         commands: ["npm run test:scoped -- 'packages/backend/src/foo.ts'"],
+        runKind: 'scoped',
       }),
     );
   });
@@ -212,6 +214,7 @@ describe('resolveTestRequestExecutionInputs — test_scoped / test_full_run_path
     expect(mockAdmitTestRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         commands: ['npm run test -w packages/backend'],
+        runKind: 'full',
       }),
     );
   });
@@ -237,6 +240,7 @@ describe('resolveTestRequestExecutionInputs — test_scoped / test_full_run_path
     expect(mockAdmitTestRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         commands: ['npm run test -w packages/backend'],
+        runKind: 'full',
       }),
     );
   });
