@@ -647,34 +647,35 @@ export function createGateStateRouter(): Router {
 
   const AUTO_GRANT_KINDS: AutoGrantKind[] = ['gate.accrete', 'seed.stage'];
 
-  // GET /api/gate/trust-rate?project=<id>&milestone=M12&flow=groom
-  // The Milestone panel's trust-precision read: per flow per milestone, the
-  // rate at which auto-dispatched output was rejected/abstained rather than
-  // approved — see db/queries.ts's getFlowRejectionRate for the per-flow
-  // definition. Alongside it, always includes the per-kind auto-grant
-  // disagreement rate (see getAutoGrantDisagreementRate) for the same
-  // project+milestone — a second, independent trust-precision read that
-  // isn't scoped by `flow`. Both are informative only; no auto-disarm.
+  // GET /api/gate/trust-rate?project=<id>&milestone=M12
+  // The Milestone panel's trust-precision read: for every auto-dispatch
+  // flow, the rate at which auto-dispatched output was rejected/abstained
+  // rather than approved — see db/queries.ts's getFlowRejectionRate for the
+  // per-flow definition. Alongside it, always includes the per-kind
+  // auto-grant disagreement rate (see getAutoGrantDisagreementRate) for the
+  // same project+milestone — a second, independent trust-precision read
+  // that isn't scoped by flow. Both are informative only; no auto-disarm.
+  // One request per panel load computes every flow's rate and every kind's
+  // disagreement rate exactly once, rather than the panel firing one
+  // request per flow and recomputing the flow-independent disagreement rate
+  // redundantly on each.
   router.get('/gate/trust-rate', (req: Request, res: Response) => {
     const project =
       typeof req.query.project === 'string' ? req.query.project : null;
     const milestone =
       typeof req.query.milestone === 'string' ? req.query.milestone : null;
-    const flow = typeof req.query.flow === 'string' ? req.query.flow : null;
-    if (!project || !milestone || !flow) {
-      res
-        .status(400)
-        .json({ error: 'project, milestone, and flow are all required' });
-      return;
-    }
-    if (!TRUST_PRECISION_FLOWS.includes(flow as TrustPrecisionFlow)) {
-      res.status(400).json({
-        error: `flow must be one of ${TRUST_PRECISION_FLOWS.join(', ')}`,
-      });
+    if (!project || !milestone) {
+      res.status(400).json({ error: 'project and milestone are required' });
       return;
     }
     try {
       const canonicalMilestone = resolveMilestoneForProject(project, milestone);
+      const rates = Object.fromEntries(
+        TRUST_PRECISION_FLOWS.map((flow) => [
+          flow,
+          getFlowRejectionRate(project, canonicalMilestone, flow),
+        ]),
+      ) as Record<TrustPrecisionFlow, ReturnType<typeof getFlowRejectionRate>>;
       const autoGrantDisagreementRate = Object.fromEntries(
         AUTO_GRANT_KINDS.map((kind) => [
           kind,
@@ -684,14 +685,7 @@ export function createGateStateRouter(): Router {
         AutoGrantKind,
         ReturnType<typeof getAutoGrantDisagreementRate>
       >;
-      res.json({
-        ...getFlowRejectionRate(
-          project,
-          canonicalMilestone,
-          flow as TrustPrecisionFlow,
-        ),
-        autoGrantDisagreementRate,
-      });
+      res.json({ rates, autoGrantDisagreementRate });
     } catch (err) {
       if (err instanceof UnknownMilestoneError) {
         res.status(400).json({ error: err.message });

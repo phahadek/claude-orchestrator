@@ -119,26 +119,15 @@ export function FlowArmToggle({
     if (!projectId || !milestoneId) return;
 
     let cancelled = false;
-    // Each flow's fetch resolves independently so a flow with data renders as
-    // soon as it's ready, instead of every row waiting on the slowest fetch.
-    TRUST_PRECISION_FLOWS.forEach((flow) => {
-      gateApi
-        .getFlowRejectionRate(projectId, milestoneId, flow)
-        .catch(
-          (): FlowRejectionRateResult => ({
-            flow,
-            project: projectId,
-            milestone: milestoneId,
-            total: 0,
-            rejected: 0,
-            rate: null,
-          }),
-        )
-        .then((result) => {
-          if (cancelled) return;
-          setTrustRates((prev) => ({ ...prev, [flow]: result }));
-        });
-    });
+    gateApi
+      .getTrustRates(projectId, milestoneId)
+      .then((result) => {
+        if (cancelled) return;
+        setTrustRates(result.rates);
+      })
+      .catch(() => {
+        /* leave trustRates empty — each row falls back to its no-data state */
+      });
 
     return () => {
       cancelled = true;
