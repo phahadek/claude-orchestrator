@@ -353,7 +353,13 @@ describe('replaceFlaggedFlakyTestsRollupOffMainThread', () => {
 
       // First tick, well before either row's window would be considered
       // stale — just flags both tests into the rollup.
-      await replaceFlaggedFlakyTestsRollupOffMainThread(file, 'proj-1', 20, 2, 0);
+      await replaceFlaggedFlakyTestsRollupOffMainThread(
+        file,
+        'proj-1',
+        20,
+        2,
+        0,
+      );
       expect(
         (
           db
