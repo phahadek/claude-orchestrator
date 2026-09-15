@@ -353,7 +353,9 @@ describe('<pr-body> marker — split across non-contiguous text segments', () =>
       type: 'assistant',
       message: {
         id: msgId,
-        content: [{ type: 'text', text: `Wrapping up.\n\n<pr-body>\n${VALID_BODY}` }],
+        content: [
+          { type: 'text', text: `Wrapping up.\n\n<pr-body>\n${VALID_BODY}` },
+        ],
       },
     });
     sendEvent(session, {
@@ -395,7 +397,10 @@ describe('<pr-body> marker — split across non-contiguous text segments', () =>
 
 describe('mergeAssistantContent', () => {
   it('preserves both non-contiguous text segments in arrival order when a tool_use intervenes', () => {
-    const step1 = mergeAssistantContent([], [{ type: 'text', text: 'first segment' }]);
+    const step1 = mergeAssistantContent(
+      [],
+      [{ type: 'text', text: 'first segment' }],
+    );
     const step2 = mergeAssistantContent(step1, [
       { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: {} },
     ]);
@@ -412,7 +417,9 @@ describe('mergeAssistantContent', () => {
 
   it('replaces (not duplicates) the last text segment when incoming text is a cumulative re-send of the in-progress run', () => {
     const step1 = mergeAssistantContent([], [{ type: 'text', text: 'Hel' }]);
-    const step2 = mergeAssistantContent(step1, [{ type: 'text', text: 'Hello' }]);
+    const step2 = mergeAssistantContent(step1, [
+      { type: 'text', text: 'Hello' },
+    ]);
 
     const textBlocks = step2.filter((b) => b.type === 'text');
     expect(textBlocks).toEqual([{ type: 'text', text: 'Hello' }]);
