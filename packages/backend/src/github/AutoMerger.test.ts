@@ -45,6 +45,7 @@ vi.mock('../db/queries.js', () =>
     getPendingRoutedCommentCount: vi.fn().mockReturnValue(0),
     markReviewerRequested: vi.fn(),
     getAnalyzeResult: vi.fn().mockReturnValue(undefined),
+    getLatestTestRequestRun: vi.fn().mockReturnValue(undefined),
   }),
 );
 
@@ -75,7 +76,7 @@ vi.mock('../tasks/TaskBackend.js', () => ({
 }));
 
 vi.mock('../session/orchestrator-config.js', () => ({
-  loadOrchestratorConfig: vi.fn(() => ({ verify: [], ci_check_name: [] })),
+  loadOrchestratorConfig: vi.fn(() => ({ verify: [], ci_check_name: [], test: [] })),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -201,6 +202,9 @@ function makeMockGitHub(
     getReviewState: vi.fn().mockResolvedValue(reviewDecision ?? null),
     detectBillingBlock: vi.fn().mockResolvedValue({ blocked: false }),
     requestReviewers: vi.fn().mockResolvedValue(undefined),
+    fetchDiff: vi
+      .fn()
+      .mockResolvedValue({ prId: 42, diff: '', filesChanged: [] }),
   } as unknown as GitHubClient;
 }
 
