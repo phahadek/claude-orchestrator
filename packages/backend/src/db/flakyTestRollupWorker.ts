@@ -54,6 +54,20 @@ interface FlakyTestRollupWorkerResult {
 // last real digest update is the only available signal to prune it.
 const GHOST_STALE_MS = 7 * 24 * 60 * 60 * 1000;
 
+// Mirrors MS_VS_US_THRESHOLD/toDigestMicros in db/queries.ts —
+// test_perf_baselines.updated_at holds whichever unit its writer used: the
+// live path stamps microseconds (Date.now() * 1000), but a historical
+// backfill left some rows in milliseconds, and both units coexist in the
+// table today. Any epoch-millisecond cutoff (like GHOST_STALE_MS below) must
+// be compared against whichever unit a given stored row actually used, or a
+// genuinely stale row can be miscounted as fresh (or vice versa) depending
+// on which unit its baseline row happens to be in.
+const MS_VS_US_THRESHOLD = 1e15;
+
+function toDigestMicros(value: number): number {
+  return value < MS_VS_US_THRESHOLD ? value * 1000 : value;
+}
+
 // Mirrors hasGhostFlaggedFlakyTests in db/queries.ts — same WHERE clause as
 // the DELETE below, wrapped in a read-only EXISTS check. A read never blocks
 // on, or is blocked by, a concurrent writer under WAL mode, so this can run
@@ -72,13 +86,15 @@ function hasGhostFlaggedFlakyTests(
          WHERE project_id = @project_id
            AND test_id NOT IN (
              SELECT test_id FROM test_perf_baselines
-             WHERE project_id = @project_id AND updated_at > @stale_before
+             WHERE project_id = @project_id
+               AND (CASE WHEN updated_at < @unit_threshold THEN updated_at * 1000 ELSE updated_at END) > @stale_before
            )
        ) AS has_ghost`,
     )
     .get({
       project_id: projectId,
-      stale_before: computedAt - GHOST_STALE_MS,
+      stale_before: toDigestMicros(computedAt - GHOST_STALE_MS),
+      unit_threshold: MS_VS_US_THRESHOLD,
     }) as { has_ghost: number };
   return row.has_ghost === 1;
 }
@@ -94,12 +110,14 @@ function pruneGhostFlaggedFlakyTests(
        WHERE project_id = @project_id
          AND test_id NOT IN (
            SELECT test_id FROM test_perf_baselines
-           WHERE project_id = @project_id AND updated_at > @stale_before
+           WHERE project_id = @project_id
+             AND (CASE WHEN updated_at < @unit_threshold THEN updated_at * 1000 ELSE updated_at END) > @stale_before
          )`,
     )
     .run({
       project_id: projectId,
-      stale_before: computedAt - GHOST_STALE_MS,
+      stale_before: toDigestMicros(computedAt - GHOST_STALE_MS),
+      unit_threshold: MS_VS_US_THRESHOLD,
     });
   return result.changes as number;
 }
