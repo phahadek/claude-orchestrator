@@ -2606,15 +2606,14 @@ function dispatchSessionEventsQueryWorker(
   mode: 'aggregate' | 'rows',
   limit?: number,
 ): Promise<
-  { mode: 'aggregate'; sessions: SessionEventsAggregateRow[] } | { mode: 'rows'; rows: SessionEvent[] }
+  | { mode: 'aggregate'; sessions: SessionEventsAggregateRow[] }
+  | { mode: 'rows'; rows: SessionEvent[] }
 > {
   return new Promise((resolve, reject) => {
     const isTsNode = __filename.endsWith('.ts');
     const workerPath = path.join(
       __dirname,
-      isTsNode
-        ? 'sessionEventsQueryWorker.ts'
-        : 'sessionEventsQueryWorker.js',
+      isTsNode ? 'sessionEventsQueryWorker.ts' : 'sessionEventsQueryWorker.js',
     );
     const worker = new Worker(workerPath, {
       workerData: { dbPath: targetPath, projectId, filters, mode, limit },

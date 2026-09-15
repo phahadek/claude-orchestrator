@@ -152,7 +152,10 @@ function run(): SessionEventsQueryWorkerResult {
   database.pragma('busy_timeout = 5000');
   try {
     if (mode === 'aggregate') {
-      return { mode: 'aggregate', sessions: runAggregate(database, projectId, filters) };
+      return {
+        mode: 'aggregate',
+        sessions: runAggregate(database, projectId, filters),
+      };
     }
     return {
       mode: 'rows',
