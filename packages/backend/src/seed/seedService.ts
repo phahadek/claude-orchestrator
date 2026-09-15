@@ -319,16 +319,18 @@ export function appendSeedItemEvent(
 }
 
 /**
- * States a reopen may be applied from: confirmed or blocked, the two
- * terminal states. `pending`/`applied` already sit on a sanctioned path to
- * resolution, so reopening them is a no-op we reject — mirrors the gate's
- * REOPEN_BLOCKED_STATES.
+ * States a reopen may be applied from: confirmed, blocked, or applied.
+ * `pending` already sits on a sanctioned path to resolution, so reopening it
+ * is a no-op we reject — mirrors the gate's REOPEN_BLOCKED_STATES.
  */
-const REOPEN_BLOCKED_STATES = new Set(['pending', 'applied']);
+const REOPEN_BLOCKED_STATES = new Set(['pending']);
 
 /**
- * Operator-attributed reopen: pulls a confirmed/blocked item back to
+ * Operator-attributed reopen: pulls a confirmed/blocked/applied item back to
  * `pending` for re-verification. Mirrors reopenGateItem in gateService.
+ * `applied` is non-terminal (authored, reconcile/capture not yet confirmed)
+ * and is the state most likely to have been recorded in error, so reopening
+ * it requires a non-empty `reason` — an operator correction must say why.
  */
 export function reopenSeedItem(
   seedItemId: string,
@@ -344,11 +346,17 @@ export function reopenSeedItem(
       `seed_item ${seedItemId}: already ${item.state} — reopen only applies to a resolved/terminal item`,
     );
   }
+  if (item.state === 'applied' && !reason) {
+    throw new Error(
+      `seed_item ${seedItemId}: reopening an applied item requires a non-empty reason`,
+    );
+  }
+  const priorState = item.state;
   const now = new Date().toISOString();
   seedStore.appendEvent(seedItemId, {
     outcome: 'reopened',
     operator,
-    evidence: reason === undefined ? undefined : { reason },
+    evidence: reason === undefined ? undefined : { reason, priorState },
     at: now,
   });
   seedStore.advanceState(seedItemId, 'pending', now);

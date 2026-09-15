@@ -483,6 +483,19 @@ clients (`ops-client.mjs`, `gate-state-client.mjs`) do.
 4. **Loop** — repeat 2–3 until `readiness` reports `green`, or the operator stops for the
    session; remaining seeds stay `pending`/`applied` and nothing is lost, state persists
    server-side.
+5. **Correcting a seed recorded `applied` in error** — `applied` is non-terminal (authored,
+   reconcile/capture not yet confirmed), and recording it is the step most likely to be
+   wrong (a session's own claim, ahead of actual verification). To return it to `pending`:
+
+   ```bash
+   node ~/.claude/scripts/seed-state-client.mjs reopen <seedItemId> "<reason>" [operator]
+   ```
+
+   `reason` is required when the item is currently `applied` (the server rejects the
+   reopen with a 400 otherwise) — an erroneous `applied` is an operator correction and
+   must say why. The resulting `reopened` event carries `{reason, priorState: 'applied'}`
+   in its evidence, so the log shows what was undone. `pending` items cannot be reopened
+   (no-op guard); `confirmed`/`blocked`/`discarded` reopen as before, with `reason` optional.
 
 **What this replaces:** it does not fetch or parse the config-seed task's body as the seed
 worklist, and it does not bulk-load a milestone's full seed set.
