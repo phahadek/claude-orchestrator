@@ -62,6 +62,9 @@ export const DEFERRAL_PHRASES: readonly string[] = [
   'to be decided during implementation',
   'figure out during implementation',
   'leave to the implementer',
+  'leaving it to the implementer',
+  "implementer's call",
+  "implementer's-call punt",
   'determine at implementation time',
 ];
 

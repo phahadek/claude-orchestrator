@@ -63,6 +63,79 @@ describe('checkReadiness — Tier 2 (lexical)', () => {
     const violations = checkReadiness(body);
     expect(violations.some((v) => v.tier === 'lexical')).toBe(false);
   });
+
+  it('flags "leaving it to the implementer" in prose', () => {
+    const body =
+      'The query mechanism was settled after operator feedback requested a concrete fix rather than leaving it to the implementer.';
+    const violations = checkReadiness(body);
+    expect(violations.some((v) => v.tier === 'lexical')).toBe(true);
+  });
+
+  it('matches "leaving it to the implementer" case-insensitively', () => {
+    const body = 'LEAVING IT TO THE IMPLEMENTER.';
+    const violations = checkReadiness(body);
+    expect(violations.some((v) => v.tier === 'lexical')).toBe(true);
+  });
+
+  it('does not flag "leaving it to the implementer" inside a fenced code block', () => {
+    const body = '```\nthis is leaving it to the implementer\n```';
+    const violations = checkReadiness(body);
+    expect(violations.some((v) => v.tier === 'lexical')).toBe(false);
+  });
+
+  it('does not flag "leaving it to the implementer" inside inline code', () => {
+    const body = 'See `leaving it to the implementer` in the old draft.';
+    const violations = checkReadiness(body);
+    expect(violations.some((v) => v.tier === 'lexical')).toBe(false);
+  });
+
+  it('flags "implementer\'s call" in prose', () => {
+    const body = 'The exact retry count is the implementer\'s call.';
+    const violations = checkReadiness(body);
+    expect(violations.some((v) => v.tier === 'lexical')).toBe(true);
+  });
+
+  it('matches "implementer\'s call" case-insensitively', () => {
+    const body = "THE RETRY COUNT IS THE IMPLEMENTER'S CALL.";
+    const violations = checkReadiness(body);
+    expect(violations.some((v) => v.tier === 'lexical')).toBe(true);
+  });
+
+  it('does not flag "implementer\'s call" inside a fenced code block', () => {
+    const body = "```\nthis is the implementer's call\n```";
+    const violations = checkReadiness(body);
+    expect(violations.some((v) => v.tier === 'lexical')).toBe(false);
+  });
+
+  it('does not flag "implementer\'s call" inside inline code', () => {
+    const body = "See `the implementer's call` in the old draft.";
+    const violations = checkReadiness(body);
+    expect(violations.some((v) => v.tier === 'lexical')).toBe(false);
+  });
+
+  it('flags "implementer\'s-call punt" in prose', () => {
+    const body = 'This was an implementer\'s-call punt that should have been resolved at grooming.';
+    const violations = checkReadiness(body);
+    expect(violations.some((v) => v.tier === 'lexical')).toBe(true);
+  });
+
+  it('matches "implementer\'s-call punt" case-insensitively', () => {
+    const body = "THIS WAS AN IMPLEMENTER'S-CALL PUNT.";
+    const violations = checkReadiness(body);
+    expect(violations.some((v) => v.tier === 'lexical')).toBe(true);
+  });
+
+  it('does not flag "implementer\'s-call punt" inside a fenced code block', () => {
+    const body = "```\nthis is an implementer's-call punt\n```";
+    const violations = checkReadiness(body);
+    expect(violations.some((v) => v.tier === 'lexical')).toBe(false);
+  });
+
+  it('does not flag "implementer\'s-call punt" inside inline code', () => {
+    const body = "See `an implementer's-call punt` in the old draft.";
+    const violations = checkReadiness(body);
+    expect(violations.some((v) => v.tier === 'lexical')).toBe(false);
+  });
 });
 
 describe('checkReadiness — Tier 2 (grooming-instruction residue)', () => {
