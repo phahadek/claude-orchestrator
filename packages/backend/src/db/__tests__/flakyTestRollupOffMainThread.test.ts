@@ -311,6 +311,90 @@ describe('replaceFlaggedFlakyTestsRollupOffMainThread', () => {
     }
   }, 60000);
 
+  it('prunes a stale row whose test_perf_baselines.updated_at is stamped in microseconds, without also pruning a fresh millisecond-stamped row — unit-consistent with queries.ts', async () => {
+    const { db, file } = openFileBackedDb();
+    try {
+      // A real epoch-millisecond magnitude (well under MS_VS_US_THRESHOLD =
+      // 1e15), matching what recordTestPerfDigestSample's live path and a
+      // pre-cutover backfill row would both look like at rest.
+      const NOW_MS = 1_760_000_000_000;
+      const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+      const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
+      // Legacy-backfill row: updated_at stamped in milliseconds, 1 day old —
+      // inside the 7-day ghost window, so it must survive pruning.
+      const freshLegacyMsUpdatedAt = NOW_MS - ONE_DAY_MS;
+      // Live-path row: updated_at stamped in microseconds (Date.now() * 1000
+      // — see recordTestPerfDigestSample), 30 days old — well outside the
+      // 7-day ghost window, so it must be pruned. Its raw numeric magnitude
+      // is nonetheless far larger than a millisecond-scale stale_before
+      // cutoff, which is exactly what made the worker's old unit-naive
+      // comparison treat it as permanently fresh regardless of true age.
+      const staleLiveMicrosUpdatedAt = (NOW_MS - THIRTY_DAYS_MS) * 1000;
+
+      ['passed', 'failed', 'passed', 'failed'].forEach((outcome, i) =>
+        insertTestResult(db, {
+          projectId: 'proj-1',
+          testId: 'test-legacy-ms-fresh',
+          name: 'suite > legacy ms fresh',
+          outcome: outcome as 'passed' | 'failed',
+          createdAt: freshLegacyMsUpdatedAt + i,
+        }),
+      );
+      ['passed', 'failed', 'passed', 'failed'].forEach((outcome, i) =>
+        insertTestResult(db, {
+          projectId: 'proj-1',
+          testId: 'test-live-micros-stale',
+          name: 'suite > live micros stale',
+          outcome: outcome as 'passed' | 'failed',
+          createdAt: staleLiveMicrosUpdatedAt + i,
+        }),
+      );
+
+      // First tick, well before either row's window would be considered
+      // stale — just flags both tests into the rollup.
+      await replaceFlaggedFlakyTestsRollupOffMainThread(
+        file,
+        'proj-1',
+        20,
+        2,
+        0,
+      );
+      expect(
+        (
+          db
+            .prepare(
+              'SELECT test_id FROM flagged_flaky_tests_rollup WHERE project_id = ? ORDER BY test_id',
+            )
+            .all('proj-1') as { test_id: string }[]
+        ).map((r) => r.test_id),
+      ).toEqual(['test-legacy-ms-fresh', 'test-live-micros-stale']);
+
+      // Second tick "now" — the microsecond-stamped row is genuinely 30
+      // days stale and must be pruned; the millisecond-stamped row is only
+      // 1 day stale (inside the 7-day window) and must survive.
+      await replaceFlaggedFlakyTestsRollupOffMainThread(
+        file,
+        'proj-1',
+        20,
+        2,
+        NOW_MS,
+      );
+
+      expect(
+        (
+          db
+            .prepare(
+              'SELECT test_id FROM flagged_flaky_tests_rollup WHERE project_id = ? ORDER BY test_id',
+            )
+            .all('proj-1') as { test_id: string }[]
+        ).map((r) => r.test_id),
+      ).toEqual(['test-legacy-ms-fresh']);
+    } finally {
+      db.close();
+    }
+  }, 60000);
+
   it('runs in-process for an in-memory database, since no second connection can open against it', async () => {
     const result = await replaceFlaggedFlakyTestsRollupOffMainThread(
       ':memory:',
