@@ -2165,11 +2165,7 @@ describe('classifyWorktreeTeardownRefusal', () => {
       classifyWorktreeTeardownRefusal('review', PROJECT_DIR, PROJECT_DIR),
     ).toEqual({ expected: true });
     expect(
-      classifyWorktreeTeardownRefusal(
-        'depth_review',
-        PROJECT_DIR,
-        PROJECT_DIR,
-      ),
+      classifyWorktreeTeardownRefusal('depth_review', PROJECT_DIR, PROJECT_DIR),
     ).toEqual({ expected: true });
   });
 
