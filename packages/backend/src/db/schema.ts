@@ -229,6 +229,25 @@ export function runMigrations(target: Database.Database): void {
       last_failure_at      INTEGER NOT NULL
     );
 
+    -- readiness_retry_counts: consecutive-identical-rejection counter for a
+    -- groom session's task.setStatus -> Ready stage-time readiness-gate
+    -- violations (see readinessGate.ts's checkReadiness), keyed per
+    -- (session_id, task_id) — a fresh session on the same task starts at
+    -- zero, and a different session's retries never interfere with this
+    -- one's count. Reset whenever the violation set changes (a new
+    -- violations_hash overwrites the row via upsert) or a body edit for the
+    -- task commits (see resetReadinessRetryCount). Caps a session re-staging
+    -- the exact same rejected flip forever (task: cap identical readiness-
+    -- gate rejections per groom session).
+    CREATE TABLE IF NOT EXISTS readiness_retry_counts (
+      session_id      TEXT    NOT NULL,
+      task_id         TEXT    NOT NULL,
+      violations_hash TEXT    NOT NULL,
+      attempts        INTEGER NOT NULL DEFAULT 0,
+      updated_at      INTEGER NOT NULL,
+      PRIMARY KEY (session_id, task_id)
+    );
+
     CREATE TABLE IF NOT EXISTS task_repo_assignments (
       task_id      TEXT    PRIMARY KEY,
       project_id   TEXT    NOT NULL,

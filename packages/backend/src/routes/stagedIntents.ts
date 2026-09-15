@@ -39,6 +39,7 @@ import {
   parseManualVerificationItems,
   parseOperationalSeedItems,
   checkAccretionContentMatch,
+  hashReadinessViolations,
   type ReadinessViolation,
 } from '../tasks/readinessGate';
 import {
@@ -109,6 +110,8 @@ import {
   setSessionTerminalCompletionReason,
   getGateVerifyAutoCommitPolicy,
   listLiveGateVerifyIntentsForMilestoneAndDisposition,
+  recordReadinessRetryAttempt,
+  resetReadinessRetryCount,
 } from '../db/queries';
 import type { OpsReconciliationAssertion } from '../db/types';
 import { DependencyResolver } from '../notion/DependencyResolver';
@@ -1635,6 +1638,14 @@ export interface StagedIntent {
   annotation?:
     | { blocked: true; violations: ReadinessViolation[] }
     | { blocked: true; reasons: string[] }
+    | {
+        blocked: true;
+        violations: ReadinessViolation[];
+        /** Set when this rejection is terminal — see evaluateReadinessRetryCap: the session re-staged the same violation set READINESS_RETRY_CAP_LIMIT times in a row. */
+        terminalReason: 'readiness_retry_cap';
+        violationsHash: string;
+        attempts: number;
+      }
     | { advisory: true; violations: ReadinessViolation[] }
     | { autoRejected: true }
     | { autoApproved: true }
@@ -7106,13 +7117,21 @@ async function computeProposedBody(
       ACTIVE_STATES.includes(row.state) &&
       (JSON.parse(row.payload) as UpdateBodyPayload).taskId === taskId,
   );
-  if (updateBodyRow) {
-    const payload = JSON.parse(updateBodyRow.payload) as UpdateBodyPayload;
-    return {
-      body: composeProposedBody(stored, payload.sections),
-      unapplied: [],
-    };
-  }
+  // A task.updateBody replaces the whole body wholesale, so it's the base a
+  // sibling task.patchBodySection composes on top of — but both can be live
+  // in the same group at once (e.g. an updateBody fixing Context alongside a
+  // patchBodySection appending a type-specific section updateBody's fixed
+  // TaskBodySections schema has no field for, like 🔎 Investigation's
+  // "## Deliverables"). Picking only one and ignoring the other silently
+  // drops the ignored one's content from the preview the readiness gate
+  // evaluates, which is exactly the failure mode that let a groom session's
+  // staged Deliverables fix never register against the gate.
+  const base = updateBodyRow
+    ? composeProposedBody(
+        stored,
+        (JSON.parse(updateBodyRow.payload) as UpdateBodyPayload).sections,
+      )
+    : stored;
   const patchRows = intents.filter(
     (row) =>
       row.kind === 'task.patchBodySection' &&
@@ -7134,7 +7153,7 @@ async function computeProposedBody(
       });
     }
     return result.body;
-  }, stored);
+  }, base);
   return { body, unapplied };
 }
 
@@ -7235,14 +7254,97 @@ function resolveEffectiveType(
 }
 
 /**
+ * Consecutive identical-violations rejections a (session, task) pair may
+ * accumulate before the stage route stops accepting the re-stage outright —
+ * see evaluateReadinessRetryCap. Three strikes: the first rejection tells the
+ * session what's wrong, the second confirms the session's correction attempt
+ * didn't land, and a third identical rejection means the session is looping
+ * rather than converging — cut it off there instead of letting it re-stage
+ * the same rejected flip indefinitely (the failure mode observed in groom
+ * session 27841dfd: 57 identical task.setStatus rejections in one turn).
+ */
+const READINESS_RETRY_CAP_LIMIT = 3;
+
+/**
+ * Bounds how many times a single groom session may re-stage a task.setStatus
+ * -> Ready that the readiness gate (checkReadiness's structural/lexical
+ * tiers) rejects for the exact same violation set. Keyed by (sessionId,
+ * taskId) in readiness_retry_counts — persisted, not in-memory, so it
+ * survives across the many separate HTTP/MCP calls one groom turn makes.
+ * Unrelated to (and independent of) routeStageTimeBlock's groupRevisionRounds
+ * budget: that one is keyed by groupId and a session re-staging into a fresh
+ * group each attempt (e.g. because each rejected group's task.setStatus gets
+ * superseded rather than revised in place) never accumulates rounds against
+ * it — this cap is the backstop that still catches that case, since it keys
+ * on the (session, task) pair and the violation content itself, not the
+ * group. Returns null when the attempt is not (yet) capped; the caller is
+ * responsible for actually terminating the stage when it is.
+ */
+function evaluateReadinessRetryCap(
+  sessionId: string | null | undefined,
+  taskId: string,
+  projectId: string | null | undefined,
+  violations: ReadinessViolation[],
+): {
+  violationsHash: string;
+  attempts: number;
+  message: string;
+} | null {
+  if (!sessionId) return null;
+  const violationsHash = hashReadinessViolations(violations);
+  const attempts = recordReadinessRetryAttempt(
+    sessionId,
+    taskId,
+    violationsHash,
+    Date.now(),
+  );
+  if (attempts < READINESS_RETRY_CAP_LIMIT) return null;
+  recordEvent({
+    event_type: 'groom_readiness_retry_capped',
+    actor_type: 'system',
+    actor_id: null,
+    project_id: projectId ?? null,
+    task_id: taskId,
+    payload: { taskId, sessionId, violationsHash, attempts },
+  });
+  const message =
+    `readiness_retry_cap: task.setStatus -> Ready for task "${taskId}" has now been rejected ` +
+    `${attempts} times in a row for the exact same readiness violations — stop re-staging this ` +
+    'flip and end your turn instead. Violations: ' +
+    violations.map((v) => v.detail).join('; ');
+  return { violationsHash, attempts, message };
+}
+
+/**
+ * Clears a task's readiness-retry cap counters (see evaluateReadinessRetryCap)
+ * whenever a task.updateBody or task.patchBodySection intent for it commits —
+ * a real, landed body edit is progress on the task regardless of whether its
+ * content happens to produce the exact same violations_hash on the very next
+ * task.setStatus retry, so the counter shouldn't carry a strike count earned
+ * against the pre-edit body into the post-edit one. A no-op for any other
+ * intent kind.
+ */
+function resetReadinessRetryCapOnBodyCommit(intent: StagedIntent): void {
+  if (intent.kind !== 'task.updateBody' && intent.kind !== 'task.patchBodySection') {
+    return;
+  }
+  const taskId = (intent.payload as { taskId?: string })?.taskId;
+  if (taskId) resetReadinessRetryCount(taskId);
+}
+
+/**
  * Stage-time eager validation for a task.setStatus -> Ready intent: runs the
  * same grooming-promotion-gate and readiness-gate checks the commit-time path
  * (applyIntent's task.setStatus case) enforces, but only to annotate the
- * intent — never to block the stage itself. Surfacing the gap here, in the
- * response to the session's own stage call, lets a session that mis-filled a
- * field self-correct in-turn (re-stage a corrected intent) instead of the
- * gap only being discovered later by the operator reviewing the decision
- * surface. checkGroomingPromotionGate + checkReadiness at commit time remain
+ * intent — never to block the stage itself, EXCEPT for the readiness-retry
+ * cap (evaluateReadinessRetryCap): a session that has re-staged the same
+ * rejected violation set READINESS_RETRY_CAP_LIMIT times in a row gets that
+ * stage outright rejected rather than annotated-and-left-staged, since
+ * leaving it staged is exactly what let the session re-stage it again.
+ * Surfacing the gap here, in the response to the session's own stage call,
+ * lets a session that mis-filled a field self-correct in-turn (re-stage a
+ * corrected intent) instead of the gap only being discovered later by the
+ * operator reviewing the decision surface. checkGroomingPromotionGate + checkReadiness at commit time remain
  * the sole hard authority — this never replaces that check, only precedes
  * it. Shared by both stage-time surfaces (POST /staged-intents and the
  * session loopback POST /task-intents), since both stage through the same
@@ -7330,6 +7432,38 @@ export async function runStageTimeReadyChecks(
 
   const violations = checkReadiness(body, resolvedType);
   if (violations.length > 0) {
+    const cap = evaluateReadinessRetryCap(
+      intent.sessionId,
+      payload.taskId,
+      intent.projectId,
+      violations,
+    );
+    if (cap) {
+      // 'pending_verification' has no direct edge to 'rejected' (only to
+      // 'staged'/'needs_revision' — see STAGED_INTENT_TRANSITIONS) — hop
+      // through 'needs_revision' first, mirroring transitionRejectedIntent's
+      // identical hop, so this cap can terminate a row regardless of which
+      // stage-time caller (initial stage, or verifyGroup's turn-park
+      // re-verify, which already moved it to pending_verification) it fires
+      // from.
+      const current = getStagedIntentRow(intent.id);
+      if (current?.state === 'pending_verification') {
+        transitionStagedIntent(intent.id, 'needs_revision');
+      }
+      const rejected = transitionStagedIntent(intent.id, 'rejected', {
+        dispositionReason: cap.message,
+        annotation: JSON.stringify({
+          blocked: true,
+          violations,
+          terminalReason: 'readiness_retry_cap',
+          violationsHash: cap.violationsHash,
+          attempts: cap.attempts,
+        }),
+      });
+      const rejectedIntent = rowToApi(rejected);
+      broadcastIntentChange(rejectedIntent);
+      return rejectedIntent;
+    }
     setStagedIntentAnnotation(
       intent.id,
       JSON.stringify({ blocked: true, violations }),
@@ -7575,6 +7709,10 @@ export async function routeStageTimeBlock(
   }
 
   const checked = await runStageTimeReadyChecks(intent);
+  // Already terminal — evaluateReadinessRetryCap rejected this stage outright
+  // rather than leaving it staged/blocked, so there is nothing left to hide
+  // or re-verify (and 'rejected' has no further transitions to hop through).
+  if (checked.state === 'rejected') return checked;
   const detail = describeBlockedAnnotation(checked.annotation);
   // No originating session — nothing to auto-correct and re-verify this via
   // a later turn-park, so hiding it would strand it in needs_revision
@@ -7629,11 +7767,20 @@ async function verifyGroup(
 
   const errors: string[] = [];
   const matchedAccretionRowIds: string[] = [];
+  // Members the readiness-retry cap already terminated outright (see
+  // evaluateReadinessRetryCap) — already sitting in `rejected` with no
+  // further transitions available, so the group-level revert loops below
+  // must skip them rather than try to move a terminal row back to
+  // staged/needs_revision.
+  const cappedRowIds = new Set<string>();
   for (const row of members) {
     const checked = await runStageTimeReadyChecks(rowToApi(row));
     const detail = describeBlockedAnnotation(checked.annotation);
     if (detail) {
       errors.push(`${row.kind} (${row.task_id ?? row.id}): ${detail}`);
+    }
+    if (checked.state === 'rejected') {
+      cappedRowIds.add(row.id);
     }
 
     if (isArmingReadyIntent(row)) {
@@ -7687,6 +7834,7 @@ async function verifyGroup(
     groupRevisionRounds.set(groupId, round);
   }
   for (const row of members) {
+    if (cappedRowIds.has(row.id)) continue;
     broadcastIntentChange(
       rowToApi(
         transitionStagedIntent(row.id, escalated ? 'staged' : 'needs_revision'),
@@ -8313,6 +8461,7 @@ async function applyGroupMember(
       intent,
       (result as { previousState?: OpsState } | undefined)?.previousState,
     );
+    resetReadinessRetryCapOnBodyCommit(intent);
     await planningOrchestrator?.handleDisposition({
       intent: committedRow,
       disposition: 'approve',
@@ -9123,6 +9272,21 @@ export function createStagedIntentsRouter(
       }
 
       const checked = await runStageTimeReadyChecks(intent);
+      if (
+        checked.state === 'rejected' &&
+        checked.annotation &&
+        'terminalReason' in checked.annotation &&
+        checked.annotation.terminalReason === 'readiness_retry_cap'
+      ) {
+        res.status(409).json({
+          error: 'readiness_retry_cap',
+          violations: checked.annotation.violations,
+          violationsHash: checked.annotation.violationsHash,
+          attempts: checked.annotation.attempts,
+          intent: checked,
+        });
+        return;
+      }
       res.status(201).json(checked);
     }),
   );
@@ -9218,6 +9382,7 @@ export function createStagedIntentsRouter(
           intent,
           (result as { previousState?: OpsState } | undefined)?.previousState,
         );
+        resetReadinessRetryCapOnBodyCommit(intent);
         await planningOrchestrator?.handleDisposition({
           intent: committed,
           disposition: 'approve',

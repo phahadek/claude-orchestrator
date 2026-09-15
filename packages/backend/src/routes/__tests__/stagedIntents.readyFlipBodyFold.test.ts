@@ -141,6 +141,57 @@ describe('Ready-flip preview folds same-task body patches staged outside the gro
     expect(checked.annotation).toBeNull();
   });
 
+  it('folds BOTH a same-group task.updateBody and a same-group task.patchBodySection into the preview — replay shape of groom-3db22f91-xdist-crash: a task.updateBody rewriting the body (which still leaves a deferral phrase in its Context) coexisting with a task.patchBodySection that fixes that phrase must not have the patch silently dropped just because a sibling task.updateBody also targets the task (task.updateBody replacing the whole body used to make computeProposedBody pick ONE of the two live body-edit intents and ignore the other outright)', async () => {
+    mockGetTaskBackend.mockReturnValue(makeBackend('## Summary\nOld.\n'));
+    recordAccretion('notion:updatebody-plus-patch');
+
+    // Rewrites the whole body via the fixed TaskBodySections schema — its
+    // Context still carries an unresolved deferral phrase (Tier 2), which
+    // needs a follow-up patch rather than a second updateBody to fix.
+    stageIntent(
+      'task.updateBody',
+      {
+        taskId: 'notion:updatebody-plus-patch',
+        sections: {
+          summary: 'Clean rewrite.',
+          dependencies: [],
+          context: [
+            {
+              type: 'paragraph',
+              text: 'The retry policy will be decide during implementation.',
+            },
+          ],
+          automatedCriteria: ['Covers the retry path.'],
+          manualCriteria: [],
+        },
+      },
+      'proj-1',
+      'group-1',
+    );
+    // Fixes the deferral phrase the updateBody's own Context still carries —
+    // this is the intent the pre-fix code silently dropped from the preview
+    // whenever a sibling task.updateBody for the same task was also live.
+    stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: 'notion:updatebody-plus-patch',
+        section: 'Context',
+        operation: 'replace',
+        find: 'The retry policy will be decide during implementation.',
+        replaceWith: 'The retry policy is exponential backoff, capped at 30s.',
+      },
+      'proj-1',
+      'group-1',
+    );
+
+    const checked = await stageReadyFlip(
+      'notion:updatebody-plus-patch',
+      'group-1',
+    );
+
+    expect(checked.annotation).toBeNull();
+  });
+
   it('still folds a same-group task.patchBodySection (regression)', async () => {
     mockGetTaskBackend.mockReturnValue(
       makeBackend('## Open Questions\n- Still unresolved?\n'),
