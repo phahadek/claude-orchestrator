@@ -141,7 +141,7 @@ vi.mock('../CliSessionRunner', () => ({
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { AgentSession } from '../AgentSession';
+import { AgentSession, mergeAssistantContent } from '../AgentSession';
 import {
   upsertPullRequest,
   getPRBySessionId,
@@ -331,6 +331,103 @@ describe('<pr-body> marker — createPR path', () => {
     // createPR only called once; second emission hits the updatePR path
     expect(ghClient.createPR).toHaveBeenCalledTimes(1);
     expect(ghClient.updatePR).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('<pr-body> marker — split across non-contiguous text segments', () => {
+  beforeEach(() => {
+    vi.mocked(upsertPullRequest).mockClear();
+    vi.mocked(validatePRBody).mockReturnValue({
+      valid: true,
+      missingSections: [],
+    });
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+  });
+
+  it('recognizes the marker when its opening/closing tags land in separate text blocks split by an intervening tool_use', async () => {
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    const msgId = 'msg_split_pr_body';
+
+    sendEvent(session, {
+      type: 'assistant',
+      message: {
+        id: msgId,
+        content: [{ type: 'text', text: `Wrapping up.\n\n<pr-body>\n${VALID_BODY}` }],
+      },
+    });
+    sendEvent(session, {
+      type: 'assistant',
+      message: {
+        id: msgId,
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_1',
+            name: 'Bash',
+            input: { command: 'echo hi' },
+          },
+        ],
+      },
+    });
+    sendEvent(session, {
+      type: 'assistant',
+      message: {
+        id: msgId,
+        content: [{ type: 'text', text: '</pr-body>' }],
+      },
+    });
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(ghClient.createPR).toHaveBeenCalledWith(
+      'owner/repo',
+      expect.objectContaining({
+        title: 'feat: my-task',
+        body: VALID_BODY.trim(),
+        head: 'feature/my-task',
+        base: 'dev',
+        draft: true,
+      }),
+    );
+  });
+});
+
+describe('mergeAssistantContent', () => {
+  it('preserves both non-contiguous text segments in arrival order when a tool_use intervenes', () => {
+    const step1 = mergeAssistantContent([], [{ type: 'text', text: 'first segment' }]);
+    const step2 = mergeAssistantContent(step1, [
+      { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: {} },
+    ]);
+    const step3 = mergeAssistantContent(step2, [
+      { type: 'text', text: 'second segment' },
+    ]);
+
+    const textBlocks = step3.filter((b) => b.type === 'text');
+    expect(textBlocks).toEqual([
+      { type: 'text', text: 'first segment' },
+      { type: 'text', text: 'second segment' },
+    ]);
+  });
+
+  it('replaces (not duplicates) the last text segment when incoming text is a cumulative re-send of the in-progress run', () => {
+    const step1 = mergeAssistantContent([], [{ type: 'text', text: 'Hel' }]);
+    const step2 = mergeAssistantContent(step1, [{ type: 'text', text: 'Hello' }]);
+
+    const textBlocks = step2.filter((b) => b.type === 'text');
+    expect(textBlocks).toEqual([{ type: 'text', text: 'Hello' }]);
+  });
+
+  it('preserves existing text when an incoming event carries only a tool_use block', () => {
+    const step1 = mergeAssistantContent([], [{ type: 'text', text: 'hello' }]);
+    const step2 = mergeAssistantContent(step1, [
+      { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: {} },
+    ]);
+
+    expect(step2).toEqual([
+      { type: 'text', text: 'hello' },
+      { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: {} },
+    ]);
   });
 });
 
