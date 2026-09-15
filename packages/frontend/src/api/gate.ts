@@ -306,10 +306,7 @@ export const gateApi = {
   },
 
   /** The Milestone panel's trust-precision read: every flow's rejection/abstain rate plus the per-kind auto-grant disagreement rate, in one request. Informative only — no auto-disarm. */
-  getTrustRates(
-    project: string,
-    milestone: string,
-  ): Promise<TrustRatesResult> {
+  getTrustRates(project: string, milestone: string): Promise<TrustRatesResult> {
     return apiRequest<TrustRatesResult>(
       `/api/gate/trust-rate${buildQuery({ project, milestone })}`,
     );
