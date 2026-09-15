@@ -9,6 +9,7 @@ import {
   gateVerifyDispositionSchema,
   gateVerifyEvidenceSchema,
   gateVerifyReclassifySchema,
+  gateVerifyProposedFixSchema,
   gateVerifyPayloadSchema,
   gateVerifyResultSchema,
   deployAgenticVerdictSchema,
@@ -340,12 +341,13 @@ export function registerVerdictTools(
       {
         title: 'Stage a gate-item verification disposition',
         description:
-          'Stages this read-only gate-verify session\'s finding for the single gate item it was dispatched to verify — pass/fail/needs-setup/not-yet-triggerable, plus an optional self-correction reclassify proposal (Human-Observation or needs-triage only) — as a normal gate.verify intent for an operator to dispose on the decision surface, exactly like any other staged intent. Use needs-setup only when a real setup step is missing that a human must perform; use not-yet-triggerable when the scenario simply has not occurred yet or the data does not exist yet — it parks the item for a scheduled retry instead of shelving it. gateItemId must be the FULL gate item uuid (e.g. "3b022f91-52f3-8173-b9b2-ada4fdb54c82"), never an 8-character short form — this project\'s ids share long structured prefixes, so a truncated id is rejected at stage time rather than resolved. The operator, never the session or the backend automatically, turns this into the gate_item_event write; a rejection resumes this session for a normal turn to revise and report again, with no limit on revisions.',
+          'Stages this read-only gate-verify session\'s finding for the single gate item it was dispatched to verify — pass/fail/needs-setup/not-yet-triggerable, plus an optional self-correction reclassify proposal (Human-Observation or needs-triage only) — as a normal gate.verify intent for an operator to dispose on the decision surface, exactly like any other staged intent. Use needs-setup only when a real setup step is missing that a human must perform; use not-yet-triggerable when the scenario simply has not occurred yet or the data does not exist yet — it parks the item for a scheduled retry instead of shelving it. gateItemId must be the FULL gate item uuid (e.g. "3b022f91-52f3-8173-b9b2-ada4fdb54c82"), never an 8-character short form — this project\'s ids share long structured prefixes, so a truncated id is rejected at stage time rather than resolved. On a fail, you may also supply proposedFix (a capped title + short summary) shaping the follow-up fix task\'s title/wording the reconciler files — omit it to fall back to the generic "Fix gate item: <text>" title; rejected on any disposition other than fail. The operator, never the session or the backend automatically, turns this into the gate_item_event write; a rejection resumes this session for a normal turn to revise and report again, with no limit on revisions.',
         inputSchema: {
           gateItemId: z.string(),
           disposition: gateVerifyDispositionSchema,
           evidence: gateVerifyEvidenceSchema.optional(),
           reclassify: gateVerifyReclassifySchema.optional(),
+          proposedFix: gateVerifyProposedFixSchema.optional(),
         },
       },
       async (args) => {
@@ -362,6 +364,7 @@ export function registerVerdictTools(
             disposition: args.disposition,
             evidence: args.evidence,
             reclassify: args.reclassify,
+            proposedFix: args.proposedFix,
           });
         } catch (err) {
           return invalid(err instanceof Error ? err.message : String(err));

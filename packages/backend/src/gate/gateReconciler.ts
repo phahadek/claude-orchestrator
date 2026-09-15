@@ -114,6 +114,21 @@ export interface GateVerificationResult {
     reason: string;
   };
   /**
+   * A failing session's own proposal for the follow-up fix task's
+   * title/wording — see gateVerifyProposedFixSchema in
+   * mcp/tools/schemas.ts. When present, `defaultFollowupFiler` uses it in
+   * place of the generic `Fix gate item: ${item.text}` title/summary; the
+   * Context section is still assembled deterministically by
+   * `buildFollowupTaskBody` regardless. Only ever set alongside
+   * `disposition: 'fail'` — schema-enforced at the MCP boundary, never
+   * present on a Human-Observation mirror's operator-supplied disposition
+   * (no verify session runs on that path).
+   */
+  proposedFix?: {
+    title: string;
+    summary: string;
+  };
+  /**
    * Set when this result came from a session's own `gate.verify` report,
    * staged as a normal intent rather than written straight to
    * gate_item_event (see mcp/tools/verdictTools.ts,
@@ -279,7 +294,8 @@ function buildFollowupTaskBody(
   }
 
   const sections: TaskBodySections = {
-    summary: `Fix gate item ${item.id}: ${item.text}`,
+    summary:
+      failure.proposedFix?.summary ?? `Fix gate item ${item.id}: ${item.text}`,
     dependencies: [],
     context,
     automatedCriteria: [`Gate item ${item.id} re-verifies as pass.`],
@@ -298,7 +314,7 @@ export const defaultFollowupFiler: FollowupFixTaskFiler = {
         `[GateReconciler] task backend for project ${item.project} does not support createTask`,
       );
     }
-    const title = `Fix gate item: ${item.text}`;
+    const title = failure.proposedFix?.title ?? `Fix gate item: ${item.text}`;
     const taskId = await backend.createTask({
       databaseId,
       title,

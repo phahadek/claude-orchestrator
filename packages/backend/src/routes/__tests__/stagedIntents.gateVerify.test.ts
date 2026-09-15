@@ -329,6 +329,66 @@ describe('gate.verify — fail disposition files a follow-up task via resolveMil
       .get(staged.body.id) as { state: string };
     expect(row.state).toBe('committed');
   });
+
+  it('uses the reported proposedFix title/summary for the filed task, in place of the generic boilerplate', async () => {
+    const item = makeGateItem({ milestone: 'M13' });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'gate.verify',
+      projectId: 'proj-a',
+      payload: {
+        gateItemId: item.id,
+        disposition: 'fail',
+        evidence: { basis: 'operational', note: 'the env var is missing' },
+        proposedFix: {
+          title: 'Write the missing env var in the deploy script',
+          summary: 'The deploy script never writes NEW_ENV_VAR to .env.',
+        },
+      },
+    });
+    expect(staged.status).toBe(201);
+
+    await agent.post(`/api/staged-intents/${staged.body.id}/approve`).send({});
+    const applied = await agent
+      .post(`/api/staged-intents/${staged.body.id}/apply`)
+      .send({});
+
+    expect(applied.status).toBe(200);
+    expect(createTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Write the missing env var in the deploy script',
+      }),
+    );
+  });
+
+  it('falls back to the generic "Fix gate item" title/summary when no proposedFix is reported', async () => {
+    const item = makeGateItem({ milestone: 'M13' });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'gate.verify',
+      projectId: 'proj-a',
+      payload: {
+        gateItemId: item.id,
+        disposition: 'fail',
+        evidence: { basis: 'operational', note: 'the env var is missing' },
+      },
+    });
+    expect(staged.status).toBe(201);
+
+    await agent.post(`/api/staged-intents/${staged.body.id}/approve`).send({});
+    const applied = await agent
+      .post(`/api/staged-intents/${staged.body.id}/apply`)
+      .send({});
+
+    expect(applied.status).toBe(200);
+    expect(createTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({ title: `Fix gate item: ${item.text}` }),
+    );
+  });
 });
 
 describe('gate.verify — Human-Observation mirror apply (operator-supplied disposition)', () => {

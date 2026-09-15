@@ -347,6 +347,20 @@ export function buildGateVerifyProcedure(item: GateItem): string {
     '```json',
     '{"expected": "...", "found": "...", "query": "...", "source": "path/to/file.ts:123"}',
     '```',
+    '',
+    "On a `fail`, you may also propose the follow-up fix task's title and " +
+      'summary via a top-level `proposedFix` field (admissible only on ' +
+      'fail) — when you omit it, the reconciler falls back to a generic ' +
+      '"Fix gate item: <item text>" title. `title` is a single capped line ' +
+      '(a real task title, not a restatement of the gate item text); ' +
+      '`summary` is a short scope paragraph, not a full markdown body — the ' +
+      'reconciler still assembles the Context section (gate item text, your ' +
+      'evidence, deploy SHA, originating source) deterministically on its ' +
+      'own regardless of what you propose here:',
+    '',
+    '```json',
+    '{"proposedFix": {"title": "...", "summary": "..."}}',
+    '```',
   ].join('\n');
 }
 
@@ -522,6 +536,7 @@ export class SessionGateItemVerifier implements GateItemVerifier {
         disposition: payload.disposition.disposition,
         evidence: payload.disposition.evidence ?? { sessionId },
         reclassify: payload.disposition.reclassify,
+        proposedFix: payload.disposition.proposedFix,
       });
 
       const onDisposition = (payload: GateVerifyDispositionPayload) => {

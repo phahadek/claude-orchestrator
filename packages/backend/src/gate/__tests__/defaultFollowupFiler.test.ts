@@ -127,6 +127,41 @@ describe('defaultFollowupFiler.fileFollowupFixTask', () => {
     );
   });
 
+  it('uses proposedFix.title/summary in place of the generic title/summary when the failure carries one', async () => {
+    const item = makeItem();
+
+    await defaultFollowupFiler.fileFollowupFixTask(item, {
+      disposition: 'fail',
+      proposedFix: {
+        title: 'Env var write is missing from the deploy script',
+        summary: 'The deploy script never writes NEW_ENV_VAR to .env.',
+      },
+    });
+
+    expect(createTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Env var write is missing from the deploy script',
+        body: expect.stringContaining(
+          'The deploy script never writes NEW_ENV_VAR to .env.',
+        ),
+      }),
+    );
+  });
+
+  it('falls back to the generic title/summary when the failure carries no proposedFix', async () => {
+    const item = makeItem();
+
+    await defaultFollowupFiler.fileFollowupFixTask(item, {
+      disposition: 'fail',
+    });
+
+    expect(createTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: `Fix gate item: ${item.text}`,
+      }),
+    );
+  });
+
   it('throws UnknownMilestoneError — not project.boardId — for a milestone that does not resolve, and never calls createTask', async () => {
     const item = makeItem({ milestone: 'not-a-real-milestone' });
 

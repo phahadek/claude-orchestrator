@@ -210,6 +210,46 @@ describe('gate.verify auto-commit — staging-time attempt', () => {
     expect(sessionRow?.status).toBe('idle');
   });
 
+  it('files the follow-up fix task with the reported proposedFix title/summary on an auto-committed fail', async () => {
+    const item = makeRunnableGateItem();
+    seedVerifySession('verify-session-proposed-fix', item.id);
+    upsertGateVerifyAutoCommitPolicy('M12', 'fail', true, Date.now());
+
+    const sm = makeSessionManager();
+    const planningOrchestrator = new PlanningOrchestrator(sm as any);
+    createStagedIntentsRouter(planningOrchestrator, sm as any);
+
+    const staged = stageIntent(
+      'gate.verify',
+      {
+        gateItemId: item.id,
+        disposition: 'fail',
+        proposedFix: {
+          title: 'Fix the missing audit write',
+          summary: 'The endpoint never writes an audit_log row on success.',
+        },
+      },
+      'proj-auto-commit',
+      null,
+      'verify-session-proposed-fix',
+      `Gate item ${item.id}: reported fail`,
+      null,
+      null,
+      item.milestone,
+      null,
+    );
+
+    await autoCommitGateVerifyIntent(
+      staged as any,
+      sm as any,
+      planningOrchestrator,
+    );
+
+    expect(createTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Fix the missing audit write' }),
+    );
+  });
+
   it('leaves an unarmed disposition class staged, untouched', async () => {
     const item = makeRunnableGateItem();
     seedVerifySession('verify-session-3', item.id);
