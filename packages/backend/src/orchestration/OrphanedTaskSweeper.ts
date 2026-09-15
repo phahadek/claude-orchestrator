@@ -27,6 +27,7 @@ import {
 import { sessionDidWork } from '../session/sessionLifecycle';
 import { isMachineParkedIdle } from '../session/sessionPredicates';
 import { isUsageAdmitted } from './usageAdmission';
+import { yieldToEventLoop } from '../utils/concurrency';
 import {
   recordEvent,
   countNudgeEvents,
@@ -203,6 +204,16 @@ export class OrphanedTaskSweeper {
       }
 
       for (const resolved of tasks) {
+        // Most tasks return early from maybeRevertTask via purely
+        // synchronous DB checks (isNoOpSuppressed, hasActiveSessionForTask,
+        // etc.) with no real I/O await inside — awaiting that only chains a
+        // microtask, which Node drains in full before ever reaching the
+        // event loop's I/O/timer phase. Across every In Progress task in
+        // every project, that never actually yields. Force a real
+        // macrotask-queue yield per task, same pattern as
+        // TaskCacheRefresher's per-milestone loop.
+        await yieldToEventLoop();
+
         const taskId = resolved.task.id;
         if (!taskId || seen.has(taskId)) continue;
         seen.add(taskId);
