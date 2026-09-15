@@ -255,7 +255,7 @@ beforeEach(() => {
 });
 
 describe('AutoMerger merge eligibility — human_merge_only', () => {
-  it('isMergeEligible() itself returns reason human_merge_only for a human_merge_only PR, independent of run()\'s own earlier short-circuit', async () => {
+  it("isMergeEligible() itself returns reason human_merge_only for a human_merge_only PR, independent of run()'s own earlier short-circuit", async () => {
     // run()'s pre-poll-loop check already returns before ever reaching
     // attemptMerge for a human_merge_only PR (see AutoMerger.ts), so this
     // exercises the unified predicate directly — the single source of truth
