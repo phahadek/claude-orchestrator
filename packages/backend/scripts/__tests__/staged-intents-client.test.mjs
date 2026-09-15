@@ -192,7 +192,10 @@ describe('staged-intents-client.mjs reject', () => {
       outcome: 'decline',
       reason: 'not needed',
     });
-  });
+  }, // This spawns a real child process; under full-suite parallel load the
+  // default 5000ms budget is sometimes consumed by process-scheduling
+  // contention alone, before the script even opens its socket.
+  15000);
 
   it('refuses client-side when --outcome is not pushback or decline', async () => {
     await expect(

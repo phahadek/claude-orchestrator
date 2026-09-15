@@ -574,6 +574,11 @@ export function runMigrations(target: Database.Database): void {
     -- indexed (session_id, timestamp) lookup into session_events can even
     -- start. See queries.ts's session_events filtered-read section.
     CREATE INDEX IF NOT EXISTS idx_sessions_project_id ON sessions(project_id);
+    -- Backs getFlowRejectionRate's staging-flow query (joins staged_intent to
+    -- sessions on project_id + session_type per trust-precision flow), which
+    -- otherwise seeks idx_sessions_project_id alone and then filters
+    -- session_type row-by-row across the whole project's session history.
+    CREATE INDEX IF NOT EXISTS idx_sessions_project_id_session_type ON sessions(project_id, session_type);
   `);
 
   // Idempotent column additions for existing databases
