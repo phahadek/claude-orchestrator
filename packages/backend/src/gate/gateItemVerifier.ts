@@ -348,7 +348,7 @@ export function buildGateVerifyProcedure(item: GateItem): string {
     '{"expected": "...", "found": "...", "query": "...", "source": "path/to/file.ts:123"}',
     '```',
     '',
-    'On a `fail`, you may also propose the follow-up fix task\'s title and ' +
+    "On a `fail`, you may also propose the follow-up fix task's title and " +
       'summary via a top-level `proposedFix` field (admissible only on ' +
       'fail) — when you omit it, the reconciler falls back to a generic ' +
       '"Fix gate item: <item text>" title. `title` is a single capped line ' +

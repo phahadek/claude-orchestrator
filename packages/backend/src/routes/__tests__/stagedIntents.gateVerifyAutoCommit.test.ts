@@ -239,7 +239,11 @@ describe('gate.verify auto-commit — staging-time attempt', () => {
       null,
     );
 
-    await autoCommitGateVerifyIntent(staged as any, sm as any, planningOrchestrator);
+    await autoCommitGateVerifyIntent(
+      staged as any,
+      sm as any,
+      planningOrchestrator,
+    );
 
     expect(createTaskMock).toHaveBeenCalledWith(
       expect.objectContaining({ title: 'Fix the missing audit write' }),

@@ -294,7 +294,8 @@ function buildFollowupTaskBody(
   }
 
   const sections: TaskBodySections = {
-    summary: failure.proposedFix?.summary ?? `Fix gate item ${item.id}: ${item.text}`,
+    summary:
+      failure.proposedFix?.summary ?? `Fix gate item ${item.id}: ${item.text}`,
     dependencies: [],
     context,
     automatedCriteria: [`Gate item ${item.id} re-verifies as pass.`],
