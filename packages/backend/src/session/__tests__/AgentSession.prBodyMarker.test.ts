@@ -152,6 +152,7 @@ import {
   getSessionMilestoneId,
   getMilestoneById,
   getLatestTestRequestRun,
+  insertTestRequestRun,
   insertTestRunResults,
   markTestResultExcused,
 } from '../../db/queries';
@@ -514,6 +515,7 @@ describe('<pr-body> marker — test.request cache gate', () => {
       started_at: 0,
       finished_at: 1,
     } as never);
+    insertTestRequestRun('run-excused-1', 'proj', 'hash', null, Date.now());
     insertTestRunResults(
       'run-excused-1',
       'proj',
@@ -548,6 +550,7 @@ describe('<pr-body> marker — test.request cache gate', () => {
       started_at: 0,
       finished_at: 1,
     } as never);
+    insertTestRequestRun('run-unmarked-1', 'proj', 'hash', null, Date.now());
     insertTestRunResults(
       'run-unmarked-1',
       'proj',
@@ -581,6 +584,7 @@ describe('<pr-body> marker — test.request cache gate', () => {
       started_at: 0,
       finished_at: 1,
     } as never);
+    insertTestRequestRun('run-partial-1', 'proj', 'hash', null, Date.now());
     insertTestRunResults(
       'run-partial-1',
       'proj',
