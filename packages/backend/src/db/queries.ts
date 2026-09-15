@@ -5788,7 +5788,7 @@ let _stmtHasCommittedNoOpForTask: Database.Statement | null = null;
  * genuine dropped-webhook merge gap, which looks identical from a bare
  * "terminal + no PR row" signal alone.
  */
-export function hasCommittedNoOpForTask(taskId: string): boolean {
+function hasCommittedNoOpForTask(taskId: string): boolean {
   _stmtHasCommittedNoOpForTask ??= db.prepare<[string]>(`
     SELECT 1 FROM staged_intent
     WHERE kind = 'planning.noOp' AND task_id = ? AND state = 'committed'
