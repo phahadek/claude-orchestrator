@@ -533,6 +533,38 @@ describe('reconcileHumanObservationMirrors — unresolved-source mirrors', () =>
     expect(liveMirrorRows('unresolved-source')).toHaveLength(1);
   });
 
+  it('retires a mirror whose backing source is a Done 💻 Code task with no PR AND a committed planning.noOp intent naming it — a confirmed deliberate no-PR closure', () => {
+    const item = makeUnresolvedSourceItem('notion:code-noop-src');
+    upsertTaskCache(
+      'notion:code-noop-src',
+      JSON.stringify({ type: '💻 Code', status: '✅ Done' }),
+    );
+    const now = Date.now();
+    db.prepare(
+      `INSERT INTO staged_intent
+        (id, kind, payload, payload_hash, task_id, project_id, state, created_at, updated_at)
+       VALUES ('noop-1', 'planning.noOp', ?, 'hash', 'notion:code-noop-src', 'proj-mirror', 'committed', ?, ?)`,
+    ).run(
+      JSON.stringify({
+        taskId: 'notion:code-noop-src',
+        reason: 'already satisfied elsewhere',
+      }),
+      now,
+      now,
+    );
+    stageUnresolvedSourceMirror(item);
+    expect(liveMirrorRows('unresolved-source')).toHaveLength(1);
+
+    const result = reconcileHumanObservationMirrors();
+
+    expect(result.retired).toHaveLength(1);
+    expect(liveMirrorRows('unresolved-source')).toHaveLength(0);
+    const row = db
+      .prepare('SELECT disposition_reason FROM staged_intent WHERE id = ?')
+      .get(result.retired[0]) as { disposition_reason: string | null };
+    expect(row.disposition_reason).toMatch(/structurally unresolvable/);
+  });
+
   it('retires the mirror once the source merge commit fills in — unchanged prior behavior', () => {
     const item = makeUnresolvedSourceItem('notion:code-src');
     upsertTaskCache(

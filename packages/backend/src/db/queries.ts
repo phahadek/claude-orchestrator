@@ -5777,16 +5777,48 @@ const NO_PR_SOURCE_TYPES: ReadonlySet<string> = new Set([
   '🔎 Investigation',
 ]);
 
+let _stmtHasCommittedNoOpForTask: Database.Statement | null = null;
+
+/**
+ * True when a committed `planning.noOp` staged_intent names `taskId` — the
+ * durable, source-of-truth confirmation that a code session deliberately
+ * closed that task with nothing to ship (maybeAutoResolveCodeNoOp in
+ * stagedIntents.ts commits exactly this row for every task it auto-resolves
+ * via the noOp path). Used to distinguish a deliberate no-PR closure from a
+ * genuine dropped-webhook merge gap, which looks identical from a bare
+ * "terminal + no PR row" signal alone.
+ */
+function hasCommittedNoOpForTask(taskId: string): boolean {
+  _stmtHasCommittedNoOpForTask ??= db.prepare<[string]>(`
+    SELECT 1 FROM staged_intent
+    WHERE kind = 'planning.noOp' AND task_id = ? AND state = 'committed'
+    LIMIT 1
+  `);
+  const normalized = normalizeTaskId(taskId);
+  if (_stmtHasCommittedNoOpForTask.get(normalized) !== undefined) return true;
+  return taskId !== normalized
+    ? _stmtHasCommittedNoOpForTask.get(taskId) !== undefined
+    : false;
+}
+
 /**
  * True when a gate_item_source's task can never produce a resolvable merge
  * commit: any non-💻-Code type that never produces a branch/PR (see
- * NO_PR_SOURCE_TYPES, mirroring gateService.ts's isSourceCovered), or a
+ * NO_PR_SOURCE_TYPES, mirroring gateService.ts's isSourceCovered), a
  * 🔧 Operational task with no pull_requests row at all (config/backfill work
- * done outside the tracked PR/branch flow). Retrying — or escalating —
- * these is pointless: escalationEvidence's "check for a dropped webhook or a
- * merge outside the tracked PR/branch flow" can never apply, since there was
- * never a PR to have dropped a webhook for. A type that can't be resolved
- * from cache falls back to the strict (PR-producing) assumption, matching
+ * done outside the tracked PR/branch flow), or a terminal (✅ Done/⏭️
+ * Deferred) 💻 Code task with no pull_requests row AND a committed
+ * planning.noOp intent confirming it was deliberately closed with nothing to
+ * ship. A bare "terminal + no PR" signal on a Code task is NOT sufficient on
+ * its own — it's indistinguishable from a genuine dropped-webhook merge, so
+ * a Code task without the committed noOp confirmation still escalates, as
+ * does one that isn't yet terminal (a PR may still arrive) and one that does
+ * have a PR row (any merge-commit gap there is the genuine dropped-webhook
+ * case). Retrying — or escalating — a structurally unresolvable source is
+ * pointless: escalationEvidence's "check for a dropped webhook or a merge
+ * outside the tracked PR/branch flow" can never apply, since there was never
+ * a PR to have dropped a webhook for. A type that can't be resolved from
+ * cache falls back to the strict (PR-producing) assumption, matching
  * gateService.ts's isSourceCovered fallback.
  */
 export function isStructurallyUnresolvableSource(
@@ -5796,6 +5828,12 @@ export function isStructurallyUnresolvableSource(
   if (type && NO_PR_SOURCE_TYPES.has(type)) return true;
   if (type === '🔧 Operational') {
     return !getPRByNotionTaskId(normalizeTaskId(sourceTaskId));
+  }
+  if (type === '💻 Code') {
+    const status = getTaskStatusFromCache(sourceTaskId);
+    if (status !== '✅ Done' && status !== '⏭️ Deferred') return false;
+    if (getPRByNotionTaskId(normalizeTaskId(sourceTaskId))) return false;
+    return hasCommittedNoOpForTask(sourceTaskId);
   }
   return false;
 }
