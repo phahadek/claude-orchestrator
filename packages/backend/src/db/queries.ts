@@ -4757,9 +4757,9 @@ export function clearTaskPauseReasonsByReason(reason: string): number {
  */
 export function clearPausedPrReasonForTask(taskId: string): void {
   const rows = db
-    .prepare<{ task_id: string }>(
-      `SELECT pr_number, repo FROM pull_requests WHERE task_id = @task_id AND pause_reason IS NOT NULL`,
-    )
+    .prepare<{
+      task_id: string;
+    }>(`SELECT pr_number, repo FROM pull_requests WHERE task_id = @task_id AND pause_reason IS NOT NULL`)
     .all({ task_id: taskId }) as Array<{ pr_number: number; repo: string }>;
   for (const row of rows) {
     setPauseReason(row.pr_number, row.repo, null);

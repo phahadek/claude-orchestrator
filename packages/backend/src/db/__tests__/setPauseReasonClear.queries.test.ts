@@ -23,7 +23,10 @@ import {
 
 const REPO = 'owner/repo';
 
-function seedPR(prNumber: number, overrides: Record<string, unknown> = {}): void {
+function seedPR(
+  prNumber: number,
+  overrides: Record<string, unknown> = {},
+): void {
   db.prepare(
     `
     INSERT INTO pull_requests

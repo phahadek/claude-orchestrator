@@ -122,7 +122,11 @@ import { computeWholeTreeContentHash } from '../../session/analyzeGating';
 import { filterBaseAttributableFailuresForF2Gate } from '../../orchestration/baseAttributableFilter';
 import type { GitHubClient } from '../GitHubClient';
 import type { PRMergeWatcher } from '../PRMergeWatcher';
-import type { PullRequestRow, Session, TestRequestRunRow } from '../../db/types';
+import type {
+  PullRequestRow,
+  Session,
+  TestRequestRunRow,
+} from '../../db/types';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -202,7 +206,9 @@ function makeMockWatcher(): PRMergeWatcher {
   } as unknown as PRMergeWatcher;
 }
 
-function makeTestRun(overrides: Partial<TestRequestRunRow> = {}): TestRequestRunRow {
+function makeTestRun(
+  overrides: Partial<TestRequestRunRow> = {},
+): TestRequestRunRow {
   return {
     id: 'run-1',
     project_id: 'proj-1',

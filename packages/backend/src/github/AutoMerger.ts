@@ -786,7 +786,10 @@ export class AutoMerger {
     | { ok: true }
     | {
         ok: false;
-        reason: 'human_merge_only' | 'verdict_not_approved' | 'test_gate_not_passed';
+        reason:
+          | 'human_merge_only'
+          | 'verdict_not_approved'
+          | 'test_gate_not_passed';
       }
   > {
     if (pr.human_merge_only) {
@@ -827,11 +830,7 @@ export class AutoMerger {
       return { ok: false, reason: 'test_gate_not_passed' };
     }
 
-    const testResult = getLatestTestRequestRun(
-      project.id,
-      contentHash,
-      'full',
-    );
+    const testResult = getLatestTestRequestRun(project.id, contentHash, 'full');
     if (testResult?.state === 'passed') {
       return { ok: true };
     }
