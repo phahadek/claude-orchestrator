@@ -945,6 +945,19 @@ describe('TaskDetail', () => {
     expect(screen.queryByText(/tokens/)).toBeNull();
   });
 
+  it('does not throw and does not display token badge when totalTokens is undefined (summary-shaped Done task)', () => {
+    expect(() =>
+      render(
+        <TaskDetail
+          task={makeTask({ totalTokens: undefined })}
+          send={vi.fn()}
+          onClose={vi.fn()}
+        />,
+      ),
+    ).not.toThrow();
+    expect(screen.queryByText(/tokens/)).toBeNull();
+  });
+
   it('displays review session token count when review has tokens', () => {
     const review = makeReview({
       verdict: 'approved',
