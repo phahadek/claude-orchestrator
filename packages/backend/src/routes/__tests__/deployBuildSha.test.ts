@@ -63,6 +63,14 @@ beforeAll(() => {
   buildShaPath = path.join(tmpDir, 'build-sha.txt');
   fs.writeFileSync(buildShaPath, 'abc123def456789\n');
   process.env.DEPLOY_BUILD_SHA_PATH = buildShaPath;
+  // deploy.ts reads DEPLOY_BUILD_SHA_PATH into a module-level constant at
+  // first import, not per-request — see its own doc comment. Force a fresh
+  // evaluation here rather than relying on this being the very first thing
+  // in the suite to import deploy.ts: if anything else already pulled it in
+  // (directly or transitively) before this env var was set, the module
+  // would already be cached with the wrong (or 'unknown') SHA baked in, and
+  // no re-import below would ever re-run that top-level read.
+  vi.resetModules();
 });
 
 afterAll(() => {
