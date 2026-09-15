@@ -41,6 +41,7 @@ import { upsertTaskCache } from '../../db/queries.js';
 let stageMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  db.prepare('DELETE FROM staged_intent').run();
   db.prepare('DELETE FROM gate_item_event').run();
   db.prepare('DELETE FROM gate_item_source').run();
   db.prepare('DELETE FROM gate_item').run();
@@ -473,5 +474,42 @@ describe('catchUpMergeCommits — escalation ceiling excludes structurally/tempo
     await driveAttempts(8);
 
     expect(stageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('never stages a mirror for a Done 💻 Code source with no PR and a committed planning.noOp intent naming it — a confirmed deliberate no-PR closure', async () => {
+    insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M16',
+      text: 'Closed via noOp — already satisfied elsewhere',
+      classification: 'needs-triage',
+      sources: [
+        {
+          sourceTaskId: 'notion:code-noop-src',
+          sourceTaskTitle: 'Already satisfied by sibling task',
+        },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+    upsertTaskCache(
+      'notion:code-noop-src',
+      JSON.stringify({ type: '💻 Code', status: '✅ Done' }),
+    );
+    const now = Date.now();
+    db.prepare(
+      `INSERT INTO staged_intent
+        (id, kind, payload, payload_hash, task_id, project_id, state, created_at, updated_at)
+       VALUES ('noop-1', 'planning.noOp', ?, 'hash', 'notion:code-noop-src', 'polimarket-analyser', 'committed', ?, ?)`,
+    ).run(
+      JSON.stringify({
+        taskId: 'notion:code-noop-src',
+        reason: 'already satisfied elsewhere',
+      }),
+      now,
+      now,
+    );
+
+    await driveAttempts(10);
+
+    expect(stageMock).not.toHaveBeenCalled();
   });
 });
