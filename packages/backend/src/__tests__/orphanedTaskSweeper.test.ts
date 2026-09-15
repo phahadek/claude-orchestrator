@@ -1997,7 +1997,7 @@ describe('OrphanedTaskSweeper', () => {
     expect(skippedCalls).toHaveLength(1);
   });
 
-  it('attributes a reverted orphan to the ops_journal entry\'s project when no session or repo assignment resolves one', async () => {
+  it("attributes a reverted orphan to the ops_journal entry's project when no session or repo assignment resolves one", async () => {
     const backend = makeBackend([
       makeTask('notion:abc', '🔄 In Progress', '🔎 Investigation'),
     ]);
