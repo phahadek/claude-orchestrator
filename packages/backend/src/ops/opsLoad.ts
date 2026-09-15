@@ -346,13 +346,42 @@ export async function loadOpsContext(
     .slice(-neighbourLimit)
     .map((m) => ({ id: m.id, board: m.source_id as string }));
 
-  // ── Job 1: load the master context page(s) ──────────────────────────────
+  // ── manifest resolution (drives both the context-page set below and the
+  // code-worklist options used during classification) ─────────────────────
   const projectRow = getProjectRowById(project);
+  const repoRoot = projectRow?.project_dir;
+  let manifest: GroomManifest = {};
+  let trackedFiles: string[] = [];
+  if (repoRoot) {
+    try {
+      if (resolveConfigDir(repoRoot))
+        manifest = loadManifest(repoRoot, project);
+    } catch {
+      manifest = {};
+    }
+    try {
+      trackedFiles = [...(await resolveTrackedFileSet(repoRoot))];
+    } catch {
+      trackedFiles = [];
+    }
+  }
+
+  // ── Job 1: load the master context page(s) + the manifest's source-of-
+  // truth docs (findings / retrospective / architecture / guidelines),
+  // skipping any entry flagged `migratedToStore` once the project has
+  // adopted the arch_unit store — mirrors groomLoad.ts's context-page loop
+  // exactly, so /ops sees the same source-of-truth docs /groom does. ──────
+  const archStoreAdopted =
+    ProjectService.getById(project)?.archStoreAdopted ?? false;
   const contextPageIds: { id: string; title?: string }[] = [];
   const masterId = projectRow?.context_url
     ? normalizeNotionId(projectRow.context_url)
     : null;
   if (masterId) contextPageIds.push({ id: masterId, title: 'Project Context' });
+  for (const pg of manifest.context_pages ?? []) {
+    if (pg.migratedToStore && archStoreAdopted) continue;
+    contextPageIds.push({ id: pg.id, title: pg.title });
+  }
   for (const p of opts.contextPages ?? []) contextPageIds.push(p);
 
   const contextPages: PageDoc[] = [];
@@ -362,6 +391,9 @@ export async function loadOpsContext(
     );
     contextPages.push({ id: p.id, title: p.title ?? title, markdown });
   }
+  logger.info(
+    `[opsContext] contextPages: ${contextPages.map((p) => p.title).join(', ') || '(none)'}`,
+  );
 
   // ── Job 2: query target + neighbour boards, resolve deps, classify ──────
   // Dual-read: a migrated project (archStoreAdopted) reads from the arch_unit
@@ -379,22 +411,6 @@ export async function loadOpsContext(
       ? archContext.pages.map((p) => ({ id: p.id, title: p.title }))
       : [];
 
-  const repoRoot = projectRow?.project_dir;
-  let manifest: GroomManifest = {};
-  let trackedFiles: string[] = [];
-  if (repoRoot) {
-    try {
-      if (resolveConfigDir(repoRoot))
-        manifest = loadManifest(repoRoot, project);
-    } catch {
-      manifest = {};
-    }
-    try {
-      trackedFiles = [...(await resolveTrackedFileSet(repoRoot))];
-    } catch {
-      trackedFiles = [];
-    }
-  }
   const worklistOptions: CodeWorklistOptions = {
     sourceRoot: manifest.source_root ?? '',
     packages: manifest.packages ?? [],

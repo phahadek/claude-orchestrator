@@ -20,7 +20,20 @@ vi.mock('../../db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
+vi.mock('../../groom/groomLoad', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../groom/groomLoad')>();
+  return {
+    ...actual,
+    resolveConfigDir: vi.fn(actual.resolveConfigDir),
+    loadManifest: vi.fn(actual.loadManifest),
+  };
+});
+
 import { execFileSync } from 'child_process';
+import {
+  resolveConfigDir as mockedResolveConfigDir,
+  loadManifest as mockedLoadManifest,
+} from '../../groom/groomLoad';
 import { db } from '../../db/db.js';
 import {
   insertProject,
@@ -321,6 +334,34 @@ describe('loadOpsContext — classification', () => {
     expect(result.contextPages).toHaveLength(1);
     expect(result.contextPages[0].id).toBe(CONTEXT_PAGE_ID);
     expect(result.contextPages[0].title).toBe('Project Context');
+  });
+
+  it("loads the manifest's context_pages (source-of-truth docs) alongside the master page, in manifest order, skipping migratedToStore entries", async () => {
+    rows = [];
+    updateProject(PROJECT, { arch_store_adopted: 1 });
+    vi.mocked(mockedResolveConfigDir).mockReturnValueOnce('/fake-config');
+    vi.mocked(mockedLoadManifest).mockReturnValueOnce({
+      context_pages: [
+        { id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', title: 'Findings' },
+        {
+          id: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+          title: 'Technical Architecture',
+          migratedToStore: true,
+        },
+        {
+          id: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+          title: 'Retrospective',
+        },
+      ],
+    });
+
+    const result = await loadOpsContext(MILESTONE);
+
+    expect(result.contextPages.map((p) => p.title)).toEqual([
+      'Project Context',
+      'Findings',
+      'Retrospective',
+    ]);
   });
 });
 

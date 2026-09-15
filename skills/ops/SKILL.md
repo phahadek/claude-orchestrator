@@ -406,7 +406,9 @@ Rules that make it safe:
   --state resolved [--resolution '<json>']`** (wraps `POST /api/ops-journal/:taskId/state` —
   deterministic field write, validated against the allowed state-transition graph server-side); the
   next `ops-context` call trims it: **deletion is the fragile part, not the write, and it's no longer
-  yours to get wrong.**
+  yours to get wrong.** `set-state`'s response on success is **the updated `ops_journal` row itself**
+  (same shape as one entry in `journal --milestone <M>`'s `entries[]`) — not `{ entry }` — and
+  `ops-client.mjs` also prints a one-line `<taskId> -> <state>` confirmation to stderr.
 - **Interactive-throughout is a lighter path.** The full `pending` → `candidate` /
   `staged-proposal` / `applied-pending-confirm` → `resolved` vocabulary exists to protect the
   **autonomous→interactive handoff**. When a run is interactive from minute one (no autonomous pass
@@ -444,7 +446,7 @@ default to `127.0.0.1:3000`, overridable via `$ORCHESTRATOR_BACKEND_HOST` /
 `$ORCHESTRATOR_BACKEND_PORT`) the same way the other sanctioned session
 clients (`ops-client.mjs`, `gate-state-client.mjs`) do.
 
-1. **Readiness** — `node ~/.claude/scripts/seed-state-client.mjs readiness --milestone <M>` →
+1. **Readiness** — `node ~/.claude/scripts/seed-state-client.mjs readiness --project <P> --milestone <M>` →
    `{status: 'green'|'blocked', blocking}`. `green` — nothing left to apply this
    milestone; report and stop. `blocked` — every unconfirmed seed with its
    project/state, as a worklist **map only** — pull the actual batch via `next`, never

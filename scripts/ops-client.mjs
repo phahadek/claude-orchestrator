@@ -177,6 +177,9 @@ switch (command) {
       `/api/ops-journal/${encodeURIComponent(taskId)}/state`,
       { method: 'POST', body: JSON.stringify(payload) },
     );
+    console.error(
+      `${taskId} -> ${state}${disposition ? ` [${disposition}]` : ''}`,
+    );
     console.log(JSON.stringify(result, null, 2));
     break;
   }
