@@ -37,6 +37,18 @@ import type { ProjectDepResolution } from './planningCandidates';
 
 const MIN_POLL_INTERVAL_MS = 5_000;
 
+/**
+ * How many tasks a per-milestone candidate scan processes before yielding
+ * back to the event loop. Per-milestone yields alone (yieldToEventLoop
+ * called once before each milestone's task loop) aren't enough: a single
+ * board's per-task loop — including resolveProjectDep, which synchronously
+ * re-scans and JSON.parses every other milestone board in the project for
+ * each dependency lookup — can run uninterrupted for tens of thousands of
+ * tasks on a large board, blocking the event loop for seconds at a time and
+ * stalling concurrent HTTP requests (e.g. GET /).
+ */
+const YIELD_EVERY_N_TASKS = 20;
+
 /** Yields to the event loop so a pending HTTP request gets serviced mid-scan. */
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
@@ -284,8 +296,10 @@ export class DispatchTriggerEvaluator {
     revalidate?: (candidate: T) => boolean | Promise<boolean>,
   ): Promise<number> {
     let dispatched = 0;
-    for (const candidate of candidates) {
+    for (let i = 0; i < candidates.length; i++) {
+      if (i > 0 && i % YIELD_EVERY_N_TASKS === 0) await yieldToEventLoop();
       if (dispatched >= remaining) break;
+      const candidate = candidates[i];
       if (revalidate && !(await revalidate(candidate))) continue;
       const launched = await dispatchFn(candidate);
       if (launched) dispatched++;
@@ -317,7 +331,9 @@ export class DispatchTriggerEvaluator {
       const tasks = this.loadBoardTasks(milestone.id);
       if (tasks.length === 0) continue;
       const tasksById = new Map(tasks.map((t) => [normalizeBoardId(t.id), t]));
-      for (const task of tasks) {
+      for (let i = 0; i < tasks.length; i++) {
+        if (i > 0 && i % YIELD_EVERY_N_TASKS === 0) await yieldToEventLoop();
+        const task = tasks[i];
         if (!groomArmed && !isDesignEligibleType(task.type)) continue;
         if (
           isGroomCandidate(task, {
@@ -353,7 +369,9 @@ export class DispatchTriggerEvaluator {
       const tasks = this.loadBoardTasks(milestone.id);
       if (tasks.length === 0) continue;
       const tasksById = new Map(tasks.map((t) => [normalizeBoardId(t.id), t]));
-      for (const task of tasks) {
+      for (let i = 0; i < tasks.length; i++) {
+        if (i > 0 && i % YIELD_EVERY_N_TASKS === 0) await yieldToEventLoop();
+        const task = tasks[i];
         const candidate = await isOpsCandidate(task, {
           tasksById,
           hasActiveSession: hasActiveSessionForTask,
@@ -384,7 +402,9 @@ export class DispatchTriggerEvaluator {
       const tasks = this.loadBoardTasks(milestone.id);
       if (tasks.length === 0) continue;
       const tasksById = new Map(tasks.map((t) => [normalizeBoardId(t.id), t]));
-      for (const task of tasks) {
+      for (let i = 0; i < tasks.length; i++) {
+        if (i > 0 && i % YIELD_EVERY_N_TASKS === 0) await yieldToEventLoop();
+        const task = tasks[i];
         if (
           isDesignCandidate(task, {
             tasksById,
@@ -420,7 +440,9 @@ export class DispatchTriggerEvaluator {
       const tasks = this.loadBoardTasks(milestone.id);
       if (tasks.length === 0) continue;
       const tasksById = new Map(tasks.map((t) => [normalizeBoardId(t.id), t]));
-      for (const task of tasks) {
+      for (let i = 0; i < tasks.length; i++) {
+        if (i > 0 && i % YIELD_EVERY_N_TASKS === 0) await yieldToEventLoop();
+        const task = tasks[i];
         const candidate = await isDocsCandidate(task, {
           tasksById,
           hasActiveSession: hasActiveSessionForTask,
