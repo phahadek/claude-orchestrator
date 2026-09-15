@@ -32,7 +32,14 @@ function seedPullRequestRow(taskId: string): void {
     `INSERT INTO pull_requests
       (pr_number, pr_url, task_id, repo, state, draft, created_at, updated_at, synced_at)
      VALUES (?, ?, ?, 'acme/repo', 'open', 0, ?, ?, ?)`,
-  ).run(1, `https://github.com/acme/repo/pull/${taskId}`, taskId, now, now, now);
+  ).run(
+    1,
+    `https://github.com/acme/repo/pull/${taskId}`,
+    taskId,
+    now,
+    now,
+    now,
+  );
 }
 
 describe('isStructurallyUnresolvableSource', () => {
@@ -106,9 +113,7 @@ describe('isStructurallyUnresolvableSource', () => {
     seedPullRequestRow('notion:code-with-pr');
     seedCommittedNoOp('notion:code-with-pr');
 
-    expect(isStructurallyUnresolvableSource('notion:code-with-pr')).toBe(
-      false,
-    );
+    expect(isStructurallyUnresolvableSource('notion:code-with-pr')).toBe(false);
   });
 
   it('returns false for a ✅ Done 💻 Code source with no PR row and no committed noOp intent — the genuine dropped-webhook case, which must still escalate', () => {
@@ -140,9 +145,9 @@ describe('isStructurallyUnresolvableSource', () => {
     );
     seedCommittedNoOp('notion:code-deferred-noop');
 
-    expect(
-      isStructurallyUnresolvableSource('notion:code-deferred-noop'),
-    ).toBe(true);
+    expect(isStructurallyUnresolvableSource('notion:code-deferred-noop')).toBe(
+      true,
+    );
   });
 
   it('returns false for an ⏭️ Deferred 💻 Code source with no PR row and no committed noOp intent — must still escalate', () => {
