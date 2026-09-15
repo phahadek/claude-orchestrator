@@ -527,6 +527,8 @@ describe('flaky.confirm gate "test_request" (pre-PR)', () => {
   const RUN = { id: 'run-1', started_at: 1000 } as never;
 
   beforeEach(() => {
+    vi.mocked(markTestResultExcused).mockClear();
+    vi.mocked(getPRBySessionId).mockClear();
     vi.mocked(getLatestTestRequestRunForSession).mockReturnValue(RUN);
     vi.mocked(getProjectById).mockReturnValue({
       id: 'proj-1',
