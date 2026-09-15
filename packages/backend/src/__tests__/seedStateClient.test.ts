@@ -7,6 +7,7 @@ import {
   fetchSeedItem,
   fetchSeedItemDetail,
   appendSeedItemEvent,
+  reopenSeedItem,
 } from '../../scripts/seed-state-client.mjs';
 
 let server: http.Server | undefined;
@@ -173,6 +174,35 @@ describe('seed-state-client.mjs', () => {
       evidence: 'row present, worker reloaded',
     });
     expect(JSON.parse(result.body)).toEqual({ id: 'si-1', state: 'confirmed' });
+  });
+
+  it('posts a reopen with reason and operator for a seed item', async () => {
+    let receivedPath = '';
+    let receivedMethod = '';
+    let receivedBody = '';
+    const port = await startFixtureServer(async (req, res) => {
+      receivedPath = req.url ?? '';
+      receivedMethod = req.method ?? '';
+      receivedBody = await readBody(req);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ id: 'si-1', state: 'pending' }));
+    });
+
+    const result = await reopenSeedItem({
+      port,
+      token: 't',
+      seedItemId: 'si-1',
+      reason: 'recorded applied in error',
+      operator: 'pedro',
+    });
+
+    expect(receivedMethod).toBe('POST');
+    expect(receivedPath).toBe('/api/seed/items/si-1/reopen');
+    expect(JSON.parse(receivedBody)).toEqual({
+      reason: 'recorded applied in error',
+      operator: 'pedro',
+    });
+    expect(JSON.parse(result.body)).toEqual({ id: 'si-1', state: 'pending' });
   });
 
   it('surfaces a non-2xx status and error body on failure', async () => {

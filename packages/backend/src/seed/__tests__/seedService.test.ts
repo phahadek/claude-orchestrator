@@ -345,12 +345,37 @@ describe('reopenSeedItem', () => {
     expect(updated.state).toBe('pending');
   });
 
-  it('rejects reopening a non-terminal (pending or applied) item', () => {
+  it('rejects reopening a pending item (no-op guard)', () => {
     const item = makeItem();
     expect(() => reopenSeedItem(item.id, 'pedro')).toThrow();
+  });
 
+  it('reopens an applied item to pending given a reason, recording priorState in evidence', () => {
+    const item = makeItem();
     appendSeedItemEvent(item.id, { outcome: 'applied', operator: 'pedro' });
+    expect(getSeedItem(item.id)?.state).toBe('applied');
+
+    const updated = reopenSeedItem(item.id, 'pedro', 'recorded applied in error');
+    expect(updated.state).toBe('pending');
+    expect(updated.events.map((e) => e.outcome)).toEqual([
+      'applied',
+      'reopened',
+    ]);
+    expect(updated.events[1]).toMatchObject({
+      outcome: 'reopened',
+      operator: 'pedro',
+      evidence: { reason: 'recorded applied in error', priorState: 'applied' },
+    });
+  });
+
+  it('rejects reopening an applied item without a reason, leaving state and events unchanged', () => {
+    const item = makeItem();
+    appendSeedItemEvent(item.id, { outcome: 'applied', operator: 'pedro' });
+
     expect(() => reopenSeedItem(item.id, 'pedro')).toThrow();
+    const detail = getSeedItemDetail(item.id);
+    expect(detail?.item.state).toBe('applied');
+    expect(detail?.events.map((e) => e.outcome)).toEqual(['applied']);
   });
 
   it('counts a reopened item as blocking again in getSeedReadiness and listSeedMilestoneReadiness', () => {

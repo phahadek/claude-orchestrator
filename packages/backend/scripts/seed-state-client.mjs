@@ -19,6 +19,7 @@
 //   node seed-state-client.mjs detail <seedItemId>
 //   node seed-state-client.mjs event <seedItemId> <json-payload>
 //   node seed-state-client.mjs rehome <seedItemId> <milestone>
+//   node seed-state-client.mjs reopen <seedItemId> [reason] [operator]
 //   node seed-state-client.mjs accrete <json-payload>
 //
 // Example:
@@ -179,6 +180,17 @@ export function rehomeSeedItem({ host, port, token, seedItemId, milestone }) {
   });
 }
 
+export function reopenSeedItem({ host, port, token, seedItemId, reason, operator }) {
+  return requestSeedState({
+    host,
+    port,
+    token,
+    method: 'POST',
+    path: `/api/seed/items/${encodeURIComponent(seedItemId)}/reopen`,
+    payload: { reason, operator },
+  });
+}
+
 export function accreteSeedContribution({ host, port, token, contribution }) {
   return requestSeedState({
     host,
@@ -212,6 +224,7 @@ const USAGE =
   '  node seed-state-client.mjs detail <seedItemId>\n' +
   '  node seed-state-client.mjs event <seedItemId> <json-payload>\n' +
   '  node seed-state-client.mjs rehome <seedItemId> <milestone>\n' +
+  '  node seed-state-client.mjs reopen <seedItemId> [reason] [operator]\n' +
   '  node seed-state-client.mjs accrete <json-payload>';
 
 async function main() {
@@ -294,6 +307,17 @@ async function main() {
         token,
         seedItemId,
         milestone,
+      });
+    } else if (command === 'reopen') {
+      const [seedItemId, reason, operator] = rest;
+      if (!seedItemId) return fail(USAGE);
+      result = await reopenSeedItem({
+        host,
+        port,
+        token,
+        seedItemId,
+        reason,
+        operator,
       });
     } else if (command === 'accrete') {
       const [payloadJson] = rest;

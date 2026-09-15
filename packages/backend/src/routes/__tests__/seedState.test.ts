@@ -288,6 +288,40 @@ describe('POST /api/seed/items/:id/events', () => {
   });
 });
 
+describe('POST /api/seed/items/:id/reopen', () => {
+  it('calls reopenSeedItem with the parsed body and returns its result', async () => {
+    const updated = { id: 'seed-1', state: 'pending' };
+    seedServiceMock.reopenSeedItem.mockReturnValue(updated);
+
+    const res = await request(makeApp())
+      .post('/api/seed/items/seed-1/reopen')
+      .send({ operator: 'pedro', reason: 'recorded applied in error' });
+
+    expect(seedServiceMock.reopenSeedItem).toHaveBeenCalledWith(
+      'seed-1',
+      'pedro',
+      'recorded applied in error',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(updated);
+  });
+
+  it('returns 400 with the reason-required message when reopening an applied item without a reason', async () => {
+    seedServiceMock.reopenSeedItem.mockImplementation(() => {
+      throw new Error(
+        'seed_item seed-1: reopening an applied item requires a non-empty reason',
+      );
+    });
+
+    const res = await request(makeApp())
+      .post('/api/seed/items/seed-1/reopen')
+      .send({ operator: 'pedro' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/requires a non-empty reason/);
+  });
+});
+
 describe('POST /api/seed/backfill', () => {
   it('calls backfillSeedTask with the parsed body and returns its result', async () => {
     const result = { createdIds: ['a'], skippedIds: [], unresolvedSources: [] };
