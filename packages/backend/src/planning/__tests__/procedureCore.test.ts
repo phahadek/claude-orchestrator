@@ -102,7 +102,7 @@ describe('procedureCore', () => {
     > = {
       groom: { principles: 15, steps: 8 },
       design: { principles: 25, steps: 7 },
-      ops: { principles: 17, steps: 5 },
+      ops: { principles: 21, steps: 5 },
       split: { principles: 6, steps: 4 },
     };
     for (const skill of Object.keys(expected) as Array<keyof typeof expected>) {
