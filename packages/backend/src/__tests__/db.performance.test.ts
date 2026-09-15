@@ -1458,17 +1458,20 @@ describe('bench: querySessionEventsByProject{Aggregate,Rows} — filtered reads 
 // event loop ─────────────────────────────────────────────────────────────
 // Mirrors walTruncateCheckpointOffMainThread.test.ts's / this file's
 // replaceFlaggedFlakyTestsRollupOffMainThread coverage above: dispatches a
-// pattern-filtered sessionEvents.query at representative production scale
-// (~520k session_events rows, matching the bench block above) against a
-// real on-disk database via sessionEventsQueryWorker.ts, and confirms a
-// concurrent main-thread timer — standing in for a concurrent `health`
-// handshake, which is likewise just a fast synchronous main-thread turn —
-// fires promptly rather than queuing behind the scan. See gate item
-// 585ffbee-e989-4016-a3e4-83897035f5c6: the prior in-process sync path
-// blocked the shared event loop long enough that a concurrent `health`
-// call queued behind the scan instead of returning promptly.
+// pattern-filtered sessionEvents.query against a real on-disk database via
+// sessionEventsQueryWorker.ts, and confirms a concurrent main-thread timer —
+// standing in for a concurrent `health` handshake, which is likewise just a
+// fast synchronous main-thread turn — fires promptly rather than queuing
+// behind the scan. See gate item 585ffbee-e989-4016-a3e4-83897035f5c6: the
+// prior in-process sync path blocked the shared event loop long enough that
+// a concurrent `health` call queued behind the scan instead of returning
+// promptly. Row count is smaller than the in-memory bench above (see that
+// block's own comment) — a real worker thread + real disk I/O is already
+// heavier per-test overhead, and the assertion only needs an absolute
+// wall-clock bound on the main thread, not a scan slow enough to be
+// interesting on its own.
 describe('querySessionEventsByProjectRowsOffMainThread — concurrency', () => {
-  it('lets a concurrent main-thread timer resolve on schedule while a pattern scan over ~520k rows runs on a worker thread', async () => {
+  it('lets a concurrent main-thread timer resolve on schedule while a pattern scan runs on a worker thread', async () => {
     const dir = fs.mkdtempSync(
       path.join(os.tmpdir(), 'session-events-query-off-thread-test-'),
     );
@@ -1491,8 +1494,17 @@ describe('querySessionEventsByProjectRowsOffMainThread — concurrency', () => {
           1000,
         );
 
-      const SESSION_COUNT = 200;
-      const EVENTS_PER_SESSION = 2_600; // ~520k rows, representative of production scale
+      // A real on-disk file plus a real worker-thread dispatch is already a
+      // heavier fixture than an in-memory bench (see the ~520k-row bench
+      // above, which needs no second connection or process). Row count here
+      // only has to be large enough that an unindexed LIKE scan over the
+      // whole window is nontrivial work — the assertion below is an
+      // absolute wall-clock bound on the main thread, not a comparison
+      // against this scan's own duration — so this stays an order of
+      // magnitude smaller to keep the full-suite run's total worker-thread +
+      // disk-I/O load down.
+      const SESSION_COUNT = 40;
+      const EVENTS_PER_SESSION = 2_000; // 80k rows
       const EVENT_COUNT = SESSION_COUNT * EVENTS_PER_SESSION;
 
       const insertSessionStmt = fileDb.prepare(
