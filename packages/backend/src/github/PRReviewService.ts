@@ -524,9 +524,7 @@ function buildTestRunEvidenceSection(
   let commandLines = '(no structured result recorded)';
   if (run.structured_result) {
     try {
-      const parsed = JSON.parse(
-        run.structured_result,
-      ) as StructuredTestResult;
+      const parsed = JSON.parse(run.structured_result) as StructuredTestResult;
       const suiteNames = parsed.suites.map((s) => s.name);
       const commandsLine =
         suiteNames.length > 0

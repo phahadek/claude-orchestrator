@@ -587,7 +587,13 @@ describe('getLatestTestRequestRun — a crash with no verdict must not squat the
   });
 
   it('excludes a settled passed row with structured_result NULL and test_report_acquisition_attempted=1 — a "pass" with no evidence any assertion ran', () => {
-    insertTestRequestRun('vacuous-1', 'proj-1', 'hash-vacuous-1', null, Date.now());
+    insertTestRequestRun(
+      'vacuous-1',
+      'proj-1',
+      'hash-vacuous-1',
+      null,
+      Date.now(),
+    );
     completeTestRequestRun(
       'vacuous-1',
       'passed',
@@ -602,7 +608,13 @@ describe('getLatestTestRequestRun — a crash with no verdict must not squat the
   });
 
   it('still returns a settled passed row with test_report_acquisition_attempted=1 and a non-null structured_result — a genuine verdict', () => {
-    insertTestRequestRun('verdict-3', 'proj-1', 'hash-verdict-3', null, Date.now());
+    insertTestRequestRun(
+      'verdict-3',
+      'proj-1',
+      'hash-verdict-3',
+      null,
+      Date.now(),
+    );
     completeTestRequestRun(
       'verdict-3',
       'passed',
@@ -618,7 +630,13 @@ describe('getLatestTestRequestRun — a crash with no verdict must not squat the
   });
 
   it('still returns a settled passed row with structured_result NULL when test_report_acquisition_attempted=0 — no report glob configured is not a vacuousness signal', () => {
-    insertTestRequestRun('verdict-4', 'proj-1', 'hash-verdict-4', null, Date.now());
+    insertTestRequestRun(
+      'verdict-4',
+      'proj-1',
+      'hash-verdict-4',
+      null,
+      Date.now(),
+    );
     completeTestRequestRun(
       'verdict-4',
       'passed',

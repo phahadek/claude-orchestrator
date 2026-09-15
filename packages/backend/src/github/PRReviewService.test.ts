@@ -3823,9 +3823,7 @@ describe('PRReviewService — manual verification items excluded from verdict', 
     expect(prompt).toContain(
       "treat that run's command + observed result as satisfying",
     );
-    expect(prompt).toContain(
-      'does not need to separately restate them',
-    );
+    expect(prompt).toContain('does not need to separately restate them');
   });
 });
 
