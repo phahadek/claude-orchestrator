@@ -353,6 +353,10 @@ Test commands are blocked at the permission layer — always via \`mcp__orchestr
 
 The backend refuses (naming why) unless the test clears the corpus and its file isn't in your diff. On success it re-runs the gate on the same commit and re-drives the merge loop on a pass — bounded, so exhaustion parks the PR for a human rather than looping.
 
+Check \`mcp__orchestrator__testHealth_getFlakyHistory\` first for a test's prior flaky/base-failing history — it grounds your \`reason\` and tells you whether \`flaky_confirm\` is even worth calling.
+
+Retrying \`test_request\` against an unchanged tree is mechanically futile: the dedup path replays the same settled result without re-running the corpus check. \`flaky_confirm\` is a separate call, not deduped that way, so re-calling it (even periodically, against the same tree) always re-checks fresh corpus evidence. Prefer that over blind retries.
+
 ---
 
 ## Responding to Review Comments
@@ -455,7 +459,7 @@ Run in order — all must pass before opening the PR:
 ${verifySteps}
 ${stageNum}. Stage only your implementation files for commit.
 
-Tests are blocked at the permission layer, not part of this gate — run via \`test_request\`.`;
+Tests are blocked at the permission layer, not part of this gate — run via \`test_request\`. A flaky-looking \`test_request\` failure here: call \`flaky_confirm\` with \`gate: "test_request"\` rather than retrying (see "Flaky / Transient CI or F2 Gate Failures" above).`;
 })()}
 
 ---
