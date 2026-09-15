@@ -2582,6 +2582,147 @@ export function querySessionEventsByProjectRows(
     .all(projectId, ...params, cappedLimit);
 }
 
+/**
+ * Off-main-thread siblings of querySessionEventsByProject{Aggregate,Rows},
+ * dispatching to sessionEventsQueryWorker.ts on a worker thread instead of
+ * running the (possibly pattern-filtered, always-unindexable-on-LIKE) scan
+ * synchronously on the shared main-thread `db` connection. better-sqlite3 is
+ * fully synchronous with no worker-thread or libuv-pool offload of its own,
+ * so a large `pattern` scan issued on `db` directly blocks every Express
+ * route, WebSocket handler, and other MCP tool call (including a concurrent
+ * `health` handshake) for the scan's full duration — the failure mode this
+ * pair exists to avoid. See runWalTruncateCheckpointOffMainThread in db.ts
+ * for the identical pattern applied to the hourly WAL TRUNCATE checkpoint.
+ *
+ * Falls back to the in-process sync path for `:memory:` (no second
+ * connection can open against an in-memory database) and for any other
+ * falsy path, as a defensive default rather than handing an unusable value
+ * to `new Database()` as a real worker target.
+ */
+function dispatchSessionEventsQueryWorker(
+  targetPath: string,
+  projectId: string,
+  filters: SessionEventsProjectQueryFilters,
+  mode: 'aggregate' | 'rows',
+  limit?: number,
+): Promise<
+  { mode: 'aggregate'; sessions: SessionEventsAggregateRow[] } | { mode: 'rows'; rows: SessionEvent[] }
+> {
+  return new Promise((resolve, reject) => {
+    const isTsNode = __filename.endsWith('.ts');
+    const workerPath = path.join(
+      __dirname,
+      isTsNode
+        ? 'sessionEventsQueryWorker.ts'
+        : 'sessionEventsQueryWorker.js',
+    );
+    const worker = new Worker(workerPath, {
+      workerData: { dbPath: targetPath, projectId, filters, mode, limit },
+      execArgv: isTsNode ? ['-r', 'ts-node/register/transpile-only'] : [],
+    });
+    let settled = false;
+    worker.once(
+      'message',
+      (
+        msg:
+          | {
+              ok: true;
+              result:
+                | { mode: 'aggregate'; sessions: SessionEventsAggregateRow[] }
+                | { mode: 'rows'; rows: SessionEvent[] };
+            }
+          | { ok: false; error: string },
+      ) => {
+        settled = true;
+        if (msg.ok) {
+          resolve(msg.result);
+        } else {
+          reject(
+            new Error(`[session_events_query] worker failed: ${msg.error}`),
+          );
+        }
+        void worker.terminate();
+      },
+    );
+    worker.once('error', (err) => {
+      settled = true;
+      reject(err);
+    });
+    worker.once('exit', (code) => {
+      if (!settled) {
+        reject(
+          new Error(
+            `[session_events_query] worker exited with code ${code} before reporting a result`,
+          ),
+        );
+      }
+    });
+  });
+}
+
+export function querySessionEventsByProjectAggregateOffMainThread(
+  targetPath: string | undefined,
+  projectId: string,
+  filters: SessionEventsProjectQueryFilters = {},
+): Promise<SessionEventsAggregateRow[]> {
+  if (
+    filters.pattern !== undefined &&
+    filters.since === undefined &&
+    filters.until === undefined
+  ) {
+    throw new UnboundedPatternQueryError();
+  }
+  if (!targetPath || targetPath === ':memory:') {
+    return Promise.resolve(
+      querySessionEventsByProjectAggregate(projectId, filters),
+    );
+  }
+  return dispatchSessionEventsQueryWorker(
+    targetPath,
+    projectId,
+    filters,
+    'aggregate',
+  ).then((result) => {
+    if (result.mode !== 'aggregate') {
+      throw new Error('[session_events_query] worker returned wrong mode');
+    }
+    return result.sessions;
+  });
+}
+
+export function querySessionEventsByProjectRowsOffMainThread(
+  targetPath: string | undefined,
+  projectId: string,
+  filters: SessionEventsProjectQueryFilters = {},
+  limit: number = SESSION_EVENTS_ROW_CAP,
+): Promise<SessionEvent[]> {
+  if (
+    filters.pattern !== undefined &&
+    filters.since === undefined &&
+    filters.until === undefined
+  ) {
+    throw new UnboundedPatternQueryError();
+  }
+  const cappedLimit = Math.min(limit, SESSION_EVENTS_ROW_CAP);
+  if (!targetPath || targetPath === ':memory:') {
+    return Promise.resolve(
+      querySessionEventsByProjectRows(projectId, filters, cappedLimit),
+    );
+  }
+  return dispatchSessionEventsQueryWorker(
+    targetPath,
+    projectId,
+    filters,
+    'rows',
+    cappedLimit,
+  ).then((result) => {
+    if (result.mode !== 'rows') {
+      throw new Error('[session_events_query] worker returned wrong mode');
+    }
+    return result.rows;
+  });
+}
+
 let _stmtClearPermissionDenials: Database.Statement | null = null;
 
 export function clearPermissionDenials(): void {

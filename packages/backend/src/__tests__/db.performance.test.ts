@@ -32,6 +32,7 @@ import {
   getLastActivityMsForArchivedSessions,
   querySessionEventsByProjectAggregate,
   querySessionEventsByProjectRows,
+  querySessionEventsByProjectRowsOffMainThread,
   UnboundedPatternQueryError,
   replaceFlaggedFlakyTestsRollupOffMainThread,
   getFlaggedFlakyTestsRollup,
@@ -1451,6 +1452,119 @@ describe('bench: querySessionEventsByProject{Aggregate,Rows} — filtered reads 
       `rejected unbounded pattern call took ${elapsed.toFixed(1)}ms, expected <50ms`,
     ).toBeLessThan(50);
   });
+});
+
+// ── querySessionEventsByProjectRowsOffMainThread — does not block the main
+// event loop ─────────────────────────────────────────────────────────────
+// Mirrors walTruncateCheckpointOffMainThread.test.ts's / this file's
+// replaceFlaggedFlakyTestsRollupOffMainThread coverage above: dispatches a
+// pattern-filtered sessionEvents.query at representative production scale
+// (~520k session_events rows, matching the bench block above) against a
+// real on-disk database via sessionEventsQueryWorker.ts, and confirms a
+// concurrent main-thread timer — standing in for a concurrent `health`
+// handshake, which is likewise just a fast synchronous main-thread turn —
+// fires well before the worker-dispatched query resolves, rather than
+// queuing behind it. See gate item 585ffbee-e989-4016-a3e4-83897035f5c6: the
+// prior in-process sync path blocked the shared event loop long enough that
+// a concurrent `health` call queued behind the scan instead of returning
+// promptly.
+describe('querySessionEventsByProjectRowsOffMainThread — concurrency', () => {
+  it(
+    'lets a concurrent main-thread timer resolve on schedule while a pattern scan over ~520k rows runs on a worker thread',
+    async () => {
+      const dir = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'session-events-query-off-thread-test-'),
+      );
+      try {
+        const file = path.join(dir, 'test.db');
+        const fileDb = new RealDatabase(file);
+        runMigrations(fileDb);
+
+        fileDb
+          .prepare(
+            `INSERT INTO projects (id, name, project_dir, github_repo, task_source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run('proj-concurrency', 'Concurrency', '/c', 'o/c', 'notion', 1000, 1000);
+
+        const SESSION_COUNT = 200;
+        const EVENTS_PER_SESSION = 2_600; // ~520k rows, representative of production scale
+        const EVENT_COUNT = SESSION_COUNT * EVENTS_PER_SESSION;
+
+        const insertSessionStmt = fileDb.prepare(
+          `INSERT INTO sessions (session_id, task_id, task_url, project_context_url, project_id, status, started_at, ended_at, pr_url, worktree_path, session_type, task_name)
+           VALUES (@session_id, NULL, NULL, NULL, @project_id, 'running', 1000, NULL, NULL, NULL, 'standard', NULL)`,
+        );
+        const sessionIds: string[] = [];
+        const seedSessions = fileDb.transaction(() => {
+          for (let i = 0; i < SESSION_COUNT; i++) {
+            const sid = `concurrency-sess-${i}`;
+            sessionIds.push(sid);
+            insertSessionStmt.run({
+              session_id: sid,
+              project_id: 'proj-concurrency',
+            });
+          }
+        });
+        seedSessions();
+
+        const insertEventStmt = fileDb.prepare(
+          `INSERT INTO session_events (session_id, event_type, payload, timestamp) VALUES (?, ?, ?, ?)`,
+        );
+        const seedEvents = fileDb.transaction(() => {
+          for (let i = 0; i < EVENT_COUNT; i++) {
+            const sid = sessionIds[i % SESSION_COUNT];
+            const payload =
+              i % 10_000 === 0
+                ? `{"text":"needle-${i}"}`
+                : `{"text":"haystack ${i}"}`;
+            insertEventStmt.run(sid, 'text', payload, i);
+          }
+        });
+        seedEvents();
+        fileDb.close();
+
+        const start = Date.now();
+        const queryPromise = querySessionEventsByProjectRowsOffMainThread(
+          file,
+          'proj-concurrency',
+          { pattern: 'needle', since: 0, until: EVENT_COUNT },
+        );
+        let queryElapsedMs: number | null = null;
+        const queryDone = queryPromise.then((rows) => {
+          queryElapsedMs = Date.now() - start;
+          return rows;
+        });
+
+        let timerElapsedMs: number | null = null;
+        const timerDelayMs = 20;
+        await new Promise<void>((resolve) => {
+          setTimeout(() => {
+            timerElapsedMs = Date.now() - start;
+            resolve();
+          }, timerDelayMs);
+        });
+
+        expect(timerElapsedMs).not.toBeNull();
+
+        const rows = await queryDone;
+        expect(rows.length).toBeGreaterThan(0);
+        expect(rows.every((r) => r.payload.includes('needle'))).toBe(true);
+
+        // If the scan had run inline on the main thread, the timer would
+        // have queued behind it and fired no earlier than the query itself.
+        // Running it on a worker thread instead means the timer — standing
+        // in for a concurrent `health` handshake — fires strictly before
+        // the query resolves. Ordering only, immune to absolute host jitter.
+        expect(queryElapsedMs).not.toBeNull();
+        expect(timerElapsedMs as number).toBeLessThan(
+          queryElapsedMs as number,
+        );
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+    60000,
+  );
 });
 
 // ── flagged_flaky_tests_rollup — incremental recompute ──────────────────────
