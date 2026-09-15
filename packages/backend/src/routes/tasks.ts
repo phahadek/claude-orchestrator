@@ -406,7 +406,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     row.pr_pause_reason ?? row.session_pr_creation_failed_pause_reason ?? null,
   );
   const taskPauseStruct = getTaskPauseReason(row.task_id);
-  const effectivePauseStruct = taskPauseStruct ?? pauseStruct;
+  const effectivePauseStruct = pauseStruct ?? taskPauseStruct;
 
   const flakeRecoveryAttempts = row.pr_flake_recovery_attempts ?? 0;
   const flakeRecoveryMaxRetries = typedGetSetting('flake_recovery_max_retries');
@@ -419,14 +419,14 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     reviewVerdict,
     reviewIterationCount: row.pr_review_iteration ?? 0,
     reviewIterationCap: cap,
-    pauseReason: pauseStruct,
+    pauseReason: effectivePauseStruct,
     flakeRecoveryAttempts,
     flakeRecoveryMaxRetries,
   });
 
   recordDisplayStatusTransition(row.task_id, displayStatus, {
     notionStatus,
-    pauseReason: pauseStruct,
+    pauseReason: effectivePauseStruct,
     flakeRecoveryAttempts,
     flakeRecoveryMaxRetries,
   });
