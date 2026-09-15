@@ -524,14 +524,19 @@ function buildTestRunEvidenceSection(
   let commandLines = '(no structured result recorded)';
   if (run.structured_result) {
     try {
-      const parsed = JSON.parse(run.structured_result) as StructuredTestResult;
+      const parsed = JSON.parse(
+        run.structured_result,
+      ) as StructuredTestResult;
       const suiteNames = parsed.suites.map((s) => s.name);
-      commandLines =
-        (suiteNames.length > 0
+      const commandsLine =
+        suiteNames.length > 0
           ? `Commands/suites run: ${suiteNames.join(', ')}`
-          : 'Commands/suites run: (none recorded)') +
-        `\nResult totals: ${parsed.totals.passed} passed, ${parsed.totals.failed} failed, ${parsed.totals.skipped} skipped, ${parsed.totals.errors} errors` +
-        (parsed.incomplete ? '\nNote: this run is marked incomplete (a test command may have crashed before its report was written).' : '');
+          : 'Commands/suites run: (none recorded)';
+      const totalsLine = `Result totals: ${parsed.totals.passed} passed, ${parsed.totals.failed} failed, ${parsed.totals.skipped} skipped, ${parsed.totals.errors} errors`;
+      const incompleteLine = parsed.incomplete
+        ? '\nNote: this run is marked incomplete (a test command may have crashed before its report was written).'
+        : '';
+      commandLines = `${commandsLine}\n${totalsLine}${incompleteLine}`;
     } catch {
       commandLines = '(structured result present but unparsable)';
     }
