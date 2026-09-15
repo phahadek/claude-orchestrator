@@ -233,8 +233,15 @@ interface MigrationCollision {
 }
 
 export interface MigrationRenumberEvaluation {
-  /** Diff migration files that renumber a task-listed migration to a currently-free number — tolerated. */
-  toleratedRenumbers: MigrationRenumberMatch[];
+  /**
+   * Diff migration files that suffix-match a task-listed migration but ship a
+   * different, self-picked number that happens to be free on the base
+   * branch. This is NOT tolerated: per the locked review branches, a session
+   * must either use the task-assigned number verbatim or escalate for
+   * reassignment — picking its own free number is not a valid resolution, so
+   * these must fail the Files/paths dimension exactly like a collision.
+   */
+  mismatches: MigrationRenumberMatch[];
   /** Diff migration files whose new number is already used by a different migration on the base branch — not tolerated. */
   collisions: MigrationCollision[];
 }
@@ -242,20 +249,20 @@ export interface MigrationRenumberEvaluation {
 /**
  * Deterministic pre-check for the "Changed files vs Files/paths affected
  * list" dimension: a migration file in the diff that isn't literally listed
- * in the task is a legitimate renumber (not a spec violation) when it shares
- * a directory and name-suffix with a listed migration and differs only in
- * its leading number — UNLESS that number is already claimed by a different
- * migration on the base branch, in which case it's a real collision. Pure
- * function so identical inputs always produce identical output, independent
- * of LLM judgement — see the PRReviewService callers that fetch
- * `baseBranchMigrationPaths` and apply this as a code-level override.
+ * in the task, but shares a directory and name-suffix with a listed
+ * migration and differs only in its leading number, is a real deviation from
+ * the assigned number — whether or not that number collides with another
+ * migration on the base branch. Pure function so identical inputs always
+ * produce identical output, independent of LLM judgement — see the
+ * PRReviewService callers that fetch `baseBranchMigrationPaths` and apply
+ * this as a code-level override.
  */
 export function evaluateMigrationRenumberTolerance(
   diffMigrationPaths: string[],
   listedMigrationPaths: string[],
   baseBranchMigrationPaths: string[],
 ): MigrationRenumberEvaluation {
-  const toleratedRenumbers: MigrationRenumberMatch[] = [];
+  const mismatches: MigrationRenumberMatch[] = [];
   const collisions: MigrationCollision[] = [];
   const listedSet = new Set(listedMigrationPaths);
 
@@ -292,7 +299,7 @@ export function evaluateMigrationRenumberTolerance(
         number: diffParts.number,
       });
     } else {
-      toleratedRenumbers.push({
+      mismatches.push({
         diffPath,
         listedPath: listedMatch.p,
         number: diffParts.number,
@@ -300,7 +307,7 @@ export function evaluateMigrationRenumberTolerance(
     }
   }
 
-  return { toleratedRenumbers, collisions };
+  return { mismatches, collisions };
 }
 
 /**
@@ -1870,13 +1877,16 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
 
   /**
    * Deterministic override for the "Changed files vs Files/paths affected
-   * list" dimension when the only deviation is a migration file renumbered
-   * away from the task-listed number (see evaluateMigrationRenumberTolerance
-   * for the rule). Fetches the base branch's file listing to check for a
-   * number collision; on fetch failure it fails open by leaving the LLM's
-   * verdict untouched rather than risking a false pass/fail from an
-   * unverifiable collision check. No-ops entirely (no network call) when the
-   * diff contains no migration file that isn't already listed verbatim.
+   * list" dimension when a migration file ships under a different number
+   * than the task listed (see evaluateMigrationRenumberTolerance for the
+   * rule). A session must either use the task-assigned number verbatim or
+   * escalate for reassignment — shipping a self-picked free number is not a
+   * valid resolution, so both collisions and free-number mismatches fail the
+   * dimension. Fetches the base branch's file listing to check for a number
+   * collision; on fetch failure it fails open by leaving the LLM's verdict
+   * untouched rather than risking a false pass/fail from an unverifiable
+   * collision check. No-ops entirely (no network call) when the diff
+   * contains no migration file that isn't already listed verbatim.
    */
   private async applyMigrationRenumberOverride(
     result: PRReviewResult,
@@ -1922,14 +1932,14 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       return overrideFilesPathsDimension(result, false, note);
     }
 
-    if (evaluation.toleratedRenumbers.length > 0) {
-      const note = `Deterministic migration-renumber check: ${evaluation.toleratedRenumbers
+    if (evaluation.mismatches.length > 0) {
+      const note = `Deterministic migration-renumber check: ${evaluation.mismatches
         .map(
-          (t) =>
-            `${t.diffPath} is a legitimate renumber of task-listed ${t.listedPath} (number ${t.number} is free on ${baseBranch})`,
+          (m) =>
+            `${m.diffPath} ships a different number than task-listed ${m.listedPath} (number ${m.number} is free on ${baseBranch} but was not assigned) — a self-picked free number is not a valid renumber`,
         )
-        .join('; ')} — tolerated.`;
-      return overrideFilesPathsDimension(result, true, note);
+        .join('; ')}.`;
+      return overrideFilesPathsDimension(result, false, note);
     }
 
     return result;
