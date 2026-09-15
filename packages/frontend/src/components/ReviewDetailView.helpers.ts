@@ -55,9 +55,7 @@ function extractJsonCandidate(text: string): string | null {
 
 const REVIEW_VERDICT_TOOL_NAME = 'mcp__orchestrator__review_verdict';
 
-function toReviewResult(
-  parsed: Record<string, unknown>,
-): ReviewResult | null {
+function toReviewResult(parsed: Record<string, unknown>): ReviewResult | null {
   if (
     typeof parsed.verdict === 'string' &&
     Array.isArray(parsed.dimensions) &&
@@ -94,7 +92,10 @@ export function parseReviewResultFromEvents(
       if (parts.length > 0) lastTextParts = parts;
 
       for (const block of content) {
-        if (block.type !== 'tool_use' || block.name !== REVIEW_VERDICT_TOOL_NAME) {
+        if (
+          block.type !== 'tool_use' ||
+          block.name !== REVIEW_VERDICT_TOOL_NAME
+        ) {
           continue;
         }
         let input: unknown = block.input;
