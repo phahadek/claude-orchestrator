@@ -78,7 +78,7 @@ const PROGRESS_RUN_THRESHOLD = 20;
  * command that ignores SIGINT still terminates within a bounded wall-clock
  * window rather than hanging indefinitely.
  */
-const GRACE_PERIOD_MS = 5_000;
+export const GRACE_PERIOD_MS = 5_000;
 
 /**
  * Test runners (pytest, vitest) print long runs of the same progress
@@ -218,21 +218,33 @@ function verifyRunTeardown(
   );
 }
 
-function runCommandWithTimeout(
-  cmd: string,
-  cwd: string,
-  timeoutMs: number,
-  maxRssMb: number,
-  runId: string,
-  baseEnv: NodeJS.ProcessEnv = process.env,
-): Promise<{
+export interface BoundedCommandResult {
   exitCode: number;
   output: string;
   timedOut: boolean;
   oomKilled: boolean;
   spawnFailed: boolean;
   teardownVerificationFailed: boolean;
-}> {
+}
+
+/**
+ * Runs a single command through the bounded test-run machinery — per-run
+ * cgroup placement (spawnIntoTestRunCgroup), a wall-clock timeout with
+ * SIGINT-then-SIGKILL escalation, an optional RSS ceiling, and
+ * teardown-verification (verifyRunTeardown) before resolving — so any caller
+ * spawning a test/verify command inherits the same bound the test: lane gets,
+ * rather than a bare unbounded spawn(). Exported for callers outside the
+ * test: lane (see verifyRunner.ts's runVerifyAsGate) that need the identical
+ * guarantee.
+ */
+export function runCommandWithTimeout(
+  cmd: string,
+  cwd: string,
+  timeoutMs: number,
+  maxRssMb: number,
+  runId: string,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): Promise<BoundedCommandResult> {
   return new Promise((resolve) => {
     // Strip production data-plane env before the child spawns. A test
     // command runs `vitest run` (or similar) in a worktree; DB_PATH pointing

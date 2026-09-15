@@ -84,7 +84,14 @@ describe('runVerifyAsGate()', () => {
 
   it('truncates output longer than ~750 chars to the last portion', async () => {
     const handlers = setupMockProc();
-    const longOutput = 'x'.repeat(1000);
+    // Varied per-line content (not a single repeated char) so the bounded
+    // runner's progress-run collapsing (test-runner.ts's
+    // collapseProgressRuns, meant for pytest/vitest dot-progress noise)
+    // doesn't interfere with this test's own truncation assertion.
+    const longOutput = Array.from(
+      { length: 100 },
+      (_, i) => `line ${i}: something happened here\n`,
+    ).join('');
     const promise = runVerifyAsGate('/repo', ['big-output-cmd']);
 
     handlers.stderrHandlers['data']?.(Buffer.from(longOutput));
@@ -187,15 +194,21 @@ describe('runVerifyAsGate() gate env scoping', () => {
     fs.rmSync(worktree, { recursive: true, force: true });
   });
 
-  it("spawns with today's inherited environment when no cache_env is declared", async () => {
+  it("spawns with today's inherited environment (minus DB_PATH) when no cache_env is declared", async () => {
     const handlers = setupMockProc();
     const promise = runVerifyAsGate('/repo', ['npm run lint']);
     handlers.procHandlers['close']?.(0);
     await promise;
 
+    // The bounded runner (test-runner.ts's runCommandWithTimeout) strips
+    // DB_PATH before every spawn — see its own doc comment — so the
+    // inherited environment here is process.env minus that one key, not an
+    // exact match against process.env (this test suite's setup pins
+    // DB_PATH to ':memory:', see testSetupDb.ts).
+    const { DB_PATH: _dbPath, ...expectedEnv } = process.env;
     expect(vi.mocked(spawn)).toHaveBeenCalledWith(
       'npm run lint',
-      expect.objectContaining({ env: process.env }),
+      expect.objectContaining({ env: expectedEnv }),
     );
   });
 

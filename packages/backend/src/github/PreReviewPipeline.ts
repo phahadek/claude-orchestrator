@@ -64,6 +64,7 @@ interface GateFailureDetail {
   isGitInfraFailure?: boolean;
   isToolInfraFailure?: boolean;
   toolFailureReason?: string;
+  isTimeoutInfraFailure?: boolean;
 }
 
 interface GateStageDescriptor {
@@ -322,6 +323,8 @@ export class PreReviewPipeline {
           {
             cacheEnv: config.cache_env,
             expectedToolVersions: config.expected_tool_versions,
+            timeoutSec: config.test_timeout_sec,
+            maxRssMb: config.test_max_rss_mb,
           },
         );
         if (result.isToolInfraFailure) {
@@ -329,6 +332,16 @@ export class PreReviewPipeline {
             summary: result.toolFailureReason ?? 'toolchain version mismatch',
             isToolInfraFailure: true,
             toolFailureReason: result.toolFailureReason,
+          };
+        }
+        if (result.isTimeoutInfraFailure) {
+          return {
+            failedCommand: result.failedCommand,
+            truncatedOutput: result.truncatedOutput,
+            summary: result.failedCommand
+              ? `verify timed out: ${result.failedCommand}`
+              : 'verify timed out',
+            isTimeoutInfraFailure: true,
           };
         }
         if (!result.passed) {
@@ -903,7 +916,9 @@ export class PreReviewPipeline {
       ? 'autofix_git_infra_failure'
       : detail.isToolInfraFailure
         ? 'autofix_tool_infra_failure'
-        : stage.verdict;
+        : detail.isTimeoutInfraFailure
+          ? 'gate_timeout_infra_failure'
+          : stage.verdict;
 
     setPRReviewResult(
       job.prNumber,
@@ -925,7 +940,9 @@ export class PreReviewPipeline {
       ? 'autofix_git_infra_failure'
       : detail.isToolInfraFailure
         ? 'autofix_tool_infra_failure'
-        : stage.pauseReason;
+        : detail.isTimeoutInfraFailure
+          ? 'gate_timeout_infra_failure'
+          : stage.pauseReason;
     if (pauseReasonToSet) {
       if (detail.truncatedOutput) {
         setPauseReason(
@@ -939,9 +956,10 @@ export class PreReviewPipeline {
       }
     }
 
-    // A tool-infra failure is a host/environment issue the session cannot
-    // fix by pushing code — route it to the operator instead of nudging.
-    if (detail.isToolInfraFailure) return;
+    // A tool-infra or timeout-infra failure is a host/environment issue the
+    // session cannot fix by pushing code — route it to the operator instead
+    // of nudging.
+    if (detail.isToolInfraFailure || detail.isTimeoutInfraFailure) return;
 
     const sessionId = prRow?.session_id;
     if (!sessionId) return;
@@ -1141,14 +1159,15 @@ export class PreReviewPipeline {
 
   /**
    * Pauses this pipeline itself sets on gate failure: every stage descriptor's
-   * pauseReason, plus 'autofix_git_infra_failure' and 'autofix_tool_infra_failure'
-   * which handleGateFailure sets imperatively (outside the stage array) on
-   * infra failures.
+   * pauseReason, plus 'autofix_git_infra_failure', 'autofix_tool_infra_failure'
+   * and 'gate_timeout_infra_failure' which handleGateFailure sets imperatively
+   * (outside the stage array) on infra failures.
    */
   private gateOwnedPauseReasons(): Set<PauseReason> {
     const owned = new Set<PauseReason>([
       'autofix_git_infra_failure',
       'autofix_tool_infra_failure',
+      'gate_timeout_infra_failure',
     ]);
     for (const stage of this.stages) {
       if (stage.mode === 'gate' && stage.pauseReason) {
