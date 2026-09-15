@@ -2550,16 +2550,12 @@ export function runMigrations(target: Database.Database): void {
   // old checkBaseBranchHealth remediation-task tracking removed (see
   // commit d113ab5b). NULL for every unexcused row.
   try {
-    target.exec(
-      `ALTER TABLE test_run_results ADD COLUMN excused_at INTEGER`,
-    );
+    target.exec(`ALTER TABLE test_run_results ADD COLUMN excused_at INTEGER`);
   } catch {
     /* already exists */
   }
   try {
-    target.exec(
-      `ALTER TABLE test_run_results ADD COLUMN excused_reason TEXT`,
-    );
+    target.exec(`ALTER TABLE test_run_results ADD COLUMN excused_reason TEXT`);
   } catch {
     /* already exists */
   }

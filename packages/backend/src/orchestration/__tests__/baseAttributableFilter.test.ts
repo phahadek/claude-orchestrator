@@ -300,11 +300,7 @@ describe('filterBaseAttributableFailures', () => {
     ]);
 
     const run = makeRun({ id: 'run-42' });
-    const result = await filterBaseAttributableFailures(
-      PROJECT,
-      run,
-      'task-1',
-    );
+    const result = await filterBaseAttributableFailures(PROJECT, run, 'task-1');
 
     expect(result.outcome).toBe('filtered_pass');
     expect(mockMarkTestResultExcused).toHaveBeenCalledWith(
