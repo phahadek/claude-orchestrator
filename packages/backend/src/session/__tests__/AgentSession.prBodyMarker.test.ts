@@ -519,7 +519,14 @@ describe('<pr-body> marker — test.request cache gate', () => {
     insertTestRunResults(
       'run-excused-1',
       'proj',
-      [{ test_id: 'test-a', name: 'test-a', outcome: 'failed', duration_ms: 1 }],
+      [
+        {
+          test_id: 'test-a',
+          name: 'test-a',
+          outcome: 'failed',
+          duration_ms: 1,
+        },
+      ],
       null,
       false,
     );
@@ -554,7 +561,14 @@ describe('<pr-body> marker — test.request cache gate', () => {
     insertTestRunResults(
       'run-unmarked-1',
       'proj',
-      [{ test_id: 'test-b', name: 'test-b', outcome: 'failed', duration_ms: 1 }],
+      [
+        {
+          test_id: 'test-b',
+          name: 'test-b',
+          outcome: 'failed',
+          duration_ms: 1,
+        },
+      ],
       null,
       false,
     );
@@ -574,7 +588,7 @@ describe('<pr-body> marker — test.request cache gate', () => {
     );
   });
 
-  it('still blocks PR creation when only some of a failed run\'s failing tests are marked excused', async () => {
+  it("still blocks PR creation when only some of a failed run's failing tests are marked excused", async () => {
     vi.mocked(getLatestTestRequestRun).mockReturnValue({
       id: 'run-partial-1',
       project_id: 'proj',
@@ -589,8 +603,18 @@ describe('<pr-body> marker — test.request cache gate', () => {
       'run-partial-1',
       'proj',
       [
-        { test_id: 'test-c', name: 'test-c', outcome: 'failed', duration_ms: 1 },
-        { test_id: 'test-d', name: 'test-d', outcome: 'failed', duration_ms: 1 },
+        {
+          test_id: 'test-c',
+          name: 'test-c',
+          outcome: 'failed',
+          duration_ms: 1,
+        },
+        {
+          test_id: 'test-d',
+          name: 'test-d',
+          outcome: 'failed',
+          duration_ms: 1,
+        },
       ],
       null,
       false,
