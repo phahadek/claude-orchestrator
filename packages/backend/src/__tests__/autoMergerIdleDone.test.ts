@@ -91,7 +91,11 @@ vi.mock('../tasks/TaskBackend.js', () => ({
   })),
 }));
 vi.mock('../session/orchestrator-config.js', () => ({
-  loadOrchestratorConfig: vi.fn(() => ({ verify: [], ci_check_name: [], test: [] })),
+  loadOrchestratorConfig: vi.fn(() => ({
+    verify: [],
+    ci_check_name: [],
+    test: [],
+  })),
 }));
 vi.mock('../audit/AuditLog.js', () => ({ recordEvent: vi.fn() }));
 vi.mock('../orchestration/localMergeRunner.js', () => ({
