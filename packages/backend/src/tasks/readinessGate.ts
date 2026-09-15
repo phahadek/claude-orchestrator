@@ -22,6 +22,7 @@
  * check), too broad for this general prose scan.
  */
 
+import { createHash } from 'crypto';
 import { renderTaskBodyMarkdown, type TaskBodySections } from './bodyRender';
 
 export interface ReadinessViolation {
@@ -559,6 +560,25 @@ export function checkReadiness(
     ...checkDeclaredWritesSection(text),
     ...floorFactScanViolations,
   ];
+}
+
+/**
+ * Order-independent fingerprint of a readiness violation set — used by the
+ * stage route's readiness-retry cap (see stagedIntents.ts's
+ * evaluateReadinessRetryCap) to tell "the session made no progress, it
+ * re-staged the exact same rejected flip" apart from "the violation set
+ * changed" across two stage-time rejections of the same task.setStatus. Sorts
+ * before hashing so the same set in a different scan order still fingerprints
+ * identically.
+ */
+export function hashReadinessViolations(
+  violations: readonly ReadinessViolation[],
+): string {
+  const normalized = violations
+    .map((v) => `${v.tier}|${v.detail}|${v.location}`)
+    .sort()
+    .join('\n');
+  return createHash('sha256').update(normalized).digest('hex');
 }
 
 /**

@@ -189,7 +189,8 @@ type EventType =
   | 're_review_skipped_pr_terminal'
   | 'task_revert_check_failed'
   | 'stale_task_pause_reasons_swept'
-  | 'groom_candidate_suppressed';
+  | 'groom_candidate_suppressed'
+  | 'groom_readiness_retry_capped';
 
 type ActorType = 'ai' | 'human' | 'system';
 

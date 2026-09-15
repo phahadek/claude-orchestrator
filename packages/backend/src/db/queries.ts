@@ -6549,6 +6549,64 @@ export function resetSessionPokeRetryCount(sessionId: string): void {
   );
 }
 
+// ─── readiness_retry_counts ─────────────────────────────────────────────────
+
+/**
+ * Records one rejected task.setStatus -> Ready readiness-gate stage attempt
+ * for (sessionId, taskId) and returns the resulting consecutive-identical-
+ * violations count: a matching `violationsHash` (as last recorded)
+ * increments the counter, any other hash resets it to 1 — see
+ * readiness_retry_counts's schema comment for why a hash change resets
+ * rather than accumulates (it means the session made progress).
+ */
+export function recordReadinessRetryAttempt(
+  sessionId: string,
+  taskId: string,
+  violationsHash: string,
+  now: number,
+): number {
+  const existing = db
+    .prepare<{ session_id: string; task_id: string }>(
+      `SELECT violations_hash, attempts FROM readiness_retry_counts
+       WHERE session_id = @session_id AND task_id = @task_id`,
+    )
+    .get({ session_id: sessionId, task_id: taskId }) as
+    | { violations_hash: string; attempts: number }
+    | undefined;
+  const attempts =
+    existing && existing.violations_hash === violationsHash
+      ? existing.attempts + 1
+      : 1;
+  db.prepare(
+    `INSERT INTO readiness_retry_counts (session_id, task_id, violations_hash, attempts, updated_at)
+     VALUES (@session_id, @task_id, @violations_hash, @attempts, @updated_at)
+     ON CONFLICT(session_id, task_id) DO UPDATE SET
+       violations_hash = excluded.violations_hash,
+       attempts = excluded.attempts,
+       updated_at = excluded.updated_at`,
+  ).run({
+    session_id: sessionId,
+    task_id: taskId,
+    violations_hash: violationsHash,
+    attempts,
+    updated_at: now,
+  });
+  return attempts;
+}
+
+/**
+ * Clears a task's readiness-retry counters for every session — called when a
+ * body edit for the task commits (see readiness_retry_counts's schema
+ * comment): that's real progress on the task regardless of which session's
+ * retry count it should relieve, so every session tracking this task starts
+ * fresh rather than only the one that happened to commit the edit.
+ */
+export function resetReadinessRetryCount(taskId: string): void {
+  db.prepare(`DELETE FROM readiness_retry_counts WHERE task_id = ?`).run(
+    taskId,
+  );
+}
+
 // ─── session_pause_intervals ────────────────────────────────────────────────
 
 export function insertPauseInterval(

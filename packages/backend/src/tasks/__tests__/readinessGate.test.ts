@@ -8,6 +8,7 @@ import {
   checkAccretionContentMatch,
   extractDeclaredWrites,
   hasSeedShape,
+  hashReadinessViolations,
 } from '../readinessGate';
 
 const repoRoot = join(__dirname, '..', '..', '..', '..', '..');
@@ -650,5 +651,46 @@ describe('checkReadiness — Declared writes section', () => {
       { capability: 'Bash(git push origin HEAD:*)', prodMutating: true },
       { capability: 'mcp__github__merge_pull_request', prodMutating: true },
     ]);
+  });
+});
+
+describe('hashReadinessViolations', () => {
+  it('is order-independent — the same violation set in a different order hashes identically', () => {
+    const a = [
+      {
+        tier: 'structural' as const,
+        detail: 'missing Deliverables',
+        location: 'body',
+      },
+      {
+        tier: 'lexical' as const,
+        detail: 'deferral phrase found',
+        location: 'line 3',
+      },
+    ];
+    const b = [a[1], a[0]];
+    expect(hashReadinessViolations(a)).toBe(hashReadinessViolations(b));
+  });
+
+  it('differs when the violation set actually differs', () => {
+    const a = [
+      {
+        tier: 'structural' as const,
+        detail: 'missing Deliverables',
+        location: 'body',
+      },
+    ];
+    const b = [
+      {
+        tier: 'structural' as const,
+        detail: 'Deliverables section is empty',
+        location: 'body',
+      },
+    ];
+    expect(hashReadinessViolations(a)).not.toBe(hashReadinessViolations(b));
+  });
+
+  it('hashes an empty violation set consistently', () => {
+    expect(hashReadinessViolations([])).toBe(hashReadinessViolations([]));
   });
 });
