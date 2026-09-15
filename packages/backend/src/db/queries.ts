@@ -11500,23 +11500,25 @@ function findSuppressingNoOpForTask(
   if (latest.state === 'committed') return latest;
   if (!NOOP_UNDISPOSITIONED_STATES.has(latest.state)) return undefined;
 
-  let current = latest;
-  while (current.supersedes) {
-    const predecessor = getStagedIntent(current.supersedes);
-    if (
-      !predecessor ||
-      predecessor.kind !== 'planning.noOp' ||
-      predecessor.task_id !== taskId
-    ) {
-      break;
-    }
-    if (
-      predecessor.state === 'committed' ||
-      predecessor.state === 'superseded'
-    ) {
-      return predecessor;
-    }
-    current = predecessor;
+  // Only one hop back: a legitimate mid-chain predecessor is always
+  // 'superseded' (that's what supersedeStagedIntent sets the row it
+  // replaces to) or, at the root, 'committed'. Anything else the
+  // `supersedes` pointer lands on — most importantly a `rejected` or
+  // `withdrawn` predecessor — is an explicit terminal disposition an
+  // operator (or the session itself) made on *that* intent, and must stop
+  // the walk rather than being stepped past in search of a still-older
+  // ancestor to resurrect.
+  if (!latest.supersedes) return undefined;
+  const predecessor = getStagedIntent(latest.supersedes);
+  if (
+    !predecessor ||
+    predecessor.kind !== 'planning.noOp' ||
+    predecessor.task_id !== taskId
+  ) {
+    return undefined;
+  }
+  if (predecessor.state === 'committed' || predecessor.state === 'superseded') {
+    return predecessor;
   }
   return undefined;
 }

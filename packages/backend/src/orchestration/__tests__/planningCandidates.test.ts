@@ -637,6 +637,33 @@ describe('isNoOpSuppressed', () => {
     });
     expect(isNoOpSuppressed('task-1')).toBe(false);
   });
+
+  it('does not resurrect an earlier committed no-op past an explicitly rejected intermediate one', () => {
+    const firstId = 'noop-a-committed';
+    const secondId = 'noop-b-rejected';
+    insertNoOp({
+      id: firstId,
+      state: 'committed',
+      supersedes: null,
+      created_at: 1000,
+      updated_at: 1000,
+    });
+    insertNoOp({
+      id: secondId,
+      state: 'rejected',
+      supersedes: firstId,
+      created_at: 2000,
+      updated_at: 2000,
+    });
+    insertNoOp({
+      id: 'noop-c-staged',
+      state: 'staged',
+      supersedes: secondId,
+      created_at: 3000,
+      updated_at: 3000,
+    });
+    expect(isNoOpSuppressed('task-1')).toBe(false);
+  });
 });
 
 function insertGroomIntent(overrides: Partial<StagedIntentRow> = {}): void {
