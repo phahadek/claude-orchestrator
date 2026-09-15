@@ -883,17 +883,12 @@ export class AutoMerger {
     pr: PullRequestRow,
     ciCheckNames: string[] = [],
   ): Promise<void> {
-    // The docs execution flow's never-auto-merged output gate — re-checked
-    // here, immediately before the actual GitHub merge API call, so no code
-    // path through attemptMerge (however it got here) can ever merge a
-    // human_merge_only PR.
-    if (pr.human_merge_only) {
-      logger.info(
-        `[AutoMerger] PR #${pr.pr_number}: human_merge_only — refusing to merge, waiting for a human`,
-      );
-      return;
-    }
-
+    // isMergeEligible() re-checks human_merge_only (along with verdict and
+    // the test gate) immediately before the actual GitHub merge API call, so
+    // no code path through attemptMerge (however it got here) can ever merge
+    // a human_merge_only PR — this used to be a separate standalone check
+    // here, duplicating isMergeEligible's own human_merge_only branch; now
+    // there is exactly one place that decides eligibility.
     const eligibility = await this.isMergeEligible(pr);
     if (!eligibility.ok) {
       logger.info(

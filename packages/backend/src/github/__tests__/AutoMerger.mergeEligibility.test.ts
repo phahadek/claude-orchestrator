@@ -254,6 +254,30 @@ beforeEach(() => {
   vi.mocked(getLatestTestRequestRun).mockReturnValue(undefined);
 });
 
+describe('AutoMerger merge eligibility — human_merge_only', () => {
+  it('isMergeEligible() itself returns reason human_merge_only for a human_merge_only PR, independent of run()\'s own earlier short-circuit', async () => {
+    // run()'s pre-poll-loop check already returns before ever reaching
+    // attemptMerge for a human_merge_only PR (see AutoMerger.ts), so this
+    // exercises the unified predicate directly — the single source of truth
+    // the task spec calls for, which every attemptMerge caller (including
+    // any future one that doesn't duplicate run()'s own early check) funnels
+    // through.
+    const github = makeMockGitHub();
+    const merger = new AutoMerger(github, makeMockWatcher(), () => {});
+    const pr = makePRRow({ human_merge_only: 1 });
+
+    const result = await (
+      merger as unknown as {
+        isMergeEligible: (
+          pr: PullRequestRow,
+        ) => Promise<{ ok: true } | { ok: false; reason: string }>;
+      }
+    ).isMergeEligible(pr);
+
+    expect(result).toEqual({ ok: false, reason: 'human_merge_only' });
+  });
+});
+
 describe('AutoMerger merge eligibility — verdict gate', () => {
   it('declines to merge a clean PR whose latest review verdict is verify_failed, never calling mergePR', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(
