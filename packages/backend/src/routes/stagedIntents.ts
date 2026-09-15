@@ -2223,6 +2223,14 @@ interface GateVerifyIntentPayload {
   evidence?: unknown;
   reclassify?: { to: GateItemClassification; reason: string };
   /**
+   * A failing verify session's proposed follow-up fix task title/summary —
+   * see gateVerifyProposedFixSchema in mcp/tools/schemas.ts. Absent for a
+   * mirror intent, same as `disposition` above (no verify session runs on
+   * that path). Threaded verbatim into the `GateVerificationResult` passed
+   * to `routeVerificationResult` at apply time.
+   */
+  proposedFix?: { title: string; summary: string };
+  /**
    * Marks a reconciler-originated stand-in the operator sees on the
    * decision surface instead of dispatching a real verify session (see
    * gateReconciler.reconcileHumanObservationMirrors). `'mirror'` is a
@@ -5280,6 +5288,7 @@ async function applyIntent(
         disposition,
         evidence,
         reclassify: payload.reclassify,
+        proposedFix: isOperatorSuppliedOrigin ? undefined : payload.proposedFix,
       };
       // The operator's approval is the verdict itself — reuse the exact
       // routing gateReconciler already applies to an operator-triggered

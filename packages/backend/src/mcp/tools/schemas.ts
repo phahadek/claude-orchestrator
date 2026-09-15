@@ -410,13 +410,42 @@ export const gateVerifyEvidenceSchema = z.object({
   source: gateVerifyEvidenceLineSchema.optional(),
 });
 
+/** Caps mirroring GATE_VERIFY_EVIDENCE_LINE_MAX's precedent — a capped title/summary, not a free-markdown body. */
+const GATE_VERIFY_PROPOSED_FIX_TITLE_MAX = 100;
+const GATE_VERIFY_PROPOSED_FIX_SUMMARY_MAX = 500;
+
 /**
- * The full gate.verify tool-call shape, used to enforce the one rule that
- * spans both sibling fields: `evidence.source` is admissible only on a
- * `fail` disposition. The MCP tool registration also declares
- * disposition/evidence/reclassify individually (for the JSON schema the
- * calling agent sees), but the handler re-validates the assembled args
- * against this schema so the fail-only-source rule is actually enforced.
+ * A failing gate-verify session's proposal for the follow-up fix task's
+ * title/wording — the reconciler still deterministically assembles the
+ * Context section (gate item text, verifier evidence, deploy SHA,
+ * originating source) exactly as `buildFollowupTaskBody` does today; this
+ * only replaces the generic `Fix gate item: ${item.text}` title/summary
+ * boilerplate. `title` is a single capped line; `summary` is a short
+ * scope paragraph, not a full markdown body.
+ */
+export const gateVerifyProposedFixSchema = z.object({
+  title: z
+    .string()
+    .max(
+      GATE_VERIFY_PROPOSED_FIX_TITLE_MAX,
+      `must be a single line, ${GATE_VERIFY_PROPOSED_FIX_TITLE_MAX} characters or fewer`,
+    ),
+  summary: z
+    .string()
+    .max(
+      GATE_VERIFY_PROPOSED_FIX_SUMMARY_MAX,
+      `must be ${GATE_VERIFY_PROPOSED_FIX_SUMMARY_MAX} characters or fewer`,
+    ),
+});
+
+/**
+ * The full gate.verify tool-call shape, used to enforce the two rules that
+ * span sibling fields: `evidence.source` and `proposedFix` are each
+ * admissible only on a `fail` disposition. The MCP tool registration also
+ * declares disposition/evidence/reclassify/proposedFix individually (for
+ * the JSON schema the calling agent sees), but the handler re-validates the
+ * assembled args against this schema so both fail-only rules are actually
+ * enforced.
  */
 export const gateVerifyPayloadSchema = z
   .object({
@@ -424,6 +453,7 @@ export const gateVerifyPayloadSchema = z
     disposition: gateVerifyDispositionSchema,
     evidence: gateVerifyEvidenceSchema.optional(),
     reclassify: gateVerifyReclassifySchema.optional(),
+    proposedFix: gateVerifyProposedFixSchema.optional(),
   })
   .superRefine((value, ctx) => {
     if (value.evidence?.source !== undefined && value.disposition !== 'fail') {
@@ -432,6 +462,13 @@ export const gateVerifyPayloadSchema = z
         path: ['evidence', 'source'],
         message:
           'evidence.source is only permitted when disposition is "fail".',
+      });
+    }
+    if (value.proposedFix !== undefined && value.disposition !== 'fail') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['proposedFix'],
+        message: 'proposedFix is only permitted when disposition is "fail".',
       });
     }
   });

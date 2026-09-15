@@ -144,6 +144,8 @@ export interface GateVerifyDisposition {
   evidence?: unknown;
   /** The session's self-correction: "this item is mis-classified" — see gateItemVerifier's report contract. */
   reclassify?: GateVerifyReclassifyProposal;
+  /** A failing session's proposed follow-up fix task title/summary — see gateVerifyProposedFixSchema in mcp/tools/schemas.ts. Fail-only. */
+  proposedFix?: { title: string; summary: string };
 }
 
 export interface GateVerifyDispositionPayload {

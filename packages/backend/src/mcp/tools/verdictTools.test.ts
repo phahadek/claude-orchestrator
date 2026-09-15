@@ -946,6 +946,71 @@ describe('gate.verify', () => {
     },
   );
 
+  it('accepts a proposedFix when disposition is fail', async () => {
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session, 'ops');
+    const result = await client.callTool({
+      name: 'gate.verify',
+      arguments: {
+        gateItemId: 'item-1',
+        disposition: 'fail',
+        evidence: {
+          expected: 'x',
+          found: 'the record shows the opposite',
+          query: 'z',
+        },
+        proposedFix: {
+          title: 'Fix the widget creation audit write',
+          summary: 'widget_created never writes an audit_log row.',
+        },
+      },
+    });
+    expect(resultOf(result as never)).toEqual({
+      status: 'ok',
+      id: 'staged-1',
+      milestone: 'M1',
+    });
+    expect(session.recordGateVerifyDisposition).toHaveBeenCalledWith({
+      gateItemId: 'item-1',
+      disposition: 'fail',
+      evidence: {
+        expected: 'x',
+        found: 'the record shows the opposite',
+        query: 'z',
+      },
+      reclassify: undefined,
+      proposedFix: {
+        title: 'Fix the widget creation audit write',
+        summary: 'widget_created never writes an audit_log row.',
+      },
+    });
+    await close();
+  });
+
+  it('rejects a proposedFix when disposition is pass', async () => {
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session, 'ops');
+    const result = await client.callTool({
+      name: 'gate.verify',
+      arguments: {
+        gateItemId: 'item-1',
+        disposition: 'pass',
+        evidence: {
+          expected: 'x',
+          found: 'y',
+          query: 'z',
+        },
+        proposedFix: {
+          title: 'Fix the widget creation audit write',
+          summary: 'widget_created never writes an audit_log row.',
+        },
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(session.recordGateVerifyDisposition).not.toHaveBeenCalled();
+    await close();
+  });
+
   it('keeps VERIFIER_RECLASSIFY_TARGETS and gateVerifyReclassifyToSchema in sync', () => {
     expect(new Set(gateVerifyReclassifyToSchema.options)).toEqual(
       VERIFIER_RECLASSIFY_TARGETS,
