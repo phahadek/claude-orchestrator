@@ -15,8 +15,14 @@ import {
   setPauseReason,
   getMergedPRForTask,
   getMergedLocalBranchForTaskId,
+  getLatestTestRequestRunForSession,
 } from '../db/queries';
-import type { OpsPrIntentPayload, PullRequestRow } from '../db/types';
+import type {
+  OpsPrIntentPayload,
+  PullRequestRow,
+  StructuredTestResult,
+  TestRequestRunRow,
+} from '../db/types';
 import {
   getReservationForTaskDirSuffix,
   getReservationByNumber,
@@ -465,6 +471,15 @@ above), the PR must show falsification-style evidence, not just a claim that it 
 Fail this dimension for any criterion lacking this command+output+non-vacuous-confirmation
 evidence, even if the surrounding diff otherwise looks plausible.
 
+If an "## Orchestrator-Verified Test Run" section is present above, its listed commands
+and pass/fail/skip counts are a real, already-executed record from the orchestrator's own
+test gate — not a claim by the PR author. For any acceptance criterion the diff shows is
+covered by a test in that run, treat that run's command + observed result as satisfying
+the "specific command run" and "observed output" requirements for that criterion; the PR
+body/description does not need to separately restate them. This does not excuse the
+non-vacuous-confirmation requirement — still fail the dimension if the run shows the
+covering test skipped/excluded, or if the run failed, or if no run covers the criterion.
+
 Evaluate the PR across exactly these 4 dimensions and respond with this JSON schema:
 {
   "verdict": "approved" | "needs_changes" | "incomplete",
@@ -489,6 +504,46 @@ Note: size-proportionality is judged separately, by a distinct depth-review pass
 }
 
 const REVIEW_JSON_SCHEMA_BLOCK = buildReviewJsonSchemaBlock();
+
+/**
+ * Renders the PR's own coding session's latest finished test_request_runs row
+ * (the F2 gate's real, already-executed verdict) into the review prompt, so
+ * the "Per-criterion evidence bar" above has something genuine to point at
+ * instead of demanding evidence the PR body/author has no way to supply.
+ * Returns '' when no finished run exists (still-running/queued rows and
+ * missing rows both fall back to today's no-section behavior) — the reviewer
+ * then evaluates the evidence bar exactly as before.
+ */
+function buildTestRunEvidenceSection(
+  run: TestRequestRunRow | undefined,
+): string {
+  if (!run || run.state === 'running' || run.state === 'queued') return '';
+  const finishedAt = run.finished_at
+    ? new Date(run.finished_at).toISOString()
+    : '(unknown)';
+  let commandLines = '(no structured result recorded)';
+  if (run.structured_result) {
+    try {
+      const parsed = JSON.parse(run.structured_result) as StructuredTestResult;
+      const suiteNames = parsed.suites.map((s) => s.name);
+      commandLines =
+        (suiteNames.length > 0
+          ? `Commands/suites run: ${suiteNames.join(', ')}`
+          : 'Commands/suites run: (none recorded)') +
+        `\nResult totals: ${parsed.totals.passed} passed, ${parsed.totals.failed} failed, ${parsed.totals.skipped} skipped, ${parsed.totals.errors} errors` +
+        (parsed.incomplete ? '\nNote: this run is marked incomplete (a test command may have crashed before its report was written).' : '');
+    } catch {
+      commandLines = '(structured result present but unparsable)';
+    }
+  }
+  return `\n## Orchestrator-Verified Test Run
+This is a real record from the orchestrator's own F2 test gate for this PR's coding
+session — not a claim made by the PR author. It ran out-of-band via mcp__orchestrator__test_request.
+Run outcome: ${run.state}
+Finished at: ${finishedAt}
+${commandLines}
+`;
+}
 
 export class PRReviewService {
   constructor(
@@ -801,7 +856,16 @@ export class PRReviewService {
       const prIntent = prIntentRow
         ? (JSON.parse(prIntentRow.payload) as OpsPrIntentPayload)
         : null;
-      const prompt = this.buildPrompt(prData, diffData, taskBody, prIntent);
+      const testRun = prRow.session_id
+        ? getLatestTestRequestRunForSession(projectId, prRow.session_id)
+        : undefined;
+      const prompt = this.buildPrompt(
+        prData,
+        diffData,
+        taskBody,
+        prIntent,
+        testRun,
+      );
 
       // Guard: determine whether the stored session is still resumable before
       // entering Case 2. A session is resumable if its DB row exists and is not
@@ -2010,6 +2074,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     diff: PRDiff,
     taskBody: string,
     prIntent?: OpsPrIntentPayload | null,
+    testRun?: TestRequestRunRow | null,
   ): string {
     const prIntentSection = prIntent
       ? `\n## Approved PR Intent (Ops)
@@ -2021,6 +2086,7 @@ Reason: ${prIntent.reason}
     const schemaBlock = prIntent
       ? buildReviewJsonSchemaBlock(OPS_PR_INTENT_FILES_DIMENSION_GUIDANCE)
       : REVIEW_JSON_SCHEMA_BLOCK;
+    const testRunSection = buildTestRunEvidenceSection(testRun ?? undefined);
     return `You are a code reviewer. Compare the following GitHub PR against its task specification.
 
 ## PR Metadata
@@ -2034,7 +2100,7 @@ ${diff.diff}
 ## Task Specification
 ${taskBody}
 ${prIntentSection}
-
+${testRunSection}
 ## Your task
 ${schemaBlock}`;
   }

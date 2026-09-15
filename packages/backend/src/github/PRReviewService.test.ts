@@ -20,6 +20,7 @@ vi.mock('../db/queries.js', () => ({
   setPauseReason: vi.fn(),
   getMergedPRForTask: vi.fn().mockReturnValue(null),
   getMergedLocalBranchForTaskId: vi.fn().mockReturnValue(undefined),
+  getLatestTestRequestRunForSession: vi.fn().mockReturnValue(undefined),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -449,6 +450,88 @@ describe('PRReviewService.buildPrompt()', () => {
     expect(prompt).not.toContain('## Approved PR Intent');
     expect(prompt).toContain(
       'necessary downstream updates caused by the listed changes',
+    );
+  });
+
+  it('renders an orchestrator-verified test-run summary when a finished run is supplied', () => {
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    const finishedAt = Date.parse('2024-01-02T03:04:05Z');
+    const testRun = {
+      id: 'run-1',
+      project_id: 'proj-1',
+      content_hash: 'abc',
+      session_id: 'session-xyz',
+      state: 'passed',
+      output: '',
+      requested_at: finishedAt - 1000,
+      started_at: finishedAt - 1000,
+      finished_at: finishedAt,
+      structured_result: JSON.stringify({
+        format: 'junit-xml',
+        suites: [{ name: 'PRReviewService.test.ts', tests: [] }],
+        totals: { passed: 12, failed: 0, skipped: 0, errors: 0 },
+        durationMsTotal: 1234,
+      }),
+      failure_reason: null,
+      concurrent_run_count: 0,
+      oom_killed: 0,
+      test_report_acquisition_attempted: 1,
+      run_origin: null,
+      producer: null,
+      run_kind: 'full',
+      base_sha: null,
+      foreign_concurrent_run_count: 0,
+    } as any;
+
+    const prompt = service.buildPrompt(
+      mockPR,
+      mockDiff,
+      mockTaskBody,
+      null,
+      testRun,
+    );
+
+    expect(prompt).toContain('## Orchestrator-Verified Test Run');
+    expect(prompt).toContain('PRReviewService.test.ts');
+    expect(prompt).toContain('12 passed, 0 failed, 0 skipped, 0 errors');
+    expect(prompt).toContain('passed');
+  });
+
+  it('falls back to no orchestrator test-run section when no finished run exists', () => {
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const promptWithUndefined = service.buildPrompt(
+      mockPR,
+      mockDiff,
+      mockTaskBody,
+      null,
+      undefined,
+    );
+    const promptWithNull = service.buildPrompt(
+      mockPR,
+      mockDiff,
+      mockTaskBody,
+      null,
+      null,
+    );
+
+    expect(promptWithUndefined).not.toContain(
+      "This is a real record from the orchestrator's own F2 test gate",
+    );
+    expect(promptWithNull).not.toContain(
+      "This is a real record from the orchestrator's own F2 test gate",
     );
   });
 });
@@ -3730,6 +3813,19 @@ describe('PRReviewService — manual verification items excluded from verdict', 
     expect(prompt).toContain('non-vacuous confirmation');
     expect(prompt).toContain('fails without the change and passes with it');
     expect(prompt).toContain('skipped or');
+  });
+
+  it('REVIEW_JSON_SCHEMA_BLOCK prompt lets an orchestrator-verified passed run satisfy the command+output bar', () => {
+    const service = makeService();
+    const prompt = service.buildPrompt(mockPR, mockDiff, mockTaskBody);
+
+    expect(prompt).toContain('Orchestrator-Verified Test Run');
+    expect(prompt).toContain(
+      "treat that run's command + observed result as satisfying",
+    );
+    expect(prompt).toContain(
+      'does not need to separately restate them',
+    );
   });
 });
 
