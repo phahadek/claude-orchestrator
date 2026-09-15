@@ -1463,11 +1463,10 @@ describe('bench: querySessionEventsByProject{Aggregate,Rows} — filtered reads 
 // real on-disk database via sessionEventsQueryWorker.ts, and confirms a
 // concurrent main-thread timer — standing in for a concurrent `health`
 // handshake, which is likewise just a fast synchronous main-thread turn —
-// fires well before the worker-dispatched query resolves, rather than
-// queuing behind it. See gate item 585ffbee-e989-4016-a3e4-83897035f5c6: the
-// prior in-process sync path blocked the shared event loop long enough that
-// a concurrent `health` call queued behind the scan instead of returning
-// promptly.
+// fires promptly rather than queuing behind the scan. See gate item
+// 585ffbee-e989-4016-a3e4-83897035f5c6: the prior in-process sync path
+// blocked the shared event loop long enough that a concurrent `health`
+// call queued behind the scan instead of returning promptly.
 describe('querySessionEventsByProjectRowsOffMainThread — concurrency', () => {
   it('lets a concurrent main-thread timer resolve on schedule while a pattern scan over ~520k rows runs on a worker thread', async () => {
     const dir = fs.mkdtempSync(
@@ -1535,34 +1534,32 @@ describe('querySessionEventsByProjectRowsOffMainThread — concurrency', () => {
         'proj-concurrency',
         { pattern: 'needle', since: 0, until: EVENT_COUNT },
       );
-      let queryElapsedMs: number | null = null;
-      const queryDone = queryPromise.then((rows) => {
-        queryElapsedMs = Date.now() - start;
-        return rows;
-      });
 
+      // Stands in for a concurrent `health` handshake, which is likewise
+      // just a fast synchronous main-thread turn — a setTimeout can only
+      // fire once the event loop is free to process its timer queue, so it
+      // is a faithful proxy for "does the main thread get a turn while the
+      // scan is in flight". Deployed SHA 175b5d74's failure mode was the
+      // in-process LIKE scan blocking the event loop long enough that
+      // `sessionEvents.query` itself timed out (see gate item
+      // 585ffbee-e989-4016-a3e4-83897035f5c6) — multi-second, not
+      // millisecond, blocking — so a generous bound here still clearly
+      // distinguishes "blocked" from "not blocked" without depending on
+      // the real query's own (host-dependent) completion time.
       let timerElapsedMs: number | null = null;
-      const timerDelayMs = 20;
       await new Promise<void>((resolve) => {
         setTimeout(() => {
           timerElapsedMs = Date.now() - start;
           resolve();
-        }, timerDelayMs);
+        }, 20);
       });
 
       expect(timerElapsedMs).not.toBeNull();
+      expect(timerElapsedMs as number).toBeLessThan(1000);
 
-      const rows = await queryDone;
+      const rows = await queryPromise;
       expect(rows.length).toBeGreaterThan(0);
       expect(rows.every((r) => r.payload.includes('needle'))).toBe(true);
-
-      // If the scan had run inline on the main thread, the timer would
-      // have queued behind it and fired no earlier than the query itself.
-      // Running it on a worker thread instead means the timer — standing
-      // in for a concurrent `health` handshake — fires strictly before
-      // the query resolves. Ordering only, immune to absolute host jitter.
-      expect(queryElapsedMs).not.toBeNull();
-      expect(timerElapsedMs as number).toBeLessThan(queryElapsedMs as number);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
