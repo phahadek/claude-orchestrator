@@ -3904,14 +3904,14 @@ describe('PRReviewService — taskUrl strips notion: prefix', () => {
 describe('evaluateMigrationRenumberTolerance()', () => {
   const listed = ['migrations/postgres/0099_daemon_roster_canary.sql'];
 
-  it('tolerates a renumber to a number free on the base branch', () => {
+  it('flags a self-picked renumber to a number free on the base branch as a mismatch (not tolerated)', () => {
     const evaluation = evaluateMigrationRenumberTolerance(
       ['migrations/postgres/0108_daemon_roster_canary.sql'],
       listed,
       ['migrations/postgres/0100_unrelated_thing.sql'],
     );
     expect(evaluation.collisions).toEqual([]);
-    expect(evaluation.toleratedRenumbers).toEqual([
+    expect(evaluation.mismatches).toEqual([
       {
         diffPath: 'migrations/postgres/0108_daemon_roster_canary.sql',
         listedPath: 'migrations/postgres/0099_daemon_roster_canary.sql',
@@ -3926,7 +3926,7 @@ describe('evaluateMigrationRenumberTolerance()', () => {
       listed,
       ['migrations/postgres/0108_something_else.sql'],
     );
-    expect(evaluation.toleratedRenumbers).toEqual([]);
+    expect(evaluation.mismatches).toEqual([]);
     expect(evaluation.collisions).toEqual([
       {
         diffPath: 'migrations/postgres/0108_daemon_roster_canary.sql',
@@ -3942,7 +3942,7 @@ describe('evaluateMigrationRenumberTolerance()', () => {
       listed,
       [],
     );
-    expect(evaluation.toleratedRenumbers).toEqual([]);
+    expect(evaluation.mismatches).toEqual([]);
     expect(evaluation.collisions).toEqual([]);
   });
 
@@ -3952,7 +3952,7 @@ describe('evaluateMigrationRenumberTolerance()', () => {
       listed,
       [],
     );
-    expect(evaluation.toleratedRenumbers).toEqual([]);
+    expect(evaluation.mismatches).toEqual([]);
     expect(evaluation.collisions).toEqual([]);
   });
 
@@ -4123,7 +4123,7 @@ describe('PRReviewService — migration-renumber override wired into reviewPR()'
     );
   }
 
-  it('a renumbered migration to a currently-free number does not fail the dimension (#1027-shaped case)', async () => {
+  it('a self-picked renumber to a currently-free number still fails the dimension, naming both paths', async () => {
     const result = await runReview(
       migrationDiff('migrations/postgres/0108_daemon_roster_canary.sql'),
       {
@@ -4136,8 +4136,14 @@ describe('PRReviewService — migration-renumber override wired into reviewPR()'
     const dim = result.dimensions!.find(
       (d) => d.name === 'Changed files vs Files/paths affected list',
     )!;
-    expect(dim.passed).toBe(true);
-    expect(result.verdict).toBe('approved');
+    expect(dim.passed).toBe(false);
+    expect(dim.notes).toContain(
+      'migrations/postgres/0099_daemon_roster_canary.sql',
+    );
+    expect(dim.notes).toContain(
+      'migrations/postgres/0108_daemon_roster_canary.sql',
+    );
+    expect(result.verdict).toBe('needs_changes');
   });
 
   it('an unlisted non-migration file still fails the dimension — tolerance is scoped to migrations', async () => {
@@ -4222,10 +4228,10 @@ describe('PRReviewService — migration-renumber override wired into reviewPR()'
     const dim1036 = pr1036Style.dimensions!.find(
       (d) => d.name === 'Changed files vs Files/paths affected list',
     )!;
-    expect(dim1027.passed).toBe(true);
-    expect(dim1036.passed).toBe(true);
-    expect(pr1027Style.verdict).toBe('approved');
-    expect(pr1036Style.verdict).toBe('approved');
+    expect(dim1027.passed).toBe(false);
+    expect(dim1036.passed).toBe(false);
+    expect(pr1027Style.verdict).toBe('needs_changes');
+    expect(pr1036Style.verdict).toBe('needs_changes');
   });
 });
 
