@@ -79,7 +79,12 @@ describe('markSessionDone terminal guard', () => {
       terminalCompletionReason: 'operator_abort',
     });
 
-    markSessionDone('sess-killed', Date.now(), null, 'planning_no_pending_dispositions');
+    markSessionDone(
+      'sess-killed',
+      Date.now(),
+      null,
+      'planning_no_pending_dispositions',
+    );
 
     const row = getRow('sess-killed');
     expect(row?.status).toBe('killed');
@@ -114,7 +119,12 @@ describe('markSessionDone terminal guard', () => {
   it('records a session_done_write_skipped_terminal audit event carrying status_before', () => {
     insertSession('sess-killed-2', 'killed', { taskId: 'task-xyz' });
 
-    markSessionDone('sess-killed-2', Date.now(), null, 'planning_no_pending_dispositions');
+    markSessionDone(
+      'sess-killed-2',
+      Date.now(),
+      null,
+      'planning_no_pending_dispositions',
+    );
 
     const rows = getAuditRows('session_done_write_skipped_terminal');
     expect(rows).toHaveLength(1);

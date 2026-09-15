@@ -602,7 +602,10 @@ export function markSessionDone(
       actor_type: 'system',
       actor_id: sessionId,
       task_id: current.task_id ?? null,
-      payload: { status_before: current.status, call_site: callSite ?? 'unknown' },
+      payload: {
+        status_before: current.status,
+        call_site: callSite ?? 'unknown',
+      },
     });
     return;
   }
