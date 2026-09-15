@@ -585,6 +585,53 @@ describe('getLatestTestRequestRun — a crash with no verdict must not squat the
     expect(rows.map((r) => r.id)).toContain('crash-3');
     expect(rows.length).toBe(2);
   });
+
+  it('excludes a settled passed row with structured_result NULL and test_report_acquisition_attempted=1 — a "pass" with no evidence any assertion ran', () => {
+    insertTestRequestRun('vacuous-1', 'proj-1', 'hash-vacuous-1', null, Date.now());
+    completeTestRequestRun(
+      'vacuous-1',
+      'passed',
+      'exited 0',
+      null,
+      null,
+      false,
+      true,
+    );
+
+    expect(getLatestTestRequestRun('proj-1', 'hash-vacuous-1')).toBeUndefined();
+  });
+
+  it('still returns a settled passed row with test_report_acquisition_attempted=1 and a non-null structured_result — a genuine verdict', () => {
+    insertTestRequestRun('verdict-3', 'proj-1', 'hash-verdict-3', null, Date.now());
+    completeTestRequestRun(
+      'verdict-3',
+      'passed',
+      '5 passed',
+      null,
+      '{"summary":"5 passed"}',
+      false,
+      true,
+    );
+
+    const row = getLatestTestRequestRun('proj-1', 'hash-verdict-3');
+    expect(row?.id).toBe('verdict-3');
+  });
+
+  it('still returns a settled passed row with structured_result NULL when test_report_acquisition_attempted=0 — no report glob configured is not a vacuousness signal', () => {
+    insertTestRequestRun('verdict-4', 'proj-1', 'hash-verdict-4', null, Date.now());
+    completeTestRequestRun(
+      'verdict-4',
+      'passed',
+      'exited 0, no glob configured',
+      null,
+      null,
+      false,
+      false,
+    );
+
+    const row = getLatestTestRequestRun('proj-1', 'hash-verdict-4');
+    expect(row?.id).toBe('verdict-4');
+  });
 });
 
 describe('runProjectTestRequest — checkout install lock', () => {
@@ -1926,6 +1973,84 @@ describe('admitTestRequest — settled-run guard', () => {
     expect(fresh.unchangedReplay).toBe(false);
     expect(fresh.passed).toBe(true);
     expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
+  });
+
+  it('a settled passed row with structured_result null despite test_report_acquisition_attempted=1 (report never matched) is never replayed as unchangedReplay — a subsequent request executes fresh', async () => {
+    // The process exited 0 (passed) but the JUnit report was never matched —
+    // collectStructuredTestResult returns null even though a glob was
+    // configured, so the settled row carries no evidence any assertion ran.
+    mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '*.xml' });
+    mockCollectStructuredTestResult.mockReturnValue(null);
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: true,
+      output: 'exited 0, no report found',
+    });
+
+    const first = await runProjectTestRequest(
+      baseSpec({ projectId: 'proj-settled-6', contentHash: 'settled-6-hash' }),
+    );
+    expect(first.passed).toBe(true);
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    mockRunTestCommands.mockResolvedValueOnce({ passed: true, output: 'ok' });
+    const second = await runProjectTestRequest(
+      baseSpec({ projectId: 'proj-settled-6', contentHash: 'settled-6-hash' }),
+    );
+
+    expect(second.unchangedReplay).toBe(false);
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
+
+    const rowCount = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM test_request_runs WHERE project_id = ? AND content_hash = ?`,
+      )
+      .get('proj-settled-6', 'settled-6-hash') as { n: number };
+    expect(rowCount.n).toBe(2);
+  });
+
+  it('a settled passed row with a genuine non-vacuous structured_result is still replayed as unchangedReplay', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '*.xml' });
+    mockCollectStructuredTestResult.mockReturnValue({
+      format: 'junit-xml',
+      suites: [],
+      totals: { passed: 5, failed: 0, skipped: 0, errors: 0 },
+      durationMsTotal: 5,
+    });
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: true,
+      output: '5 passed',
+    });
+
+    await runProjectTestRequest(
+      baseSpec({ projectId: 'proj-settled-7', contentHash: 'settled-7-hash' }),
+    );
+    const replay = await runProjectTestRequest(
+      baseSpec({ projectId: 'proj-settled-7', contentHash: 'settled-7-hash' }),
+    );
+
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    expect(replay.unchangedReplay).toBe(true);
+    expect(replay.passed).toBe(true);
+  });
+
+  it('a settled passed row with test_report_acquisition_attempted=0 (no report glob configured) is still replayed as unchangedReplay — a null structured_result there is not a vacuousness signal', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '' });
+    mockCollectStructuredTestResult.mockReturnValue(null);
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: true,
+      output: 'ok, no report configured',
+    });
+
+    await runProjectTestRequest(
+      baseSpec({ projectId: 'proj-settled-8', contentHash: 'settled-8-hash' }),
+    );
+    const replay = await runProjectTestRequest(
+      baseSpec({ projectId: 'proj-settled-8', contentHash: 'settled-8-hash' }),
+    );
+
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    expect(replay.unchangedReplay).toBe(true);
+    expect(replay.passed).toBe(true);
   });
 });
 

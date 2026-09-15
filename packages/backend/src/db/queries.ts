@@ -9199,9 +9199,24 @@ export function countTestRequestRunsNeedingExtraction(): number {
  * is invisible here, so a fresh run is triggered instead of the crash being
  * served forever.
  *
+ * A `passed` row is subject to the same squat-guard when it's vacuous: the
+ * process exited 0 but test_report_acquisition_attempted = 1 (a
+ * `test_report_glob` was configured) and structured_result is still NULL,
+ * meaning collectStructuredTestResult never matched a report file — exactly
+ * the shape AgentSession's PR-open gate treats as isVacuousResult(null) and
+ * refuses to open a PR against (test-runner.ts's isVacuousResult). Serving
+ * that row forever as a cache hit would permanently block PR creation for
+ * an unchanged tree with no escape path. A passed row where
+ * test_report_acquisition_attempted is 0 or NULL (no report glob configured,
+ * or the column predates this tracking) is unaffected — a null
+ * structured_result there carries no vacuousness signal and is replayed as
+ * today; only an explicit 1 (acquisition was attempted and still came back
+ * empty) counts as evidence of vacuousness.
+ *
  * `includeUnsettledCrashRows` opts a caller back into seeing those crash
- * rows — base-health classification (baseHealthCheck.ts) is the only one
- * that needs the crash itself as its verdict rather than a fresh run.
+ * rows (failed-crash or passed-vacuous) — base-health classification
+ * (baseHealthCheck.ts) is the only one that needs the crash itself as its
+ * verdict rather than a fresh run.
  */
 export function getLatestTestRequestRun(
   projectId: string,
@@ -9259,6 +9274,12 @@ export function getLatestTestRequestRun(
              SELECT 1 FROM test_run_results
              WHERE test_run_results.test_request_run_id = test_request_runs.id
            )
+         )
+         AND (
+           @include_unsettled_crash_rows = 1
+           OR state != 'passed'
+           OR structured_result IS NOT NULL
+           OR test_report_acquisition_attempted IS NOT 1
          )
        ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
     )

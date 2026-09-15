@@ -426,9 +426,15 @@ export function admitTestRequest(
   // "unchanged" independent of what the server itself recomputed.
   // A settled run that never actually executed (failure_reason ===
   // 'execution_failed', e.g. spawn ENOENT) carries no verdict about this
-  // tree at all — it must never be replayed as if it were one. Falling
-  // through here means admission proceeds to a fresh execution below, same
-  // as if no settled run existed.
+  // tree at all — it must never be replayed as if it were one. Nor does a
+  // settled 'passed' run whose structured_result never got extracted despite
+  // a report glob being configured (test_report_acquisition_attempted = 1):
+  // that's the same shape AgentSession's PR-open gate treats as
+  // isVacuousResult(null) and refuses to open a PR against, so replaying it
+  // forever would permanently block PR creation for this tree with no
+  // escape path. getLatestTestRequestRun's own squat-guard SQL excludes both
+  // shapes from the lookup below. Falling through here means admission
+  // proceeds to a fresh execution, same as if no settled run existed.
   const settled = getLatestTestRequestRun(
     spec.projectId,
     spec.contentHash,
