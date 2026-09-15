@@ -356,7 +356,7 @@ export const reviewDispositionSchema = z.enum([
 ]);
 
 /** VerifiedFlakyDisposition's gate vocabulary — see AgentSession.ts's recordVerifiedFlakyDisposition. */
-export const flakyGateSchema = z.enum(['ci', 'f2', 'analyze']);
+export const flakyGateSchema = z.enum(['ci', 'f2', 'analyze', 'test_request']);
 
 /** PRReviewResult['verdict'] vocabulary — see PRReviewService.ts and AgentSession.ts's recordReviewVerdict. */
 export const reviewVerdictSchema = z.enum([

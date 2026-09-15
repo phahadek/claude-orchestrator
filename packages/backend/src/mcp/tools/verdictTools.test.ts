@@ -19,8 +19,12 @@ import type { PlanningWorkflow } from '../../planning/planningIntentKinds';
 import {
   getPRBySessionId,
   evaluateTestFlakinessCorpus,
+  getLatestTestRequestRunForSession,
+  markTestResultExcused,
 } from '../../db/queries';
 import { getChangedFiles } from '../../session/autofix-runner';
+import { getProjectById } from '../../config';
+import { firstRunCutoffMs } from '../../orchestration/baseAttributableFilter';
 import {
   pauseReasonFromCanonical,
   serializePauseReason,
@@ -29,10 +33,20 @@ import {
 vi.mock('../../db/queries', () => ({
   getPRBySessionId: vi.fn(),
   evaluateTestFlakinessCorpus: vi.fn(),
+  getLatestTestRequestRunForSession: vi.fn(),
+  markTestResultExcused: vi.fn(),
 }));
 
 vi.mock('../../session/autofix-runner', () => ({
   getChangedFiles: vi.fn(),
+}));
+
+vi.mock('../../config', () => ({
+  getProjectById: vi.fn(),
+}));
+
+vi.mock('../../orchestration/baseAttributableFilter', () => ({
+  firstRunCutoffMs: vi.fn(),
 }));
 
 vi.mock('../../config/settings', () => ({
@@ -504,6 +518,165 @@ describe('flaky.confirm', () => {
     expect(error).toContain('current: ci_billing_blocked');
     expect(session.recordVerifiedFlakyDisposition).not.toHaveBeenCalled();
     await close();
+  });
+});
+
+describe('flaky.confirm gate "test_request" (pre-PR)', () => {
+  const TEST_ID = 'tests.test_foo.test_something';
+  const TEST_NAME = 'test_something';
+  const RUN = { id: 'run-1', started_at: 1000 } as never;
+
+  beforeEach(() => {
+    vi.mocked(markTestResultExcused).mockClear();
+    vi.mocked(getPRBySessionId).mockClear();
+    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue(RUN);
+    vi.mocked(getProjectById).mockReturnValue({
+      id: 'proj-1',
+      baseBranch: 'dev',
+    } as never);
+    vi.mocked(firstRunCutoffMs).mockReturnValue(500);
+    vi.mocked(evaluateTestFlakinessCorpus).mockReturnValue({
+      testId: TEST_ID,
+      eligible: true,
+    });
+    vi.mocked(getChangedFiles).mockResolvedValue([
+      'packages/backend/src/unrelated.ts',
+    ]);
+  });
+
+  it('writes the excused marker and succeeds when the test clears the corpus and is absent from the diff', async () => {
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session);
+    const result = await client.callTool({
+      name: 'flaky.confirm',
+      arguments: {
+        gate: 'test_request',
+        reason: 'fails across many trees, unrelated to my diff',
+        testId: TEST_ID,
+        testName: TEST_NAME,
+      },
+    });
+    expect(resultOf(result as never)).toEqual({ status: 'ok' });
+    expect(markTestResultExcused).toHaveBeenCalledWith(
+      'run-1',
+      TEST_ID,
+      'flaky_confirm',
+    );
+    expect(session.recordVerifiedFlakyDisposition).not.toHaveBeenCalled();
+    await close();
+  });
+
+  it('refuses with no marker written when the test has not cleared the corpus', async () => {
+    vi.mocked(evaluateTestFlakinessCorpus).mockReturnValue({
+      testId: TEST_ID,
+      eligible: false,
+      reason: 'has not cleared the cross-SHA flakiness bar yet',
+    });
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session);
+    const result = await client.callTool({
+      name: 'flaky.confirm',
+      arguments: {
+        gate: 'test_request',
+        reason: 'seems flaky',
+        testId: TEST_ID,
+        testName: TEST_NAME,
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(resultOf(result as never).error).toContain(
+      'has not cleared the cross-SHA flakiness bar yet',
+    );
+    expect(markTestResultExcused).not.toHaveBeenCalled();
+    await close();
+  });
+
+  it("refuses regardless of corpus evidence when the test's own file is in the session's diff", async () => {
+    vi.mocked(getChangedFiles).mockResolvedValue([
+      'tests/test_foo.py',
+      'packages/backend/src/other.ts',
+    ]);
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session);
+    const result = await client.callTool({
+      name: 'flaky.confirm',
+      arguments: {
+        gate: 'test_request',
+        reason: 'seems flaky',
+        testId: TEST_ID,
+        testName: TEST_NAME,
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(resultOf(result as never).error).toContain('tests/test_foo.py');
+    expect(markTestResultExcused).not.toHaveBeenCalled();
+    await close();
+  });
+
+  it('refuses when the session has no active test_request run', async () => {
+    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue(undefined);
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session);
+    const result = await client.callTool({
+      name: 'flaky.confirm',
+      arguments: {
+        gate: 'test_request',
+        reason: 'seems flaky',
+        testId: TEST_ID,
+        testName: TEST_NAME,
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(resultOf(result as never).error).toContain(
+      'no active test_request run',
+    );
+    expect(getPRBySessionId).not.toHaveBeenCalled();
+    await close();
+  });
+
+  it('the insufficient-evidence refusal wording matches the post-PR gates verbatim', async () => {
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      pr_number: 7,
+      repo: 'owner/repo',
+      created_at: '2026-08-01T00:00:00.000Z',
+      base_branch: 'dev',
+      pause_reason: CI_FAILING_PAUSE,
+    } as never);
+    vi.mocked(evaluateTestFlakinessCorpus).mockReturnValue({
+      testId: TEST_ID,
+      eligible: false,
+      reason: 'has not cleared the cross-SHA flakiness bar yet (shared text)',
+    });
+
+    const preSession = fakeSession();
+    const pre = await connectedClient(() => preSession);
+    const preResult = await pre.client.callTool({
+      name: 'flaky.confirm',
+      arguments: {
+        gate: 'test_request',
+        reason: 'seems flaky',
+        testId: TEST_ID,
+        testName: TEST_NAME,
+      },
+    });
+    await pre.close();
+
+    const postSession = fakeSession();
+    const post = await connectedClient(() => postSession);
+    const postResult = await post.client.callTool({
+      name: 'flaky.confirm',
+      arguments: {
+        gate: 'f2',
+        reason: 'seems flaky',
+        testId: TEST_ID,
+        testName: TEST_NAME,
+      },
+    });
+    await post.close();
+
+    expect(resultOf(preResult as never).error).toEqual(
+      resultOf(postResult as never).error,
+    );
   });
 });
 

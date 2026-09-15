@@ -1349,8 +1349,26 @@ export interface TestRunResultRow {
   failure_trace_excerpt: string | null;
   /** JSON array of marker/tag strings (e.g. '["slow"]'), or null when the JUnit XML carried none. */
   markers: string | null;
+  /** When this specific (run, test_id) failure was excused — see TestExcusalSource. Null when never excused. */
+  excused_at: number | null;
+  /** Which path excused this failure — see TestExcusalSource. Null when never excused. */
+  excused_reason: string | null;
   created_at: number;
 }
+
+/**
+ * Tags the path that wrote a test_run_results row's excused_reason —
+ * 'flaky_confirm' is a session's own pre-PR flaky.confirm(gate:'test_request')
+ * call; 'breadth_corpus'/'flaky_rollup' are the two exclusion buckets the
+ * fully-automatic base-attributable filter (baseAttributableFilter.ts)
+ * already computes (excludedTests/flakyExcludedTests respectively). Kept as
+ * a plain string column rather than a CHECK constraint so a new source can
+ * be added without a migration.
+ */
+export type TestExcusalSource =
+  | 'flaky_confirm'
+  | 'breadth_corpus'
+  | 'flaky_rollup';
 
 export interface NewTestRunResultRow {
   test_id: string;

@@ -26,17 +26,20 @@ const {
   mockGetFlaggedFlakyTestIds,
   mockListTestRequestRunsForSession,
   mockComputeTestFailureBreadthFlag,
+  mockMarkTestResultExcused,
 } = vi.hoisted(() => ({
   mockGetFailingTestIdsForRun: vi.fn(),
   mockGetFlaggedFlakyTestIds: vi.fn(() => new Set<string>()),
   mockListTestRequestRunsForSession: vi.fn(() => []),
   mockComputeTestFailureBreadthFlag: vi.fn(),
+  mockMarkTestResultExcused: vi.fn(),
 }));
 vi.mock('../../db/queries', () => ({
   getFailingTestIdsForRun: mockGetFailingTestIdsForRun,
   getFlaggedFlakyTestIds: mockGetFlaggedFlakyTestIds,
   listTestRequestRunsForSession: mockListTestRequestRunsForSession,
   computeTestFailureBreadthFlag: mockComputeTestFailureBreadthFlag,
+  markTestResultExcused: mockMarkTestResultExcused,
 }));
 
 const { mockTypedGetSetting } = vi.hoisted(() => ({
@@ -117,6 +120,7 @@ beforeEach(() => {
     touched: false,
     confident: true,
   });
+  mockMarkTestResultExcused.mockReset();
 });
 
 describe('baseAttributableFilter.ts source', () => {
@@ -285,6 +289,41 @@ describe('filterBaseAttributableFailures', () => {
 
     expect(result.outcome).toBe('unfiltered');
     expect(result.passed).toBe(false);
+  });
+
+  it('writes the same excused marker shape flaky.confirm(gate:"test_request") writes for a filtered_pass outcome', async () => {
+    stubBreadthFlags(new Set(['suite.testA']));
+    mockGetFlaggedFlakyTestIds.mockReturnValue(new Set(['suite.testB']));
+    mockGetFailingTestIdsForRun.mockReturnValue([
+      { test_id: 'suite.testA', name: 'testA' },
+      { test_id: 'suite.testB', name: 'testB' },
+    ]);
+
+    const run = makeRun({ id: 'run-42' });
+    const result = await filterBaseAttributableFailures(PROJECT, run, 'task-1');
+
+    expect(result.outcome).toBe('filtered_pass');
+    expect(mockMarkTestResultExcused).toHaveBeenCalledWith(
+      'run-42',
+      'suite.testA',
+      'breadth_corpus',
+    );
+    expect(mockMarkTestResultExcused).toHaveBeenCalledWith(
+      'run-42',
+      'suite.testB',
+      'flaky_rollup',
+    );
+  });
+
+  it('writes no marker when the run is unfiltered', async () => {
+    stubBreadthFlags(new Set());
+    mockGetFailingTestIdsForRun.mockReturnValue([
+      { test_id: 'suite.testC', name: 'testC' },
+    ]);
+
+    await filterBaseAttributableFailures(PROJECT, makeRun(), 'task-1');
+
+    expect(mockMarkTestResultExcused).not.toHaveBeenCalled();
   });
 });
 

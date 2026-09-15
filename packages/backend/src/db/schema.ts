@@ -2559,6 +2559,25 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+  // Idempotent: excused-marker columns for pre-existing test_run_results
+  // tables — the pre-PR flaky.confirm(gate:'test_request') gate and the
+  // fully-automatic base-attributable filter (baseAttributableFilter.ts)
+  // both write these onto the specific (test_request_run_id, test_id) row
+  // they excused, rather than a standalone claims table with its own
+  // release condition — this row's own lifecycle (it dies with its run) is
+  // the release condition, avoiding the stranded-claims bug that got the
+  // old checkBaseBranchHealth remediation-task tracking removed (see
+  // commit d113ab5b). NULL for every unexcused row.
+  try {
+    target.exec(`ALTER TABLE test_run_results ADD COLUMN excused_at INTEGER`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(`ALTER TABLE test_run_results ADD COLUMN excused_reason TEXT`);
+  } catch {
+    /* already exists */
+  }
   // Replaces the getFlakyRollupCandidates/getCandidates join through
   // test_request_runs with a direct project-scoped range scan — see the
   // comment above those functions in queries.ts/flakyTestRollupWorker.ts.
