@@ -3,7 +3,9 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   getFlaggedFlakyTestsRollup,
   getBaseHealthRemediationTestTracking,
+  getAllBaseHealthRemediationTestTracking,
 } from '../../db/queries';
+import type { BaseHealthRemediationTestTrackingRow } from '../../db/types';
 
 /** Per-connection context the test-health read tool is scoped to. */
 export interface TestHealthReadToolContext {
@@ -62,25 +64,27 @@ export function registerTestHealthReadTools(
           transitionCount: row.transitionCount,
         }));
 
-      const trackedTestIds = args.testId
-        ? [args.testId]
-        : Array.from(new Set(rollupRows.map((row) => row.testId)));
-      const tracking: RemediationTrackingState[] = trackedTestIds
-        .map((testId) => {
-          const row = getBaseHealthRemediationTestTracking(
-            ctx.projectId,
-            testId,
+      const toTrackingState = (
+        row: BaseHealthRemediationTestTrackingRow,
+      ): RemediationTrackingState => ({
+        testId: row.test_id,
+        remediationTaskId: row.remediation_task_id,
+        remediationTaskOpen: row.remediation_task_open === 1,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      });
+
+      const tracking: RemediationTrackingState[] = args.testId
+        ? (() => {
+            const row = getBaseHealthRemediationTestTracking(
+              ctx.projectId,
+              args.testId,
+            );
+            return row ? [toTrackingState(row)] : [];
+          })()
+        : getAllBaseHealthRemediationTestTracking(ctx.projectId).map(
+            toTrackingState,
           );
-          if (!row) return null;
-          return {
-            testId: row.test_id,
-            remediationTaskId: row.remediation_task_id,
-            remediationTaskOpen: row.remediation_task_open === 1,
-            createdAt: row.created_at,
-            updatedAt: row.updated_at,
-          };
-        })
-        .filter((entry): entry is RemediationTrackingState => entry !== null);
 
       return {
         content: [{ type: 'text', text: JSON.stringify({ rollup, tracking }) }],

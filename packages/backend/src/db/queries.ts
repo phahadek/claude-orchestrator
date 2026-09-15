@@ -7891,6 +7891,8 @@ export function getFlakyRemediationTrackingRowsByOpenTaskId(
 // mcp/tools/testHealthReadTools.ts and AutoLauncher.ts remain here.
 
 let _stmtGetBaseHealthRemediationTestTracking: Database.Statement | null = null;
+let _stmtGetAllBaseHealthRemediationTestTracking: Database.Statement | null =
+  null;
 
 /** The current tracking row for one (project_id, test_id), or undefined if it was never confirmed base-failing. */
 export function getBaseHealthRemediationTestTracking(
@@ -7907,6 +7909,25 @@ export function getBaseHealthRemediationTestTracking(
     project_id: projectId,
     test_id: testId,
   }) as BaseHealthRemediationTestTrackingRow | undefined;
+}
+
+/**
+ * All tracking rows for a project, independent of the flaky rollup — used by
+ * the bulk (no-testId) path of testHealth.getFlakyHistory so remediation
+ * history for a test that has since dropped out of flagged_flaky_tests_rollup
+ * is still surfaced.
+ */
+export function getAllBaseHealthRemediationTestTracking(
+  projectId: string,
+): BaseHealthRemediationTestTrackingRow[] {
+  _stmtGetAllBaseHealthRemediationTestTracking ??= db.prepare<{
+    project_id: string;
+  }>(
+    `SELECT * FROM base_health_remediation_test_tracking WHERE project_id = @project_id`,
+  );
+  return _stmtGetAllBaseHealthRemediationTestTracking.all({
+    project_id: projectId,
+  }) as BaseHealthRemediationTestTrackingRow[];
 }
 
 // ─── gate_item ────────────────────────────────────────────────────────────
