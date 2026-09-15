@@ -1609,7 +1609,7 @@ describe('OrphanedTaskSweeper', () => {
     },
   );
 
-  it('still reverts a %s task whose ops_journal entry is still pending', async () => {
+  it('does not revert a %s task with no session row whose ops_journal entry is still pending but fresh (interactive-ops grace window)', async () => {
     const backend = makeBackend([
       makeTask('notion:abc', '🔄 In Progress', '🔎 Investigation'),
     ]);
@@ -1641,8 +1641,11 @@ describe('OrphanedTaskSweeper', () => {
 
     await sweeper.sweepOnce();
 
-    expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
+    expect(backend.updateStatus).not.toHaveBeenCalled();
     expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_skipped' }),
+    );
+    expect(recordEvent).not.toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'task_orphan_reverted' }),
     );
   });
