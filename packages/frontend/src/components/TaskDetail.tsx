@@ -597,10 +597,12 @@ export function TaskDetail({
           {task.priority && (
             <span className={styles.priorityBadge}>{task.priority}</span>
           )}
-          {task.totalTokens.input + task.totalTokens.output > 0 && (
+          {(task.totalTokens?.input ?? 0) + (task.totalTokens?.output ?? 0) >
+            0 && (
             <span className={styles.totalTokensBadge}>
               {formatTokenCount(
-                task.totalTokens.input + task.totalTokens.output,
+                (task.totalTokens?.input ?? 0) +
+                  (task.totalTokens?.output ?? 0),
               )}{' '}
               tokens
             </span>

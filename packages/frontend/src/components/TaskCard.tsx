@@ -399,9 +399,12 @@ export function TaskCard({
             {getTaskSourceLinkLabel(project?.taskSource ?? 'notion')}
           </a>
         )}
-        {task.totalTokens.input + task.totalTokens.output > 0 && (
+        {(task.totalTokens?.input ?? 0) + (task.totalTokens?.output ?? 0) >
+          0 && (
           <span className={styles.tokenBadge}>
-            {formatTokenCount(task.totalTokens.input + task.totalTokens.output)}{' '}
+            {formatTokenCount(
+              (task.totalTokens?.input ?? 0) + (task.totalTokens?.output ?? 0),
+            )}{' '}
             tokens
           </span>
         )}

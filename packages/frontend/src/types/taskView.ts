@@ -82,7 +82,7 @@ export interface TaskView {
     inputTokens: number;
     outputTokens: number;
   } | null;
-  totalTokens: { input: number; output: number };
+  totalTokens?: { input: number; output: number };
   /** Assigned target repo slug for multi-repo projects. Null when unassigned. */
   assignedRepo: string | null;
   /** True when this task has a staged intent in the decision-inbox visibility set (staged/approved/needs_revision/pending_verification) — the operator still owns a disposition for it. Absent/undefined is treated as false. */
