@@ -32,6 +32,7 @@ import {
   getLastActivityMsForArchivedSessions,
   querySessionEventsByProjectAggregate,
   querySessionEventsByProjectRows,
+  querySessionEventsByProjectRowsOffMainThread,
   UnboundedPatternQueryError,
   replaceFlaggedFlakyTestsRollupOffMainThread,
   getFlaggedFlakyTestsRollup,
@@ -1451,6 +1452,130 @@ describe('bench: querySessionEventsByProject{Aggregate,Rows} — filtered reads 
       `rejected unbounded pattern call took ${elapsed.toFixed(1)}ms, expected <50ms`,
     ).toBeLessThan(50);
   });
+});
+
+// ── querySessionEventsByProjectRowsOffMainThread — does not block the main
+// event loop ─────────────────────────────────────────────────────────────
+// Mirrors walTruncateCheckpointOffMainThread.test.ts's / this file's
+// replaceFlaggedFlakyTestsRollupOffMainThread coverage above: dispatches a
+// pattern-filtered sessionEvents.query against a real on-disk database via
+// sessionEventsQueryWorker.ts, and confirms a concurrent main-thread timer —
+// standing in for a concurrent `health` handshake, which is likewise just a
+// fast synchronous main-thread turn — fires promptly rather than queuing
+// behind the scan. See gate item 585ffbee-e989-4016-a3e4-83897035f5c6: the
+// prior in-process sync path blocked the shared event loop long enough that
+// a concurrent `health` call queued behind the scan instead of returning
+// promptly. Row count is smaller than the in-memory bench above (see that
+// block's own comment) — a real worker thread + real disk I/O is already
+// heavier per-test overhead, and the assertion only needs an absolute
+// wall-clock bound on the main thread, not a scan slow enough to be
+// interesting on its own.
+describe('querySessionEventsByProjectRowsOffMainThread — concurrency', () => {
+  it('lets a concurrent main-thread timer resolve on schedule while a pattern scan runs on a worker thread', async () => {
+    const dir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'session-events-query-off-thread-test-'),
+    );
+    try {
+      const file = path.join(dir, 'test.db');
+      const fileDb = new RealDatabase(file);
+      runMigrations(fileDb);
+
+      fileDb
+        .prepare(
+          `INSERT INTO projects (id, name, project_dir, github_repo, task_source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          'proj-concurrency',
+          'Concurrency',
+          '/c',
+          'o/c',
+          'notion',
+          1000,
+          1000,
+        );
+
+      // A real on-disk file plus a real worker-thread dispatch is already a
+      // heavier fixture than an in-memory bench (see the ~520k-row bench
+      // above, which needs no second connection or process). Row count here
+      // only has to be large enough that an unindexed LIKE scan over the
+      // whole window is nontrivial work — the assertion below is an
+      // absolute wall-clock bound on the main thread, not a comparison
+      // against this scan's own duration — so this stays an order of
+      // magnitude smaller to keep the full-suite run's total worker-thread +
+      // disk-I/O load down.
+      const SESSION_COUNT = 40;
+      const EVENTS_PER_SESSION = 2_000; // 80k rows
+      const EVENT_COUNT = SESSION_COUNT * EVENTS_PER_SESSION;
+
+      const insertSessionStmt = fileDb.prepare(
+        `INSERT INTO sessions (session_id, task_id, task_url, project_context_url, project_id, status, started_at, ended_at, pr_url, worktree_path, session_type, task_name)
+           VALUES (@session_id, NULL, NULL, NULL, @project_id, 'running', 1000, NULL, NULL, NULL, 'standard', NULL)`,
+      );
+      const sessionIds: string[] = [];
+      const seedSessions = fileDb.transaction(() => {
+        for (let i = 0; i < SESSION_COUNT; i++) {
+          const sid = `concurrency-sess-${i}`;
+          sessionIds.push(sid);
+          insertSessionStmt.run({
+            session_id: sid,
+            project_id: 'proj-concurrency',
+          });
+        }
+      });
+      seedSessions();
+
+      const insertEventStmt = fileDb.prepare(
+        `INSERT INTO session_events (session_id, event_type, payload, timestamp) VALUES (?, ?, ?, ?)`,
+      );
+      const seedEvents = fileDb.transaction(() => {
+        for (let i = 0; i < EVENT_COUNT; i++) {
+          const sid = sessionIds[i % SESSION_COUNT];
+          const payload =
+            i % 10_000 === 0
+              ? `{"text":"needle-${i}"}`
+              : `{"text":"haystack ${i}"}`;
+          insertEventStmt.run(sid, 'text', payload, i);
+        }
+      });
+      seedEvents();
+      fileDb.close();
+
+      const start = Date.now();
+      const queryPromise = querySessionEventsByProjectRowsOffMainThread(
+        file,
+        'proj-concurrency',
+        { pattern: 'needle', since: 0, until: EVENT_COUNT },
+      );
+
+      // Stands in for a concurrent `health` handshake, which is likewise
+      // just a fast synchronous main-thread turn — a setTimeout can only
+      // fire once the event loop is free to process its timer queue, so it
+      // is a faithful proxy for "does the main thread get a turn while the
+      // scan is in flight". Deployed SHA 175b5d74's failure mode was the
+      // in-process LIKE scan blocking the event loop long enough that
+      // `sessionEvents.query` itself timed out (see gate item
+      // 585ffbee-e989-4016-a3e4-83897035f5c6) — multi-second, not
+      // millisecond, blocking — so a generous bound here still clearly
+      // distinguishes "blocked" from "not blocked" without depending on
+      // the real query's own (host-dependent) completion time.
+      let timerElapsedMs: number | null = null;
+      await new Promise<void>((resolve) => {
+        setTimeout(() => {
+          timerElapsedMs = Date.now() - start;
+          resolve();
+        }, 20);
+      });
+
+      expect(timerElapsedMs).not.toBeNull();
+      expect(timerElapsedMs as number).toBeLessThan(1000);
+
+      const rows = await queryPromise;
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.every((r) => r.payload.includes('needle'))).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60000);
 });
 
 // ── flagged_flaky_tests_rollup — incremental recompute ──────────────────────

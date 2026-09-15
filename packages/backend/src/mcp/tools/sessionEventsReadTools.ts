@@ -2,10 +2,11 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   getGrantedCapabilities,
-  querySessionEventsByProjectAggregate,
-  querySessionEventsByProjectRows,
+  querySessionEventsByProjectAggregateOffMainThread,
+  querySessionEventsByProjectRowsOffMainThread,
   SESSION_EVENTS_ROW_CAP,
 } from '../../db/queries';
+import { dbPath } from '../../db/db';
 import { sessionEventsReadCapability } from '../../session/orchestrator-config';
 
 /** Per-connection context the session-events-read tool is scoped to. */
@@ -92,7 +93,8 @@ export function registerSessionEventsReadTools(
       };
 
       if (args.includePayloads) {
-        const rows = querySessionEventsByProjectRows(
+        const rows = await querySessionEventsByProjectRowsOffMainThread(
+          dbPath,
           args.projectId,
           filters,
           args.limit,
@@ -102,7 +104,8 @@ export function registerSessionEventsReadTools(
         };
       }
 
-      const sessions = querySessionEventsByProjectAggregate(
+      const sessions = await querySessionEventsByProjectAggregateOffMainThread(
+        dbPath,
         args.projectId,
         filters,
       );
