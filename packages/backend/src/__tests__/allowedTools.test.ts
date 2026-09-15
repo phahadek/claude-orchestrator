@@ -307,6 +307,14 @@ describe('mcp__orchestrator__ allow-list entries match the CLI-exposed tool name
   });
 });
 
+describe('ALLOWED_TOOLS — testHealth.getFlakyHistory grant', () => {
+  it('contains the underscore form of testHealth_getFlakyHistory, matching the grant already given to groom/design/ops/investigate/depth-review sessions', () => {
+    expect(ALLOWED_TOOLS).toContain(
+      'mcp__orchestrator__testHealth_getFlakyHistory',
+    );
+  });
+});
+
 describe('GROOM_ALLOWED_TOOLS — restricted environment/context re-derivation surface', () => {
   it('excludes unscoped filesystem-search and broad-directory-listing prefixes', () => {
     expect(GROOM_ALLOWED_TOOLS).not.toContain('Bash(find:*)');
