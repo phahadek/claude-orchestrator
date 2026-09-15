@@ -7,13 +7,7 @@ import type {
 } from '@claude-orchestrator/backend/src/db/queries';
 import type { GateVerifyFleetState } from '@claude-orchestrator/backend/src/gate/gateService';
 
-export type {
-  AutoGrantDisagreementRateResult,
-  AutoGrantKind,
-  FlowRejectionRateResult,
-  TrustPrecisionFlow,
-  GateVerifyFleetState,
-};
+export type { FlowRejectionRateResult, TrustPrecisionFlow, GateVerifyFleetState };
 
 /** The /api/gate/trust-rate response: every flow's rejection/abstain rate plus the per-kind auto-grant disagreement rate, for one project+milestone. */
 export interface TrustRatesResult {
