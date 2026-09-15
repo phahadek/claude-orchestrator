@@ -40,6 +40,7 @@ export type CanonicalPauseReason =
   | 'needs_repo'
   | 'autofix_git_infra_failure'
   | 'autofix_tool_infra_failure'
+  | 'gate_timeout_infra_failure'
   | 'workflow_scope_denied'
   | 'resume_failed'
   | 'review_rules_escalation'
@@ -260,6 +261,15 @@ export const PAUSE_REASON_REGISTRY: Record<
   },
   autofix_tool_infra_failure: {
     source: 'autofix',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  // A verify (or future gate) command exceeded its bounded timeout budget —
+  // a hung/wedged process is a host/environment issue, not a code defect
+  // the implementing session can fix by pushing, so it is routed the same
+  // way as autofix_tool_infra_failure rather than nudged to the session.
+  gate_timeout_infra_failure: {
+    source: 'verify',
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
   },
@@ -541,6 +551,7 @@ const RECOVERY_ACTION_MAP: Record<
   // rerun: clear pause + re-run the pre-review pipeline
   autofix_git_infra_failure: 'rerun',
   autofix_tool_infra_failure: 'rerun',
+  gate_timeout_infra_failure: 'rerun',
   ci_billing_blocked: 'rerun',
   auto_merge_failed: 'rerun',
   // resume: sendOrResume + nudge

@@ -657,6 +657,108 @@ export function reapOrphanedMainCgroupProcesses(
   return reaped;
 }
 
+/** Reads a pid's argv from /proc/<pid>/cmdline (NUL-separated), joined with spaces; null if unreadable (pid gone). */
+function readProcCmdline(pid: number): string | null {
+  try {
+    return fs
+      .readFileSync(`/proc/${pid}/cmdline`, 'utf8')
+      .split('\0')
+      .filter(Boolean)
+      .join(' ');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A pid's age in seconds, derived from /proc/<pid>/stat's starttime field
+ * (in clock ticks since boot — field 22 overall, index 19 after the
+ * comm-aware split readPpid also uses) and /proc/uptime. Returns null when
+ * either read fails (pid gone). 100 clock ticks/sec is not read from
+ * sysconf(_SC_CLK_TCK) — it is fixed at 100 on every Linux platform this
+ * backend targets (x86_64/arm64), so hardcoding it avoids a native binding
+ * just for this one constant.
+ */
+function readProcessAgeSec(pid: number): number | null {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const afterComm = stat.slice(stat.lastIndexOf(')') + 2);
+    const fields = afterComm.split(' ');
+    const starttimeTicks = parseInt(fields[19], 10);
+    const CLOCK_TICKS_PER_SEC = 100;
+    const uptimeSec = parseFloat(
+      fs.readFileSync('/proc/uptime', 'utf8').split(' ')[0],
+    );
+    if (Number.isNaN(starttimeTicks) || Number.isNaN(uptimeSec)) return null;
+    return uptimeSec - starttimeTicks / CLOCK_TICKS_PER_SEC;
+  } catch {
+    return null;
+  }
+}
+
+export interface StaleBackendChildReapDeps {
+  listMainCgroupPids: () => number[];
+  readPpid: (pid: number) => number | null;
+  readCmdline: (pid: number) => string | null;
+  getAgeSec: (pid: number) => number | null;
+  kill: (pid: number) => void;
+  ownPid: number;
+}
+
+/**
+ * Backstop for a caller that spawns a test/verify command bare (no
+ * per-run cgroup, no timeout — see verifyRunner.ts's pre-bounded-runner
+ * history) directly as a child of the backend's own process: such a
+ * subprocess is invisible to reapOrphanedMainCgroupProcesses above, which
+ * only reaps ppid===1 escapees, because its immediate parent (the backend)
+ * is very much alive. Reaps a pid sitting in main/ when all three hold:
+ * its immediate parent is this backend process (ppid === ownPid, not 1);
+ * `resolveBudgetSec(cmdline)` recognizes its command line as a configured
+ * project test/verify command and returns that project's timeout+grace
+ * budget in seconds (null when the cmdline matches no known command, which
+ * leaves the pid alone — this module has no project-config dependency of
+ * its own, so matching is entirely the caller's responsibility, mirroring
+ * reapOrphanedTestsCgroupProcesses' caller-supplied isRunReapable); and its
+ * age exceeds that budget. A pid younger than its budget is left alone — it
+ * may be a legitimate in-flight run still within its own timeout.
+ */
+export function reapStaleBackendChildProcesses(
+  resolveBudgetSec: (cmdline: string) => number | null,
+  deps: Partial<StaleBackendChildReapDeps> = {},
+): number {
+  if (!mainCgroupPath) return 0;
+  const listPids = deps.listMainCgroupPids ?? listMainCgroupPids;
+  const getPpid = deps.readPpid ?? readPpid;
+  const getCmdline = deps.readCmdline ?? readProcCmdline;
+  const getAge = deps.getAgeSec ?? readProcessAgeSec;
+  const kill = deps.kill ?? ((pid: number) => process.kill(pid, 'SIGKILL'));
+  const ownPid = deps.ownPid ?? process.pid;
+
+  let reaped = 0;
+  for (const pid of listPids()) {
+    if (pid === ownPid) continue;
+    if (getPpid(pid) !== ownPid) continue;
+    const cmdline = getCmdline(pid);
+    if (!cmdline) continue;
+    const budgetSec = resolveBudgetSec(cmdline);
+    if (budgetSec === null) continue;
+    const age = getAge(pid);
+    if (age === null || age <= budgetSec) continue;
+    try {
+      kill(pid);
+      reaped++;
+      logger.warn(
+        `[sessionCgroup] reaped orphaned process ${pid} found sitting in main/ cgroup with ppid=${ownPid}, reason: stale_verify_child`,
+      );
+    } catch (err) {
+      logger.warn(
+        `[sessionCgroup] failed to reap orphaned process ${pid}: ${(err as Error).message}`,
+      );
+    }
+  }
+  return reaped;
+}
+
 function listTestRunDirNames(): string[] {
   if (!testsCgroupPath) return [];
   try {

@@ -1,8 +1,9 @@
-import { spawn } from 'child_process';
+import { randomUUID } from 'crypto';
 import type { StructuredTestResult } from '../db/types';
 import {
   clearReportFiles,
   collectStructuredTestResult,
+  runCommandWithTimeout,
 } from '../session/test-runner';
 import type { ToolVersionCheck } from '../session/orchestrator-config';
 import {
@@ -19,6 +20,8 @@ export interface VerifyResult {
   isToolInfraFailure?: boolean;
   /** Names the mismatched version_command and versions, for operator triage. */
   toolFailureReason?: string;
+  /** True when the failure is a command that exceeded its timeout budget — a hung/wedged process, not a code defect. */
+  isTimeoutInfraFailure?: boolean;
   /**
    * The failing command's own report, parsed against `testReportGlob` when
    * one is configured — null when no glob is configured, the glob matched
@@ -46,33 +49,15 @@ export function tailOfLog(
   return output.length > chars ? output.slice(output.length - chars) : output;
 }
 
-function runCommand(
-  cmd: string,
-  cwd: string,
-  env: NodeJS.ProcessEnv,
-): Promise<{ exitCode: number; output: string }> {
-  return new Promise((resolve) => {
-    const chunks: Buffer[] = [];
-    const proc = spawn(cmd, { shell: true, cwd, env });
-    proc.stdout.on('data', (d: Buffer) => chunks.push(d));
-    proc.stderr.on('data', (d: Buffer) => chunks.push(d));
-    proc.on('close', (code) => {
-      resolve({
-        exitCode: code ?? 1,
-        output: Buffer.concat(chunks).toString('utf8'),
-      });
-    });
-    proc.on('error', (err) => {
-      resolve({ exitCode: 1, output: err.message });
-    });
-  });
-}
-
 export interface RunVerifyAsGateOptions {
   /** Env var name -> path (relative to worktreePath) scoping a tool's cache to this worktree. See OrchestratorConfig.cache_env. */
   cacheEnv?: Record<string, string>;
   /** Toolchain versions this gate expects. See OrchestratorConfig.expected_tool_versions. */
   expectedToolVersions?: ToolVersionCheck[];
+  /** Per-command timeout in seconds, mirroring the test: lane's OrchestratorConfig.test_timeout_sec. Default 300. */
+  timeoutSec?: number;
+  /** Max RSS in MB per verify subprocess, mirroring OrchestratorConfig.test_max_rss_mb. 0 = disabled. */
+  maxRssMb?: number;
 }
 
 export async function runVerifyAsGate(
@@ -110,10 +95,23 @@ export async function runVerifyAsGate(
     clearReportFiles(worktreePath, testReportGlob);
   }
 
+  const timeoutMs = (options.timeoutSec ?? 300) * 1000;
+  const maxRssMb = options.maxRssMb ?? 0;
+  const runId = randomUUID();
+
   for (const cmd of commands) {
-    const { exitCode, output } = await runCommand(cmd, worktreePath, env);
+    const { exitCode, output, timedOut } = await runCommandWithTimeout(
+      cmd,
+      worktreePath,
+      timeoutMs,
+      maxRssMb,
+      runId,
+      env,
+    );
     if (exitCode !== 0) {
-      const truncated = tailOfLog(output);
+      const truncated = tailOfLog(
+        timedOut ? `${output}\n[verify] TIMEOUT` : output,
+      );
       let structuredResult: StructuredTestResult | null = null;
       if (testReportGlob) {
         try {
@@ -132,6 +130,7 @@ export async function runVerifyAsGate(
         failedCommand: cmd,
         truncatedOutput: truncated,
         structuredResult,
+        ...(timedOut ? { isTimeoutInfraFailure: true } : {}),
       };
     }
   }

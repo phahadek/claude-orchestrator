@@ -38,7 +38,9 @@ import { CliSessionRunner, PreSpawnConfigError } from './CliSessionRunner';
 import {
   killSessionCgroup,
   reapOrphanedMainCgroupProcesses,
+  reapStaleBackendChildProcesses,
 } from './sessionCgroup';
+import { GRACE_PERIOD_MS } from './test-runner';
 import {
   revokeStageCredential,
   mintStageCredential,
@@ -68,6 +70,7 @@ import {
 import { getCorporateMode } from '../config/corporateMode';
 import {
   config,
+  getAllProjects,
   getProjectById,
   normalizePath,
   runtimeSettings,
@@ -3525,7 +3528,9 @@ export class SessionManager extends EventEmitter {
    * that's still genuinely executing and about to produce a real result.
    */
   reapMainCgroupOrphans(): number {
-    const reaped = reapOrphanedMainCgroupProcesses();
+    const reaped =
+      reapOrphanedMainCgroupProcesses() +
+      reapStaleBackendChildProcesses(this.resolveVerifyChildBudgetSec);
     if (reaped > 0) {
       logger.info(
         `[SessionManager] reaped ${reaped} orphaned process(es) from main/ cgroup`,
@@ -3533,6 +3538,35 @@ export class SessionManager extends EventEmitter {
     }
     return reaped;
   }
+
+  /**
+   * Resolves the timeout+grace budget (seconds) for a stale-child candidate's
+   * cmdline against every project's configured verify: and test: commands —
+   * the caller-supplied predicate reapStaleBackendChildProcesses needs to
+   * stay free of any project-config dependency of its own (see that
+   * function's doc comment). A cmdline substring-matching a configured
+   * command inherits that project's test_timeout_sec; no match returns null,
+   * leaving the pid alone. Re-derived on every sweep rather than cached,
+   * since it's a handful of in-memory config reads and project config can
+   * change between sweeps.
+   */
+  private resolveVerifyChildBudgetSec = (
+    cmdline: string,
+  ): number | null => {
+    for (const project of getAllProjects()) {
+      let cfg;
+      try {
+        cfg = loadOrchestratorConfig(project.projectDir);
+      } catch {
+        continue;
+      }
+      const commands = [...cfg.verify, ...cfg.test];
+      if (commands.some((cmd) => cmd && cmdline.includes(cmd))) {
+        return cfg.test_timeout_sec + GRACE_PERIOD_MS / 1000;
+      }
+    }
+    return null;
+  };
 
   /**
    * Detect sessions still marked 'running' in the DB after a server restart
