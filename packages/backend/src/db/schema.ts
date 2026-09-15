@@ -313,6 +313,7 @@ export function runMigrations(target: Database.Database): void {
       FOREIGN KEY (gate_item_id) REFERENCES gate_item(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_gate_item_source_gate_item_id ON gate_item_source(gate_item_id);
+    CREATE INDEX IF NOT EXISTS idx_gate_item_source_source_task_id ON gate_item_source(source_task_id);
 
     CREATE TABLE IF NOT EXISTS gate_item_event (
       id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1203,6 +1204,7 @@ export function runMigrations(target: Database.Database): void {
       FOREIGN KEY (seed_item_id) REFERENCES seed_item(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_seed_item_source_seed_item_id ON seed_item_source(seed_item_id);
+    CREATE INDEX IF NOT EXISTS idx_seed_item_source_source_task_id ON seed_item_source(source_task_id);
 
     CREATE TABLE IF NOT EXISTS seed_item_event (
       id             INTEGER PRIMARY KEY AUTOINCREMENT,

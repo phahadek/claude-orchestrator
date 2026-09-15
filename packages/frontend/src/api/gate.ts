@@ -1,15 +1,28 @@
 import { apiRequest } from './projects';
 import type {
+  AutoGrantDisagreementRateResult,
+  AutoGrantKind,
   FlowRejectionRateResult,
   TrustPrecisionFlow,
 } from '@claude-orchestrator/backend/src/db/queries';
 import type { GateVerifyFleetState } from '@claude-orchestrator/backend/src/gate/gateService';
 
 export type {
+  AutoGrantDisagreementRateResult,
+  AutoGrantKind,
   FlowRejectionRateResult,
   TrustPrecisionFlow,
   GateVerifyFleetState,
 };
+
+/** The /api/gate/trust-rate response: every flow's rejection/abstain rate plus the per-kind auto-grant disagreement rate, for one project+milestone. */
+export interface TrustRatesResult {
+  rates: Record<TrustPrecisionFlow, FlowRejectionRateResult>;
+  autoGrantDisagreementRate: Record<
+    AutoGrantKind,
+    AutoGrantDisagreementRateResult
+  >;
+}
 
 /** Mirrors the backend's TRUST_PRECISION_FLOWS (routes/gateState.ts) — the flows the /api/gate/trust-rate route accepts. */
 export const TRUST_PRECISION_FLOWS: TrustPrecisionFlow[] = [
@@ -292,14 +305,13 @@ export const gateApi = {
     );
   },
 
-  /** The Milestone panel's trust-precision read: per-flow rejection/abstain rate. Informative only — no auto-disarm. */
-  getFlowRejectionRate(
+  /** The Milestone panel's trust-precision read: every flow's rejection/abstain rate plus the per-kind auto-grant disagreement rate, in one request. Informative only — no auto-disarm. */
+  getTrustRates(
     project: string,
     milestone: string,
-    flow: TrustPrecisionFlow,
-  ): Promise<FlowRejectionRateResult> {
-    return apiRequest<FlowRejectionRateResult>(
-      `/api/gate/trust-rate${buildQuery({ project, milestone, flow })}`,
+  ): Promise<TrustRatesResult> {
+    return apiRequest<TrustRatesResult>(
+      `/api/gate/trust-rate${buildQuery({ project, milestone })}`,
     );
   },
 
