@@ -403,6 +403,36 @@ describe('SessionManager.enqueueFeedback()', () => {
     );
   });
 
+  it('idle, non-terminal session: surfaces needs-attention (pause reason + session_action_failed) instead of silently dropping the feedback when sendOrResume returns null', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-idle-4',
+      status: 'idle',
+      task_id: null,
+      project_id: null,
+    } as never);
+
+    const sm = new SessionManager();
+    const emitSpy = vi.spyOn(sm, 'emit');
+    vi.spyOn(sm, 'sendOrResume').mockResolvedValue(null);
+
+    await sm.enqueueFeedback('sess-idle-4', 'system:nudge', 'nudge text');
+
+    expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
+      'sess-idle-4',
+      'verdict_routing_failed',
+    );
+    expect(emitSpy).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        type: 'session_action_failed',
+        sessionId: 'sess-idle-4',
+        reason: 'verdict_routing_failed',
+      }),
+    );
+    expect(queries.markInboxItemsDelivered).not.toHaveBeenCalled();
+    expect(queries.listUndeliveredInboxItems('sess-idle-4')).toHaveLength(1);
+  });
+
   it('terminal, resumable session: attempts a resume (bypassing the terminal refusal) and delivers on success', async () => {
     vi.mocked(queries.getSession).mockReturnValue({
       session_id: 'sess-done',
