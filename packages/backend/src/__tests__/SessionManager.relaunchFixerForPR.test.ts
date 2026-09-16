@@ -363,6 +363,7 @@ describe('relaunchFixerForPR() archived + status still running + worktree gone: 
       ...BASE_SESSION_ROW,
       status: 'running',
       archived: 1,
+      archive_kind: 'machine_park',
     } as never);
     vi.mocked(fs.existsSync).mockReturnValue(false);
 
@@ -380,6 +381,43 @@ describe('relaunchFixerForPR() archived + status still running + worktree gone: 
       .filter((c) => c.includes('worktree add'));
     expect(addCalls.length).toBeGreaterThan(0);
     expect(queries.updateSessionStatus).toHaveBeenCalledWith(
+      SESSION_ID,
+      'running',
+    );
+  });
+});
+
+describe('relaunchFixerForPR() operator-archived + status still running + worktree gone: NOT terminal-equivalent', () => {
+  it('still surfaces to the operator (stalled_idle) rather than resurrecting an explicitly parked session', async () => {
+    // An operator-initiated archive (routes/sessions.ts PATCH /:id/archive ->
+    // archiveAndEndSession -> archiveSession(id, 'operator')) also leaves
+    // status='running' untouched, producing the same archived+running shape
+    // as the liveness reconciler's machine_park archival — but it's the
+    // opposite signal: a human explicitly said this session is done. Only
+    // archive_kind='machine_park' is terminal-equivalent here; 'operator'
+    // must still refuse via the idle-worktree-missing path.
+    vi.mocked(queries.getSession).mockReturnValue({
+      ...BASE_SESSION_ROW,
+      status: 'running',
+      archived: 1,
+      archive_kind: 'operator',
+    } as never);
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+
+    const sm = new SessionManager();
+    const result = await sm.relaunchFixerForPR(PR, 'gate failure feedback');
+
+    expect(result).toBeNull();
+    expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
+      SESSION_ID,
+      'stalled_idle',
+    );
+    const addCalls = vi
+      .mocked(exec)
+      .mock.calls.map((c) => c[0] as string)
+      .filter((c) => c.includes('worktree add'));
+    expect(addCalls).toHaveLength(0);
+    expect(queries.updateSessionStatus).not.toHaveBeenCalledWith(
       SESSION_ID,
       'running',
     );
