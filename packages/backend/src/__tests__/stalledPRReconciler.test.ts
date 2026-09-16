@@ -245,6 +245,7 @@ describe('StalledPRReconciler', () => {
     const ro = makeReviewOrchestrator();
     const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
     reconciler.setReviewOrchestrator(ro as any);
+    reconciler.setSessionManager(makeSessionManager() as any);
 
     await reconciler.reconcileOnce();
 
@@ -252,6 +253,33 @@ describe('StalledPRReconciler', () => {
     expect(ro.enqueueReview).toHaveBeenCalledWith(
       expect.objectContaining({ prNumber: 42, repo: 'org/repo' }),
     );
+  });
+
+  it('bails out (does not clear review_session_id, does not enqueue) when sessionManager is not wired, instead of clearing without a supersede', async () => {
+    const pr = makePR({
+      review_result: null,
+      head_sha: 'sha1',
+      last_reviewed_sha: null,
+      review_session_id: 'dead-review-session',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+    vi.mocked(getSession).mockReturnValue({
+      status: 'error',
+      session_id: 'dead-review-session',
+    } as any);
+
+    const { fn: broadcast } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+    // Deliberately not calling setSessionManager — models the narrow
+    // startup/wiring race the depth review flagged.
+
+    await reconciler.reconcileOnce();
+
+    expect(clearReviewSessionId).not.toHaveBeenCalled();
+    expect(markSessionSuperseded).not.toHaveBeenCalled();
+    expect(ro.enqueueReview).not.toHaveBeenCalled();
   });
 
   it('supersedes the abandoned review session before clearing review_session_id for an errored review session', async () => {
@@ -1011,6 +1039,7 @@ describe('StalledPRReconciler', () => {
     const ro = makeReviewOrchestrator();
     const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
     reconciler.setReviewOrchestrator(ro as any);
+    reconciler.setSessionManager(makeSessionManager() as any);
 
     await reconciler.reconcileOnce();
 
@@ -1635,6 +1664,7 @@ describe('StalledPRReconciler', () => {
     const ro = makeReviewOrchestrator(false, false); // enqueueReview reports it did not queue
     const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
     reconciler.setReviewOrchestrator(ro as any);
+    reconciler.setSessionManager(makeSessionManager() as any);
 
     await reconciler.reconcileOnce();
 
@@ -1671,6 +1701,7 @@ describe('StalledPRReconciler', () => {
     const ro = makeReviewOrchestrator();
     const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
     reconciler.setReviewOrchestrator(ro as any);
+    reconciler.setSessionManager(makeSessionManager() as any);
 
     await reconciler.reconcileOnce();
 
