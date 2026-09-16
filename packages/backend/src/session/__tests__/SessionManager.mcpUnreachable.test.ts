@@ -425,7 +425,104 @@ describe('reconcileMcpUnreachableSessions', () => {
 
     expect(result.detected).toEqual([SESSION_ID]);
     expect(result.respawned).toEqual([]);
+    expect(result.declined).toEqual([SESSION_ID]);
     expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+
+    const declinedEvent = vi
+      .mocked(recordEvent)
+      .mock.calls.find(
+        (c) => c[0].event_type === 'session_mcp_unreachable_respawn_declined',
+      )![0];
+    expect(declinedEvent.actor_id).toBe(SESSION_ID);
+    expect((declinedEvent.payload as any).reason).toBe('worktree_missing');
+    expect((declinedEvent.payload as any).attempt_number).toBe(1);
+  });
+
+  it('never detects a permanently idle, worktree-less session across repeated sweeps', async () => {
+    liveSessionRows = [makeRow({ status: 'idle' })];
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+
+    for (let i = 0; i < 3; i++) {
+      const result = await sm.reconcileMcpUnreachableSessions();
+      expect(result.detected).toEqual([]);
+      expect(result.skippedNotRespawnable).toBe(1);
+    }
+
+    const eventTypes = vi
+      .mocked(recordEvent)
+      .mock.calls.map((c) => c[0].event_type);
+    expect(eventTypes).not.toContain('session_mcp_unreachable_detected');
+    expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+  });
+
+  it('records a declined respawn as an attempt so a permanently un-respawnable session reaches exhaustion and is then skipped forever', async () => {
+    liveSessionRows = [makeRow()];
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+
+    // Sweep 1: detected + declined, attempt 1.
+    let result = await sm.reconcileMcpUnreachableSessions();
+    expect(result.detected).toEqual([SESSION_ID]);
+    expect(result.declined).toEqual([SESSION_ID]);
+    expect(result.exhausted).toEqual([]);
+    mcpRespawnAttempts[SESSION_ID] = 1; // persisted decline counted as an attempt
+
+    // Sweep 2: detected + declined again, attempt 2 — reaches
+    // MAX_MCP_UNREACHABLE_RESPAWNS worth of declined attempts.
+    result = await sm.reconcileMcpUnreachableSessions();
+    expect(result.detected).toEqual([SESSION_ID]);
+    expect(result.declined).toEqual([SESSION_ID]);
+    expect(result.exhausted).toEqual([]);
+    mcpRespawnAttempts[SESSION_ID] = 2;
+
+    // Sweep 3: attemptsSoFar (2) >= MAX_MCP_UNREACHABLE_RESPAWNS — exhausted,
+    // paused, no further respawn attempt.
+    result = await sm.reconcileMcpUnreachableSessions();
+    expect(result.detected).toEqual([SESSION_ID]);
+    expect(result.exhausted).toEqual([SESSION_ID]);
+    expect(vi.mocked(setSessionPauseReason)).toHaveBeenCalledWith(
+      SESSION_ID,
+      'mcp_unreachable_exhausted',
+    );
+    mcpExhausted[SESSION_ID] = true; // persisted exhaustion event
+
+    // Sweep 4+: skipped entirely — no audit rows at all.
+    vi.mocked(recordEvent).mockClear();
+    result = await sm.reconcileMcpUnreachableSessions();
+    expect(result.detected).toEqual([]);
+    expect(result.exhausted).toEqual([]);
+    expect(result.skippedNotRespawnable).toBe(1);
+    expect(vi.mocked(recordEvent)).not.toHaveBeenCalled();
+    expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+  });
+
+  it('items_processed reflects actions (respawned + exhausted), not the number of rows examined or detected', async () => {
+    const SESSION_A = 'sess-a-respawns';
+    const SESSION_B = 'sess-b-declines';
+    const rowA = makeRow({
+      session_id: SESSION_A,
+      task_id: 'task-a',
+      worktree_path: `${PROJECT_DIR}/.claude/worktrees/${SESSION_A}`,
+    });
+    const rowB = makeRow({
+      session_id: SESSION_B,
+      task_id: 'task-b',
+      worktree_path: `${PROJECT_DIR}/.claude/worktrees/${SESSION_B}`,
+    });
+    liveSessionRows = [rowA, rowB];
+    vi.mocked(getSession).mockImplementation(
+      (id: string) => [rowA, rowB].find((r) => r.session_id === id) as any,
+    );
+    vi.mocked(fs.existsSync).mockImplementation(
+      (p: unknown) => !String(p).includes(SESSION_B),
+    );
+
+    const result = await sm.reconcileMcpUnreachableSessions();
+
+    expect([...result.detected].sort()).toEqual([SESSION_A, SESSION_B].sort());
+    expect(result.respawned).toEqual([SESSION_A]);
+    expect(result.declined).toEqual([SESSION_B]);
+    expect(result.exhausted).toEqual([]);
+    expect(result.itemsProcessed).toBe(1);
   });
 
   it('surfaces to the operator at the respawn cap instead of respawning again', async () => {

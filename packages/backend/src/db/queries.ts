@@ -11838,16 +11838,20 @@ export function isPlanningKillSuppressed(
 }
 
 /**
- * Count of session_mcp_unreachable_respawned audit events recorded for this
- * session — doubles as both the respawn-attempt counter (next attempt
- * number = this + 1) and the grace-window anchor's fallback source (see
- * getMcpUnreachableSweepFacts's lastRespawnTs).
+ * Count of session_mcp_unreachable_respawned + session_mcp_unreachable_respawn_declined
+ * audit events recorded for this session — doubles as both the respawn-attempt
+ * counter (next attempt number = this + 1) and the grace-window anchor's
+ * fallback source (see getMcpUnreachableSweepFacts's lastRespawnTs). A
+ * declined respawn (e.g. worktree missing) counts as an attempt so a
+ * permanently un-respawnable session still reaches the exhaustion cap
+ * instead of being re-detected forever.
  */
 export function countMcpUnreachableRespawnAttempts(sessionId: string): number {
   const row = db
     .prepare<[string], { cnt: number }>(
       `SELECT COUNT(*) AS cnt FROM audit_log
-       WHERE event_type = 'session_mcp_unreachable_respawned' AND actor_id = ?`,
+       WHERE event_type IN ('session_mcp_unreachable_respawned', 'session_mcp_unreachable_respawn_declined')
+         AND actor_id = ?`,
     )
     .get(sessionId);
   return row?.cnt ?? 0;

@@ -883,13 +883,14 @@ scheduler.register({
   runOnBoot: true,
   concurrency: 'skip-if-running',
   run: async () => {
-    const { detected, respawned, exhausted } =
+    const { detected, respawned, exhausted, declined, itemsProcessed } =
       await sessionManager.reconcileMcpUnreachableSessions();
     return {
-      items_processed: detected.length,
+      items_processed: itemsProcessed,
       detected: detected.length,
       respawned: respawned.length,
       exhausted: exhausted.length,
+      declined: declined.length,
     };
   },
 });
