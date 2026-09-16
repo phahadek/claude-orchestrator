@@ -228,8 +228,6 @@ describe('StuckSessionMonitor — stuck_session_alive_subprocess park escalation
 
     expect(readLiveSessionProcessIds).toHaveBeenCalledTimes(1);
     expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledTimes(1);
-    expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith(
-      'sess-2',
-    );
+    expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith('sess-2');
   });
 });

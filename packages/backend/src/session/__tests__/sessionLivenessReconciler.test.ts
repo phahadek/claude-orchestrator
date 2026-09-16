@@ -879,9 +879,9 @@ describe('reconcileNonPlanningSessionLiveness', () => {
       sessionType: 'standard',
     });
     const checkedIds: string[] = [];
-    const snapshotLiveProcessIds = vi.fn().mockReturnValue(
-      new Set(['np-running-1', 'np-running-2']),
-    );
+    const snapshotLiveProcessIds = vi
+      .fn()
+      .mockReturnValue(new Set(['np-running-1', 'np-running-2']));
     const isProcessAliveSpy = vi.fn((sessionId: string) => {
       checkedIds.push(sessionId);
       return sessionId === 'np-running-1' || sessionId === 'np-running-2';
@@ -897,9 +897,7 @@ describe('reconcileNonPlanningSessionLiveness', () => {
     expect(checkedIds.sort()).toEqual(['np-running-1', 'np-running-2']);
     expect(result.examined).toBe(302);
 
-    const summary = (
-      recordEvent as ReturnType<typeof vi.fn>
-    ).mock.calls.find(
+    const summary = (recordEvent as ReturnType<typeof vi.fn>).mock.calls.find(
       ([event]) => event.event_type === 'session_liveness_sweep_completed',
     )![0];
     expect(summary.payload).toMatchObject({

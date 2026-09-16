@@ -56,9 +56,8 @@ function mockProcTree(pidToCmdline: Record<string, string>): void {
 describe('readLiveSessionProcessIds', () => {
   it('parses a fixture /proc tree and returns exactly the session ids present', () => {
     mockProcTree({
-      '100': ['claude', '--session-id', 'abc-123', '--other-flag'].join(
-        '\0',
-      ) + '\0',
+      '100':
+        ['claude', '--session-id', 'abc-123', '--other-flag'].join('\0') + '\0',
       '101': ['claude', '--resume', 'def-456'].join('\0') + '\0',
       '102': ['claude', 'remote-control'].join('\0') + '\0',
       'not-a-pid': 'ignored',
