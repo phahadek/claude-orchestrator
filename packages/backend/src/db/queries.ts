@@ -1045,11 +1045,11 @@ export function getStuckAliveSubprocessParkRows(): StuckAliveSubprocessParkRow[]
       `
     SELECT s.session_id, s.task_id, s.project_id, s.pr_url, s.worktree_path,
            s.session_type, al.ts AS parked_at,
-           (SELECT MAX(timestamp) FROM session_events se WHERE se.session_id = s.session_id) AS latest_event_ts
+           s.last_event_at AS latest_event_ts
     FROM sessions s
     JOIN audit_log al ON al.actor_id = s.session_id
-    WHERE s.status = 'idle'
       AND al.event_type = 'session_status_changed'
+    WHERE s.status = 'idle'
       AND json_extract(al.payload, '$.call_site') = 'stuck_session_alive_subprocess'
       AND al.id = (
         SELECT MAX(id) FROM audit_log
@@ -11900,6 +11900,113 @@ export function hasMcpUnreachableExhaustedEvent(sessionId: string): boolean {
     )
     .get(sessionId);
   return (row?.cnt ?? 0) > 0;
+}
+
+export interface McpUnreachableSweepFacts {
+  exhausted: boolean;
+  lastRespawnTs: number | null;
+}
+
+/**
+ * Batched replacement for per-session hasMcpUnreachableExhaustedEvent +
+ * getLatestMcpUnreachableRespawnTimestamp calls: one grouped query over the
+ * two session_mcp_unreachable_* event types for every given session id,
+ * instead of two point queries per live session per sweep. Sessions with
+ * neither event type are absent from the returned map — callers should
+ * treat a missing entry the same as { exhausted: false, lastRespawnTs: null }.
+ */
+export function getMcpUnreachableSweepFacts(
+  sessionIds: string[],
+): Map<string, McpUnreachableSweepFacts> {
+  const facts = new Map<string, McpUnreachableSweepFacts>();
+  if (sessionIds.length === 0) return facts;
+
+  const placeholders = sessionIds.map(() => '?').join(',');
+  const rows = db
+    .prepare(
+      `SELECT actor_id, event_type, MAX(ts) AS max_ts
+       FROM audit_log
+       WHERE actor_id IN (${placeholders})
+         AND event_type IN ('session_mcp_unreachable_respawn_exhausted', 'session_mcp_unreachable_respawned')
+       GROUP BY actor_id, event_type`,
+    )
+    .all(...sessionIds) as {
+    actor_id: string;
+    event_type: string;
+    max_ts: number;
+  }[];
+
+  for (const row of rows) {
+    const entry = facts.get(row.actor_id) ?? {
+      exhausted: false,
+      lastRespawnTs: null,
+    };
+    if (row.event_type === 'session_mcp_unreachable_respawn_exhausted') {
+      entry.exhausted = true;
+    } else {
+      entry.lastRespawnTs = row.max_ts;
+    }
+    facts.set(row.actor_id, entry);
+  }
+  return facts;
+}
+
+/**
+ * Batched replacement for per-session getLatestOrchestratorMcpStatusSince
+ * calls: every session_orchestrator_mcp_status_reported row for the given
+ * session ids, newest-first per session. Each session's grace-window anchor
+ * (lastSpawnMs) is only known after combining sessions.started_at with
+ * getMcpUnreachableSweepFacts's lastRespawnTs, so the `ts > since` filter is
+ * applied per session in JS (see resolveLatestOrchestratorMcpStatus below)
+ * rather than in this query.
+ */
+export function getOrchestratorMcpStatusEventsForSessions(
+  sessionIds: string[],
+): Map<string, { ts: number; status: string | undefined }[]> {
+  const events = new Map<string, { ts: number; status: string | undefined }[]>();
+  if (sessionIds.length === 0) return events;
+
+  const placeholders = sessionIds.map(() => '?').join(',');
+  const rows = db
+    .prepare(
+      `SELECT actor_id, ts, payload FROM audit_log
+       WHERE actor_id IN (${placeholders})
+         AND event_type = 'session_orchestrator_mcp_status_reported'
+       ORDER BY actor_id, ts DESC`,
+    )
+    .all(...sessionIds) as { actor_id: string; ts: number; payload: string }[];
+
+  for (const row of rows) {
+    let status: string | undefined;
+    try {
+      const payload = JSON.parse(row.payload) as { status?: string };
+      status = typeof payload.status === 'string' ? payload.status : undefined;
+    } catch {
+      status = undefined;
+    }
+    const list = events.get(row.actor_id) ?? [];
+    list.push({ ts: row.ts, status });
+    events.set(row.actor_id, list);
+  }
+  return events;
+}
+
+/**
+ * Resolves getOrchestratorMcpStatusEventsForSessions's per-session event
+ * list (newest-first) down to the single "latest status reported after
+ * sinceMs" value that getLatestOrchestratorMcpStatusSince computes per call —
+ * undefined means "still initialising", not "unreachable" (see that
+ * function's doc comment).
+ */
+export function resolveLatestOrchestratorMcpStatus(
+  events: { ts: number; status: string | undefined }[] | undefined,
+  sinceMs: number,
+): string | undefined {
+  if (!events) return undefined;
+  for (const event of events) {
+    if (event.ts > sinceMs) return event.status;
+  }
+  return undefined;
 }
 
 /**

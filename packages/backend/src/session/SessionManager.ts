@@ -132,10 +132,10 @@ import {
   setSessionTerminalCompletionReason,
   incrementSessionPokeRetryCount,
   resetSessionPokeRetryCount,
-  getLatestOrchestratorMcpStatusSince,
   countMcpUnreachableRespawnAttempts,
-  getLatestMcpUnreachableRespawnTimestamp,
-  hasMcpUnreachableExhaustedEvent,
+  getMcpUnreachableSweepFacts,
+  getOrchestratorMcpStatusEventsForSessions,
+  resolveLatestOrchestratorMcpStatus,
   listLiveSessionRows,
   setSessionAwaitingOperatorDecision,
   clearSessionAwaitingOperatorDecision,
@@ -4585,14 +4585,19 @@ export class SessionManager extends EventEmitter {
     }
 
     const now = Date.now();
-    for (const row of listLiveSessionRows()) {
-      if (hasMcpUnreachableExhaustedEvent(row.session_id)) continue;
+    const liveRows = listLiveSessionRows();
+    const sessionIds = liveRows.map((row) => row.session_id);
+    const sweepFacts = getMcpUnreachableSweepFacts(sessionIds);
+    const orchestratorStatusEvents =
+      getOrchestratorMcpStatusEventsForSessions(sessionIds);
 
-      const lastSpawnMs =
-        getLatestMcpUnreachableRespawnTimestamp(row.session_id) ??
-        row.started_at;
-      const orchestratorMcpStatus = getLatestOrchestratorMcpStatusSince(
-        row.session_id,
+    for (const row of liveRows) {
+      const facts = sweepFacts.get(row.session_id);
+      if (facts?.exhausted) continue;
+
+      const lastSpawnMs = facts?.lastRespawnTs ?? row.started_at;
+      const orchestratorMcpStatus = resolveLatestOrchestratorMcpStatus(
+        orchestratorStatusEvents.get(row.session_id),
         lastSpawnMs,
       );
 

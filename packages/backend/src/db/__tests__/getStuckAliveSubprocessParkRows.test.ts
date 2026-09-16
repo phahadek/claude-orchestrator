@@ -51,6 +51,17 @@ function insertSessionEvent(sessionId: string, timestamp: number): void {
     `INSERT INTO session_events (session_id, event_type, payload, timestamp)
      VALUES (?, 'system', '{}', ?)`,
   ).run(sessionId, timestamp);
+  // Mirrors the last_event_at bump insertEvent applies at the real
+  // session_events insert site (queries.ts) — a raw INSERT here has no
+  // trigger to do it automatically.
+  db.prepare(
+    `UPDATE sessions
+     SET last_event_at = CASE
+       WHEN last_event_at IS NULL OR last_event_at < ? THEN ?
+       ELSE last_event_at
+     END
+     WHERE session_id = ?`,
+  ).run(timestamp, timestamp, sessionId);
 }
 
 beforeEach(() => {
