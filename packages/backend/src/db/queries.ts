@@ -1050,6 +1050,7 @@ export function getStuckAliveSubprocessParkRows(): StuckAliveSubprocessParkRow[]
     JOIN audit_log al ON al.actor_id = s.session_id
       AND al.event_type = 'session_status_changed'
     WHERE s.status = 'idle'
+      AND s.archived = 0
       AND json_extract(al.payload, '$.call_site') = 'stuck_session_alive_subprocess'
       AND al.id = (
         SELECT MAX(id) FROM audit_log
