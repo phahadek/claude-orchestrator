@@ -230,6 +230,26 @@ export class PRMergeWatcher extends EventEmitter {
       pauseSet: boolean;
     }
   >();
+  /**
+   * A flake-recovery F2 rerun this instance has triggered (via
+   * actuateF2Rerun) and is waiting to see settle, keyed by PR key
+   * (`${prNumber}:${repo}`). PreReviewPipeline.rerunFlakyTests only enqueues
+   * the rerun now — it never awaits the run's completion — so there is no
+   * synchronous outcome to branch on the way applyFlakeRecoveryOutcome used
+   * to. Instead, runMergeabilityCheck reads test_request_runs for this same
+   * content hash on a later tick exactly like it reads any other F2 verdict;
+   * once that read finds a settled row, the marker here is what tells it
+   * "this settled row is the outcome of a triggered recovery, not a fresh
+   * unremediated failure" so it applies the budget/pause bookkeeping instead
+   * of trying to trigger a second recovery. A marker whose contentHash no
+   * longer matches the PR's current content hash (a new push landed while
+   * the rerun was in flight) is stale and is dropped unconsumed — the new
+   * content hash gets its own fresh verdict cycle.
+   */
+  private readonly pendingF2FlakeReruns = new Map<
+    string,
+    { contentHash: string; maxRetries: number; justRestored: boolean }
+  >();
 
   constructor(
     private github: GitHubClient,
@@ -840,6 +860,48 @@ export class PRMergeWatcher extends EventEmitter {
       if (testResult) {
         this.f2PendingVerdicts.delete(this.prKey(pr));
       }
+
+      // A previously triggered flake-recovery rerun (tryF2LaneAutoDisposition
+      // or handleVerifiedFlakyDisposition's f2 branch) settles here, read the
+      // same way any other F2 verdict is — PreReviewPipeline.rerunFlakyTests
+      // never hands back a synchronous outcome (see its doc comment), so this
+      // is the only place that outcome becomes known. `redrive: false` below
+      // because falling through this same tick already re-evaluates
+      // mergeability further down — re-entering checkMergeabilityNow from
+      // here would recurse into this very call.
+      let consumedRerunOutcome: FlakeRecoveryOutcome | null = null;
+      const pendingRerunKey = this.prKey(pr);
+      const pendingRerun = this.pendingF2FlakeReruns.get(pendingRerunKey);
+      if (pendingRerun && testResult) {
+        this.pendingF2FlakeReruns.delete(pendingRerunKey);
+        if (pendingRerun.contentHash === testResult.content_hash) {
+          consumedRerunOutcome =
+            testResult.state === 'failed' ? 'failed' : 'passed';
+          recordEvent({
+            event_type: 'flake_recovery_f2_rerun',
+            actor_type: 'system',
+            project_id: project.id,
+            task_id: pr.task_id ?? null,
+            payload: {
+              prNumber: pr.pr_number,
+              repo: pr.repo,
+              sha: pr.head_sha,
+              outcome: consumedRerunOutcome,
+            },
+          });
+          await this.applyFlakeRecoveryOutcome(
+            pr,
+            consumedRerunOutcome,
+            pendingRerun.maxRetries,
+            pendingRerun.justRestored,
+            false,
+          );
+        }
+        // else: stale — a new push landed (new content hash) while the
+        // rerun was in flight. Drop it unconsumed; the new content hash
+        // gets its own fresh verdict cycle below.
+      }
+
       if (testResult && testResult.state === 'failed') {
         // ── Base-health-aware f2-gate pre-empt ─────────────────────────────
         // Filter the raw failure against the project's confirmed
@@ -878,15 +940,23 @@ export class PRMergeWatcher extends EventEmitter {
             ).map((t) => t.test_id),
           );
           if (pr.ci_remediation_attempted_sha !== pr.head_sha) {
-            const recovered = worktreePath
-              ? await this.tryF2LaneAutoDisposition(
-                  pr,
-                  project,
-                  testResult,
-                  worktreePath,
-                  baseExcusedTestIds,
-                )
-              : false;
+            // A rerun just consumed above as 'failed' has already had its
+            // disposition attempted and its budget charged
+            // (applyFlakeRecoveryOutcome, called from the marker-consumption
+            // block above) — do not attempt a second disposition against the
+            // same settled result, just fall through to the pause+nudge.
+            const recovered =
+              consumedRerunOutcome === 'failed'
+                ? false
+                : worktreePath
+                  ? await this.tryF2LaneAutoDisposition(
+                      pr,
+                      project,
+                      testResult,
+                      worktreePath,
+                      baseExcusedTestIds,
+                    )
+                  : false;
             if (!recovered) {
               setCiRemediationAttemptedSha(pr.pr_number, pr.repo, pr.head_sha);
               const gateDigest =
@@ -1363,13 +1433,26 @@ export class PRMergeWatcher extends EventEmitter {
     });
 
     if (!pr.head_sha) return;
-    let outcome: FlakeRecoveryOutcome;
 
     if (payload.disposition.gate === 'f2') {
-      const result = await this.actuateF2Rerun(pr, project);
-      if (result === null) return;
-      outcome = result;
-    } else if (payload.disposition.gate === 'analyze') {
+      // Trigger (enqueue) only — PreReviewPipeline.rerunFlakyTests no longer
+      // awaits the run, so there is no synchronous outcome to hand to
+      // applyFlakeRecoveryOutcome here. Registering the pending marker and
+      // returning mirrors tryF2LaneAutoDisposition: runMergeabilityCheck
+      // reads the settled verdict back for this content hash on a later
+      // poll tick and applies the outcome from there.
+      const contentHash = await this.actuateF2Rerun(pr, project);
+      if (contentHash === null) return;
+      this.pendingF2FlakeReruns.set(this.prKey(pr), {
+        contentHash,
+        maxRetries,
+        justRestored,
+      });
+      return;
+    }
+
+    let outcome: FlakeRecoveryOutcome;
+    if (payload.disposition.gate === 'analyze') {
       if (!project || !pr.session_id || !this.reviewOrchestrator) return;
       const session = getSession(pr.session_id);
       const worktreePath = session?.worktree_path ?? '';
@@ -1446,18 +1529,24 @@ export class PRMergeWatcher extends EventEmitter {
   }
 
   /**
-   * Actuate a re-run of the F2 (orchestrator-run test) gate against `pr`'s
-   * current head_sha — the shared f2 actuation path both a session's
-   * flaky.confirm disposition and the lane-side auto-disposition check
-   * (tryF2LaneAutoDisposition) reuse rather than duplicate. Returns null
-   * when the PR/session/project state can't support a re-run (no session
-   * worktree, no reviewOrchestrator wired, etc.) — the caller treats that
-   * as "nothing to actuate", not a failure outcome.
+   * Trigger (enqueue, non-blocking) a re-run of the F2 (orchestrator-run
+   * test) gate against `pr`'s current head_sha — the shared f2 actuation
+   * path both a session's flaky.confirm disposition and the lane-side
+   * auto-disposition check (tryF2LaneAutoDisposition) reuse rather than
+   * duplicate. Returns the content hash the rerun was enqueued against when
+   * a rerun was actually triggered, or null when the PR/session/project
+   * state can't support one (no session worktree, no reviewOrchestrator
+   * wired, no test: commands configured, etc.) — the caller treats a null
+   * return as "nothing to actuate", not a failure outcome. The eventual
+   * pass/fail outcome is never returned here: PreReviewPipeline.rerunFlakyTests
+   * no longer awaits the run, so runMergeabilityCheck reads the settled
+   * verdict back on a later poll tick (see the pendingF2FlakeReruns marker
+   * this method's callers register).
    */
   private async actuateF2Rerun(
     pr: PullRequestRow,
     project: ProjectConfig | undefined,
-  ): Promise<FlakeRecoveryOutcome | null> {
+  ): Promise<string | null> {
     if (
       !project ||
       !pr.session_id ||
@@ -1476,7 +1565,7 @@ export class PRMergeWatcher extends EventEmitter {
       worktreePath,
       project,
     );
-    return result?.outcome ?? null;
+    return result?.contentHash ?? null;
   }
 
   /**
@@ -1491,6 +1580,17 @@ export class PRMergeWatcher extends EventEmitter {
     outcome: FlakeRecoveryOutcome,
     maxRetries: number,
     justRestored = false,
+    /**
+     * False when called from inside runMergeabilityCheck's own F2-gate
+     * marker-consumption (a passing outcome discovered while already
+     * executing this tick's mergeability pass) — falling through to the
+     * rest of that same tick already re-evaluates mergeability, so calling
+     * checkMergeabilityNow here would recurse into the call this outcome
+     * was read from. True (default) for the WS-event-driven analyze/ci
+     * gates in handleVerifiedFlakyDisposition, which run outside any
+     * runMergeabilityCheck call and so must actively re-drive.
+     */
+    redrive = true,
   ): Promise<void> {
     if (outcome === 'inconclusive') {
       logger.info(
@@ -1535,17 +1635,21 @@ export class PRMergeWatcher extends EventEmitter {
         repo: pr.repo,
       });
       logger.info(
-        `[PRMergeWatcher] PR #${pr.pr_number}: verified-flaky re-run passed — pause cleared, re-driving merge loop`,
+        `[PRMergeWatcher] PR #${pr.pr_number}: verified-flaky re-run passed — pause cleared${redrive ? ', re-driving merge loop' : ''}`,
       );
-      const redriveKey = flakeRecoveryKey(pr.pr_number, pr.repo);
-      this.flakeRecoveryRedriving.add(redriveKey);
-      try {
-        // checkMergeabilityNow bypasses the approved-verdict gate that
-        // checkMergeability enforces, so a not-yet-approved PR is re-driven too.
-        await this.checkMergeabilityNow(pr.pr_number, pr.repo);
+      if (redrive) {
+        const redriveKey = flakeRecoveryKey(pr.pr_number, pr.repo);
+        this.flakeRecoveryRedriving.add(redriveKey);
+        try {
+          // checkMergeabilityNow bypasses the approved-verdict gate that
+          // checkMergeability enforces, so a not-yet-approved PR is re-driven too.
+          await this.checkMergeabilityNow(pr.pr_number, pr.repo);
+          this.autoMerger?.attempt(pr.pr_number, pr.repo);
+        } finally {
+          this.flakeRecoveryRedriving.delete(redriveKey);
+        }
+      } else {
         this.autoMerger?.attempt(pr.pr_number, pr.repo);
-      } finally {
-        this.flakeRecoveryRedriving.delete(redriveKey);
       }
     } else {
       const attempt = baseAttributable
@@ -1630,10 +1734,12 @@ export class PRMergeWatcher extends EventEmitter {
    * before actuation fires; a single unflagged/guard-blocked failure falls
    * through to the unmodified session pause+nudge path.
    *
-   * Returns true only when the re-run this triggers actually passed (pause
-   * cleared, merge loop re-driven) — the caller must still pause+nudge on
-   * false, whether that's because no test qualified or because the re-run
-   * (having been attempted) still failed.
+   * Returns true when a rerun was actually triggered (registered as pending —
+   * see pendingF2FlakeReruns — for a later poll tick to read its settled
+   * outcome) — the caller treats that as "in flight, don't pause this tick"
+   * the same way it treats an as-yet-unsettled push-triggered run. Returns
+   * false, and the caller must pause+nudge, when no test qualified for
+   * auto-disposition at all (budget exhausted, no eligible test, etc.).
    */
   private async tryF2LaneAutoDisposition(
     pr: PullRequestRow,
@@ -1716,10 +1822,14 @@ export class PRMergeWatcher extends EventEmitter {
       },
     });
 
-    const outcome = await this.actuateF2Rerun(pr, project);
-    if (outcome === null) return false;
-    await this.applyFlakeRecoveryOutcome(pr, outcome, maxRetries, justRestored);
-    return outcome === 'passed';
+    const contentHash = await this.actuateF2Rerun(pr, project);
+    if (contentHash === null) return false;
+    this.pendingF2FlakeReruns.set(this.prKey(pr), {
+      contentHash,
+      maxRetries,
+      justRestored,
+    });
+    return true;
   }
 
   /**
