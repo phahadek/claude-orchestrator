@@ -3472,6 +3472,20 @@ export function runMigrations(target: Database.Database): void {
       throw err;
     }
   }
+
+  // idx_audit_log_actor_event_ts: backs the shape shared by
+  // hasMcpUnreachableExhaustedEvent, getLatestMcpUnreachableRespawnTimestamp,
+  // getLatestOrchestratorMcpStatusSince, getMcpUnreachableSweepFacts and
+  // getStuckAliveSubprocessParkRows — WHERE actor_id = ? AND event_type = ?
+  // (some also ORDER BY ts DESC LIMIT 1 / MAX(ts)). The only previously
+  // usable index was the single-column idx_audit_log_actor_id, which forced
+  // a scan of every audit row for that actor plus a temp b-tree for the
+  // ORDER BY. idx_audit_log_actor_id is kept — other readers filter on
+  // actor_id alone without an event_type predicate.
+  target.exec(`
+    CREATE INDEX IF NOT EXISTS idx_audit_log_actor_event_ts
+      ON audit_log(actor_id, event_type, ts);
+  `);
 }
 
 // ─── test_run_results → test_perf_baselines digest backfill ────────────────

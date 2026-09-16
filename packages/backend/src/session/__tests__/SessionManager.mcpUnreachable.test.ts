@@ -180,17 +180,39 @@ vi.mock('../../db/queries', () => ({
   expireStagedIntentsForSession: vi.fn(),
   reapStagedIntentsForNeverStagedSession: vi.fn(() => 0),
   listLiveSessionRows: vi.fn(() => liveSessionRows),
-  getLatestOrchestratorMcpStatusSince: vi.fn(
-    (sessionId: string) => mcpOrchestratorStatus[sessionId],
-  ),
   countMcpUnreachableRespawnAttempts: vi.fn(
     (sessionId: string) => mcpRespawnAttempts[sessionId] ?? 0,
   ),
-  getLatestMcpUnreachableRespawnTimestamp: vi.fn(
-    (sessionId: string) => mcpLatestRespawnTs[sessionId] ?? null,
-  ),
-  hasMcpUnreachableExhaustedEvent: vi.fn(
-    (sessionId: string) => mcpExhausted[sessionId] ?? false,
+  getMcpUnreachableSweepFacts: vi.fn((sessionIds: string[]) => {
+    const facts = new Map<
+      string,
+      { exhausted: boolean; lastRespawnTs: number | null }
+    >();
+    for (const id of sessionIds) {
+      facts.set(id, {
+        exhausted: mcpExhausted[id] ?? false,
+        lastRespawnTs: mcpLatestRespawnTs[id] ?? null,
+      });
+    }
+    return facts;
+  }),
+  getOrchestratorMcpStatusEventsForSessions: vi.fn((sessionIds: string[]) => {
+    const events = new Map<
+      string,
+      { ts: number; status: string | undefined }[]
+    >();
+    for (const id of sessionIds) {
+      if (mcpOrchestratorStatus[id] !== undefined) {
+        events.set(id, [
+          { ts: Number.MAX_SAFE_INTEGER, status: mcpOrchestratorStatus[id] },
+        ]);
+      }
+    }
+    return events;
+  }),
+  resolveLatestOrchestratorMcpStatus: vi.fn(
+    (events: { ts: number; status: string | undefined }[] | undefined) =>
+      events && events.length > 0 ? events[0].status : undefined,
   ),
 }));
 
@@ -264,7 +286,13 @@ vi.mock('fs', () => ({
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
 import { SessionManager } from '../SessionManager';
-import { getSession, setSessionPauseReason } from '../../db/queries';
+import {
+  getSession,
+  setSessionPauseReason,
+  listLiveSessionRows,
+  getMcpUnreachableSweepFacts,
+  getOrchestratorMcpStatusEventsForSessions,
+} from '../../db/queries';
 import { getProjectById, runtimeSettings } from '../../config';
 import { AgentSession } from '../AgentSession';
 import { recordEvent } from '../../audit/AuditLog';
@@ -459,6 +487,20 @@ describe('reconcileMcpUnreachableSessions', () => {
 
     expect(result.detected).toEqual([]);
     expect(result.exhausted).toEqual([]);
+  });
+
+  it('hits the DB with a bounded number of statements per sweep regardless of live-row count', async () => {
+    liveSessionRows = Array.from({ length: 25 }, (_, i) =>
+      makeRow({ session_id: `sess-${i}`, task_id: `task-${i}` }),
+    );
+
+    await sm.reconcileMcpUnreachableSessions();
+
+    expect(vi.mocked(listLiveSessionRows)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(getMcpUnreachableSweepFacts)).toHaveBeenCalledTimes(1);
+    expect(
+      vi.mocked(getOrchestratorMcpStatusEventsForSessions),
+    ).toHaveBeenCalledTimes(1);
   });
 });
 
