@@ -146,6 +146,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'A failing F2 test was excluded as a confirmed base-branch break (clearing both masking guards) — does not block merge. No action needed.',
   orchestrator_mcp_connect_failed:
     "Session's orchestrator MCP server did not connect — the session cannot run test.request. Automatic in-place respawn is attempting to recover; no action needed unless it escalates.",
+  f2_verdict_missing:
+    'No F2 test verdict settled for this PR for longer than expected — the push-driven pipeline may have failed to start it. Clears automatically once a verdict is read; investigate if it persists.',
 };
 
 function verdictLabel(verdict: string): string {

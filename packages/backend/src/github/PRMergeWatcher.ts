@@ -20,16 +20,14 @@ import type { ProjectConfig } from '../config';
 import type { Scheduler } from '../orchestration/Scheduler';
 import { typedGetSetting } from '../config/settings';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
+import type { OrchestratorConfig } from '../session/orchestrator-config';
 import {
   loadAutofixCommands,
   runAutofix,
   getChangedFiles,
 } from '../session/autofix-runner';
 import { computeWholeTreeContentHash } from '../session/analyzeGating';
-import {
-  evaluateF2LaneFlakyDisposition,
-  runProjectTestRequest,
-} from '../orchestration/testRequestLane';
+import { evaluateF2LaneFlakyDisposition } from '../orchestration/testRequestLane';
 import { tailOfLog } from '../orchestration/verifyRunner';
 import {
   filterBaseAttributableFailures,
@@ -214,6 +212,24 @@ export class PRMergeWatcher extends EventEmitter {
    * without this guard the two recurse into each other until the heap dies.
    */
   private readonly flakeRecoveryRedriving = new Set<string>();
+  /**
+   * F2-gate pending state per PR key (`${prNumber}:${repo}`) — poll() is a
+   * pure reader of test_request_runs now (see runMergeabilityCheck): it
+   * never triggers a run itself, so a PR with no settled full-run verdict
+   * for its current content hash just stays pending until the push-driven
+   * pipeline produces one. Reset whenever the content hash changes (a new
+   * push). auditEmitted makes the pr_f2_verdict_pending audit row and the
+   * info log edge-triggered — once per (pr, contentHash), never per tick.
+   */
+  private readonly f2PendingVerdicts = new Map<
+    string,
+    {
+      contentHash: string;
+      firstSeenAt: number;
+      auditEmitted: boolean;
+      pauseSet: boolean;
+    }
+  >();
 
   constructor(
     private github: GitHubClient,
@@ -270,8 +286,13 @@ export class PRMergeWatcher extends EventEmitter {
       intervalMs: () => DEFAULT_INTERVAL_MS,
       runOnBoot: true,
       concurrency: 'skip-if-running',
-      run: async () => {
-        await this.poll();
+      // poll() is a pure reader of settled test verdicts now — it never
+      // awaits a test execution (see runMergeabilityCheck) — so a real
+      // overrun is a genuine fault again. Sized to the poll interval
+      // rather than DEFAULT_JOB_TIMEOUT_MS.
+      timeoutMs: DEFAULT_INTERVAL_MS,
+      run: async ({ signal }) => {
+        await this.poll(signal);
       },
       onError: (err: unknown) =>
         logger.warn('[PRMergeWatcher] poll error:', (err as Error).message),
@@ -426,7 +447,7 @@ export class PRMergeWatcher extends EventEmitter {
     recordGitHubRateLimit(err, '[PRMergeWatcher]', this.broadcast);
   }
 
-  async poll(): Promise<void> {
+  async poll(signal?: AbortSignal): Promise<void> {
     if (isGitHubRateLimitActive(this.broadcast)) return;
     this.sweepStalePendingReReviews();
     await this.sweepPendingPushDeadLetters();
@@ -456,6 +477,7 @@ export class PRMergeWatcher extends EventEmitter {
     }
 
     for (const [repo, prs] of byRepo) {
+      if (signal?.aborted) return;
       if (prs.length < 2) {
         // Single PR for this repo — individual fetch
         await this.checkPR(prs[0], silentMerges);
@@ -487,6 +509,7 @@ export class PRMergeWatcher extends EventEmitter {
       }
 
       for (const pr of prs) {
+        if (signal?.aborted) return;
         const batchEntry = batchStates.get(pr.pr_number);
         if (batchEntry) {
           // Still open — use batch headSha for push detection, skip getPRState
@@ -693,6 +716,65 @@ export class PRMergeWatcher extends EventEmitter {
     await this.runMergeabilityCheck(pr);
   }
 
+  private prKey(pr: Pick<PullRequestRow, 'pr_number' | 'repo'>): string {
+    return `${pr.pr_number}:${pr.repo}`;
+  }
+
+  /**
+   * Records that this PR's F2 gate has no settled full-run verdict for its
+   * current content hash. Emits the pr_f2_verdict_pending audit row and an
+   * info log exactly once per (pr, contentHash) — never per tick — and, once
+   * the pending state has persisted past 2x the project's total test:
+   * budget, sets pause reason f2_verdict_missing exactly once so an operator
+   * sees a pipeline that never produced a verdict.
+   */
+  private recordF2VerdictPending(
+    pr: PullRequestRow,
+    project: ProjectConfig,
+    contentHash: string,
+    config: Pick<OrchestratorConfig, 'test' | 'test_timeout_sec'>,
+  ): void {
+    const key = this.prKey(pr);
+    let state = this.f2PendingVerdicts.get(key);
+    if (!state || state.contentHash !== contentHash) {
+      state = {
+        contentHash,
+        firstSeenAt: Date.now(),
+        auditEmitted: false,
+        pauseSet: false,
+      };
+      this.f2PendingVerdicts.set(key, state);
+    }
+    if (!state.auditEmitted) {
+      logger.info(
+        `[PRMergeWatcher] PR #${pr.pr_number}: no settled F2 verdict for content hash ${contentHash.slice(0, 12)} — undecided this tick`,
+      );
+      recordEvent({
+        event_type: 'pr_f2_verdict_pending',
+        actor_type: 'system',
+        project_id: project.id,
+        task_id: pr.task_id,
+        payload: {
+          pr_number: pr.pr_number,
+          repo: pr.repo,
+          content_hash: contentHash,
+        },
+      });
+      state.auditEmitted = true;
+    }
+    const budgetSec = config.test.length * config.test_timeout_sec;
+    const boundMs = 2 * budgetSec * 1000;
+    if (!state.pauseSet && Date.now() - state.firstSeenAt > boundMs) {
+      setPauseReason(
+        pr.pr_number,
+        pr.repo,
+        'f2_verdict_missing',
+        `No F2 verdict settled within ${Math.round(boundMs / 1000)}s for content hash ${contentHash.slice(0, 12)} — pipeline may have failed to start the full-run test`,
+      );
+      state.pauseSet = true;
+    }
+  }
+
   private async runMergeabilityCheck(pr: PullRequestRow): Promise<void> {
     if (pr.state === 'merged' || pr.state === 'closed') return;
     // PRs paused for terminal reasons (AutoMerger given up / human intervention
@@ -740,29 +822,23 @@ export class PRMergeWatcher extends EventEmitter {
       // Explicitly scoped to 'full' — a settled row from a diff-scoped run
       // (test_scoped:) must never stand in for the full-suite verdict this
       // gate exists to enforce; see run_kind on test_request_runs.
-      let testResult = contentHash
+      const testResult = contentHash
         ? getLatestTestRequestRun(project.id, contentHash, 'full')
         : undefined;
       if (!testResult && contentHash && worktreePath) {
-        // No full-run verdict yet for this content hash — trigger one.
-        // runProjectTestRequest coalesces with any run already in flight for
-        // this exact (project, content-hash, 'full') key, so an overlapping
-        // poll joins the same execution instead of launching a second one;
-        // once settled, later polls hit the cache read above and never
-        // re-execute against an unchanged tree.
-        await runProjectTestRequest({
-          projectId: project.id,
-          contentHash,
-          worktreePath,
-          commands: config.test,
-          timeoutSec: config.test_timeout_sec,
-          maxRssMb: config.test_max_rss_mb,
-          sessionId: null,
-          runOrigin: 'pr_pipeline',
-          producer: 'pr_gate',
-          runKind: 'full',
-        });
-        testResult = getLatestTestRequestRun(project.id, contentHash, 'full');
+        // No full-run verdict yet for this content hash. The poll only
+        // reads settled verdicts — triggering a full-suite run belongs to
+        // the push-driven pipeline (PreReviewPipeline/ReviewOrchestrator),
+        // which already runs the full suite for every new head SHA. A
+        // pending state here means that run is either still in flight
+        // (join it by reading on a later tick) or the pipeline failed to
+        // start it — a pipeline-durability defect to surface, not silently
+        // repair by launching a second run from inside the poll.
+        this.recordF2VerdictPending(pr, project, contentHash, config);
+        return; // Undecided for this tick — no mergeability decision yet.
+      }
+      if (testResult) {
+        this.f2PendingVerdicts.delete(this.prKey(pr));
       }
       if (testResult && testResult.state === 'failed') {
         // ── Base-health-aware f2-gate pre-empt ─────────────────────────────
