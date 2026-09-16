@@ -6182,10 +6182,20 @@ export class SessionManager extends EventEmitter {
       return { outcome: 'session_row_missing' };
     }
 
+    // sessionLivenessReconciler.runLivenessSweep archives a dead-process
+    // session (archiveSession) without touching its status — a deliberate
+    // operator ruling (see that reconciler's doc comment). That leaves a
+    // 'running' row whose worktree is already torn down; treating archived
+    // as terminal-equivalent here routes it through the same
+    // recreate-worktree-and-resume path as a genuinely terminal row instead
+    // of falling into the idle-with-worktree-check branch below, which would
+    // otherwise refuse forever (setSessionPauseReason + null return, with no
+    // retry-budget or escalation signal for the caller).
     const isTerminal =
       row.status === 'done' ||
       row.status === 'error' ||
-      row.status === 'killed';
+      row.status === 'killed' ||
+      !!row.archived;
 
     if (!isTerminal) {
       const project = getProjectById(row.project_id ?? '');

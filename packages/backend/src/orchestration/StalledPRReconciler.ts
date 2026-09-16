@@ -130,6 +130,24 @@ export class StalledPRReconciler {
   private sessionManager: SessionManager | undefined;
   private githubClient: GitHubClient | undefined;
 
+  /**
+   * Consecutive-tick counter for a fixer relaunch that keeps being refused
+   * "before it started" (relaunchFixerForPR returns null, or the typed
+   * session_row_missing failure) — a case reDriveViaFixerRelaunch
+   * deliberately never charges against stalled_pr_retry_count, since no
+   * fixer attempt actually happened. Without a separate bound, a refusal
+   * that turns out to be permanent (e.g. the anchor session is archived
+   * with its worktree torn down and every relaunch attempt keeps declining
+   * for the same underlying reason) would loop here forever: count stays
+   * at 0, the retryCap check at reconcileOnce's top never trips, and
+   * escalate() is never reached. Keyed by repo/pr/head_sha so a fresh push
+   * starts a clean streak; reset on any successful relaunch. In-memory only
+   * (not persisted) — a backend restart resets the streak, which only
+   * delays this backstop's escalation rather than losing correctness, since
+   * the underlying condition (if still permanent) keeps reproducing it.
+   */
+  private unchargedRefusalStreaks = new Map<string, number>();
+
   constructor(
     private readonly broadcast: (msg: ServerMessage) => void,
     private readonly options: {
@@ -720,14 +738,17 @@ export class StalledPRReconciler {
       logger.error(
         `[StalledPRReconciler] PR #${prNumber} (${repo}): relaunch failed — implementing session ${pr.session_id ?? '(none)'} has no row in sessions (deleted anchor)`,
       );
+      this.recordUnchargedRefusal(pr, kind);
       return false;
     }
     if (!relaunched) {
       logger.info(
         `[StalledPRReconciler] PR #${prNumber} (${repo}): fixer relaunch (kind=${kind}) was refused before it started — not counting as an attempt`,
       );
+      this.recordUnchargedRefusal(pr, kind);
       return false;
     }
+    this.unchargedRefusalStreaks.delete(this.unchargedRefusalStreakKey(pr));
 
     const project = getProjectByGithubRepo(repo);
     const baseAttributable =
@@ -804,6 +825,38 @@ export class StalledPRReconciler {
       repo,
       kind: 'no_relaunch_target',
     });
+  }
+
+  private unchargedRefusalStreakKey(pr: PullRequestRow): string {
+    return `${pr.repo}#${pr.pr_number}#${pr.head_sha ?? ''}`;
+  }
+
+  /**
+   * Bounds an uncharged fixer-relaunch refusal (relaunchFixerForPR returned
+   * null or session_row_missing) that reDriveViaFixerRelaunch deliberately
+   * doesn't count against stalled_pr_retry_count. Most refusals are
+   * transient (a memory/usage admission deferral) and clear on their own
+   * within a few ticks — but some are permanent (e.g. the anchor session is
+   * archived and its worktree is gone, or its sessions row was deleted) and
+   * would otherwise refuse identically forever with no retry-budget movement
+   * and no operator-visible signal. Once the same PR/head_sha refuses this
+   * many consecutive ticks, escalate exactly like the charged retry-cap path
+   * does, so the PR always surfaces to a human within a bounded number of
+   * reconciler ticks either way.
+   */
+  private recordUnchargedRefusal(pr: PullRequestRow, kind: StalledPRKind): void {
+    const key = this.unchargedRefusalStreakKey(pr);
+    const streak = (this.unchargedRefusalStreaks.get(key) ?? 0) + 1;
+    const cap = this.options.retryCap ?? DEFAULT_RETRY_CAP;
+    if (streak < cap) {
+      this.unchargedRefusalStreaks.set(key, streak);
+      return;
+    }
+    this.unchargedRefusalStreaks.delete(key);
+    logger.warn(
+      `[StalledPRReconciler] PR #${pr.pr_number} (${pr.repo}): fixer relaunch refused ${streak} consecutive ticks with no charged attempt — escalating`,
+    );
+    this.escalate(pr.pr_number, pr.repo, kind, pr.stalled_pr_retry_count ?? 0);
   }
 
   /**

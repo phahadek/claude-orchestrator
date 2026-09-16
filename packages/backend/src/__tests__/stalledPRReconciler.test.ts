@@ -481,6 +481,50 @@ describe('StalledPRReconciler', () => {
     expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
   });
 
+  it('escalates after repeated uncharged fixer-relaunch refusals (archived session, worktree gone) even though stalled_pr_retry_count never advances', async () => {
+    // relaunchFixerForPR returning null models SessionManager refusing the
+    // relaunch before it starts — the exact shape a session archived with a
+    // torn-down worktree used to produce forever, with the retry budget
+    // never charged and reconcile_exhausted never set.
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'verify_failed' }),
+      head_sha: 'sha1',
+      last_reviewed_sha: 'sha1',
+      review_session_id: null,
+      pending_push: 0,
+      stalled_pr_retry_count: 0,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+
+    const { fn: broadcast, messages } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const sm = makeSessionManager();
+    sm.relaunchFixerForPR = vi.fn().mockResolvedValue(null);
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+    reconciler.setSessionManager(sm as any);
+
+    await reconciler.reconcileOnce();
+    expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
+    expect(setReconcileExhausted).not.toHaveBeenCalled();
+
+    await reconciler.reconcileOnce();
+
+    expect(sm.relaunchFixerForPR).toHaveBeenCalledTimes(2);
+    // Never charged against the normal retry budget — the escalation below
+    // is driven by the uncharged-refusal streak, not stalled_pr_retry_count.
+    expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
+    expect(setReconcileExhausted).toHaveBeenCalledWith(42, 'org/repo', true);
+    expect(
+      messages.find((m) => m.type === 'pr_stalled_escalated'),
+    ).toMatchObject({
+      type: 'pr_stalled_escalated',
+      prNumber: 42,
+      repo: 'org/repo',
+      kind: 'gate_failed',
+    });
+  });
+
   it('routes a dead-session merge conflict to the fixer relaunch with a rebase prompt', async () => {
     const pr = makePR({
       review_result: null,
