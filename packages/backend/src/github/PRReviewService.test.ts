@@ -22,6 +22,7 @@ vi.mock('../db/queries.js', () => ({
   getMergedLocalBranchForTaskId: vi.fn().mockReturnValue(undefined),
   getLatestTestRequestRunForSession: vi.fn().mockReturnValue(undefined),
   getLatestFinishedTestRequestRunForSession: vi.fn().mockReturnValue(undefined),
+  getTestRunSummary: vi.fn().mockReturnValue(undefined),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -2516,6 +2517,110 @@ describe('PRReviewService.reReviewPR()', () => {
     expect(followUp).toContain('verdict rules:');
     expect(followUp).toContain(
       'necessary downstream updates caused by the listed changes',
+    );
+  });
+
+  it('follow-up includes the Orchestrator-Verified Test Run section when a finished run exists for the session', async () => {
+    const prRowWithSession = {
+      ...mockPRRow,
+      review_session_id: 'review-session-abc',
+      session_id: 'session-xyz',
+    };
+    vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
+    const finishedAt = Date.parse('2024-01-02T03:04:05Z');
+    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue({
+      id: 'run-1',
+      project_id: 'proj-1',
+      content_hash: 'abc',
+      session_id: 'session-xyz',
+      state: 'passed',
+      output: '',
+      requested_at: finishedAt - 1000,
+      started_at: finishedAt - 1000,
+      finished_at: finishedAt,
+      structured_result: JSON.stringify({
+        format: 'junit-xml',
+        suites: [{ name: 'PRReviewService.test.ts', tests: [] }],
+        totals: { passed: 12, failed: 0, skipped: 0, errors: 0 },
+        durationMsTotal: 1234,
+      }),
+      failure_reason: null,
+      concurrent_run_count: 0,
+      oom_killed: 0,
+      test_report_acquisition_attempted: 1,
+      run_origin: null,
+      producer: null,
+      run_kind: 'full',
+      base_sha: null,
+      foreign_concurrent_run_count: 0,
+    } as any);
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async (sessionId: string) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(sessionId, JSON.stringify(claudePayload)),
+          ),
+        );
+        return sessionId;
+      },
+    );
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    await service.reReviewPR(42, 'owner/repo');
+
+    const [, followUp] = (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mock
+      .calls[0];
+    expect(followUp).toContain('## Orchestrator-Verified Test Run');
+    expect(followUp).toContain('PRReviewService.test.ts');
+    expect(followUp).toContain('12 passed, 0 failed, 0 skipped, 0 errors');
+  });
+
+  it('follow-up omits the Orchestrator-Verified Test Run section when no finished run exists for the session', async () => {
+    const prRowWithSession = {
+      ...mockPRRow,
+      review_session_id: 'review-session-abc',
+      session_id: 'session-xyz',
+    };
+    vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
+    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue(undefined);
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async (sessionId: string) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(sessionId, JSON.stringify(claudePayload)),
+          ),
+        );
+        return sessionId;
+      },
+    );
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    await service.reReviewPR(42, 'owner/repo');
+
+    const [, followUp] = (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mock
+      .calls[0];
+    expect(followUp).not.toContain(
+      "This is a real record from the orchestrator's own F2 test gate",
     );
   });
 });

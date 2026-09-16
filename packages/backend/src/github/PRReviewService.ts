@@ -1422,6 +1422,27 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       );
     }
 
+    let testRun = pr.session_id
+      ? getLatestTestRequestRunForSession(projectId, pr.session_id)
+      : undefined;
+    if (
+      testRun &&
+      (testRun.state === 'running' || testRun.state === 'queued') &&
+      pr.session_id
+    ) {
+      testRun =
+        getLatestFinishedTestRequestRunForSession(projectId, pr.session_id) ??
+        testRun;
+    }
+    const testRunSummary =
+      testRun && !testRun.structured_result
+        ? getTestRunSummary(testRun.id)
+        : undefined;
+    const testRunEvidenceSection = buildTestRunEvidenceSection(
+      testRun,
+      testRunSummary,
+    );
+
     const followUp = [
       `The code session has pushed new commits to PR #${prNumber}.`,
       `Please re-review the updated diff against the same task spec.`,
@@ -1435,6 +1456,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       '```',
       diffData.diff,
       '```',
+      testRunEvidenceSection,
       REVIEW_JSON_SCHEMA_BLOCK,
     ].join('\n');
 
