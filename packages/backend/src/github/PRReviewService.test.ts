@@ -21,6 +21,7 @@ vi.mock('../db/queries.js', () => ({
   getMergedPRForTask: vi.fn().mockReturnValue(null),
   getMergedLocalBranchForTaskId: vi.fn().mockReturnValue(undefined),
   getLatestTestRequestRunForSession: vi.fn().mockReturnValue(undefined),
+  getLatestFinishedTestRequestRunForSession: vi.fn().mockReturnValue(undefined),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -57,6 +58,8 @@ import {
   setLastReviewedSha,
   getSession,
   setPauseReason,
+  getLatestTestRequestRunForSession,
+  getLatestFinishedTestRequestRunForSession,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { logger } from '../logger';
@@ -3226,6 +3229,120 @@ describe('PRReviewService.reviewPR() — DiffSource populates prompt', () => {
     );
     expect(result.verdict).toBe('approved');
     expect(diffSource.fetchDiff).toHaveBeenCalledOnce();
+  });
+});
+
+// ── reviewPR() — falls back to last finished test run when latest is in-flight ──
+
+describe('PRReviewService.reviewPR() — falls back to finished test run when latest is running/queued', () => {
+  it("uses the last finished run's evidence instead of rendering an empty section", async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+
+    const finishedAt = Date.parse('2024-01-02T03:04:05Z');
+    const runningRun = {
+      id: 'run-running',
+      project_id: 'proj-1',
+      content_hash: 'newer-hash',
+      session_id: 'session-xyz',
+      state: 'running',
+      output: '',
+      requested_at: finishedAt + 1000,
+      started_at: finishedAt + 1000,
+      finished_at: null,
+      structured_result: null,
+      failure_reason: null,
+      concurrent_run_count: 0,
+      oom_killed: 0,
+      test_report_acquisition_attempted: 0,
+      run_origin: null,
+      producer: null,
+      run_kind: 'full',
+      base_sha: null,
+      foreign_concurrent_run_count: 0,
+    } as any;
+    const finishedRun = {
+      id: 'run-finished',
+      project_id: 'proj-1',
+      content_hash: 'older-hash',
+      session_id: 'session-xyz',
+      state: 'passed',
+      output: '',
+      requested_at: finishedAt - 1000,
+      started_at: finishedAt - 1000,
+      finished_at: finishedAt,
+      structured_result: JSON.stringify({
+        format: 'junit-xml',
+        suites: [{ name: 'npm run test -w packages/backend', tests: [] }],
+        totals: { passed: 42, failed: 0, skipped: 0, errors: 0 },
+        durationMsTotal: 1234,
+      }),
+      failure_reason: null,
+      concurrent_run_count: 0,
+      oom_killed: 0,
+      test_report_acquisition_attempted: 1,
+      run_origin: null,
+      producer: null,
+      run_kind: 'full',
+      base_sha: null,
+      foreign_concurrent_run_count: 0,
+    } as any;
+
+    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue(runningRun);
+    vi.mocked(getLatestFinishedTestRequestRunForSession).mockReturnValue(
+      finishedRun,
+    );
+
+    const approvedPayload = {
+      verdict: 'approved',
+      dimensions: [{ name: 'Diff vs Context spec', passed: true, notes: 'ok' }],
+      summary: 'All good.',
+    };
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (
+        _a: string,
+        _b: string,
+        opts: { sessionId: string; customPrompt: string },
+      ) => {
+        expect(opts.customPrompt).toContain(
+          '## Orchestrator-Verified Test Run',
+        );
+        expect(opts.customPrompt).toContain('npm run test -w packages/backend');
+        expect(opts.customPrompt).toContain(
+          '42 passed, 0 failed, 0 skipped, 0 errors',
+        );
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(
+              opts.sessionId,
+              JSON.stringify(approvedPayload),
+            ),
+          ),
+        );
+        return opts.sessionId;
+      },
+    );
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    expect(result.verdict).toBe('approved');
+    expect(getLatestFinishedTestRequestRunForSession).toHaveBeenCalledWith(
+      'proj-1',
+      'session-xyz',
+    );
   });
 });
 
