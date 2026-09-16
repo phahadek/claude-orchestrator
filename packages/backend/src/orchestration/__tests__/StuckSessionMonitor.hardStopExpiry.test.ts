@@ -32,6 +32,7 @@ vi.mock('../../audit/AuditLog', () => ({
 
 vi.mock('../../session/processLiveness', () => ({
   isSessionProcessAlive: vi.fn().mockReturnValue(false),
+  readLiveSessionProcessIds: vi.fn().mockReturnValue(new Set()),
 }));
 
 import { getSession, archiveSession } from '../../db/queries.js';

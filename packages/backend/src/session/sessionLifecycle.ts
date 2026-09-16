@@ -32,7 +32,7 @@ import {
 import { isGateVerifySession } from './sessionPredicates';
 import type { SessionType } from './sessionPredicates';
 import type { StagedIntentState, OpsJournalState } from '../db/types';
-import { isSessionProcessAlive } from './processLiveness';
+import { readLiveSessionProcessIds } from './processLiveness';
 
 /**
  * True iff the session has emitted a session_events row more recently than
@@ -65,10 +65,16 @@ export function sessionIsLive(sessionId: string): boolean {
  * only see a session through periodic reads rather than the live message
  * stream, so they can't maintain StuckSessionMonitor's in-memory counter
  * themselves.
+ *
+ * Reads readLiveSessionProcessIds directly rather than going through
+ * isSessionProcessAlive — this is a single-session poller call, not a
+ * per-row sweep, so there is no snapshot to share across calls the way
+ * sessionLivenessReconciler/StuckSessionMonitor's periodic sweeps do.
  */
 export function sessionBusyInFlightToolCall(sessionId: string): boolean {
   return (
-    getPendingToolUseCount(sessionId) > 0 && isSessionProcessAlive(sessionId)
+    getPendingToolUseCount(sessionId) > 0 &&
+    (readLiveSessionProcessIds()?.has(sessionId) ?? true)
   );
 }
 

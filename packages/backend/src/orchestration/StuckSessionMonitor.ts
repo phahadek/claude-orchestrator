@@ -187,21 +187,26 @@ export class StuckSessionMonitor {
   /**
    * Reset notify/pause deadlines for every tracked session that currently
    * has an in-flight tool_use (see pendingToolUseCount) and whose OS
-   * process is still alive per isSessionProcessAlive — the intra-tool
-   * heartbeat. Reuses recordActivity, the same code path a real
-   * session_event already drives, so a long-running tool call is treated
-   * identically to continuous activity.
+   * process is still alive — the intra-tool heartbeat. Reuses
+   * recordActivity, the same code path a real session_event already drives,
+   * so a long-running tool call is treated identically to continuous
+   * activity.
    *
    * A session with no in-flight tool_use, or whose process has actually
    * exited mid-call, is left untouched here — its notify/pause/hard-stop
    * timers keep running exactly as they do today, so a genuinely hung
    * session still escalates.
+   *
+   * Takes one /proc snapshot for the whole sweep (readLiveSessionProcessIds)
+   * rather than a per-session isSessionProcessAlive call — same one-scan-
+   * per-sweep pattern as scanForStuckAliveSubprocessParks.
    */
   private runHeartbeatSweep(): void {
+    const liveProcessIds = readLiveSessionProcessIds();
     for (const [sessionId, state] of this.timers) {
       if (state.suspended) continue;
       if (state.pendingToolUseCount <= 0) continue;
-      if (!isSessionProcessAlive(sessionId)) continue;
+      if (!(liveProcessIds?.has(sessionId) ?? true)) continue;
       this.recordActivity(sessionId);
       recordEvent({
         event_type: 'stuck_session_heartbeat_tick',
