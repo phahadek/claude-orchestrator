@@ -116,7 +116,10 @@ function seedLiveSession(sm: SessionManager, endSessionSpy: () => void) {
     sm as unknown as {
       sessions: Map<string, { sessionType: string; endSession: () => void }>;
     }
-  ).sessions.set(SESSION_ID, { sessionType: 'review', endSession: endSessionSpy });
+  ).sessions.set(SESSION_ID, {
+    sessionType: 'review',
+    endSession: endSessionSpy,
+  });
 }
 
 beforeEach(() => {
