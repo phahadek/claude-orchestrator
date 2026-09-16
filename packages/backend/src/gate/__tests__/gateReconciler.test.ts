@@ -44,6 +44,7 @@ import {
   appendGateItemEvent,
   reconcileGateRunnability,
   getGateReadiness,
+  resetAncestryMemoForTests,
 } from '../gateService.js';
 import { catchUpMergeCommits } from '../gateMergeConsumer.js';
 import {
@@ -104,6 +105,7 @@ beforeEach(() => {
   db.prepare('DELETE FROM sessions').run();
   db.prepare('DELETE FROM staged_intent').run();
   deployServiceMock.getProjectDeployedSha.mockReset().mockReturnValue(null);
+  resetAncestryMemoForTests();
   // Most tests below exercise auto-run behavior, which needs M12's
   // gate-verify arm on (DEFAULT_ARM is disarmed) — tests exercising the
   // disarmed/default/unresolvable paths explicitly override this.
@@ -1444,6 +1446,70 @@ describe('reconcileGateRunnability — synchronous git-spawn hot-path regression
     await reconcileGateRunnability('sha1', { ancestrySource: { isAncestor } });
 
     expect(isAncestor).toHaveBeenCalledTimes(1);
+  });
+
+  it('runGateReconcilerTick twice against an unchanged deploy SHA spawns no ancestry checks on the second tick, with an identical open->runnable transition', async () => {
+    const item = makeItem();
+    mergeSource(item.id, 'sha1', new Date(1).toISOString());
+    const isAncestor = vi.fn(() => true);
+
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      ancestrySourceForProject: () => ({ isAncestor }),
+    });
+    expect(isAncestor).toHaveBeenCalledTimes(1);
+    expect(getItem(item.id)?.state).toBe('runnable');
+
+    isAncestor.mockClear();
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      ancestrySourceForProject: () => ({ isAncestor }),
+    });
+    expect(isAncestor).not.toHaveBeenCalled();
+    expect(getItem(item.id)?.state).toBe('runnable');
+  });
+
+  it('the cross-tick ancestry memo does not disturb a fail -> open -> reopen transition across repeated same-SHA ticks', async () => {
+    const item = await makeRunnableItem({ classification: 'Read-Only' });
+    const failingVerifier: GateItemVerifier = {
+      verify: vi.fn(async () => ({
+        disposition: 'fail',
+        evidence: { log: 'boom' },
+      })),
+    };
+    const followupFiler: FollowupFixTaskFiler = {
+      fileFollowupFixTask: vi.fn(async () => ({
+        taskId: 'notion:followup-1',
+        taskTitle: 'fix it',
+      })),
+    };
+
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: failingVerifier,
+      followupFiler,
+    });
+    expect(getItem(item.id)?.state).toBe('open');
+
+    // Same deploySha again — the memo should short-circuit repeat ancestry
+    // checks but must not spuriously reopen the still-failing item.
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: failingVerifier,
+      followupFiler,
+    });
+    expect(getItem(item.id)?.state).toBe('open');
+
+    mergeSource(item.id, 'sha2', new Date(2).toISOString());
+    setSourceMergeCommit(item.id, 'notion:followup-1', 'sha2');
+    const passingVerifier: GateItemVerifier = {
+      verify: vi.fn(async () => ({ disposition: 'pass' as const })),
+    };
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha2'),
+      verifier: passingVerifier,
+    });
+    expect(getItem(item.id)?.state).toBe('pass');
   });
 });
 
