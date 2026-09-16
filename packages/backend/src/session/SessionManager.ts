@@ -5175,6 +5175,15 @@ export class SessionManager extends EventEmitter {
           reason: 'sendOrResume_returned_null',
         },
       });
+      setSessionPauseReason(sessionId, 'verdict_routing_failed');
+      this.emit('message', {
+        type: 'session_action_failed',
+        sessionId,
+        action: 'enqueue_feedback',
+        reason: 'verdict_routing_failed',
+        detail:
+          'Feedback delivery to a live session failed and was left undelivered — needs operator attention.',
+      } satisfies ServerMessage);
       this.emitFeedbackPending(sessionId, false);
       return;
     }
