@@ -80,6 +80,23 @@ const DEFAULT_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 export const DEFAULT_RETRY_CAP = 2;
 
 /**
+ * Cap on consecutive "refused before it started" fixer-relaunch outcomes
+ * (relaunchFixerForPR returning null or a session_row_missing failure) per
+ * PR before this reconciler escalates anyway. Such refusals never increment
+ * stalled_pr_retry_count by design (they're not a real attempt — see
+ * reDriveViaFixerRelaunch), so without this separate counter a PR whose
+ * refusal reason never resolves itself (e.g. an idle session with no
+ * worktree that relaunchFixerForPR keeps declining to touch) would loop as
+ * a silent, uncharged no-op forever — never reaching DEFAULT_RETRY_CAP,
+ * never escalating. Deliberately tracked in-memory (keyed by PR + head_sha,
+ * see unchargedRefusalCounts) rather than as a new persisted column: a
+ * backend restart resetting this counter only delays escalation by a few
+ * ticks, it never suppresses it, since the underlying refusal keeps
+ * recurring every reconcile interval until something external fixes it.
+ */
+const UNCHARGED_REFUSAL_ESCALATION_CAP = 3;
+
+/**
  * Stall kinds whose escalation may plausibly trace back to a broken base
  * branch rather than the PR/session's own change — gate_failed (a genuine
  * test/build failure), session_inert (the implementing session going silent
@@ -129,6 +146,10 @@ export class StalledPRReconciler {
   private reviewOrchestrator: ReviewOrchestrator | undefined;
   private sessionManager: SessionManager | undefined;
   private githubClient: GitHubClient | undefined;
+  // Keyed by `${repo}#${prNumber}#${head_sha}` so a new push naturally
+  // resets the count, mirroring stalled_pr_retry_count's own head_sha-keyed
+  // reset via setHeadSha. See UNCHARGED_REFUSAL_ESCALATION_CAP.
+  private readonly unchargedRefusalCounts = new Map<string, number>();
 
   constructor(
     private readonly broadcast: (msg: ServerMessage) => void,
@@ -726,8 +747,22 @@ export class StalledPRReconciler {
       logger.info(
         `[StalledPRReconciler] PR #${prNumber} (${repo}): fixer relaunch (kind=${kind}) was refused before it started — not counting as an attempt`,
       );
+      const refusalKey = `${repo}#${prNumber}#${pr.head_sha ?? ''}`;
+      const refusalCount = (this.unchargedRefusalCounts.get(refusalKey) ?? 0) + 1;
+      this.unchargedRefusalCounts.set(refusalKey, refusalCount);
+      if (refusalCount >= UNCHARGED_REFUSAL_ESCALATION_CAP) {
+        logger.warn(
+          `[StalledPRReconciler] PR #${prNumber} (${repo}): fixer relaunch refused before starting ${refusalCount} times running — escalating rather than looping as an uncharged no-op`,
+        );
+        this.escalate(prNumber, repo, kind, pr.stalled_pr_retry_count ?? 0);
+        this.unchargedRefusalCounts.delete(refusalKey);
+      }
       return false;
     }
+
+    this.unchargedRefusalCounts.delete(
+      `${repo}#${prNumber}#${pr.head_sha ?? ''}`,
+    );
 
     const project = getProjectByGithubRepo(repo);
     const baseAttributable =

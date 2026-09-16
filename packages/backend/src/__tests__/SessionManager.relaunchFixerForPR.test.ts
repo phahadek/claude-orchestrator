@@ -395,6 +395,42 @@ describe('relaunchFixerForPR() evicts a lingering in-memory session entry first'
   });
 });
 
+describe('relaunchFixerForPR() archived + status still running + worktree gone', () => {
+  it('treats the archived row as terminal-equivalent and recreates the worktree instead of no-oping', async () => {
+    // Reproduces sessionLivenessReconciler.runLivenessSweep's deliberate
+    // archive-without-status-change: the OS process is gone, the row is
+    // archived to drop it from the live population, but status is left at
+    // 'running' by design. Before this fix, relaunchFixerForPR's isTerminal
+    // check only looked at status, so this row fell into the idle-with-
+    // worktree-check branch, found the worktree gone (also torn down), and
+    // returned null forever instead of ever attempting recovery.
+    vi.mocked(queries.getSession).mockReturnValue({
+      ...BASE_SESSION_ROW,
+      status: 'running',
+      archived: 1,
+    } as never);
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+
+    const sm = new SessionManager();
+    const result = await sm.relaunchFixerForPR(PR, 'gate failure feedback');
+
+    expect(result).toBe(SESSION_ID);
+    expect(queries.setSessionPauseReason).not.toHaveBeenCalledWith(
+      SESSION_ID,
+      'stalled_idle',
+    );
+    const addCalls = vi
+      .mocked(exec)
+      .mock.calls.map((c) => c[0] as string)
+      .filter((c) => c.includes('worktree add'));
+    expect(addCalls.length).toBeGreaterThan(0);
+    expect(queries.updateSessionStatus).toHaveBeenCalledWith(
+      SESSION_ID,
+      'running',
+    );
+  });
+});
+
 describe('relaunchFixerForPR() no session_id on the PR', () => {
   it('returns null without touching session state', async () => {
     const sm = new SessionManager();

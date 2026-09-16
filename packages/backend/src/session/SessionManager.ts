@@ -6182,10 +6182,19 @@ export class SessionManager extends EventEmitter {
       return { outcome: 'session_row_missing' };
     }
 
+    // archived=1 covers sessionLivenessReconciler's deliberate
+    // archive-without-status-change: a session whose OS process is gone is
+    // archived to drop it from the live population, but its status row is
+    // left at 'running' by design (see runLivenessSweep's doc comment) — a
+    // plain status check alone would treat that row as non-terminal forever
+    // and fall into the idle-with-worktree-check branch below, which always
+    // refuses (the worktree was torn down along with the process) and never
+    // reaches the terminal bypass this recovery path exists for.
     const isTerminal =
       row.status === 'done' ||
       row.status === 'error' ||
-      row.status === 'killed';
+      row.status === 'killed' ||
+      row.archived === 1;
 
     if (!isTerminal) {
       const project = getProjectById(row.project_id ?? '');

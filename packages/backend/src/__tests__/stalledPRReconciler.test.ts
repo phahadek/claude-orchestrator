@@ -459,6 +459,55 @@ describe('StalledPRReconciler', () => {
     expect(sm.relaunchFixerForPR).not.toHaveBeenCalled();
   });
 
+  it('escalates a gate_failed PR whose fixer relaunch is repeatedly refused before it starts (e.g. archived session, worktree gone), even though the refusal never charges the retry budget', async () => {
+    // Mirrors relaunchFixerForPR returning null forever for an archived
+    // session whose worktree is gone but whose status row is (by design)
+    // never reopened as terminal by the liveness reconciler — see
+    // sessionLivenessReconciler.ts's runLivenessSweep doc comment. Each such
+    // refusal is deliberately uncharged (reDriveViaFixerRelaunch never bumps
+    // stalled_pr_retry_count for it), so DEFAULT_RETRY_CAP alone would never
+    // fire; UNCHARGED_REFUSAL_ESCALATION_CAP is the safety net that must.
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'verify_failed' }),
+      head_sha: 'sha1',
+      last_reviewed_sha: 'sha1',
+      review_session_id: null,
+      pending_push: 0,
+      stalled_pr_retry_count: 0,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+
+    const { fn: broadcast, messages } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const sm = makeSessionManager();
+    vi.mocked(sm.relaunchFixerForPR).mockResolvedValue(null);
+    const gh = makeGitHubClient('sha1'); // remote HEAD unchanged, no new push
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+    reconciler.setSessionManager(sm as any);
+    reconciler.setGitHubClient(gh as any);
+
+    await reconciler.reconcileOnce();
+    await reconciler.reconcileOnce();
+    expect(setReconcileExhausted).not.toHaveBeenCalled();
+    expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
+
+    await reconciler.reconcileOnce();
+
+    expect(setReconcileExhausted).toHaveBeenCalledWith(42, 'org/repo', true);
+    expect(
+      messages.find((m) => m.type === 'pr_stalled_escalated'),
+    ).toMatchObject({
+      type: 'pr_stalled_escalated',
+      prNumber: 42,
+      repo: 'org/repo',
+      kind: 'gate_failed',
+    });
+    // Escalation happened via the uncharged-refusal safety net, not the
+    // normal retry-cap path — the budget was never touched.
+    expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
+  });
+
   it('does not relaunch a gate-failed PR when sessionManager is not set', async () => {
     const pr = makePR({
       review_result: JSON.stringify({ verdict: 'verify_failed' }),
