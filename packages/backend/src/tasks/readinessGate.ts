@@ -89,15 +89,52 @@ function normalizeHeadingText(text: string): string {
 }
 
 /**
+ * Every canonical section heading task-writing.md's authoring convention
+ * uses — critically including `### 👁️ Manual verification`, which by
+ * convention is always `###` even directly under a `##` section (e.g.
+ * "## Targets / surfaces affected" / "## Deliverables") with no intervening
+ * "## Acceptance criteria" wrapper. Because that convention makes heading
+ * depth an unreliable nesting signal on its own, a heading matching one of
+ * these names always ends the current section regardless of its level; a
+ * heading that matches none of these (an author-invented subheading like
+ * "### Observed" or "### Decision space" under "## Context") is presumed to
+ * be a genuine subsection when it's deeper than the target's own level.
+ */
+const KNOWN_SECTION_HEADING_LABELS: readonly string[] = [
+  'Summary',
+  'Dependencies',
+  'Context',
+  'Acceptance criteria',
+  'Automated tests',
+  'Manual verification',
+  'Notion pages affected',
+  'Files / paths affected',
+  'Declared writes',
+  'Targets / surfaces affected',
+  'Deliverables',
+  'Operational seed',
+  'Implementation notes',
+  'Open Questions',
+  'Open question',
+];
+
+const KNOWN_SECTION_HEADINGS: ReadonlySet<string> = new Set(
+  KNOWN_SECTION_HEADING_LABELS.map(normalizeHeadingText),
+);
+
+/**
  * Level-aware section membership: for each line in `lines`, whether it falls
  * under the first heading (any level) whose normalized text equals
  * `normalizedTarget` — "under" meaning up to (but not including) the next
- * heading at the *same or shallower* level. A deeper-level heading (e.g. a
- * `###` subsection of a matched `##` heading) is itself a line the mask
- * excludes (heading lines are never section content), but does NOT end the
- * section — content in and after it, up to the real boundary, stays in.
- * Shared by every "read one named section's body" scan in this module so the
- * level-unaware bug (any heading, any level, ends the section) is fixed once.
+ * heading that either (a) is at the same or shallower level, or (b) matches
+ * a name in KNOWN_SECTION_HEADINGS (see its doc comment — heading depth alone
+ * isn't a reliable nesting signal in this codebase's convention). A
+ * deeper-level heading with an unrecognized name (e.g. a `###` subsection of
+ * a matched `##` heading) is itself a line the mask excludes (heading lines
+ * are never section content), but does NOT end the section — content in and
+ * after it, up to the real boundary, stays in. Shared by every "read one
+ * named section's body" scan in this module so the level-unaware bug (any
+ * heading, any level, ends the section) is fixed once.
  */
 function computeSectionMask(
   lines: readonly string[],
@@ -111,10 +148,15 @@ function computeSectionMask(
     const heading = lines[i].match(/^(#{1,6})\s*(.+)$/);
     if (heading) {
       const level = heading[1].length;
-      if (inSection && level <= targetLevel) {
+      const normalized = normalizeHeadingText(heading[2]);
+      if (
+        inSection &&
+        normalized !== normalizedTarget &&
+        (level <= targetLevel || KNOWN_SECTION_HEADINGS.has(normalized))
+      ) {
         inSection = false;
       }
-      if (normalizeHeadingText(heading[2]) === normalizedTarget) {
+      if (normalized === normalizedTarget) {
         inSection = true;
         targetLevel = level;
         found = true;
