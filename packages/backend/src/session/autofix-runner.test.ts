@@ -114,10 +114,7 @@ describe('getChangedFiles()', () => {
 
       // C2: lands on dev via another PR, touching a file unrelated to the
       // one under test (e.g. tests/ops/test_canary_verifier.py in #1290).
-      fs.writeFileSync(
-        path.join(worktreeDir, 'unrelated_file.py'),
-        'x = 1\n',
-      );
+      fs.writeFileSync(path.join(worktreeDir, 'unrelated_file.py'), 'x = 1\n');
       await git(['add', 'unrelated_file.py'], worktreeDir);
       await git(
         [...GIT_AUTHOR, 'commit', '-m', 'sibling PR touches unrelated file'],

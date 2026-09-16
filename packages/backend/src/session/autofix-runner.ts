@@ -172,12 +172,12 @@ async function resolveBaseBranchRef(
 ): Promise<string> {
   if (baseBranch.includes('/')) return baseBranch;
   const remoteRef = `origin/${baseBranch}`;
-  const { exitCode } = await spawnCmd(
+  const { exitCode, stdout } = await spawnCmd(
     'git',
-    ['rev-parse', '--verify', '--quiet', remoteRef],
+    ['show-ref', '--verify', `refs/remotes/${remoteRef}`],
     { cwd: worktreePath },
   );
-  return exitCode === 0 ? remoteRef : baseBranch;
+  return exitCode === 0 && stdout.trim() ? remoteRef : baseBranch;
 }
 
 export async function getChangedFiles(
