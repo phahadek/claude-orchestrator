@@ -16,6 +16,7 @@ import {
   getMergedPRForTask,
   getMergedLocalBranchForTaskId,
   getLatestTestRequestRunForSession,
+  getLatestFinishedTestRequestRunForSession,
   getTestRunSummary,
 } from '../db/queries';
 import type {
@@ -882,9 +883,24 @@ export class PRReviewService {
       const prIntent = prIntentRow
         ? (JSON.parse(prIntentRow.payload) as OpsPrIntentPayload)
         : null;
-      const testRun = prRow.session_id
+      // The latest run may still be running/queued (e.g. the session fired a
+      // second test_request while this review builds its prompt). That row
+      // has no evidence to show yet, so fall back to the last *finished* run
+      // rather than silently dropping real, already-executed evidence.
+      let testRun = prRow.session_id
         ? getLatestTestRequestRunForSession(projectId, prRow.session_id)
         : undefined;
+      if (
+        testRun &&
+        (testRun.state === 'running' || testRun.state === 'queued') &&
+        prRow.session_id
+      ) {
+        testRun =
+          getLatestFinishedTestRequestRunForSession(
+            projectId,
+            prRow.session_id,
+          ) ?? testRun;
+      }
       const testRunSummary =
         testRun && !testRun.structured_result
           ? getTestRunSummary(testRun.id)

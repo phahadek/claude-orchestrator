@@ -9496,6 +9496,21 @@ export function getLatestTestRequestRunForSession(
   }) as { id: string } | undefined;
   if (running) return getTestRequestRunById(running.id);
 
+  return getLatestFinishedTestRequestRunForSession(projectId, sessionId);
+}
+
+/**
+ * The latest *finished* (non-running/queued) run for (project_id, session_id),
+ * regardless of whether a newer running/queued row exists. Callers that need
+ * real, already-executed evidence — e.g. PRReviewService's evidence-section
+ * builder — must use this instead of getLatestTestRequestRunForSession, whose
+ * running-row precedence is correct for status display but would otherwise
+ * silently drop a finished run's evidence behind an in-flight one.
+ */
+export function getLatestFinishedTestRequestRunForSession(
+  projectId: string,
+  sessionId: string,
+): TestRequestRunRow | undefined {
   _stmtLatestFinishedTestRequestRunIdForSession ??= db.prepare<{
     project_id: string;
     session_id: string;
