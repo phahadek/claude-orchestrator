@@ -3294,9 +3294,7 @@ describe('PRReviewService.reviewPR() — falls back to finished test run when la
 
     const approvedPayload = {
       verdict: 'approved',
-      dimensions: [
-        { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
-      ],
+      dimensions: [{ name: 'Diff vs Context spec', passed: true, notes: 'ok' }],
       summary: 'All good.',
     };
 
@@ -3307,10 +3305,10 @@ describe('PRReviewService.reviewPR() — falls back to finished test run when la
         _b: string,
         opts: { sessionId: string; customPrompt: string },
       ) => {
-        expect(opts.customPrompt).toContain('## Orchestrator-Verified Test Run');
         expect(opts.customPrompt).toContain(
-          'npm run test -w packages/backend',
+          '## Orchestrator-Verified Test Run',
         );
+        expect(opts.customPrompt).toContain('npm run test -w packages/backend');
         expect(opts.customPrompt).toContain(
           '42 passed, 0 failed, 0 skipped, 0 errors',
         );
