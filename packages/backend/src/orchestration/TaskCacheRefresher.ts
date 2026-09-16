@@ -69,6 +69,15 @@ export class TaskCacheRefresher {
    * see refreshProject's `hadFailure` gate.
    */
   private readonly projectFetchedTaskIds = new Map<string, Set<string>>();
+  /**
+   * Last-known task ids per milestone (project.id::milestone.id), updated
+   * whenever that milestone is actually fetched. A wrapped milestone is
+   * terminal — its board can't change without /milestone-wrap re-touching
+   * it — so periodic ticks skip fetching it and instead reuse this snapshot
+   * to keep its tasks out of the eviction diff, exactly as the condemned-
+   * milestone path already does for unresolvable registrations.
+   */
+  private readonly milestoneTaskIds = new Map<string, Set<string>>();
 
   /**
    * Counts how many of `tasks`' cache rows have different raw_json than the
@@ -188,14 +197,33 @@ export class TaskCacheRefresher {
       ProjectService.reconcileYamlMilestones(project.id, project.projectDir);
     }
 
-    const milestones = ProjectService.listMilestones(project.id).filter(
-      (m) => m.sourceId,
-    );
+    const registeredMilestones = ProjectService.listMilestones(
+      project.id,
+    ).filter((m) => m.sourceId);
+
+    // Explicit operator refreshes (skipCache) still hit every milestone,
+    // wrapped or not. Periodic ticks skip wrapped milestones' board fetch
+    // entirely — their content is terminal and can't change without
+    // /milestone-wrap re-touching them (see task spec).
+    const milestones = skipCache
+      ? registeredMilestones
+      : registeredMilestones.filter((m) => m.wrappedAt == null);
+    const skippedWrappedMilestones = skipCache
+      ? []
+      : registeredMilestones.filter((m) => m.wrappedAt != null);
 
     let jiraAborted = false;
     let hadFailure = false;
     let changedRows = 0;
     const fetchedTaskIds = new Set<string>();
+    for (const milestone of skippedWrappedMilestones) {
+      const knownIds = this.milestoneTaskIds.get(
+        `${project.id}::${milestone.id}`,
+      );
+      if (knownIds) {
+        for (const id of knownIds) fetchedTaskIds.add(id);
+      }
+    }
     const milestoneConcurrency =
       project.taskSource === 'jira' ? 1 : MILESTONE_CONCURRENCY;
 
@@ -237,10 +265,18 @@ export class TaskCacheRefresher {
             ? await backend.fetchReadyTasks(fetchId, true)
             : await backend.fetchReadyTasks(fetchId);
           changedRows += this.countChangedTaskRows(tasks);
+          const taskIdsForMilestone = new Set<string>();
           for (const item of tasks) {
             const taskId = item?.task?.id;
-            if (taskId) fetchedTaskIds.add(taskId);
+            if (taskId) {
+              fetchedTaskIds.add(taskId);
+              taskIdsForMilestone.add(taskId);
+            }
           }
+          this.milestoneTaskIds.set(
+            `${project.id}::${milestone.id}`,
+            taskIdsForMilestone,
+          );
           // The board cache is always keyed on the DB milestone UUID (milestone.id),
           // regardless of what identifier the backend needed to fetch the data —
           // this must match the read side (ws/router) and the write side (each
