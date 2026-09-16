@@ -158,13 +158,36 @@ async function getHeadSha(cwd: string): Promise<string> {
   return stdout.trim();
 }
 
+/**
+ * Resolves a bare branch name (e.g. 'dev') to its remote-tracking ref
+ * (e.g. 'origin/dev') when one exists. A local worktree's own `dev` pointer
+ * can go stale relative to `origin/dev` on a long-lived worktree/branch
+ * stack, making a diff against the local ref include commits that aren't
+ * actually in the PR. A baseBranch that already names a remote (contains a
+ * slash) is passed through unchanged.
+ */
+async function resolveBaseBranchRef(
+  worktreePath: string,
+  baseBranch: string,
+): Promise<string> {
+  if (baseBranch.includes('/')) return baseBranch;
+  const remoteRef = `origin/${baseBranch}`;
+  const { exitCode } = await spawnCmd(
+    'git',
+    ['rev-parse', '--verify', '--quiet', remoteRef],
+    { cwd: worktreePath },
+  );
+  return exitCode === 0 ? remoteRef : baseBranch;
+}
+
 export async function getChangedFiles(
   worktreePath: string,
   baseBranch: string,
 ): Promise<string[]> {
+  const resolvedBase = await resolveBaseBranchRef(worktreePath, baseBranch);
   const { stdout } = await spawnCmd(
     'git',
-    ['diff', '--name-only', `${baseBranch}...HEAD`],
+    ['diff', '--name-only', `${resolvedBase}...HEAD`],
     { cwd: worktreePath },
   );
   // A three-dot diff can list paths whose deletion is already committed in HEAD
