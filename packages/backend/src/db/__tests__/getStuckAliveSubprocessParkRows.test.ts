@@ -16,11 +16,7 @@ vi.mock('../db.js', async () => {
 import { db } from '../db.js';
 import { getStuckAliveSubprocessParkRows } from '../queries.js';
 
-function insertSession(
-  sessionId: string,
-  status = 'idle',
-  archived = 0,
-): void {
+function insertSession(sessionId: string, status = 'idle', archived = 0): void {
   db.prepare(
     `INSERT INTO sessions
        (session_id, project_id, task_id, task_url, project_context_url,
