@@ -307,6 +307,34 @@ describe('PRMergeWatcher.poll()', () => {
     expect(vi.mocked(github.getPRState)).toHaveBeenCalledWith(42, 'owner/repo');
   });
 
+  it('stops after the first iteration and processes exactly one PR once the signal aborts', async () => {
+    const prs = [
+      makePRRow({ pr_number: 1, repo: 'owner/repo-a', review_result: null }),
+      makePRRow({ pr_number: 2, repo: 'owner/repo-b', review_result: null }),
+      makePRRow({ pr_number: 3, repo: 'owner/repo-c', review_result: null }),
+    ];
+    vi.mocked(getAllOpenPRs).mockReturnValue(prs);
+    const github = makeMockGitHub();
+    const controller = new AbortController();
+    // Abort partway through the first PR's own processing so the poll's
+    // next-iteration check (top of the repo-batch loop) is what stops it —
+    // not the signal already being aborted before poll() even started.
+    vi.mocked(github.getPRState).mockImplementation(async () => {
+      controller.abort();
+      return { state: 'open', headSha: null };
+    });
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll(controller.signal);
+
+    expect(vi.mocked(github.getPRState)).toHaveBeenCalledTimes(1);
+  });
+
   it('checks PRs with no review verdict (review_result IS NULL)', async () => {
     const pr = makePRRow({ review_result: null });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
@@ -3818,7 +3846,7 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
     expect(vi.mocked(github.categorizeMergeability)).toHaveBeenCalled();
   });
 
-  it('triggers a full run when the only settled row at this content_hash is scoped-passed — a scoped pass never satisfies F2', async () => {
+  it('a scoped-passed row never satisfies F2 — the poll stays pending and never triggers a run', async () => {
     const pr = makePRRow({
       head_sha: 'sha-scoped-only',
       session_id: 'coding-session',
@@ -3847,10 +3875,6 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
     // call-args assertion below confirms 'full' is what was actually asked
     // for.
     vi.mocked(getLatestTestRequestRun).mockReturnValue(undefined);
-    mockRunProjectTestRequest.mockResolvedValueOnce({
-      passed: true,
-      output: '',
-    });
     const sessions = makeMockSessions();
 
     const watcher = new PRMergeWatcher(
@@ -3866,14 +3890,181 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       'content-hash-x',
       'full',
     );
-    expect(mockRunProjectTestRequest).toHaveBeenCalledTimes(1);
-    expect(mockRunProjectTestRequest).toHaveBeenCalledWith(
-      expect.objectContaining({
-        projectId: 'proj-1',
-        contentHash: 'content-hash-x',
-        commands: ['npm test'],
-      }),
+    // The poll only reads — triggering belongs to the push-driven pipeline.
+    expect(mockRunProjectTestRequest).not.toHaveBeenCalled();
+    expect(vi.mocked(github.categorizeMergeability)).not.toHaveBeenCalled();
+  });
+
+  it('with no settled full-run verdict: never triggers a run, leaves the PR undecided, and audits pr_f2_verdict_pending exactly once across three polls', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-pending',
+      session_id: 'coding-session',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeClean(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue(undefined);
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
     );
+
+    await watcher.poll();
+    await watcher.poll();
+    await watcher.poll();
+
+    expect(mockRunProjectTestRequest).not.toHaveBeenCalled();
+    expect(vi.mocked(github.categorizeMergeability)).not.toHaveBeenCalled();
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'f2_verdict_missing',
+      expect.anything(),
+    );
+    const pendingEvents = vi
+      .mocked(recordEvent)
+      .mock.calls.filter(
+        (call) => (call[0] as { event_type: string }).event_type ===
+          'pr_f2_verdict_pending',
+      );
+    expect(pendingEvents).toHaveLength(1);
+  });
+
+  it('once a settled passed row exists for the content hash, the next poll proceeds to the mergeability decision as before', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-pending-then-settled',
+      session_id: 'coding-session',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeClean(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+
+    vi.mocked(getLatestTestRequestRun).mockReturnValue(undefined);
+    await watcher.poll();
+    expect(vi.mocked(github.categorizeMergeability)).not.toHaveBeenCalled();
+
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-settled',
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
+      state: 'passed',
+      output: 'All tests passed',
+      run_kind: 'full',
+      started_at: 1000,
+      finished_at: 2000,
+    } as any);
+    await watcher.poll();
+
+    expect(mockRunProjectTestRequest).not.toHaveBeenCalled();
+    expect(vi.mocked(github.categorizeMergeability)).toHaveBeenCalled();
+  });
+
+  it('sets pause reason f2_verdict_missing exactly once once the pending verdict outlives the bound', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-stuck-pending',
+      session_id: 'coding-session',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeClean(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    // budget = commands.length(1) * test_timeout_sec(300) = 300s;
+    // bound = 2 * budget = 600s (10 min).
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue(undefined);
+    const sessions = makeMockSessions();
+
+    vi.useFakeTimers();
+    try {
+      const watcher = new PRMergeWatcher(
+        github,
+        sessions,
+        makeMockNotion(),
+        () => {},
+      );
+
+      await watcher.poll();
+      expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+        42,
+        'owner/repo',
+        'f2_verdict_missing',
+        expect.anything(),
+      );
+
+      // Still under the bound — no pause yet.
+      vi.setSystemTime(Date.now() + 9 * 60 * 1000);
+      await watcher.poll();
+      expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+        42,
+        'owner/repo',
+        'f2_verdict_missing',
+        expect.anything(),
+      );
+
+      // Past the bound — pause fires exactly once.
+      vi.setSystemTime(Date.now() + 2 * 60 * 1000);
+      await watcher.poll();
+      await watcher.poll();
+
+      const missingCalls = vi
+        .mocked(setPauseReason)
+        .mock.calls.filter((call) => call[2] === 'f2_verdict_missing');
+      expect(missingCalls).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a full-passed row at the current content_hash satisfies F2 without re-executing', async () => {
@@ -3920,63 +4111,6 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
 
     expect(mockRunProjectTestRequest).not.toHaveBeenCalled();
     expect(vi.mocked(github.categorizeMergeability)).toHaveBeenCalled();
-  });
-
-  it('reuses one cached full-run result across repeated mergeability polls against an unchanged tree (no re-execution per poll)', async () => {
-    const pr = makePRRow({
-      head_sha: 'sha-unchanged',
-      session_id: 'coding-session',
-    });
-    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
-    const github = makeMockGitHub();
-    mockCategorizeClean(github);
-    vi.mocked(getProjectByGithubRepo).mockReturnValue({
-      id: 'proj-1',
-      projectDir: '/proj',
-    } as any);
-    vi.mocked(loadOrchestratorConfig).mockReturnValue({
-      ci_check_name: [],
-      test: ['npm test'],
-      test_timeout_sec: 300,
-      autofix: [],
-      verify: [],
-      allowed_tools: [],
-      bash_rules: [],
-      bootstrap_script: '',
-    } as any);
-    // First poll: no settled full row yet — the run executes and this mock
-    // stands in for the durable row it would have written.
-    let settled: any = undefined;
-    mockRunProjectTestRequest.mockImplementationOnce(async () => {
-      settled = {
-        id: 'run-full-2',
-        project_id: 'proj-1',
-        content_hash: 'content-hash-x',
-        state: 'passed',
-        output: 'All tests passed',
-        run_kind: 'full',
-        started_at: 1000,
-        finished_at: 2000,
-      };
-      return { passed: true, output: '' };
-    });
-    vi.mocked(getLatestTestRequestRun).mockImplementation(() => settled);
-    const sessions = makeMockSessions();
-
-    const watcher = new PRMergeWatcher(
-      github,
-      sessions,
-      makeMockNotion(),
-      () => {},
-    );
-    await watcher.poll();
-    expect(mockRunProjectTestRequest).toHaveBeenCalledTimes(1);
-
-    // Second poll against the same (unchanged) tree — the settled row from
-    // the first poll is now returned by getLatestTestRequestRun, so no
-    // second execution should be triggered.
-    await watcher.poll();
-    expect(mockRunProjectTestRequest).toHaveBeenCalledTimes(1);
   });
 
   it('does not re-remediate when ci_remediation_attempted_sha matches head_sha', async () => {
@@ -5615,7 +5749,7 @@ describe('PRMergeWatcher — sweepPendingPushDeadLetters', () => {
 // into the scheduler correctly.
 
 describe('PRMergeWatcher.register()', () => {
-  it('registers a job that calls poll() when run', async () => {
+  it('registers a job that calls poll() with the run signal when run', async () => {
     const watcher = new PRMergeWatcher(
       makeMockGitHub(),
       makeMockSessions(),
@@ -5624,9 +5758,47 @@ describe('PRMergeWatcher.register()', () => {
     );
     const pollSpy = vi.spyOn(watcher, 'poll').mockResolvedValue(undefined);
 
-    const registered: Array<{ name: string; run: () => Promise<void> }> = [];
+    const registered: Array<{
+      name: string;
+      timeoutMs?: number;
+      run: (ctx: { signal: AbortSignal }) => Promise<void>;
+    }> = [];
     const fakeScheduler = {
-      register: vi.fn((opts: { name: string; run: () => Promise<void> }) => {
+      register: vi.fn(
+        (opts: {
+          name: string;
+          timeoutMs?: number;
+          run: (ctx: { signal: AbortSignal }) => Promise<void>;
+        }) => {
+          registered.push(opts);
+        },
+      ),
+    };
+
+    watcher.register(fakeScheduler as never);
+
+    const mainJob = registered.find((j) => j.name === 'pr_merge_watcher');
+    expect(mainJob).toBeDefined();
+    const { signal } = new AbortController();
+    await mainJob!.run({ signal });
+    expect(pollSpy).toHaveBeenCalledTimes(1);
+    expect(pollSpy).toHaveBeenCalledWith(signal);
+  });
+
+  // poll() no longer awaits a test execution — it's a pure reader — so an
+  // overrun is a real fault again and must have its own bound instead of
+  // silently falling back to DEFAULT_JOB_TIMEOUT_MS.
+  it('registers pr_merge_watcher with an explicit timeoutMs', () => {
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+
+    const registered: Array<{ name: string; timeoutMs?: number }> = [];
+    const fakeScheduler = {
+      register: vi.fn((opts: { name: string; timeoutMs?: number }) => {
         registered.push(opts);
       }),
     };
@@ -5635,8 +5807,8 @@ describe('PRMergeWatcher.register()', () => {
 
     const mainJob = registered.find((j) => j.name === 'pr_merge_watcher');
     expect(mainJob).toBeDefined();
-    await mainJob!.run();
-    expect(pollSpy).toHaveBeenCalledTimes(1);
+    expect(mainJob!.timeoutMs).toBeTypeOf('number');
+    expect(mainJob!.timeoutMs).toBeGreaterThan(0);
   });
 });
 

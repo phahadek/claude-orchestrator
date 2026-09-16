@@ -66,6 +66,8 @@ import type { SessionManager } from '../../session/SessionManager';
 import type { PRReviewService, PRReviewResult } from '../PRReviewService';
 import type { ReviewOrchestrator } from '../ReviewOrchestrator';
 import { getProjectByGithubRepo } from '../../config';
+import { loadOrchestratorConfig } from '../../session/orchestrator-config';
+import { getSession } from '../../db/queries';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -184,6 +186,58 @@ describe('PRMergeWatcher push re-review — project id forwarding', () => {
       REPO,
       project.id,
       project.contextUrl,
+    );
+  });
+
+  it('returns before the test pipeline promise settles, and invokes it exactly once for the new head SHA', async () => {
+    const project = makeProject();
+    vi.mocked(getProjectByGithubRepo).mockReturnValue(project);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      test: ['npm test'],
+      test_timeout_sec: 300,
+      test_max_rss_mb: 0,
+      test_fail_fast: true,
+    } as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/wt/session',
+    } as any);
+
+    let resolveTestPipeline!: () => void;
+    const testPipelineSettled = new Promise<void>((resolve) => {
+      resolveTestPipeline = resolve;
+    });
+    const events: string[] = [];
+    vi.mocked(reviewOrchestrator.runTestPipeline).mockImplementation(
+      async () => {
+        await testPipelineSettled;
+        events.push('test-pipeline-settled');
+      },
+    );
+
+    await watcher.handlePushDetected(makePRRow());
+    events.push('handlePushDetected-resolved');
+
+    // handlePushDetected already resolved while the test pipeline promise is
+    // still pending — it's fire-and-forget, never awaited by the caller.
+    expect(events).toEqual(['handlePushDetected-resolved']);
+
+    resolveTestPipeline();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(events).toEqual([
+      'handlePushDetected-resolved',
+      'test-pipeline-settled',
+    ]);
+    expect(reviewOrchestrator.runTestPipeline).toHaveBeenCalledTimes(1);
+    expect(reviewOrchestrator.runTestPipeline).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      HEAD_SHA,
+      '/wt/session',
+      ['npm test'],
+      300,
+      0,
+      true,
     );
   });
 
