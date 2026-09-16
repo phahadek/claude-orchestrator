@@ -1406,6 +1406,15 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       );
     }
 
+    const testRun = pr.session_id
+      ? getLatestTestRequestRunForSession(projectId, pr.session_id)
+      : undefined;
+    const testRunSummary =
+      testRun && !testRun.structured_result
+        ? getTestRunSummary(testRun.id)
+        : undefined;
+    const testRunSection = buildTestRunEvidenceSection(testRun, testRunSummary);
+
     const followUp = [
       `The code session has pushed new commits to PR #${prNumber}.`,
       `Please re-review the updated diff against the same task spec.`,
@@ -1419,6 +1428,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       '```',
       diffData.diff,
       '```',
+      testRunSection,
       REVIEW_JSON_SCHEMA_BLOCK,
     ].join('\n');
 
