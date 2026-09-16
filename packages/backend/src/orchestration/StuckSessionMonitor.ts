@@ -29,7 +29,10 @@ import { recoverSession } from '../session/sessionRecovery';
 import { getCurrentBranch, hasNonEmptyDiff } from './localBranchHelpers';
 import { submitLocalBranch } from './localBranchSubmission';
 import { sessionIsLive } from '../session/sessionLifecycle';
-import { isSessionProcessAlive } from '../session/processLiveness';
+import {
+  isSessionProcessAlive,
+  readLiveSessionProcessIds,
+} from '../session/processLiveness';
 
 interface TimerState {
   taskName: string;
@@ -184,21 +187,26 @@ export class StuckSessionMonitor {
   /**
    * Reset notify/pause deadlines for every tracked session that currently
    * has an in-flight tool_use (see pendingToolUseCount) and whose OS
-   * process is still alive per isSessionProcessAlive — the intra-tool
-   * heartbeat. Reuses recordActivity, the same code path a real
-   * session_event already drives, so a long-running tool call is treated
-   * identically to continuous activity.
+   * process is still alive — the intra-tool heartbeat. Reuses
+   * recordActivity, the same code path a real session_event already drives,
+   * so a long-running tool call is treated identically to continuous
+   * activity.
    *
    * A session with no in-flight tool_use, or whose process has actually
    * exited mid-call, is left untouched here — its notify/pause/hard-stop
    * timers keep running exactly as they do today, so a genuinely hung
    * session still escalates.
+   *
+   * Takes one /proc snapshot for the whole sweep (readLiveSessionProcessIds)
+   * rather than a per-session isSessionProcessAlive call — same one-scan-
+   * per-sweep pattern as scanForStuckAliveSubprocessParks.
    */
   private runHeartbeatSweep(): void {
+    const liveProcessIds = readLiveSessionProcessIds();
     for (const [sessionId, state] of this.timers) {
       if (state.suspended) continue;
       if (state.pendingToolUseCount <= 0) continue;
-      if (!isSessionProcessAlive(sessionId)) continue;
+      if (!(liveProcessIds?.has(sessionId) ?? true)) continue;
       this.recordActivity(sessionId);
       recordEvent({
         event_type: 'stuck_session_heartbeat_tick',
@@ -382,7 +390,8 @@ export class StuckSessionMonitor {
    *
    * The escalation never fires on elapsed time alone: it requires both the
    * bound to have passed AND the OS process to still be alive right now
-   * (isSessionProcessAlive, the same ground-truth signal used elsewhere) —
+   * (the same /proc-backed ground-truth signal isSessionProcessAlive uses
+   * elsewhere, taken as one snapshot per sweep rather than once per row) —
    * per procedures.md's rule against a terminal action on status/age alone.
    */
   private async scanForStuckAliveSubprocessParks(): Promise<void> {
@@ -392,6 +401,9 @@ export class StuckSessionMonitor {
       if (boundMs <= 0) return;
       const rows = getStuckAliveSubprocessParkRows();
       const now = Date.now();
+      // One /proc snapshot for the whole sweep instead of a `ps` fork per
+      // row — see processLiveness.ts's readLiveSessionProcessIds.
+      const liveProcessIds = readLiveSessionProcessIds();
       for (const row of rows) {
         // Event silence, not comparison against sessions.ended_at or
         // parked_at, is what separates a genuinely wedged park from a
@@ -404,7 +416,7 @@ export class StuckSessionMonitor {
         const silenceMs = now - row.latest_event_ts;
         if (silenceMs < boundMs) continue;
 
-        if (!isSessionProcessAlive(row.session_id)) continue;
+        if (!(liveProcessIds?.has(row.session_id) ?? true)) continue;
 
         await this.escalateStuckAliveSubprocessPark(row, silenceMs);
       }

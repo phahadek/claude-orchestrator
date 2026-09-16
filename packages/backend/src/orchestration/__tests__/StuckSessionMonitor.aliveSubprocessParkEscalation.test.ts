@@ -30,10 +30,11 @@ vi.mock('../../audit/AuditLog', () => ({
 
 vi.mock('../../session/processLiveness', () => ({
   isSessionProcessAlive: vi.fn().mockReturnValue(true),
+  readLiveSessionProcessIds: vi.fn(),
 }));
 
 import { recordEvent } from '../../audit/AuditLog';
-import { isSessionProcessAlive } from '../../session/processLiveness';
+import { readLiveSessionProcessIds } from '../../session/processLiveness';
 import { getStuckAliveSubprocessParkRows } from '../../db/queries.js';
 import { runtimeSettings } from '../../config.js';
 import { StuckSessionMonitor } from '../StuckSessionMonitor.js';
@@ -78,7 +79,7 @@ function makeRow(overrides: Record<string, unknown> = {}) {
 describe('StuckSessionMonitor — stuck_session_alive_subprocess park escalation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(isSessionProcessAlive).mockReturnValue(true);
+    vi.mocked(readLiveSessionProcessIds).mockReturnValue(new Set(['sess-1']));
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
   });
@@ -169,7 +170,7 @@ describe('StuckSessionMonitor — stuck_session_alive_subprocess park escalation
     vi.mocked(getStuckAliveSubprocessParkRows).mockReturnValue([
       makeRow(),
     ] as never);
-    vi.mocked(isSessionProcessAlive).mockReturnValue(false);
+    vi.mocked(readLiveSessionProcessIds).mockReturnValue(new Set());
     const { monitor, sessionManager } = makeMonitor();
 
     await (monitor as any).scanForStuckAliveSubprocessParks();
@@ -213,4 +214,20 @@ describe('StuckSessionMonitor — stuck_session_alive_subprocess park escalation
       );
     },
   );
+
+  it('takes exactly one process snapshot per sweep and escalates only rows present in it, regardless of row count', async () => {
+    vi.mocked(getStuckAliveSubprocessParkRows).mockReturnValue([
+      makeRow({ session_id: 'sess-1' }),
+      makeRow({ session_id: 'sess-2' }),
+      makeRow({ session_id: 'sess-3' }),
+    ] as never);
+    vi.mocked(readLiveSessionProcessIds).mockReturnValue(new Set(['sess-2']));
+    const { monitor, sessionManager } = makeMonitor();
+
+    await (monitor as any).scanForStuckAliveSubprocessParks();
+
+    expect(readLiveSessionProcessIds).toHaveBeenCalledTimes(1);
+    expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledTimes(1);
+    expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith('sess-2');
+  });
 });

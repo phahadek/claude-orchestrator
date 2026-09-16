@@ -1,5 +1,59 @@
 import { execSync } from 'child_process';
+import fs from 'fs';
 import { logger } from '../logger';
+
+const SESSION_ID_FLAGS = new Set(['--session-id', '--resume']);
+
+/**
+ * Enumerates every live `--session-id <id>` / `--resume <id>` value from the
+ * OS process table in a single in-process pass over /proc — no `ps` spawn.
+ * Reads each process's /proc/<pid>/cmdline directly (NUL-separated argv, so
+ * unlike scanning ps output there is no risk of a value containing
+ * whitespace being mis-split).
+ *
+ * Backs both isSessionProcessAlive (single-id lookup) and the periodic
+ * liveness sweeps (session/sessionLivenessReconciler.ts,
+ * orchestration/StuckSessionMonitor.ts), which used to call the single-id
+ * check once per row — one `ps` fork per row, forking the whole backend
+ * process's page tables on the event-loop thread each time. Sweeps should
+ * take exactly one snapshot per pass and test membership against it.
+ *
+ * Fails safe: an unreadable /proc root returns null, so callers must treat
+ * that as "every session is alive" rather than reap on it — the same
+ * fail-safe contract the old `ps`-backed check made.
+ */
+export function readLiveSessionProcessIds(): Set<string> | null {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync('/proc');
+  } catch (err) {
+    logger.error(
+      `[processLiveness] /proc unreadable, treating all sessions as alive (fail-safe): ${(err as Error).message}`,
+    );
+    return null;
+  }
+
+  const ids = new Set<string>();
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) continue;
+    let cmdline: string;
+    try {
+      cmdline = fs.readFileSync(`/proc/${entry}/cmdline`, 'utf-8');
+    } catch {
+      // Process exited between readdir and read, or belongs to another
+      // user — neither is fatal to the rest of the scan.
+      continue;
+    }
+    const args = cmdline.split('\0').filter((arg) => arg.length > 0);
+    for (let i = 0; i < args.length - 1; i++) {
+      if (SESSION_ID_FLAGS.has(args[i])) {
+        ids.add(args[i + 1]);
+        break;
+      }
+    }
+  }
+  return ids;
+}
 
 /**
  * True if an OS process is currently running this session — a `claude
@@ -13,25 +67,15 @@ import { logger } from '../logger';
  * direction, and reusing it as the liveness signal would be the same
  * near-miss the reconciler is meant to close.
  *
+ * Single-id convenience wrapper over readLiveSessionProcessIds — callers
+ * checking more than one id per pass (any periodic sweep) should call
+ * readLiveSessionProcessIds() once themselves instead of this in a loop.
+ *
  * Fails safe: an unreadable process table is treated as "alive" so a
- * transient `ps` failure can never authorize a destructive terminal write.
+ * transient failure can never authorize a destructive terminal write.
  */
 export function isSessionProcessAlive(sessionId: string): boolean {
-  try {
-    const out = execSync('ps -eo args=', {
-      encoding: 'utf-8',
-      maxBuffer: 16 * 1024 * 1024,
-    });
-    return (
-      out.includes(`--session-id ${sessionId}`) ||
-      out.includes(`--resume ${sessionId}`)
-    );
-  } catch (err) {
-    logger.error(
-      `[processLiveness] ps check failed for ${sessionId.slice(0, 8)}, treating as alive (fail-safe): ${(err as Error).message}`,
-    );
-    return true;
-  }
+  return readLiveSessionProcessIds()?.has(sessionId) ?? true;
 }
 
 /** A `claude` OS process observed in the process table by {@link scanClaudeSessionProcesses}. */

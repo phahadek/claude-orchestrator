@@ -840,6 +840,146 @@ describe('reconcileNonPlanningSessionLiveness', () => {
     expect(result.examined).toBe(2);
     expect(result.alive).toBe(1);
   });
+
+  it('takes exactly one process snapshot for the whole sweep, never once per row', () => {
+    for (let i = 0; i < 12; i++) {
+      seedSession({
+        sessionId: `np-snapshot-${i}`,
+        status: 'running',
+        sessionType: 'standard',
+      });
+    }
+    const snapshotLiveProcessIds = vi.fn().mockReturnValue(new Set());
+
+    reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      nowFn: () => NOW,
+      snapshotLiveProcessIds,
+    });
+
+    expect(snapshotLiveProcessIds).toHaveBeenCalledTimes(1);
+  });
+
+  it('performs the process check only for running rows, still reporting the correct examined/idle counts for a mixed idle/running population', () => {
+    for (let i = 0; i < 300; i++) {
+      seedSession({
+        sessionId: `np-idle-${i}`,
+        status: 'idle',
+        sessionType: 'standard',
+      });
+    }
+    seedSession({
+      sessionId: 'np-running-1',
+      status: 'running',
+      sessionType: 'standard',
+    });
+    seedSession({
+      sessionId: 'np-running-2',
+      status: 'running',
+      sessionType: 'standard',
+    });
+    const checkedIds: string[] = [];
+    const snapshotLiveProcessIds = vi
+      .fn()
+      .mockReturnValue(new Set(['np-running-1', 'np-running-2']));
+    const isProcessAliveSpy = vi.fn((sessionId: string) => {
+      checkedIds.push(sessionId);
+      return sessionId === 'np-running-1' || sessionId === 'np-running-2';
+    });
+
+    const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      nowFn: () => NOW,
+      snapshotLiveProcessIds,
+      isProcessAlive: isProcessAliveSpy,
+    });
+
+    expect(checkedIds.sort()).toEqual(['np-running-1', 'np-running-2']);
+    expect(result.examined).toBe(302);
+
+    const summary = (recordEvent as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([event]) => event.event_type === 'session_liveness_sweep_completed',
+    )![0];
+    expect(summary.payload).toMatchObject({
+      examined: 302,
+      idle_process_absent_count: 300,
+    });
+  });
+
+  it('issues no per-row session_events aggregate query and exactly one batched staged-intent query per sweep', () => {
+    seedSession({
+      sessionId: 'np-batched-1',
+      status: 'running',
+      sessionType: 'standard',
+    });
+    seedSession({
+      sessionId: 'np-batched-2',
+      status: 'running',
+      sessionType: 'standard',
+    });
+    const lastActivitySpy = vi.spyOn(queries, 'getSessionLastActivityMs');
+    lastActivitySpy.mockClear();
+    const stagedIntentSpy = vi.spyOn(
+      queries,
+      'getUndispositionedStagedIntentSessionIds',
+    );
+    stagedIntentSpy.mockClear();
+
+    reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    });
+
+    expect(lastActivitySpy).not.toHaveBeenCalled();
+    expect(stagedIntentSpy).toHaveBeenCalledTimes(1);
+    lastActivitySpy.mockRestore();
+    stagedIntentSpy.mockRestore();
+  });
+
+  it('archives a running row with no live process once its last_event_at clears the grace floor, with no undispositioned staged intent', () => {
+    seedSession({
+      sessionId: 'np-last-event-old',
+      status: 'running',
+      sessionType: 'standard',
+    });
+    insertEvent({
+      session_id: 'np-last-event-old',
+      event_type: 'text',
+      payload: '{}',
+      timestamp: NOW - 2 * 60_000 - 1, // just past LIVENESS_RECONCILE_GRACE_MS
+    });
+
+    const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    });
+
+    expect(result.reconciled).toEqual(['np-last-event-old']);
+  });
+
+  it('leaves a running row untouched when its last_event_at is inside the grace window, even with no live process', () => {
+    seedSession({
+      sessionId: 'np-last-event-fresh',
+      status: 'running',
+      sessionType: 'standard',
+    });
+    insertEvent({
+      session_id: 'np-last-event-fresh',
+      event_type: 'text',
+      payload: '{}',
+      timestamp: NOW - 5_000,
+    });
+
+    const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    });
+
+    expect(result.reconciled).toEqual([]);
+  });
 });
 
 describe('reconcileOrphanProcesses', () => {

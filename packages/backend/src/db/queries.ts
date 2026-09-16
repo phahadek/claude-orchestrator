@@ -11588,6 +11588,28 @@ export function hasUndispositionedStagedIntentsForSession(
 }
 
 /**
+ * Batched counterpart to hasUndispositionedStagedIntentsForSession, for a
+ * periodic sweep that used to call it once per row (session_liveness
+ * reconciler): one query for the whole candidate set instead of one per
+ * session_id. Returns the subset of `sessionIds` holding a staged/approved
+ * intent; membership in the set is the same predicate the single-id version
+ * checks.
+ */
+export function getUndispositionedStagedIntentSessionIds(
+  sessionIds: string[],
+): Set<string> {
+  if (sessionIds.length === 0) return new Set();
+  const placeholders = sessionIds.map(() => '?').join(', ');
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT session_id FROM staged_intent
+       WHERE state IN ('staged', 'approved') AND session_id IN (${placeholders})`,
+    )
+    .all(...sessionIds) as { session_id: string }[];
+  return new Set(rows.map((r) => r.session_id));
+}
+
+/**
  * True if this task has at least one decision.pickOne intent, staged by any
  * session, in a non-withdrawn/non-superseded state. decision.pickOne carries
  * no taskId of its own the way grouped kinds do (extractTaskId returns null

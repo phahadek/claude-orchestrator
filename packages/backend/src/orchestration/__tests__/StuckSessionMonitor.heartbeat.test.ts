@@ -33,11 +33,16 @@ vi.mock('../../audit/AuditLog', () => ({
 }));
 
 vi.mock('../../session/processLiveness', () => ({
-  isSessionProcessAlive: vi.fn().mockReturnValue(true),
+  // handleHardStopWindowExpiry (a single-event call, not a per-sweep loop)
+  // still goes through isSessionProcessAlive directly — see
+  // processLiveness.ts. Defaults to false since every hard-stop-expiry
+  // scenario this file exercises is past the OS process's death.
+  isSessionProcessAlive: vi.fn().mockReturnValue(false),
+  readLiveSessionProcessIds: vi.fn(),
 }));
 
 import { recordEvent } from '../../audit/AuditLog';
-import { isSessionProcessAlive } from '../../session/processLiveness';
+import { readLiveSessionProcessIds } from '../../session/processLiveness';
 import { StuckSessionMonitor } from '../StuckSessionMonitor.js';
 import * as queries from '../../db/queries.js';
 
@@ -85,7 +90,7 @@ function runHeartbeatSweep(monitor: StuckSessionMonitor) {
 describe('StuckSessionMonitor intra-tool heartbeat', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(isSessionProcessAlive).mockReturnValue(true);
+    vi.mocked(readLiveSessionProcessIds).mockReturnValue(null);
     vi.useFakeTimers();
   });
 
@@ -169,7 +174,7 @@ describe('StuckSessionMonitor intra-tool heartbeat', () => {
     });
 
     emitSessionEvent(sessionManager, 'sess-3', 'tool_use');
-    vi.mocked(isSessionProcessAlive).mockReturnValue(false);
+    vi.mocked(readLiveSessionProcessIds).mockReturnValue(new Set());
 
     for (let i = 0; i < 30; i++) {
       vi.advanceTimersByTime(5 * 60 * 1000);
