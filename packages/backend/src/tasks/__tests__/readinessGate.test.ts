@@ -372,6 +372,26 @@ describe('checkReadiness — 🔎 Investigation floor facts', () => {
     expect(checkReadiness(body, '🔎 Investigation')).toEqual([]);
   });
 
+  it('accepts a decision-branch list nested under a ### subsection that follows an earlier ### subsection with no list (context organized into subsections)', () => {
+    const body =
+      '## Deliverables\n- A go/no-go decision.\n\n' +
+      '## Context\nMode: 🔎 Investigation\n' +
+      '### Observed\nThe worker crashed twice under xdist, no clear pattern yet.\n' +
+      '### Decision space\n' +
+      '1. If the crash reproduces under -p no:randomly, it is a fixture-ordering bug: file a Code task.\n' +
+      '1. If it does not reproduce, it is an xdist scheduling race: file a follow-on Investigation.\n';
+    expect(checkReadiness(body, '🔎 Investigation')).toEqual([]);
+  });
+
+  it('accepts if/then branch prose nested under a ### subsection that follows an earlier ### subsection with no list', () => {
+    const body =
+      '## Deliverables\n- A go/no-go decision.\n\n' +
+      '## Context\nMode: 🔎 Investigation\n' +
+      '### Observed\nThe worker crashed twice under xdist, no clear pattern yet.\n' +
+      '### Decision space\nIf the crash reproduces under -p no:randomly, then it is a fixture-ordering bug and a Code task should be filed.\n';
+    expect(checkReadiness(body, '🔎 Investigation')).toEqual([]);
+  });
+
   it("Investigation's existing Tier-1/Tier-2 exemption is unchanged: a live Open Questions section and a deferral phrase are not flagged", () => {
     const body =
       validBody +

@@ -88,6 +88,86 @@ function normalizeHeadingText(text: string): string {
     .toLowerCase();
 }
 
+/**
+ * Every canonical section heading task-writing.md's authoring convention
+ * uses — critically including `### 👁️ Manual verification`, which by
+ * convention is always `###` even directly under a `##` section (e.g.
+ * "## Targets / surfaces affected" / "## Deliverables") with no intervening
+ * "## Acceptance criteria" wrapper. Because that convention makes heading
+ * depth an unreliable nesting signal on its own, a heading matching one of
+ * these names always ends the current section regardless of its level; a
+ * heading that matches none of these (an author-invented subheading like
+ * "### Observed" or "### Decision space" under "## Context") is presumed to
+ * be a genuine subsection when it's deeper than the target's own level.
+ */
+const KNOWN_SECTION_HEADING_LABELS: readonly string[] = [
+  'Summary',
+  'Dependencies',
+  'Context',
+  'Acceptance criteria',
+  'Automated tests',
+  'Manual verification',
+  'Notion pages affected',
+  'Files / paths affected',
+  'Declared writes',
+  'Targets / surfaces affected',
+  'Deliverables',
+  'Operational seed',
+  'Implementation notes',
+  'Open Questions',
+  'Open question',
+];
+
+const KNOWN_SECTION_HEADINGS: ReadonlySet<string> = new Set(
+  KNOWN_SECTION_HEADING_LABELS.map(normalizeHeadingText),
+);
+
+/**
+ * Level-aware section membership: for each line in `lines`, whether it falls
+ * under the first heading (any level) whose normalized text equals
+ * `normalizedTarget` — "under" meaning up to (but not including) the next
+ * heading that either (a) is at the same or shallower level, or (b) matches
+ * a name in KNOWN_SECTION_HEADINGS (see its doc comment — heading depth alone
+ * isn't a reliable nesting signal in this codebase's convention). A
+ * deeper-level heading with an unrecognized name (e.g. a `###` subsection of
+ * a matched `##` heading) is itself a line the mask excludes (heading lines
+ * are never section content), but does NOT end the section — content in and
+ * after it, up to the real boundary, stays in. Shared by every "read one
+ * named section's body" scan in this module so the level-unaware bug (any
+ * heading, any level, ends the section) is fixed once.
+ */
+function computeSectionMask(
+  lines: readonly string[],
+  normalizedTarget: string,
+): { found: boolean; mask: boolean[] } {
+  const mask: boolean[] = new Array(lines.length).fill(false);
+  let found = false;
+  let inSection = false;
+  let targetLevel = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const heading = lines[i].match(/^(#{1,6})\s*(.+)$/);
+    if (heading) {
+      const level = heading[1].length;
+      const normalized = normalizeHeadingText(heading[2]);
+      if (
+        inSection &&
+        normalized !== normalizedTarget &&
+        (level <= targetLevel || KNOWN_SECTION_HEADINGS.has(normalized))
+      ) {
+        inSection = false;
+      }
+      if (normalized === normalizedTarget) {
+        inSection = true;
+        targetLevel = level;
+        found = true;
+      }
+      continue;
+    }
+    mask[i] = inSection;
+  }
+  return { found, mask };
+}
+
 /** Tier 1 — a live, non-empty "## Open Questions" section. */
 function checkOpenQuestionsSection(body: string): ReadinessViolation[] {
   const violations: ReadinessViolation[] = [];
@@ -254,15 +334,10 @@ function parseDeclaredWriteLine(rawLine: string): DeclaredWriteEntry {
 export function extractDeclaredWrites(body: string): DeclaredWriteEntry[] {
   const entries: DeclaredWriteEntry[] = [];
   const lines = body.split('\n');
-  let inSection = false;
-  for (const line of lines) {
-    const heading = line.match(/^#{1,6}\s*(.+)$/);
-    if (heading) {
-      inSection = normalizeHeadingText(heading[1]) === 'declared writes';
-      continue;
-    }
-    if (!inSection) continue;
-    const trimmed = line.trim();
+  const { mask } = computeSectionMask(lines, 'declared writes');
+  for (let i = 0; i < lines.length; i++) {
+    if (!mask[i]) continue;
+    const trimmed = lines[i].trim();
     if (!trimmed || /^none$/i.test(trimmed)) continue;
     if (!/^[-*]\s+/.test(trimmed) && !/^\d+[.)]\s+/.test(trimmed)) continue;
     const entry = parseDeclaredWriteLine(trimmed);
@@ -284,14 +359,9 @@ export function extractDeclaredWrites(body: string): DeclaredWriteEntry[] {
 function checkDeclaredWritesSection(body: string): ReadinessViolation[] {
   const violations: ReadinessViolation[] = [];
   const lines = body.split('\n');
-  let inSection = false;
+  const { mask } = computeSectionMask(lines, 'declared writes');
   for (let i = 0; i < lines.length; i++) {
-    const heading = lines[i].match(/^#{1,6}\s*(.+)$/);
-    if (heading) {
-      inSection = normalizeHeadingText(heading[1]) === 'declared writes';
-      continue;
-    }
-    if (!inSection) continue;
+    if (!mask[i]) continue;
     const trimmed = lines[i].trim();
     if (!trimmed || /^none$/i.test(trimmed)) continue;
     if (!/^[-*]\s+/.test(trimmed) && !/^\d+[.)]\s+/.test(trimmed)) continue;
@@ -339,19 +409,11 @@ function checkRequiredHeadingSection(
 ): ReadinessViolation[] {
   const target = normalizeHeadingText(headingLabel);
   const lines = stripNonProse(body);
-  let found = false;
-  let inSection = false;
+  const { found, mask } = computeSectionMask(lines, target);
   let hasContent = false;
-  for (const line of lines) {
-    const heading = line.match(/^#{1,6}\s*(.+)$/);
-    if (heading) {
-      const normalized = normalizeHeadingText(heading[1]);
-      inSection = normalized === target;
-      if (inSection) found = true;
-      continue;
-    }
-    if (!inSection) continue;
-    const trimmed = line.trim();
+  for (let i = 0; i < lines.length; i++) {
+    if (!mask[i]) continue;
+    const trimmed = lines[i].trim();
     if (!trimmed || /^none$/i.test(trimmed)) continue;
     hasContent = true;
   }
@@ -378,8 +440,10 @@ function checkRequiredHeadingSection(
 
 /**
  * Extracts the prose (fenced/quoted content blanked, per stripNonProse) of
- * the first heading (any level) matching `normalizedTarget`, up to the next
- * heading. Returns `found: false` when no such heading exists.
+ * the first heading matching `normalizedTarget`, up to the next heading at
+ * the same or shallower level — a deeper-level heading is a subsection of the
+ * target and its content stays in (see computeSectionMask). Returns
+ * `found: false` when no such heading exists.
  */
 function extractSectionProse(
   body: string,
@@ -387,18 +451,11 @@ function extractSectionProse(
 ): { found: boolean; text: string; hasList: boolean } {
   const rawLines = body.split('\n');
   const proseLines = stripNonProse(body);
-  let inSection = false;
-  let found = false;
+  const { found, mask } = computeSectionMask(rawLines, normalizedTarget);
   let hasList = false;
   let text = '';
   for (let i = 0; i < rawLines.length; i++) {
-    const heading = rawLines[i].match(/^#{1,6}\s*(.+)$/);
-    if (heading) {
-      inSection = normalizeHeadingText(heading[1]) === normalizedTarget;
-      if (inSection) found = true;
-      continue;
-    }
-    if (!inSection) continue;
+    if (!mask[i]) continue;
     const trimmed = rawLines[i].trim();
     if (/^[-*]\s+/.test(trimmed) || /^\d+[.)]\s+/.test(trimmed)) hasList = true;
     text += proseLines[i] + '\n';
