@@ -800,7 +800,12 @@ export class PRReviewService {
           // The target session cannot be relied on to ever produce a
           // verdict — do not burn the full VERDICT_TIMEOUT_MS waiting on it.
           abortController.abort();
-          supersedeReviewSession(this.sessionManager, prNumber, repo, 'review_session_cleared');
+          supersedeReviewSession(
+            this.sessionManager,
+            prNumber,
+            repo,
+            'review_session_cleared',
+          );
           clearReviewSessionId(prNumber, repo);
           if (prData.headSha && prData.headSha === prRow.last_reviewed_sha) {
             const stored = this.storedResultOrNull(prNumber, repo, prRow);
@@ -934,7 +939,12 @@ export class PRReviewService {
           `[PRReviewService] Stale review_session_id ${existingReviewSessionId} for PR #${prNumber} ` +
             `(${existingSession ? `status=${existingSession.status}` : 'no DB row'}) — clearing and spawning fresh.`,
         );
-        supersedeReviewSession(this.sessionManager, prNumber, repo, 'review_session_cleared');
+        supersedeReviewSession(
+          this.sessionManager,
+          prNumber,
+          repo,
+          'review_session_cleared',
+        );
         clearReviewSessionId(prNumber, repo);
         // Fall through to Case 3.
       }
@@ -990,7 +1000,12 @@ export class PRReviewService {
         logger.warn(
           `[PRReviewService] sendOrResume returned null for ${existingReviewSessionId} — spawning fresh.`,
         );
-        supersedeReviewSession(this.sessionManager, prNumber, repo, 'review_session_cleared');
+        supersedeReviewSession(
+          this.sessionManager,
+          prNumber,
+          repo,
+          'review_session_cleared',
+        );
         clearReviewSessionId(prNumber, repo);
       }
 
@@ -1390,7 +1405,12 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
         `[PRReviewService] reReviewPR PR #${prNumber}: review session ${pr.review_session_id} is terminal ` +
           `(${existingSession ? `status=${existingSession.status}` : 'no DB row'}) — launching fresh review session instead of a follow-up.`,
       );
-      supersedeReviewSession(this.sessionManager, prNumber, repo, 'review_session_cleared');
+      supersedeReviewSession(
+        this.sessionManager,
+        prNumber,
+        repo,
+        'review_session_cleared',
+      );
       clearReviewSessionId(prNumber, repo);
       const diffSource = new GitHubDiffSource(this.github, repo, prNumber);
       return this.reviewPR(

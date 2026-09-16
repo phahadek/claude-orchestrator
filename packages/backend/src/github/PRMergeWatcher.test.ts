@@ -1186,11 +1186,9 @@ describe('PRMergeWatcher.handleMerged()', () => {
       'review-session-2': 'superseded',
       'review-session-3': 'idle',
     };
-    vi.mocked(markSessionDone).mockImplementation(
-      (sessionId: string) => {
-        sessionStatuses[sessionId] = 'done';
-      },
-    );
+    vi.mocked(markSessionDone).mockImplementation((sessionId: string) => {
+      sessionStatuses[sessionId] = 'done';
+    });
 
     const pr = makePRRow({
       session_id: null,

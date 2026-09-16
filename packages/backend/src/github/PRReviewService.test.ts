@@ -2201,7 +2201,12 @@ describe('supersedeReviewSession()', () => {
     } as any);
     const mockSM = makeMockSessionManager();
 
-    supersedeReviewSession(mockSM as any, 42, 'owner/repo', 'review_session_cleared');
+    supersedeReviewSession(
+      mockSM as any,
+      42,
+      'owner/repo',
+      'review_session_cleared',
+    );
 
     expect(mockSM.endSession).not.toHaveBeenCalled();
     expect(vi.mocked(markSessionSuperseded)).not.toHaveBeenCalled();
@@ -2235,7 +2240,12 @@ describe('supersedeReviewSession()', () => {
     vi.mocked(getSession).mockReturnValue({ status: 'done' } as any);
     const mockSM = makeMockSessionManager();
 
-    supersedeReviewSession(mockSM as any, 42, 'owner/repo', 'review_session_cleared');
+    supersedeReviewSession(
+      mockSM as any,
+      42,
+      'owner/repo',
+      'review_session_cleared',
+    );
 
     expect(mockSM.endSession).not.toHaveBeenCalled();
     expect(vi.mocked(markSessionSuperseded)).not.toHaveBeenCalled();
@@ -2249,7 +2259,12 @@ describe('supersedeReviewSession()', () => {
     vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
     const mockSM = makeMockSessionManager();
 
-    supersedeReviewSession(mockSM as any, 42, 'owner/repo', 'review_session_cleared');
+    supersedeReviewSession(
+      mockSM as any,
+      42,
+      'owner/repo',
+      'review_session_cleared',
+    );
 
     expect(mockSM.endSession).toHaveBeenCalledWith('idle-id');
     expect(vi.mocked(markSessionSuperseded)).toHaveBeenCalledWith(

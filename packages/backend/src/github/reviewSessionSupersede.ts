@@ -34,7 +34,10 @@ export function supersedeReviewSession(
   const prev = pr?.review_session_id;
   if (!prev || prev === incomingSessionId) return;
   const session = getSession(prev);
-  if (!session || TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED.has(session.status)) {
+  if (
+    !session ||
+    TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED.has(session.status)
+  ) {
     return;
   }
   sessionManager.endSession(prev);
