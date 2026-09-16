@@ -4582,23 +4582,34 @@ export class SessionManager extends EventEmitter {
    * observed elsewhere (a session dies, the orphan sweeper reverts its task
    * to Ready, a fresh session launches, repeat).
    *
-   * Candidate population: every live (non-terminal) session. Skipped
-   * entirely in api session_mode, mirroring the other liveness
-   * reconcilers' skip — an ApiSessionRunner session has no CLI subprocess
-   * and no MCP client to fail.
+   * Candidate population: every live session that isRespawnable — running,
+   * not already exhausted. Skipped entirely in api session_mode, mirroring
+   * the other liveness reconcilers' skip — an ApiSessionRunner session has
+   * no CLI subprocess and no MCP client to fail. A row that isn't running
+   * (e.g. idle) or is already exhausted is skipped before isMcpUnreachable
+   * is even evaluated, so a level-triggered non-respawnable session (a
+   * parked idle session whose worktree was cleaned, say) never produces a
+   * session_mcp_unreachable_detected row at all.
    *
    * Grace window: no detection fires until MCP_UNREACHABLE_GRACE_MS has
    * elapsed since the session's most recent spawn — its original
    * started_at, or its latest respawn attempt's timestamp once this
    * reconciler has already respawned it once (getLatestMcpUnreachableRespawnTimestamp).
-   * That reference moves forward on every respawn, so the grace window
+   * That reference moves forward on every successful respawn (not on a
+   * decline — no new process was actually spawned), so the grace window
    * restarts each time: a session whose new process's init reports the
    * orchestrator server connected is never flagged again
    * (getLatestOrchestratorMcpStatusSince finds that status), and one whose
    * init still doesn't report connected — or hasn't reported at all once
-   * the grace window elapses — gets re-detected, up to
-   * MAX_MCP_UNREACHABLE_RESPAWNS before escalating to the operator instead
-   * of counting the respawn as a successful recovery.
+   * the grace window elapses — gets re-detected.
+   *
+   * Each detection either respawns, or declines and records
+   * session_mcp_unreachable_respawn_declined (missing worktree/project, or
+   * a deferred usage admission) — a declined respawn counts as an attempt
+   * exactly like a respawned one, so a session that can never be respawned
+   * (e.g. its worktree was cleaned) still reaches MAX_MCP_UNREACHABLE_RESPAWNS
+   * and escalates to the operator once, rather than being redetected on
+   * every sweep forever.
    */
   async reconcileMcpUnreachableSessions(): Promise<{
     detected: string[];
