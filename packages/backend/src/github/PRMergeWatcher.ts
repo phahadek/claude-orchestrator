@@ -822,7 +822,7 @@ export class PRMergeWatcher extends EventEmitter {
       // Explicitly scoped to 'full' — a settled row from a diff-scoped run
       // (test_scoped:) must never stand in for the full-suite verdict this
       // gate exists to enforce; see run_kind on test_request_runs.
-      let testResult = contentHash
+      const testResult = contentHash
         ? getLatestTestRequestRun(project.id, contentHash, 'full')
         : undefined;
       if (!testResult && contentHash && worktreePath) {

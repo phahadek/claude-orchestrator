@@ -3942,7 +3942,8 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
     const pendingEvents = vi
       .mocked(recordEvent)
       .mock.calls.filter(
-        (call) => (call[0] as { event_type: string }).event_type ===
+        (call) =>
+          (call[0] as { event_type: string }).event_type ===
           'pr_f2_verdict_pending',
       );
     expect(pendingEvents).toHaveLength(1);
