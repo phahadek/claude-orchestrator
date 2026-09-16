@@ -762,7 +762,9 @@ describe('reconcileGateRunnability', () => {
 
       const result = await reconcileGateRunnability(headSha, {
         project: 'gate-ancestry-project',
-        ancestrySource: defaultAncestrySourceForProject('gate-ancestry-project'),
+        ancestrySource: defaultAncestrySourceForProject(
+          'gate-ancestry-project',
+        ),
       });
 
       expect(result.markedRunnable).toEqual([item.id]);

@@ -271,7 +271,9 @@ describe('nextApplyableSeedItems default per-project ancestry', () => {
       join(__dirname, '..', '..'),
     );
     mkdirSync(scratchBase, { recursive: true });
-    const nonRepoDir = mkdtempSync(join(scratchBase, 'seed-ancestry-non-repo-'));
+    const nonRepoDir = mkdtempSync(
+      join(scratchBase, 'seed-ancestry-non-repo-'),
+    );
     const originalCwd = process.cwd();
     process.chdir(nonRepoDir);
     try {
