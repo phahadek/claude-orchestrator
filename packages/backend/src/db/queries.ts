@@ -1859,8 +1859,12 @@ export function archiveFinishedSessions(): number {
 }
 
 /**
- * Archive concluded sessions (status derived from TERMINAL_SESSION_STATUSES, archived=0)
- * whose ended_at is older than the given cutoff timestamp (ms).
+ * Archive concluded sessions (status derived from
+ * TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED, archived=0) whose ended_at is
+ * older than the given cutoff timestamp (ms). Includes 'superseded' —
+ * otherwise a session terminalized by supersedeReviewSession would never be
+ * picked up here, since markSessionSuperseded is intentionally excluded from
+ * BASE_TERMINAL_STATUS_SQL_LIST (see that const's doc comment).
  * Idle sessions are excluded — the CLI subprocess is still alive and resumable.
  * Returns the session_ids of archived sessions.
  */
@@ -1868,7 +1872,7 @@ export function archiveConcludedSessionsOlderThan(cutoffMs: number): string[] {
   const rows = db
     .prepare(
       `SELECT session_id, task_id, session_type FROM sessions
-       WHERE status IN (${BASE_TERMINAL_STATUS_SQL_LIST})
+       WHERE status IN (${TERMINAL_STATUS_SQL_LIST})
          AND archived = 0
          AND ended_at IS NOT NULL
          AND ended_at < @cutoff`,

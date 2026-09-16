@@ -478,6 +478,14 @@ export interface StartOptions {
    */
   taskId?: string;
   /**
+   * PR URL to stamp onto sessions.pr_url at spawn time — the durable
+   * back-link from a review session to the PR it reviews (review sessions
+   * otherwise insert with pr_url: null, unlike code sessions which acquire
+   * it later via the PR-creation path). Currently threaded only from the
+   * review-session spawn site in PRReviewService.
+   */
+  prUrl?: string | null;
+  /**
    * Resolved GitHub repo (owner/repo) for this session. Determined at launch time from
    * task_repo_assignments for multi-repo projects, or auto-resolved for single-repo projects.
    * Used for branch deletion and other GitHub API calls in completeStart.
@@ -1765,6 +1773,7 @@ export class SessionManager extends EventEmitter {
       taskKind,
       taskId: precomputedTaskId,
       docsTargetSurface,
+      prUrl,
     } = options ?? {};
 
     if (countsAgainstConcurrency(sessionType) && taskKind === undefined) {
@@ -1899,7 +1908,7 @@ export class SessionManager extends EventEmitter {
       status: 'starting',
       started_at: startedAt,
       ended_at: null,
-      pr_url: null,
+      pr_url: prUrl ?? null,
       worktree_path: usesWorktree(sessionType, docsTargetSurface)
         ? worktreePath
         : null,

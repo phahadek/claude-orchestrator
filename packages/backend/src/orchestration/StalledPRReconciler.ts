@@ -46,6 +46,7 @@ import {
   formatCIFailureFeedback,
   formatMergeConflictFeedback,
 } from '../github/reviewUtils';
+import { supersedeReviewSession } from '../github/reviewSessionSupersede';
 
 /**
  * Replacement for the retired whole-tree base-attributability check: true
@@ -485,6 +486,14 @@ export class StalledPRReconciler {
     ) {
       // Clear any stale review_session_id so PRReviewService spawns a fresh
       // session rather than calling sendOrResume on a terminal session.
+      if (this.sessionManager) {
+        supersedeReviewSession(
+          this.sessionManager,
+          prNumber,
+          repo,
+          'review_session_cleared',
+        );
+      }
       clearReviewSessionId(prNumber, repo);
     }
 

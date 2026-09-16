@@ -19,6 +19,8 @@ import {
   getLatestFinishedTestRequestRunForSession,
   getTestRunSummary,
 } from '../db/queries';
+import { supersedeReviewSession } from './reviewSessionSupersede';
+export { supersedeReviewSession } from './reviewSessionSupersede';
 import type {
   OpsPrIntentPayload,
   PullRequestRow,
@@ -798,6 +800,7 @@ export class PRReviewService {
           // The target session cannot be relied on to ever produce a
           // verdict — do not burn the full VERDICT_TIMEOUT_MS waiting on it.
           abortController.abort();
+          supersedeReviewSession(this.sessionManager, prNumber, repo, 'review_session_cleared');
           clearReviewSessionId(prNumber, repo);
           if (prData.headSha && prData.headSha === prRow.last_reviewed_sha) {
             const stored = this.storedResultOrNull(prNumber, repo, prRow);
@@ -931,6 +934,7 @@ export class PRReviewService {
           `[PRReviewService] Stale review_session_id ${existingReviewSessionId} for PR #${prNumber} ` +
             `(${existingSession ? `status=${existingSession.status}` : 'no DB row'}) — clearing and spawning fresh.`,
         );
+        supersedeReviewSession(this.sessionManager, prNumber, repo, 'review_session_cleared');
         clearReviewSessionId(prNumber, repo);
         // Fall through to Case 3.
       }
@@ -986,6 +990,7 @@ export class PRReviewService {
         logger.warn(
           `[PRReviewService] sendOrResume returned null for ${existingReviewSessionId} — spawning fresh.`,
         );
+        supersedeReviewSession(this.sessionManager, prNumber, repo, 'review_session_cleared');
         clearReviewSessionId(prNumber, repo);
       }
 
@@ -1009,6 +1014,7 @@ export class PRReviewService {
         projectId,
         taskName: `#${prData.id} ${prData.title}`,
         taskId: prRow.task_id ?? undefined,
+        prUrl: prRow.pr_url,
       });
 
       // 3. Persist the review session pairing and record the SHA under review.
@@ -1017,6 +1023,16 @@ export class PRReviewService {
       // review_session_id is set, and shouldAutoReview returns true when
       // last_reviewed_sha is null. By recording it now, any push_detected during
       // the review sees headSha === last_reviewed_sha and is correctly skipped.
+      // Supersede whatever review_session_id the PR row currently carries
+      // (re-read live, not trusted from the earlier local variable — a
+      // concurrent spawn could have set it since) before overwriting it.
+      supersedeReviewSession(
+        this.sessionManager,
+        prNumber,
+        repo,
+        'review_iteration_superseded',
+        sessionId,
+      );
       setReviewSessionId(prNumber, repo, sessionId);
       setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
       recordEvent({
@@ -1374,6 +1390,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
         `[PRReviewService] reReviewPR PR #${prNumber}: review session ${pr.review_session_id} is terminal ` +
           `(${existingSession ? `status=${existingSession.status}` : 'no DB row'}) — launching fresh review session instead of a follow-up.`,
       );
+      supersedeReviewSession(this.sessionManager, prNumber, repo, 'review_session_cleared');
       clearReviewSessionId(prNumber, repo);
       const diffSource = new GitHubDiffSource(this.github, repo, prNumber);
       return this.reviewPR(

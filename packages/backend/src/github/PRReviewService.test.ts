@@ -23,6 +23,13 @@ vi.mock('../db/queries.js', () => ({
   getLatestTestRequestRunForSession: vi.fn().mockReturnValue(undefined),
   getLatestFinishedTestRequestRunForSession: vi.fn().mockReturnValue(undefined),
   getTestRunSummary: vi.fn().mockReturnValue(undefined),
+  markSessionSuperseded: vi.fn(),
+  TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED: new Set([
+    'done',
+    'error',
+    'killed',
+    'superseded',
+  ]),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -45,6 +52,7 @@ import {
   evaluateMigrationRenumberTolerance,
   extractListedMigrationPaths,
   overrideFilesPathsDimension,
+  supersedeReviewSession,
 } from './PRReviewService';
 import {
   getPRByNumber,
@@ -61,6 +69,7 @@ import {
   setPauseReason,
   getLatestTestRequestRunForSession,
   getLatestFinishedTestRequestRunForSession,
+  markSessionSuperseded,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { logger } from '../logger';
@@ -162,6 +171,7 @@ function makeMockSessionManager() {
     send: vi.fn(),
     isAlive: vi.fn().mockReturnValue(false),
     sendOrResume: vi.fn().mockResolvedValue('resumed-session-id'),
+    endSession: vi.fn(),
   });
 }
 
@@ -2178,6 +2188,342 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
     );
 
     expect(vi.mocked(setReviewSessionId)).not.toHaveBeenCalled();
+  });
+});
+
+// ── supersedeReviewSession() ─────────────────────────────────────────────────
+
+describe('supersedeReviewSession()', () => {
+  it('no-ops when the PR has no prior review_session_id', () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...mockPRRow,
+      review_session_id: null,
+    } as any);
+    const mockSM = makeMockSessionManager();
+
+    supersedeReviewSession(mockSM as any, 42, 'owner/repo', 'review_session_cleared');
+
+    expect(mockSM.endSession).not.toHaveBeenCalled();
+    expect(vi.mocked(markSessionSuperseded)).not.toHaveBeenCalled();
+  });
+
+  it('no-ops when the prior id matches the incoming id (same session, not a replacement)', () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...mockPRRow,
+      review_session_id: 'same-id',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
+    const mockSM = makeMockSessionManager();
+
+    supersedeReviewSession(
+      mockSM as any,
+      42,
+      'owner/repo',
+      'review_iteration_superseded',
+      'same-id',
+    );
+
+    expect(mockSM.endSession).not.toHaveBeenCalled();
+    expect(vi.mocked(markSessionSuperseded)).not.toHaveBeenCalled();
+  });
+
+  it('no-ops when the prior session is already terminal (done/error/killed) — left untouched', () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...mockPRRow,
+      review_session_id: 'terminal-id',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'done' } as any);
+    const mockSM = makeMockSessionManager();
+
+    supersedeReviewSession(mockSM as any, 42, 'owner/repo', 'review_session_cleared');
+
+    expect(mockSM.endSession).not.toHaveBeenCalled();
+    expect(vi.mocked(markSessionSuperseded)).not.toHaveBeenCalled();
+  });
+
+  it('ends and marks superseded a non-terminal prior session', () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...mockPRRow,
+      review_session_id: 'idle-id',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
+    const mockSM = makeMockSessionManager();
+
+    supersedeReviewSession(mockSM as any, 42, 'owner/repo', 'review_session_cleared');
+
+    expect(mockSM.endSession).toHaveBeenCalledWith('idle-id');
+    expect(vi.mocked(markSessionSuperseded)).toHaveBeenCalledWith(
+      'idle-id',
+      expect.any(Number),
+      'review_session_cleared',
+    );
+  });
+});
+
+// ── review session supersession wired into reviewPR()/reReviewPR() ──────────
+
+describe('PRReviewService — review session supersession wired into call sites', () => {
+  const claudePayload = {
+    verdict: 'approved',
+    dimensions: [{ name: 'Diff vs Context spec', passed: true, notes: 'ok' }],
+    summary: 'All good.',
+  };
+
+  it('spawning a fresh review session supersedes a non-terminal prior review_session_id (review_iteration_superseded), then sets the new id', async () => {
+    vi.mocked(getPRByNumber)
+      .mockReturnValueOnce({ ...mockPRRow, review_session_id: null } as any)
+      .mockReturnValueOnce({
+        ...mockPRRow,
+        review_session_id: 'prev-session-id',
+      } as any);
+    vi.mocked(getSession).mockReturnValueOnce({ status: 'idle' } as any);
+
+    const mockSM = makeMockSessionManager();
+    const startMock = mockSM.start as ReturnType<typeof vi.fn>;
+    startMock.mockImplementationOnce(
+      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        const id = opts.sessionId;
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(id, JSON.stringify(claudePayload)),
+          ),
+        );
+        return id;
+      },
+    );
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    expect(mockSM.endSession).toHaveBeenCalledWith('prev-session-id');
+    expect(vi.mocked(markSessionSuperseded)).toHaveBeenCalledWith(
+      'prev-session-id',
+      expect.any(Number),
+      'review_iteration_superseded',
+    );
+    expect(vi.mocked(setReviewSessionId)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      expect.any(String),
+    );
+    expect(result.verdict).toBe('approved');
+  });
+
+  it('a freshly spawned review session is started with the PR row pr_url', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...mockPRRow,
+      review_session_id: null,
+      pr_url: 'https://github.com/owner/repo/pull/42',
+    } as any);
+
+    const mockSM = makeMockSessionManager();
+    const startMock = mockSM.start as ReturnType<typeof vi.fn>;
+    startMock.mockImplementationOnce(
+      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        const id = opts.sessionId;
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(id, JSON.stringify(claudePayload)),
+          ),
+        );
+        return id;
+      },
+    );
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    const [, , opts] = startMock.mock.calls[0];
+    expect(opts.prUrl).toBe('https://github.com/owner/repo/pull/42');
+  });
+
+  it('Case 2 (sendOrResume success) does not supersede or end the resumed session', async () => {
+    const prRowWithDeadSession = {
+      ...mockPRRow,
+      review_session_id: 'dead-review-session-id',
+    };
+    vi.mocked(getPRByNumber).mockReturnValue(prRowWithDeadSession as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.isAlive as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    const resumedId = 'new-resumed-session-id';
+    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async () => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(resumedId, JSON.stringify(claudePayload)),
+          ),
+        );
+        return resumedId;
+      },
+    );
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    expect(mockSM.endSession).not.toHaveBeenCalled();
+    expect(vi.mocked(markSessionSuperseded)).not.toHaveBeenCalled();
+  });
+
+  it('reReviewPR resume path does not supersede or end the resumed session', async () => {
+    const prRowWithSession = {
+      ...mockPRRow,
+      review_session_id: 'existing-review-session-abc',
+    };
+    vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async (sessionId: string) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(sessionId, JSON.stringify(claudePayload)),
+          ),
+        );
+        return sessionId;
+      },
+    );
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    await service.reReviewPR(42, 'owner/repo');
+
+    expect(mockSM.endSession).not.toHaveBeenCalled();
+    expect(vi.mocked(markSessionSuperseded)).not.toHaveBeenCalled();
+  });
+
+  it('Case 1 delivery-failure clear site supersedes the abandoned live session (review_session_cleared)', async () => {
+    const prRowWithLiveSession = {
+      ...mockPRRow,
+      review_session_id: 'live-session-id',
+    };
+    vi.mocked(getPRByNumber).mockReturnValue(prRowWithLiveSession as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as any);
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.isAlive as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (mockSM.send as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(
+              'live-session-id',
+              JSON.stringify(claudePayload),
+            ),
+          ),
+        );
+        return false;
+      })
+      .mockImplementationOnce(() => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(
+              'live-session-id',
+              JSON.stringify(claudePayload),
+            ),
+          ),
+        );
+        return true;
+      });
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    expect(mockSM.endSession).toHaveBeenCalledWith('live-session-id');
+    expect(vi.mocked(markSessionSuperseded)).toHaveBeenCalledWith(
+      'live-session-id',
+      expect.any(Number),
+      'review_session_cleared',
+    );
+  });
+
+  it('a prior session already done/error/killed is left untouched when the stale pointer is cleared (no supersede)', async () => {
+    const prRowWithTerminalSession = {
+      ...mockPRRow,
+      review_session_id: 'terminal-session-id',
+    };
+    vi.mocked(getPRByNumber).mockReturnValue(prRowWithTerminalSession as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'done' } as any);
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.isAlive as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    const startMock = mockSM.start as ReturnType<typeof vi.fn>;
+    startMock.mockImplementationOnce(
+      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        const id = opts.sessionId;
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(id, JSON.stringify(claudePayload)),
+          ),
+        );
+        return id;
+      },
+    );
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    expect(mockSM.endSession).not.toHaveBeenCalled();
+    expect(vi.mocked(markSessionSuperseded)).not.toHaveBeenCalled();
   });
 });
 
