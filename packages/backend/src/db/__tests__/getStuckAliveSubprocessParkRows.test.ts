@@ -16,18 +16,23 @@ vi.mock('../db.js', async () => {
 import { db } from '../db.js';
 import { getStuckAliveSubprocessParkRows } from '../queries.js';
 
-function insertSession(sessionId: string, status = 'idle'): void {
+function insertSession(
+  sessionId: string,
+  status = 'idle',
+  archived = 0,
+): void {
   db.prepare(
     `INSERT INTO sessions
        (session_id, project_id, task_id, task_url, project_context_url,
-        status, started_at, ended_at, session_type, worktree_path, pr_url)
+        status, started_at, ended_at, session_type, worktree_path, pr_url, archived)
      VALUES (?, 'proj-1', 'task-1', 'https://notion.so/task', 'https://notion.so/ctx',
-       ?, ?, ?, 'standard', '/fake/wt', NULL)`,
+       ?, ?, ?, 'standard', '/fake/wt', NULL, ?)`,
   ).run(
     sessionId,
     status,
     Date.now() - 60 * 60 * 1000,
     Date.now() - 30 * 60 * 1000,
+    archived,
   );
 }
 
@@ -148,5 +153,30 @@ describe('getStuckAliveSubprocessParkRows', () => {
 
     expect(rows).toHaveLength(1);
     expect(rows[0].latest_event_ts).toBe(laterEventTs);
+  });
+
+  it('excludes an archived session even if it was parked via stuck_session_alive_subprocess, but includes the unarchived one', () => {
+    insertSession('sess-6', 'idle', 1);
+    const archivedParkTs = Date.now() - 20 * 24 * 60 * 60 * 1000;
+    insertStatusChangedAudit(
+      'sess-6',
+      'stuck_session_alive_subprocess',
+      archivedParkTs,
+    );
+    insertSessionEvent('sess-6', archivedParkTs);
+
+    insertSession('sess-7', 'idle', 0);
+    const parkTs = Date.now() - 30 * 60 * 1000;
+    insertStatusChangedAudit(
+      'sess-7',
+      'stuck_session_alive_subprocess',
+      parkTs,
+    );
+    insertSessionEvent('sess-7', parkTs);
+
+    const rows = getStuckAliveSubprocessParkRows();
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].session_id).toBe('sess-7');
   });
 });
