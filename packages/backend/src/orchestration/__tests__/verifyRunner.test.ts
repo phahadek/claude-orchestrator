@@ -204,11 +204,21 @@ describe('runVerifyAsGate() gate env scoping', () => {
     // DB_PATH before every spawn — see its own doc comment — so the
     // inherited environment here is process.env minus that one key, not an
     // exact match against process.env (this test suite's setup pins
-    // DB_PATH to ':memory:', see testSetupDb.ts).
+    // DB_PATH to ':memory:', see testSetupDb.ts). It also adds a per-run
+    // TMPDIR/TMP/TEMP (see runCommandWithTimeout's own doc comment), so
+    // those three keys are asserted separately rather than folded into the
+    // exact-match expectation.
     const { DB_PATH: _dbPath, ...expectedEnv } = process.env;
     expect(vi.mocked(spawn)).toHaveBeenCalledWith(
       'npm run lint',
-      expect.objectContaining({ env: expectedEnv }),
+      expect.objectContaining({
+        env: {
+          ...expectedEnv,
+          TMPDIR: expect.any(String),
+          TMP: expect.any(String),
+          TEMP: expect.any(String),
+        },
+      }),
     );
   });
 
