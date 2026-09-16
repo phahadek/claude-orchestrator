@@ -6,8 +6,11 @@ import {
   statSync,
   unlinkSync,
   writeFileSync,
+  mkdtempSync,
+  rmSync,
   type Dirent,
 } from 'fs';
+import os from 'os';
 import path from 'path';
 import { platform } from 'process';
 import { minimatch } from 'minimatch';
@@ -225,6 +228,8 @@ export interface BoundedCommandResult {
   oomKilled: boolean;
   spawnFailed: boolean;
   teardownVerificationFailed: boolean;
+  /** The per-run TMPDIR created for this command, if one could be created. Removed by the time this result resolves. */
+  tmpDir?: string;
 }
 
 /**
@@ -253,6 +258,26 @@ export function runCommandWithTimeout(
     // it spawns) could open and write to production data. See
     // CliSessionRunner.ts's identical strip for the session-spawn path.
     const { DB_PATH: _productionDbPath, ...env } = baseEnv;
+
+    // A per-run TMPDIR so this command's own mkdtemp calls (Node's
+    // os.tmpdir(), Python's tempfile, bash mktemp) resolve here instead of
+    // the shared host /tmp — a test file that forgets to clean up its own
+    // temp dirs then leaks into this run-scoped directory, which is removed
+    // on every settle path below, rather than accumulating in /tmp forever.
+    let runTmp: string | null = null;
+    try {
+      runTmp = mkdtempSync(
+        path.join(os.tmpdir(), `orchestrator-run-${runId}-`),
+      );
+      env.TMPDIR = runTmp;
+      env.TMP = runTmp;
+      env.TEMP = runTmp;
+    } catch (err) {
+      logger.warn(
+        `[test-runner] failed to create per-run TMPDIR for ${runId.slice(0, 8)}: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+
     const spawnOpts =
       platform === 'win32'
         ? { shell: true, cwd, env }
@@ -319,6 +344,18 @@ export function runCommandWithTimeout(
       // this run's cgroup — the run must not be recorded as torn down
       // unless that's actually true (see verifyRunTeardown's doc comment).
       verifyRunTeardown(runId, (survived) => {
+        // Only remove the per-run TMPDIR once the process tree is confirmed
+        // gone — removing it earlier could race a still-running grandchild
+        // writing into it.
+        if (runTmp) {
+          try {
+            rmSync(runTmp, { recursive: true, force: true });
+          } catch (err) {
+            logger.warn(
+              `[test-runner] failed to remove per-run TMPDIR ${runTmp} for run ${runId.slice(0, 8)}: ${err instanceof Error ? err.message : err}`,
+            );
+          }
+        }
         if (survived) {
           logger.error(
             `[test-runner] teardown verification failed for run ${runId.slice(0, 8)}: a process survived cgroup kill`,
@@ -327,6 +364,7 @@ export function runCommandWithTimeout(
         resolve({
           spawnFailed: false,
           teardownVerificationFailed: survived,
+          tmpDir: runTmp ?? undefined,
           ...result,
         });
       });

@@ -1,4 +1,13 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeEach,
+  afterEach,
+  beforeAll,
+} from 'vitest';
+import os from 'os';
 
 // ── fs mock (for RSS /proc reads) ─────────────────────────────────────────────
 
@@ -68,6 +77,7 @@ function makeProc(
 
 import {
   runTestCommands,
+  runCommandWithTimeout,
   collapseProgressRuns,
   truncateForDelivery,
   getRunMemoryMb,
@@ -229,6 +239,159 @@ describe('runTestCommands — timeout', () => {
     await promise;
 
     expect(logs.some((l) => l.includes('TIMEOUT'))).toBe(true);
+  });
+});
+
+describe('runCommandWithTimeout — per-run TMPDIR', () => {
+  let realFs: typeof import('fs');
+
+  beforeAll(async () => {
+    realFs = await vi.importActual<typeof import('fs')>('fs');
+  });
+
+  beforeEach(() => {
+    vi.mocked(fsModule.mkdtempSync).mockImplementation(
+      (...args: Parameters<typeof realFs.mkdtempSync>) =>
+        realFs.mkdtempSync(...args),
+    );
+    vi.mocked(fsModule.rmSync).mockImplementation(
+      (...args: Parameters<typeof realFs.rmSync>) => realFs.rmSync(...args),
+    );
+  });
+
+  afterEach(() => {
+    vi.mocked(fsModule.mkdtempSync).mockReset();
+    vi.mocked(fsModule.rmSync).mockReset();
+  });
+
+  it('spawns with TMPDIR set to a fresh runId-named directory that is gone once the result resolves', async () => {
+    const runId = 'tmpdir-happy-run-id';
+    let capturedEnv: NodeJS.ProcessEnv | undefined;
+    _spawnHook = (_cmd, opts) => {
+      capturedEnv = (opts as { env: NodeJS.ProcessEnv }).env;
+      return makeProc(0, 'ok');
+    };
+
+    const promise = runCommandWithTimeout(
+      'write-a-file',
+      '/worktree',
+      5000,
+      0,
+      runId,
+      process.env,
+    );
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(capturedEnv?.TMPDIR).toBeDefined();
+    expect(capturedEnv?.TMPDIR).toContain(runId);
+    expect(capturedEnv?.TMPDIR?.startsWith(os.tmpdir())).toBe(true);
+    expect(capturedEnv?.TMP).toBe(capturedEnv?.TMPDIR);
+    expect(capturedEnv?.TEMP).toBe(capturedEnv?.TMPDIR);
+
+    expect(result.tmpDir).toBe(capturedEnv?.TMPDIR);
+    expect(realFs.existsSync(result.tmpDir as string)).toBe(false);
+  });
+
+  it('removes the per-run TMPDIR after the timeout kill sequence completes, and still reports timedOut', async () => {
+    const runId = 'tmpdir-timeout-run-id';
+    let tmpDirSeen: string | undefined;
+    _spawnHook = (_cmd, opts) => {
+      tmpDirSeen = (opts as { env: NodeJS.ProcessEnv }).env.TMPDIR;
+      return makeProc(0, '', '', 9999_000);
+    };
+
+    const promise = runCommandWithTimeout(
+      'slow-cmd',
+      '/worktree',
+      5,
+      0,
+      runId,
+      process.env,
+    );
+    // Advance past the 5s timeout plus the SIGINT grace period.
+    await vi.advanceTimersByTimeAsync(11_000);
+    const result = await promise;
+
+    expect(result.timedOut).toBe(true);
+    expect(tmpDirSeen).toContain(runId);
+    expect(realFs.existsSync(tmpDirSeen as string)).toBe(false);
+  });
+
+  it('leaves no directory behind and reports spawnFailed when the child cannot be spawned', async () => {
+    const runId = 'tmpdir-spawnfail-run-id';
+    let tmpDirSeen: string | undefined;
+    _spawnHook = (_cmd, opts) => {
+      tmpDirSeen = (opts as { env: NodeJS.ProcessEnv }).env.TMPDIR;
+      const errorCbs: Array<(err: Error) => void> = [];
+      setTimeout(
+        () => errorCbs.forEach((cb) => cb(new Error('spawn ENOENT'))),
+        0,
+      );
+      return {
+        pid: undefined as unknown as number,
+        stdout: { on: () => {} },
+        stderr: { on: () => {} },
+        on: (e, cb) => {
+          if (e === 'error') errorCbs.push(cb as (err: Error) => void);
+        },
+      };
+    };
+
+    const promise = runCommandWithTimeout(
+      'nonexistent-shell-command',
+      '/worktree',
+      5000,
+      0,
+      runId,
+      process.env,
+    );
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(result.spawnFailed).toBe(true);
+    expect(tmpDirSeen).toBeDefined();
+    expect(realFs.existsSync(tmpDirSeen as string)).toBe(false);
+  });
+
+  it('does not mutate the parent process.env.TMPDIR', async () => {
+    const originalTmpdir = process.env.TMPDIR;
+    _spawnHook = () => makeProc(0, 'ok');
+
+    const promise = runCommandWithTimeout(
+      'echo hi',
+      '/worktree',
+      5000,
+      0,
+      'tmpdir-parent-env-run-id',
+      process.env,
+    );
+    await vi.runAllTimersAsync();
+    await promise;
+
+    expect(process.env.TMPDIR).toBe(originalTmpdir);
+  });
+
+  it('still strips DB_PATH from the child env', async () => {
+    let capturedEnv: NodeJS.ProcessEnv | undefined;
+    _spawnHook = (_cmd, opts) => {
+      capturedEnv = (opts as { env: NodeJS.ProcessEnv }).env;
+      return makeProc(0, 'ok');
+    };
+    const baseEnv = { ...process.env, DB_PATH: '/prod/db.sqlite' };
+
+    const promise = runCommandWithTimeout(
+      'echo hi',
+      '/worktree',
+      5000,
+      0,
+      'tmpdir-db-path-run-id',
+      baseEnv,
+    );
+    await vi.runAllTimersAsync();
+    await promise;
+
+    expect(capturedEnv?.DB_PATH).toBeUndefined();
   });
 });
 
