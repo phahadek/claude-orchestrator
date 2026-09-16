@@ -33,6 +33,11 @@ vi.mock('../../audit/AuditLog', () => ({
 }));
 
 vi.mock('../../session/processLiveness', () => ({
+  // handleHardStopWindowExpiry (a single-event call, not a per-sweep loop)
+  // still goes through isSessionProcessAlive directly — see
+  // processLiveness.ts. Defaults to false since every hard-stop-expiry
+  // scenario this file exercises is past the OS process's death.
+  isSessionProcessAlive: vi.fn().mockReturnValue(false),
   readLiveSessionProcessIds: vi.fn(),
 }));
 
