@@ -49,6 +49,7 @@ import {
   reopenGateItem,
   reclassifyGateItem,
   proposeGateItemReclassification,
+  resetAncestryMemoForTests,
   type DeployAncestrySource,
 } from '../gateService.js';
 import { ProjectService } from '../../projects/ProjectService.js';
@@ -59,6 +60,7 @@ beforeEach(() => {
   db.prepare('DELETE FROM gate_item').run();
   db.prepare('DELETE FROM audit_log').run();
   db.prepare('DELETE FROM task_cache').run();
+  resetAncestryMemoForTests();
 });
 
 function makeItem(overrides: Partial<Parameters<typeof insertItem>[0]> = {}) {
@@ -770,6 +772,110 @@ describe('reconcileGateRunnability', () => {
       expect(result.markedRunnable).toEqual([item.id]);
       expect(getGateItem(item.id)?.state).toBe('runnable');
     });
+  });
+});
+
+describe('reconcileGateRunnability ancestry memo', () => {
+  function countingAncestry(
+    base: DeployAncestrySource = orderedAncestry,
+  ): DeployAncestrySource & { isAncestor: ReturnType<typeof vi.fn> } {
+    return {
+      isAncestor: vi.fn((a: string, b: string) => base.isAncestor(a, b)),
+    };
+  }
+
+  it('issues isAncestor exactly once per distinct mergeCommit across two consecutive calls with the same deploySha', async () => {
+    const a = makeItem({ text: 'a' });
+    const b = makeItem({ text: 'b' });
+    mergeSource(a.id, 'sha1', new Date(1).toISOString());
+    mergeSource(b.id, 'sha2', new Date(1).toISOString());
+    const ancestry = countingAncestry();
+
+    await reconcileGateRunnability('sha3', {
+      ancestrySource: ancestry,
+      project: 'polimarket-analyser',
+    });
+    expect(ancestry.isAncestor).toHaveBeenCalledTimes(2);
+
+    ancestry.isAncestor.mockClear();
+    await reconcileGateRunnability('sha3', {
+      ancestrySource: ancestry,
+      project: 'polimarket-analyser',
+    });
+    expect(ancestry.isAncestor).not.toHaveBeenCalled();
+  });
+
+  it('discards the memo and re-issues isAncestor for every pair when deploySha changes for the same project', async () => {
+    const item = makeItem();
+    mergeSource(item.id, 'sha1', new Date(1).toISOString());
+    const ancestry = countingAncestry();
+
+    await reconcileGateRunnability('sha2', {
+      ancestrySource: ancestry,
+      project: 'polimarket-analyser',
+    });
+    expect(ancestry.isAncestor).toHaveBeenCalledTimes(1);
+
+    ancestry.isAncestor.mockClear();
+    await reconcileGateRunnability('sha3', {
+      ancestrySource: ancestry,
+      project: 'polimarket-analyser',
+    });
+    expect(ancestry.isAncestor).toHaveBeenCalledTimes(1);
+  });
+
+  it('scopes memo entries per project — a deploySha change for project A does not invalidate project B', async () => {
+    const a = makeItem({ project: 'polimarket-analyser' });
+    const b = makeItem({ project: 'other-project', milestone: 'M12' });
+    mergeSource(a.id, 'sha1', new Date(1).toISOString());
+    mergeSource(b.id, 'sha1', new Date(1).toISOString());
+    const ancestry = countingAncestry();
+
+    await reconcileGateRunnability('sha2', {
+      ancestrySource: ancestry,
+      project: 'polimarket-analyser',
+    });
+    await reconcileGateRunnability('sha2', {
+      ancestrySource: ancestry,
+      project: 'other-project',
+    });
+    expect(ancestry.isAncestor).toHaveBeenCalledTimes(2);
+
+    ancestry.isAncestor.mockClear();
+    // Project A's deploySha advances; project B's stays the same.
+    await reconcileGateRunnability('sha3', {
+      ancestrySource: ancestry,
+      project: 'polimarket-analyser',
+    });
+    await reconcileGateRunnability('sha2', {
+      ancestrySource: ancestry,
+      project: 'other-project',
+    });
+    expect(ancestry.isAncestor).toHaveBeenCalledTimes(1);
+    expect(ancestry.isAncestor).toHaveBeenCalledWith('sha1', 'sha3');
+  });
+
+  it('checks a new candidate exactly once on the second call, without rechecking existing pairs', async () => {
+    const a = makeItem({ text: 'a' });
+    mergeSource(a.id, 'sha1', new Date(1).toISOString());
+    const ancestry = countingAncestry();
+
+    await reconcileGateRunnability('sha3', {
+      ancestrySource: ancestry,
+      project: 'polimarket-analyser',
+    });
+    expect(ancestry.isAncestor).toHaveBeenCalledTimes(1);
+    ancestry.isAncestor.mockClear();
+
+    const b = makeItem({ text: 'b' });
+    mergeSource(b.id, 'sha2', new Date(1).toISOString());
+
+    await reconcileGateRunnability('sha3', {
+      ancestrySource: ancestry,
+      project: 'polimarket-analyser',
+    });
+    expect(ancestry.isAncestor).toHaveBeenCalledTimes(1);
+    expect(ancestry.isAncestor).toHaveBeenCalledWith('sha2', 'sha3');
   });
 });
 

@@ -410,22 +410,29 @@ async function isSourceCovered(
   deploySha: string,
   ancestry: AsyncDeployAncestrySource,
   ancestryCache: Map<string, Promise<boolean>>,
+  memoResults: Map<string, boolean>,
 ): Promise<boolean> {
   const type = getCachedType(source.sourceTaskId);
   if (type !== null && type !== '💻 Code') {
     return getCachedStatus(source.sourceTaskId) === 'Done';
   }
   if (!source.mergeCommit) return false;
-  // Memoized per (mergeCommit, deploySha) pair — multiple items (or
-  // multiple sources within one item) commonly share the same pair within
-  // a single tick, and git ancestry between two fixed shas can't change
-  // mid-tick, so a repeat pair is a spawn worth skipping entirely.
-  const key = `${source.mergeCommit}::${deploySha}`;
+  // Memoized per mergeCommit — deploySha is fixed for the whole call (the
+  // ancestryCache/memoResults pair is scoped to one project+deploySha, see
+  // reconcileGateRunnability), so ancestry between two fixed shas can't
+  // change mid-call, and a repeat mergeCommit is a spawn worth skipping
+  // entirely. memoResults additionally survives across ticks (see
+  // ancestryMemo) so a steady-state tick with an unchanged deploySha issues
+  // no spawns at all.
+  const key = source.mergeCommit;
   let pending = ancestryCache.get(key);
   if (!pending) {
     pending = Promise.resolve(
       ancestry.isAncestor(source.mergeCommit, deploySha),
-    );
+    ).then((result) => {
+      memoResults.set(key, result);
+      return result;
+    });
     ancestryCache.set(key, pending);
   }
   return pending;
@@ -437,13 +444,55 @@ async function isItemCovered(
   deploySha: string,
   ancestry: AsyncDeployAncestrySource,
   ancestryCache: Map<string, Promise<boolean>>,
+  memoResults: Map<string, boolean>,
 ): Promise<boolean> {
   if (item.sources.length === 0) return true;
   for (const source of item.sources) {
-    if (!(await isSourceCovered(source, deploySha, ancestry, ancestryCache)))
+    if (
+      !(await isSourceCovered(
+        source,
+        deploySha,
+        ancestry,
+        ancestryCache,
+        memoResults,
+      ))
+    )
       return false;
   }
   return true;
+}
+
+/**
+ * Cross-tick memo of git-ancestry results, keyed on the project the
+ * candidate set was reconciled against ('*' when reconcileGateRunnability is
+ * called unscoped, e.g. the manual POST /gate/reconcile route). Ancestry
+ * between two fixed shas is immutable, and deploySha only changes on a
+ * deploy report-in, so on every tick between deploys the whole 400-pair
+ * candidate set answers identically to the previous tick's — this survives
+ * across calls so a steady-state tick re-spawns nothing. Invalidated solely
+ * by a deploySha change for that project; no TTL.
+ */
+const ancestryMemo = new Map<
+  string,
+  { deploySha: string; results: Map<string, boolean> }
+>();
+
+/** Test-only: clears the cross-tick ancestry memo so tests don't leak state into each other. */
+export function resetAncestryMemoForTests(): void {
+  ancestryMemo.clear();
+}
+
+function getAncestryMemoEntry(
+  project: string | undefined,
+  deploySha: string,
+): { deploySha: string; results: Map<string, boolean> } {
+  const key = project ?? '*';
+  let entry = ancestryMemo.get(key);
+  if (!entry || entry.deploySha !== deploySha) {
+    entry = { deploySha, results: new Map() };
+    ancestryMemo.set(key, entry);
+  }
+  return entry;
 }
 
 /**
@@ -485,7 +534,11 @@ export async function reconcileGateRunnability(
     .map((item) => gateStore.getItem(item.id))
     .filter((item): item is GateItem => item !== undefined);
 
+  const memoEntry = getAncestryMemoEntry(options.project, deploySha);
   const ancestryCache = new Map<string, Promise<boolean>>();
+  for (const [mergeCommit, result] of memoEntry.results) {
+    ancestryCache.set(mergeCommit, Promise.resolve(result));
+  }
 
   await runWithConcurrency(
     candidates,
@@ -503,6 +556,7 @@ export async function reconcileGateRunnability(
         deploySha,
         ancestry,
         ancestryCache,
+        memoEntry.results,
       );
 
       let state = item.state;
