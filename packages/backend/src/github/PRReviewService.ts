@@ -16,12 +16,14 @@ import {
   getMergedPRForTask,
   getMergedLocalBranchForTaskId,
   getLatestTestRequestRunForSession,
+  getTestRunSummary,
 } from '../db/queries';
 import type {
   OpsPrIntentPayload,
   PullRequestRow,
   StructuredTestResult,
   TestRequestRunRow,
+  TestRunSummaryRow,
 } from '../db/types';
 import {
   getReservationForTaskDirSuffix,
@@ -520,9 +522,17 @@ const REVIEW_JSON_SCHEMA_BLOCK = buildReviewJsonSchemaBlock();
  * Returns '' when no finished run exists (still-running/queued rows and
  * missing rows both fall back to today's no-section behavior) — the reviewer
  * then evaluates the evidence bar exactly as before.
+ *
+ * `summary` is the test_run_summaries row for this run, when one exists. It's
+ * the fallback source of truth when `run.structured_result` has already been
+ * nulled by the storage-dedup sweep (clearExtractedStructuredResultsBatch /
+ * clearSupersededStructuredResults in db/queries.ts) — without it, a real,
+ * already-extracted run reads back as an unexplained crash forever, since
+ * nothing ever re-populates or re-evaluates that row.
  */
 function buildTestRunEvidenceSection(
   run: TestRequestRunRow | undefined,
+  summary?: TestRunSummaryRow,
 ): string {
   if (!run || run.state === 'running' || run.state === 'queued') return '';
   const finishedAt = run.finished_at
@@ -545,6 +555,12 @@ function buildTestRunEvidenceSection(
     } catch {
       commandLines = '(structured result present but unparsable)';
     }
+  } else if (summary) {
+    const totalsLine = `Result totals: ${summary.passed_count} passed, ${summary.failed_count} failed, ${summary.skipped_count} skipped, ${summary.error_count} errors`;
+    const incompleteLine = summary.incomplete
+      ? '\nNote: this run is marked incomplete (a test command may have crashed before its report was written).'
+      : '';
+    commandLines = `(raw structured result was cleared by storage dedup after extraction; totals below are from the extracted summary)\n${totalsLine}${incompleteLine}`;
   }
   return `\n## Orchestrator-Verified Test Run
 This is a real record from the orchestrator's own F2 test gate for this PR's coding
@@ -869,12 +885,17 @@ export class PRReviewService {
       const testRun = prRow.session_id
         ? getLatestTestRequestRunForSession(projectId, prRow.session_id)
         : undefined;
+      const testRunSummary =
+        testRun && !testRun.structured_result
+          ? getTestRunSummary(testRun.id)
+          : undefined;
       const prompt = this.buildPrompt(
         prData,
         diffData,
         taskBody,
         prIntent,
         testRun,
+        testRunSummary,
       );
 
       // Guard: determine whether the stored session is still resumable before
@@ -2088,6 +2109,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     taskBody: string,
     prIntent?: OpsPrIntentPayload | null,
     testRun?: TestRequestRunRow | null,
+    testRunSummary?: TestRunSummaryRow,
   ): string {
     const prIntentSection = prIntent
       ? `\n## Approved PR Intent (Ops)
@@ -2099,7 +2121,10 @@ Reason: ${prIntent.reason}
     const schemaBlock = prIntent
       ? buildReviewJsonSchemaBlock(OPS_PR_INTENT_FILES_DIMENSION_GUIDANCE)
       : REVIEW_JSON_SCHEMA_BLOCK;
-    const testRunSection = buildTestRunEvidenceSection(testRun ?? undefined);
+    const testRunSection = buildTestRunEvidenceSection(
+      testRun ?? undefined,
+      testRunSummary,
+    );
     return `You are a code reviewer. Compare the following GitHub PR against its task specification.
 
 ## PR Metadata
