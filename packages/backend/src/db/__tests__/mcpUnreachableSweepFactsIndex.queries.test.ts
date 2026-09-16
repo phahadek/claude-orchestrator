@@ -71,8 +71,16 @@ describe('getMcpUnreachableSweepFacts', () => {
     const now = Date.now();
 
     // sess-exhausted: has an exhausted event, and prior respawns.
-    insertAuditEvent('sess-exhausted', 'session_mcp_unreachable_respawned', now - 3000);
-    insertAuditEvent('sess-exhausted', 'session_mcp_unreachable_respawned', now - 2000);
+    insertAuditEvent(
+      'sess-exhausted',
+      'session_mcp_unreachable_respawned',
+      now - 3000,
+    );
+    insertAuditEvent(
+      'sess-exhausted',
+      'session_mcp_unreachable_respawned',
+      now - 2000,
+    );
     insertAuditEvent(
       'sess-exhausted',
       'session_mcp_unreachable_respawn_exhausted',

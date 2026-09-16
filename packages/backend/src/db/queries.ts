@@ -11963,7 +11963,10 @@ export function getMcpUnreachableSweepFacts(
 export function getOrchestratorMcpStatusEventsForSessions(
   sessionIds: string[],
 ): Map<string, { ts: number; status: string | undefined }[]> {
-  const events = new Map<string, { ts: number; status: string | undefined }[]>();
+  const events = new Map<
+    string,
+    { ts: number; status: string | undefined }[]
+  >();
   if (sessionIds.length === 0) return events;
 
   const placeholders = sessionIds.map(() => '?').join(',');
