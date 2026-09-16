@@ -4693,15 +4693,17 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
     });
   }
 
+  // rerunFlakyTests only enqueues now — it never hands back a settled
+  // pass/fail (see PreReviewPipeline.rerunFlakyTests's doc comment). The
+  // eventual outcome is read back from test_request_runs on a later,
+  // independent poll() tick, keyed on the content hash this resolves to.
   function makeMockReviewOrchestratorWithF2(
-    outcome: 'passed' | 'failed' = 'passed',
+    contentHash = 'content-hash-x',
   ): ReviewOrchestrator {
     return {
-      rerunFlakyTests: vi.fn().mockResolvedValue({
-        outcome,
-        passed: outcome === 'passed',
-        output: '',
-      }),
+      rerunFlakyTests: vi
+        .fn()
+        .mockResolvedValue({ triggered: true, contentHash }),
     } as unknown as ReviewOrchestrator;
   }
 
@@ -4764,7 +4766,7 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
 
     const github = makeMockGitHub();
     const sessions = makeMockSessions();
-    const reviewOrchestrator = makeMockReviewOrchestratorWithF2('passed');
+    const reviewOrchestrator = makeMockReviewOrchestratorWithF2();
     const watcher = new PRMergeWatcher(
       github,
       sessions,
@@ -4782,6 +4784,26 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
       '/wt/session',
       expect.objectContaining({ id: 'proj-1' }),
     );
+    // Triggered (enqueued) only — the rerun is never awaited, so nothing
+    // about the outcome is knowable within this same tick.
+    expect(vi.mocked(setCiRemediationAttemptedSha)).not.toHaveBeenCalled();
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
+    expect(vi.mocked(sessions.sendOrResume)).not.toHaveBeenCalled();
+
+    // The enqueued rerun settles (as passed) for the same content hash —
+    // read back on a later, independent poll tick.
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'f2-run-clean-settled',
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
+      state: 'passed',
+      output: 'PASS',
+      started_at: 3000,
+      finished_at: 4000,
+    } as any);
+
+    await watcher.poll();
+
     // Recovered — never falls through to the pause+nudge path.
     expect(vi.mocked(setCiRemediationAttemptedSha)).not.toHaveBeenCalled();
     expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
@@ -4796,6 +4818,11 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
       42,
       'owner/repo',
       null,
+    );
+    // Only the one triggering call — the settlement tick reads the outcome
+    // back, it does not trigger a second rerun.
+    expect(vi.mocked(reviewOrchestrator.rerunFlakyTests)).toHaveBeenCalledTimes(
+      1,
     );
   });
 
@@ -4830,7 +4857,7 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
 
     const github = makeMockGitHub();
     const sessions = makeMockSessions();
-    const reviewOrchestrator = makeMockReviewOrchestratorWithF2('passed');
+    const reviewOrchestrator = makeMockReviewOrchestratorWithF2();
     const watcher = new PRMergeWatcher(
       github,
       sessions,
@@ -4848,6 +4875,23 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
       '/wt/session',
       expect.objectContaining({ id: 'proj-1' }),
     );
+    expect(vi.mocked(sessions.sendOrResume)).not.toHaveBeenCalled();
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
+
+    // The enqueued rerun settles (as passed) for the same content hash —
+    // read back on a later, independent poll tick.
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'f2-run-breadth-settled',
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
+      state: 'passed',
+      output: 'PASS',
+      started_at: 3000,
+      finished_at: 4000,
+    } as any);
+
+    await watcher.poll();
+
     expect(vi.mocked(sessions.sendOrResume)).not.toHaveBeenCalled();
     expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
       42,
@@ -4892,7 +4936,7 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
 
     const github = makeMockGitHub();
     const sessions = makeMockSessions();
-    const reviewOrchestrator = makeMockReviewOrchestratorWithF2('passed');
+    const reviewOrchestrator = makeMockReviewOrchestratorWithF2();
     const watcher = new PRMergeWatcher(
       github,
       sessions,
@@ -4948,7 +4992,7 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
 
     const github = makeMockGitHub();
     const sessions = makeMockSessions();
-    const reviewOrchestrator = makeMockReviewOrchestratorWithF2('passed');
+    const reviewOrchestrator = makeMockReviewOrchestratorWithF2();
     const watcher = new PRMergeWatcher(
       github,
       sessions,
@@ -5020,7 +5064,7 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
 
     const github = makeMockGitHub();
     const sessions = makeMockSessions();
-    const reviewOrchestrator = makeMockReviewOrchestratorWithF2('passed');
+    const reviewOrchestrator = makeMockReviewOrchestratorWithF2();
     const watcher = new PRMergeWatcher(
       github,
       sessions,

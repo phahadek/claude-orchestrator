@@ -67,9 +67,19 @@ vi.mock('../../session/analyzeGating', async (importOriginal) => {
 const mockRunProjectTestRequest = vi
   .fn()
   .mockResolvedValue({ passed: true, output: '' });
+const mockAdmitTestRequest = vi.fn().mockReturnValue({
+  runId: 'run-enqueued',
+  status: 'running',
+  position: 0,
+  queueDepth: 0,
+  reused: false,
+  unchangedReplay: false,
+  result: Promise.resolve({ passed: true, output: '' }),
+});
 vi.mock('../../orchestration/testRequestLane', () => ({
   runProjectTestRequest: (...args: unknown[]) =>
     mockRunProjectTestRequest(...args),
+  admitTestRequest: (...args: unknown[]) => mockAdmitTestRequest(...args),
 }));
 
 const mockRunVerifyAsGate = vi.fn().mockResolvedValue({ passed: true });
@@ -1592,14 +1602,24 @@ describe('PreReviewPipeline — setPreReviewStage transitions', () => {
 // ── rerunFlakyTests — F2 verified-flaky actuation ────────────────────────────
 
 describe('PreReviewPipeline.rerunFlakyTests', () => {
-  it('audits + invalidates the existing test result row, then re-runs on the same SHA (no new commit)', async () => {
+  it('audits + invalidates the existing test result row, then enqueues (without awaiting) a re-run on the same SHA (no new commit)', async () => {
     mockLoadOrchestratorConfig.mockReturnValue({
       test: ['npm test'],
       test_timeout_sec: 300,
       test_max_rss_mb: 0,
       test_fail_fast: true,
     });
-    mockRunProjectTestRequest.mockResolvedValue({ passed: true, output: 'ok' });
+    // A slow/never-settling result promise proves the call returns without
+    // waiting on it — the whole point of this non-blocking trigger.
+    mockAdmitTestRequest.mockReturnValue({
+      runId: 'run-enqueued',
+      status: 'running',
+      position: 0,
+      queueDepth: 0,
+      reused: false,
+      unchangedReplay: false,
+      result: new Promise(() => {}),
+    });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 
@@ -1611,9 +1631,12 @@ describe('PreReviewPipeline.rerunFlakyTests', () => {
       makeProject(),
     );
 
-    expect(result).toEqual({ outcome: 'passed', passed: true, output: 'ok' });
+    expect(result).toEqual({
+      triggered: true,
+      contentHash: 'worktree-content-hash',
+    });
 
-    // Audited: invalidation happened, recorded before the re-run.
+    // Audited: invalidation happened, recorded before the enqueue.
     expect(mockDeleteTestRequestRunsForContentHash).toHaveBeenCalledWith(
       'proj-1',
       'worktree-content-hash',
@@ -1628,20 +1651,14 @@ describe('PreReviewPipeline.rerunFlakyTests', () => {
         }),
       }),
     );
-    expect(mockRecordEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event_type: 'flake_recovery_f2_rerun',
-        project_id: 'proj-1',
-        payload: expect.objectContaining({
-          prNumber: PR_NUMBER,
-          sha: HEAD_SHA,
-          outcome: 'passed',
-        }),
-      }),
+    // No outcome is known (or auditable) at trigger time — the run was
+    // never awaited, so this call must not emit a settled-outcome event.
+    expect(mockRecordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'flake_recovery_f2_rerun' }),
     );
 
-    // Re-run on the same SHA — no new commit, no new head_sha.
-    expect(mockRunProjectTestRequest).toHaveBeenCalledWith({
+    // Enqueued on the same SHA — no new commit, no new head_sha.
+    expect(mockAdmitTestRequest).toHaveBeenCalledWith({
       projectId: 'proj-1',
       contentHash: 'worktree-content-hash',
       worktreePath: WORKTREE,
@@ -1675,24 +1692,19 @@ describe('PreReviewPipeline.rerunFlakyTests', () => {
     expect(result).toBeNull();
     expect(mockDeleteTestRequestRunsForContentHash).not.toHaveBeenCalled();
     expect(mockRunTestCommands).not.toHaveBeenCalled();
-    expect(mockRunProjectTestRequest).not.toHaveBeenCalled();
+    expect(mockAdmitTestRequest).not.toHaveBeenCalled();
   });
 
-  it('records inconclusive when head_sha drifted by the time the re-run completed', async () => {
+  it('returns null when the worktree hashes empty (nothing to key the lane run on)', async () => {
     mockLoadOrchestratorConfig.mockReturnValue({
       test: ['npm test'],
       test_timeout_sec: 300,
       test_max_rss_mb: 0,
       test_fail_fast: true,
     });
-    mockRunProjectTestRequest.mockResolvedValue({ passed: true, output: 'ok' });
+    mockComputeWholeTreeContentHash.mockResolvedValueOnce(null);
     const sm = makeSessionManager();
-    const github = {
-      getPRState: vi
-        .fn()
-        .mockResolvedValue({ state: 'open', headSha: 'sha-new-push' }),
-    } as any;
-    const pipeline = new PreReviewPipeline(sm, github);
+    const pipeline = new PreReviewPipeline(sm);
 
     const result = await pipeline.rerunFlakyTests(
       PR_NUMBER,
@@ -1702,17 +1714,9 @@ describe('PreReviewPipeline.rerunFlakyTests', () => {
       makeProject(),
     );
 
-    expect(result).toEqual({
-      outcome: 'inconclusive',
-      passed: true,
-      output: 'ok',
-    });
-    expect(mockRecordEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event_type: 'flake_recovery_f2_rerun',
-        payload: expect.objectContaining({ outcome: 'inconclusive' }),
-      }),
-    );
+    expect(result).toBeNull();
+    expect(mockDeleteTestRequestRunsForContentHash).not.toHaveBeenCalled();
+    expect(mockAdmitTestRequest).not.toHaveBeenCalled();
   });
 });
 

@@ -44,7 +44,10 @@ import {
   formatToolchainMismatch,
 } from '../orchestration/gateEnv';
 import { runTestCommands } from '../session/test-runner';
-import { runProjectTestRequest } from '../orchestration/testRequestLane';
+import {
+  runProjectTestRequest,
+  admitTestRequest,
+} from '../orchestration/testRequestLane';
 import type { TestRequestRunResult } from '../orchestration/testRequestLane';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
 import { formatCIFailureFeedback } from './reviewUtils';
@@ -704,9 +707,19 @@ export class PreReviewPipeline {
   /**
    * Actuate a session's verified-flaky disposition on the F2 (orchestrator-run
    * test) gate: audit + invalidate the shared content-hash cache entry
-   * (test_request_runs, keyed by (project_id, content_hash)), then re-run the
-   * same test commands against the same SHA — no new commit, no new SHA.
-   * Returns null when the project has no F2 tests configured.
+   * (test_request_runs, keyed by (project_id, content_hash)), then enqueue
+   * the same test commands against the same SHA — no new commit, no new SHA —
+   * via the test.request lane's admission path, without awaiting completion.
+   * This must never hold a scheduler slot for the run's duration: it is
+   * reachable from PRMergeWatcher's poll-driven flake-recovery cascade
+   * (tryF2LaneAutoDisposition/actuateF2Rerun), and that poll loop is a pure
+   * settled-verdict reader everywhere else (see
+   * PRMergeWatcher.runMergeabilityCheck) — this call must not be the
+   * exception. The caller reads the eventual outcome back the same way any
+   * other F2 verdict is read: getLatestTestRequestRun keyed on this same
+   * content hash, on a later poll tick, once the enqueued run settles.
+   * Returns null when the project has no F2 tests configured, or when the
+   * worktree hashed empty (nothing to key the lane run on).
    */
   async rerunFlakyTests(
     prNumber: number,
@@ -714,15 +727,12 @@ export class PreReviewPipeline {
     headSha: string,
     worktreePath: string,
     project: ProjectConfig,
-  ): Promise<{
-    outcome: FlakeRecoveryOutcome;
-    passed: boolean;
-    output: string;
-  } | null> {
+  ): Promise<{ triggered: true; contentHash: string } | null> {
     const config = loadOrchestratorConfig(project.projectDir);
     if (!config.test?.length) return null;
 
     const contentHash = await computeWholeTreeContentHash(worktreePath);
+    if (!contentHash) return null;
 
     recordEvent({
       event_type: 'flake_recovery_f2_invalidated',
@@ -731,55 +741,33 @@ export class PreReviewPipeline {
       task_id: null,
       payload: { prNumber, repo, sha: headSha },
     });
-    if (contentHash) {
-      deleteTestRequestRunsForContentHash(project.id, contentHash);
-    }
+    deleteTestRequestRunsForContentHash(project.id, contentHash);
 
-    const { passed, output } = contentHash
-      ? await runProjectTestRequest({
-          projectId: project.id,
-          contentHash,
-          worktreePath,
-          commands: config.test,
-          timeoutSec: config.test_timeout_sec,
-          maxRssMb: config.test_max_rss_mb,
-          sessionId: null,
-          runOrigin: 'pr_pipeline',
-          producer: 'pr_gate',
-        })
-      : await runTestCommands(
-          worktreePath,
-          config.test,
-          config.test_timeout_sec,
-          (msg) =>
-            logger.info(
-              `[PreReviewPipeline] flaky-rerun PR #${prNumber}: ${msg}`,
-            ),
-          { maxRssMb: config.test_max_rss_mb, failFast: config.test_fail_fast },
-        );
-
-    // Re-verify head_sha immediately before recording the outcome — a push
-    // that landed mid-run means this result no longer speaks to the SHA the
-    // disposition was diagnosed against.
-    let outcome: FlakeRecoveryOutcome = passed ? 'passed' : 'failed';
-    if (this.github) {
-      const current = await this.github.getPRState(prNumber, repo);
-      if (current.headSha !== headSha) {
-        outcome = 'inconclusive';
-      }
-    }
-
-    recordEvent({
-      event_type: 'flake_recovery_f2_rerun',
-      actor_type: 'system',
-      project_id: project.id,
-      task_id: null,
-      payload: { prNumber, repo, sha: headSha, outcome },
+    // Enqueue only — admitTestRequest durably records the run and returns
+    // immediately with admission status; its `.result` promise is
+    // deliberately left unawaited here. A later poll tick's settled-verdict
+    // read (PRMergeWatcher.runMergeabilityCheck) is what surfaces the
+    // outcome; a spawn/admission failure here is logged, not thrown.
+    admitTestRequest({
+      projectId: project.id,
+      contentHash,
+      worktreePath,
+      commands: config.test,
+      timeoutSec: config.test_timeout_sec,
+      maxRssMb: config.test_max_rss_mb,
+      sessionId: null,
+      runOrigin: 'pr_pipeline',
+      producer: 'pr_gate',
+    }).result.catch((err: unknown) => {
+      logger.warn(
+        `[PreReviewPipeline] flaky-rerun enqueue failed for PR #${prNumber}: ${(err as Error).message}`,
+      );
     });
+
     logger.info(
-      `[PreReviewPipeline] flaky re-run ${outcome} for PR #${prNumber} SHA ${headSha.slice(0, 7)}`,
+      `[PreReviewPipeline] flaky re-run enqueued for PR #${prNumber} SHA ${headSha.slice(0, 7)}`,
     );
-    return { outcome, passed, output };
+    return { triggered: true, contentHash };
   }
 
   /**

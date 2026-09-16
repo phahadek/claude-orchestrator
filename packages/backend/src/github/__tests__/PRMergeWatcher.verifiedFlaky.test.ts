@@ -197,9 +197,13 @@ function makeMockAutoMerger(): AutoMerger {
 
 function makeMockReviewOrchestrator(): ReviewOrchestrator {
   return {
+    // rerunFlakyTests only enqueues now — it never hands back a settled
+    // pass/fail (see PreReviewPipeline.rerunFlakyTests). The eventual
+    // outcome is read back by PRMergeWatcher.runMergeabilityCheck on a
+    // later poll tick, not synchronously from this call.
     rerunFlakyTests: vi
       .fn()
-      .mockResolvedValue({ outcome: 'passed', passed: true, output: 'ok' }),
+      .mockResolvedValue({ triggered: true, contentHash: 'content-hash-1' }),
     rerunFlakyAnalyze: vi
       .fn()
       .mockResolvedValue({ outcome: 'passed', passed: true, output: 'ok' }),
@@ -267,7 +271,7 @@ describe('PRMergeWatcher.handleVerifiedFlakyDisposition — same-SHA re-run actu
     );
   });
 
-  it('F2 gate: delegates to ReviewOrchestrator.rerunFlakyTests for an audited invalidation + re-run on the same SHA', async () => {
+  it('F2 gate: delegates to ReviewOrchestrator.rerunFlakyTests to enqueue a re-run on the same SHA, without awaiting its outcome', async () => {
     const github = makeMockGitHub();
     const { watcher, reviewOrchestrator } = makeWatcher(github);
     const pr = makePRRow();
@@ -285,6 +289,27 @@ describe('PRMergeWatcher.handleVerifiedFlakyDisposition — same-SHA re-run actu
       expect.objectContaining({ id: 'project-1' }),
     );
     expect(vi.mocked(github.rerunFailedJobs)).not.toHaveBeenCalled();
+    // No settled outcome exists yet at this point — the budget/pause
+    // bookkeeping only happens once runMergeabilityCheck reads the settled
+    // verdict back on a later poll tick, not synchronously from this call.
+    expect(vi.mocked(incrementFlakeRecoveryAttempts)).not.toHaveBeenCalled();
+    expect(vi.mocked(resetFlakeRecoveryAttempts)).not.toHaveBeenCalled();
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
+  });
+
+  it('F2 gate: no-ops (does not track a pending rerun) when ReviewOrchestrator reports nothing was actuated', async () => {
+    const github = makeMockGitHub();
+    const { watcher, reviewOrchestrator } = makeWatcher(github);
+    vi.mocked(reviewOrchestrator.rerunFlakyTests).mockResolvedValue(null);
+    const pr = makePRRow();
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+
+    await watcher.handleVerifiedFlakyDisposition(
+      makePayload({ disposition: { gate: 'f2', reason: 'contention' } }),
+    );
+
+    expect(vi.mocked(incrementFlakeRecoveryAttempts)).not.toHaveBeenCalled();
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
   });
 
   it('Analyze gate: delegates to ReviewOrchestrator.rerunFlakyAnalyze for an audited invalidation + re-run on the same SHA', async () => {
@@ -521,26 +546,12 @@ describe('PRMergeWatcher.handleVerifiedFlakyDisposition — inconclusive outcome
     );
   });
 
-  it('F2 gate: records inconclusive and does not consume retry budget when ReviewOrchestrator reports SHA drift', async () => {
-    const github = makeMockGitHub();
-    const { watcher, reviewOrchestrator } = makeWatcher(github);
-    vi.mocked(reviewOrchestrator.rerunFlakyTests).mockResolvedValue({
-      outcome: 'inconclusive',
-      passed: false,
-      output: '',
-    } as any);
-    const pr = makePRRow();
-    vi.mocked(getPRByNumber).mockReturnValue(pr);
-
-    await watcher.handleVerifiedFlakyDisposition(
-      makePayload({ disposition: { gate: 'f2', reason: 'contention' } }),
-    );
-
-    expect(vi.mocked(incrementFlakeRecoveryAttempts)).not.toHaveBeenCalled();
-    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
-      PR_NUMBER,
-      REPO,
-      null,
-    );
-  });
+  // F2's own SHA-drift/staleness handling no longer has a synchronous
+  // "inconclusive" outcome to record here — PreReviewPipeline.rerunFlakyTests
+  // only enqueues (see its doc comment), so there is nothing to compare
+  // head_sha against at the point handleVerifiedFlakyDisposition returns.
+  // A rerun made stale by a subsequent push is instead dropped unconsumed
+  // by content-hash mismatch when runMergeabilityCheck reads it back on a
+  // later poll tick — see the "allows a later, independent recovery once a
+  // new push has landed" case in PRMergeWatcher.f2LaneRedriveRecursion.test.ts.
 });
