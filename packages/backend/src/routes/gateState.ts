@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import {
   getGateReadiness,
   reconcileGateRunnability,
+  defaultAncestrySourceForProject,
   nextRunnableGateItems,
   nextPendingGateItems,
   getGateItem,
@@ -109,18 +110,28 @@ export function createGateStateRouter(): Router {
     }
   });
 
-  // POST /api/gate/reconcile  { deploySha }
+  // POST /api/gate/reconcile  { deploySha, project }
   router.post(
     '/gate/reconcile',
     asyncHandler(async (req: Request, res: Response) => {
-      const body = req.body as { deploySha?: unknown };
+      const body = req.body as { deploySha?: unknown; project?: unknown };
       const deploySha =
         typeof body.deploySha === 'string' ? body.deploySha : null;
       if (!deploySha) {
         res.status(400).json({ error: 'deploySha is required' });
         return;
       }
-      res.json(await reconcileGateRunnability(deploySha));
+      const project = typeof body.project === 'string' ? body.project : null;
+      if (!project) {
+        res.status(400).json({ error: 'project is required' });
+        return;
+      }
+      res.json(
+        await reconcileGateRunnability(deploySha, {
+          project,
+          ancestrySource: defaultAncestrySourceForProject(project),
+        }),
+      );
     }),
   );
 

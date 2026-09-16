@@ -9,7 +9,11 @@
  * outcomes and has no auto-apply path.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll, vi } from 'vitest';
+import { execFileSync } from 'child_process';
+import { mkdirSync, mkdtempSync, rmSync } from 'fs';
+import { join } from 'path';
+import { resolveTestScratchDataDir } from '../../testScratchDataDir.js';
 
 vi.mock('../../db/db.js', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
@@ -29,6 +33,7 @@ import {
   reopenSeedItem,
 } from '../seedService.js';
 import type { DeployAncestrySource } from '../../gate/gateService.js';
+import { ProjectService } from '../../projects/ProjectService.js';
 
 beforeEach(() => {
   db.prepare('DELETE FROM seed_item_event').run();
@@ -217,6 +222,71 @@ describe('nextApplyableSeedItems', () => {
     );
     expect(smallBatch.length).toBe(3);
     expect(smallBatch.length).toBeLessThan(items.length);
+  });
+});
+
+describe('nextApplyableSeedItems default per-project ancestry', () => {
+  // Real commit shas from this repo's own history, so
+  // createLocalGitAncestrySource's `git merge-base --is-ancestor` has a
+  // genuine ancestry relationship to check against, with project_dir pointed
+  // at this checkout (mirrors opsLoad.test.ts's dep-deploy-gating suite).
+  const repoDir = process.cwd();
+  const headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoDir })
+    .toString()
+    .trim();
+  const ancestorSha = execFileSync('git', ['rev-parse', 'HEAD~3'], {
+    cwd: repoDir,
+  })
+    .toString()
+    .trim();
+
+  beforeAll(() => {
+    ProjectService.create({
+      id: 'ancestry-project',
+      name: 'Ancestry Project',
+      projectDir: repoDir,
+    });
+  });
+
+  it('returns a seed whose min_deployed_commit is an ancestor of the deploy sha, resolved against the project clone', () => {
+    const item = makeItem({ project: 'ancestry-project', milestone: 'M12' });
+    setMinDeployedCommit(item.id, ancestorSha, new Date(1).toISOString());
+
+    const applyable = nextApplyableSeedItems(
+      'ancestry-project',
+      'M12',
+      headSha,
+    );
+    expect(applyable.map((i) => i.id)).toEqual([item.id]);
+  });
+
+  it('still resolves correctly when the process cwd is not a git repo', () => {
+    const item = makeItem({ project: 'ancestry-project', milestone: 'M12' });
+    setMinDeployedCommit(item.id, ancestorSha, new Date(1).toISOString());
+
+    // Scratch dirs live under packages/backend/, never the system tmpdir —
+    // see testScratchDataDir.ts and its .gitignore rule.
+    const scratchBase = resolveTestScratchDataDir(
+      process.pid,
+      join(__dirname, '..', '..'),
+    );
+    mkdirSync(scratchBase, { recursive: true });
+    const nonRepoDir = mkdtempSync(
+      join(scratchBase, 'seed-ancestry-non-repo-'),
+    );
+    const originalCwd = process.cwd();
+    process.chdir(nonRepoDir);
+    try {
+      const applyable = nextApplyableSeedItems(
+        'ancestry-project',
+        'M12',
+        headSha,
+      );
+      expect(applyable.map((i) => i.id)).toEqual([item.id]);
+    } finally {
+      process.chdir(originalCwd);
+      rmSync(nonRepoDir, { recursive: true, force: true });
+    }
   });
 });
 

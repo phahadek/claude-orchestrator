@@ -4,6 +4,8 @@ import * as gateStore from './gateStore';
 import type { GateItem } from './gateStore';
 import type { GateItemClassification } from '../db/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
+import { getProjectById } from '../config';
+import { logger } from '../logger';
 import {
   getTaskCache,
   getVerifySessionsForGateItems,
@@ -33,9 +35,24 @@ export interface DeployAncestrySource {
   isAncestor(ancestorSha: string, descendantSha: string): boolean;
 }
 
-/** The default git-ancestry deploy-integration surface, reused by seedService's applyability check. */
-export const gitAncestrySource: DeployAncestrySource =
-  createLocalGitAncestrySource();
+let warnedUnscopedAncestrySource = false;
+
+/**
+ * Every caller of the unscoped default runs `git merge-base` in the
+ * backend process's own cwd, not any project's clone — which is not a git
+ * repo, so every ancestry check silently fails closed except the
+ * ancestorSha === descendantSha short-circuit (see the polimarket M15 seed
+ * under-reporting this caused). Logged once so a future caller reaching
+ * this path is loud rather than silently wrong.
+ */
+function warnUnscopedAncestrySourceUse(): void {
+  if (warnedUnscopedAncestrySource) return;
+  warnedUnscopedAncestrySource = true;
+  logger.warn(
+    'gateService: an unscoped git-ancestry source was invoked with no project cwd — ' +
+      'use defaultAncestrySourceForProject(project) / defaultSyncAncestrySourceForProject(project) instead',
+  );
+}
 
 /**
  * A git-ancestry source scoped to a specific local clone (a project's
@@ -100,9 +117,53 @@ export function createLocalAsyncGitAncestrySource(
   };
 }
 
-/** The default non-blocking git-ancestry source, used by reconcileGateRunnability. */
-const asyncGitAncestrySource: AsyncDeployAncestrySource =
-  createLocalAsyncGitAncestrySource();
+/**
+ * The default non-blocking git-ancestry source. Not exported — every caller
+ * must go through defaultAncestrySourceForProject (or inject its own scoped
+ * source); see warnUnscopedAncestrySourceUse above.
+ */
+const asyncGitAncestrySource: AsyncDeployAncestrySource = {
+  isAncestor(ancestorSha, descendantSha) {
+    warnUnscopedAncestrySourceUse();
+    return createLocalAsyncGitAncestrySource().isAncestor(
+      ancestorSha,
+      descendantSha,
+    );
+  },
+};
+
+/**
+ * The per-project git-ancestry source: resolves `project`'s local clone
+ * (`projectDir`) and scopes `git merge-base` to it, rather than the backend
+ * process's own cwd (which is not a git repo — see warnUnscopedAncestrySourceUse).
+ * The default for both the scheduled gate-reconciler tick and the on-demand
+ * seed/gate routes; callers may still inject their own scoped source (e.g.
+ * tests).
+ */
+export function defaultAncestrySourceForProject(
+  project: string,
+): AsyncDeployAncestrySource {
+  let projectDir: string | undefined;
+  try {
+    projectDir = getProjectById(project)?.projectDir;
+  } catch {
+    projectDir = undefined;
+  }
+  return createLocalAsyncGitAncestrySource(projectDir);
+}
+
+/** Synchronous twin of defaultAncestrySourceForProject, for callers (nextApplyableSeedItems) that need the blocking DeployAncestrySource shape. */
+export function defaultSyncAncestrySourceForProject(
+  project: string,
+): DeployAncestrySource {
+  let projectDir: string | undefined;
+  try {
+    projectDir = getProjectById(project)?.projectDir;
+  } catch {
+    projectDir = undefined;
+  }
+  return createLocalGitAncestrySource(projectDir);
+}
 
 /**
  * The closed disposition vocabulary an event may carry. Anything outside this
