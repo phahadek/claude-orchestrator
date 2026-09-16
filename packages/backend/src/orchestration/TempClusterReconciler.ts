@@ -13,19 +13,55 @@ const ORPHAN_AGE_MS = 2 * 60 * 60_000; // 2h
 const MAINTENANCE_INTERVAL_MS = 30 * 60_000;
 
 // testing.postgresql (Python tempfile.mkdtemp(), default prefix) produces
-// /tmp/tmpXXXXXXXX; bash mktemp -d produces /tmp/tmp.XXXXXXXXXX. Nothing the
-// reconciler reclaims lives under any other name shape, so entries that
-// don't match are skipped before any fs.access/stat call.
+// /tmp/tmpXXXXXXXX; bash mktemp -d produces /tmp/tmp.XXXXXXXXXX. This gates
+// only the (multi-syscall) Postgres cluster check — entries that don't match
+// still go through the single-stat generic sweep below, since backend test
+// mkdtemp dirs (oc-*, co-*, mcp-*, flaky-*, etc.) don't share this shape.
 const TEMP_CLUSTER_ENTRY_RE = /^tmp[A-Za-z0-9_.]{6,}$/;
 
-// Bounds fs.access/stat concurrency for the (small) set of name-shape
-// candidates so a future large candidate set can't saturate the threadpool.
+// Backend tests create plain mkdtemp dirs (oc-*, co-*, mcp-*, flaky-*, etc. —
+// no shared naming convention) normally removed in afterEach/afterAll; a
+// killed/timed-out/crashed run leaks the dir with no analog to postmaster.pid
+// to prove liveness. Age is the only safety net here, so the margin is set
+// well beyond the default test_timeout_sec (300s, orchestrator-config.ts) plus
+// GRACE_PERIOD_MS (test-runner.ts) — and beyond any realistic per-project
+// override — rather than reusing the Postgres-specific ORPHAN_AGE_MS.
+const GENERIC_ORPHAN_AGE_MS = 6 * 60 * 60_000; // 6h
+
+// Bounds fs.access/stat concurrency across all candidates (Postgres-shaped
+// or generic) so a polluted /tmp with tens of thousands of entries can't
+// saturate the threadpool.
 const FIND_CLUSTER_CONCURRENCY = 8;
 
-interface SweepStats {
+// Top-level /tmp entries created by the OS/other services, not by backend
+// test mkdtemp calls. No structural marker (like PG_VERSION) distinguishes
+// these from a leaked test dir by inspection, so they're excluded by name
+// up front — the cost of over-excluding a few prefixes is negligible next
+// to the cost of a false-positive removal on a production host.
+const SYSTEM_ENTRY_PATTERNS: RegExp[] = [
+  /^systemd-private-/,
+  /^\.X11-unix$/,
+  /^\.ICE-unix$/,
+  /^\.font-unix$/,
+  /^\.Test-unix$/,
+  /^ssh-/,
+  /^snap\./,
+  /^\.XIM-unix$/,
+];
+
+function isSystemEntry(name: string): boolean {
+  return SYSTEM_ENTRY_PATTERNS.some((pattern) => pattern.test(name));
+}
+
+interface CategoryStats {
   scanned: number;
   removed: number;
   failed: number;
+}
+
+interface CombinedSweepStats {
+  postgres: CategoryStats;
+  generic: CategoryStats;
   skipped: number;
 }
 
@@ -75,43 +111,82 @@ async function isLive(dirPath: string): Promise<boolean> {
 
 async function reconcileEntry(
   entryPath: string,
-  stats: SweepStats,
+  name: string,
+  stats: CombinedSweepStats,
   now: number,
 ): Promise<void> {
   // Any stat/read error below on a candidate is treated defensively as
   // "not orphaned" — skip it, never remove on an inconclusive read.
   try {
-    const clusterDir = await findClusterDir(entryPath);
-    if (!clusterDir) return;
+    if (TEMP_CLUSTER_ENTRY_RE.test(name)) {
+      const clusterDir = await findClusterDir(entryPath);
+      if (clusterDir) {
+        stats.postgres.scanned++;
 
-    stats.scanned++;
+        if (await isLive(clusterDir)) return;
 
-    if (await isLive(clusterDir)) return;
+        let entryStat: fs.Stats;
+        let clusterStat: fs.Stats;
+        try {
+          entryStat = await fs.promises.stat(entryPath);
+          clusterStat =
+            clusterDir === entryPath
+              ? entryStat
+              : await fs.promises.stat(clusterDir);
+        } catch {
+          return;
+        }
+        const mostRecentMtimeMs = Math.max(
+          entryStat.mtimeMs,
+          clusterStat.mtimeMs,
+        );
+        if (now - mostRecentMtimeMs < ORPHAN_AGE_MS) return;
+
+        try {
+          await fs.promises.rm(entryPath, { recursive: true, force: true });
+          stats.postgres.removed++;
+          logger.info(
+            `[TempClusterReconciler] removed orphaned Postgres data dir ${entryPath}`,
+          );
+        } catch (err) {
+          stats.postgres.failed++;
+          logger.error(
+            `[TempClusterReconciler] failed to remove orphaned Postgres data dir ${entryPath}: ${err}`,
+          );
+        }
+        return;
+      }
+    }
+
+    // Not a live Postgres cluster dir — either the name doesn't have the
+    // tmp*/tmp.* shape testing.postgresql/mktemp produce, or it does but no
+    // PG_VERSION was found at either depth. Fall back to the generic
+    // mkdtemp-leak check.
+    if (isSystemEntry(name)) {
+      stats.skipped++;
+      return;
+    }
+
+    stats.generic.scanned++;
 
     let entryStat: fs.Stats;
-    let clusterStat: fs.Stats;
     try {
       entryStat = await fs.promises.stat(entryPath);
-      clusterStat =
-        clusterDir === entryPath
-          ? entryStat
-          : await fs.promises.stat(clusterDir);
     } catch {
       return;
     }
-    const mostRecentMtimeMs = Math.max(entryStat.mtimeMs, clusterStat.mtimeMs);
-    if (now - mostRecentMtimeMs < ORPHAN_AGE_MS) return;
+    if (now - entryStat.mtimeMs < GENERIC_ORPHAN_AGE_MS) return;
 
     try {
       await fs.promises.rm(entryPath, { recursive: true, force: true });
-      stats.removed++;
+      stats.generic.removed++;
       logger.info(
-        `[TempClusterReconciler] removed orphaned Postgres data dir ${entryPath}`,
+        `[TempClusterReconciler] removed orphaned temp dir ${entryPath}`,
       );
     } catch (err) {
-      stats.failed++;
+      stats.generic.failed++;
       logger.error(
-        `[TempClusterReconciler] failed to remove orphaned Postgres data dir ${entryPath}: ${err}`,
+        `[TempClusterReconciler] failed to remove orphaned temp dir ${entryPath}: ${err}`,
       );
     }
   } catch {
@@ -119,8 +194,12 @@ async function reconcileEntry(
   }
 }
 
-async function reconcileBaseDir(baseDir: string): Promise<SweepStats> {
-  const stats: SweepStats = { scanned: 0, removed: 0, failed: 0, skipped: 0 };
+async function reconcileBaseDir(baseDir: string): Promise<CombinedSweepStats> {
+  const stats: CombinedSweepStats = {
+    postgres: { scanned: 0, removed: 0, failed: 0 },
+    generic: { scanned: 0, removed: 0, failed: 0 },
+    skipped: 0,
+  };
 
   // withFileTypes lets us discard non-directory entries using the same
   // syscall as the listing itself, avoiding a stat() per entry across a
@@ -134,22 +213,37 @@ async function reconcileBaseDir(baseDir: string): Promise<SweepStats> {
 
   const now = Date.now();
 
-  const candidatePaths: string[] = [];
+  const candidates: { path: string; name: string }[] = [];
   for (const dirent of entries) {
-    if (!dirent.isDirectory() || !TEMP_CLUSTER_ENTRY_RE.test(dirent.name)) {
+    if (!dirent.isDirectory()) {
       stats.skipped++;
       continue;
     }
-    candidatePaths.push(path.join(baseDir, dirent.name));
+    candidates.push({
+      path: path.join(baseDir, dirent.name),
+      name: dirent.name,
+    });
   }
 
-  await runWithConcurrency(
-    candidatePaths,
-    FIND_CLUSTER_CONCURRENCY,
-    (entryPath) => reconcileEntry(entryPath, stats, now),
+  await runWithConcurrency(candidates, FIND_CLUSTER_CONCURRENCY, (c) =>
+    reconcileEntry(c.path, c.name, stats, now),
   );
 
   return stats;
+}
+
+function logSweepSummary(stats: CombinedSweepStats): void {
+  if (
+    stats.postgres.removed > 0 ||
+    stats.postgres.failed > 0 ||
+    stats.generic.removed > 0 ||
+    stats.generic.failed > 0
+  ) {
+    logger.info(
+      `[TempClusterReconciler] sweep complete — postgres scanned: ${stats.postgres.scanned}, removed: ${stats.postgres.removed}, failed: ${stats.postgres.failed}; ` +
+        `generic scanned: ${stats.generic.scanned}, removed: ${stats.generic.removed}, failed: ${stats.generic.failed}; skipped: ${stats.skipped}`,
+    );
+  }
 }
 
 export async function runBootTempClusterReconciliation(options?: {
@@ -157,11 +251,7 @@ export async function runBootTempClusterReconciliation(options?: {
 }): Promise<void> {
   const baseDir = options?.baseDir ?? os.tmpdir();
   const stats = await reconcileBaseDir(baseDir);
-  if (stats.removed > 0 || stats.failed > 0) {
-    logger.info(
-      `[TempClusterReconciler] sweep complete — scanned: ${stats.scanned}, removed: ${stats.removed}, failed: ${stats.failed}, skipped: ${stats.skipped}`,
-    );
-  }
+  logSweepSummary(stats);
 }
 
 export function register(scheduler: Scheduler): void {
@@ -172,11 +262,7 @@ export function register(scheduler: Scheduler): void {
     concurrency: 'skip-if-running',
     run: async () => {
       const stats = await reconcileBaseDir(os.tmpdir());
-      if (stats.removed > 0 || stats.failed > 0) {
-        logger.info(
-          `[TempClusterReconciler] sweep complete — scanned: ${stats.scanned}, removed: ${stats.removed}, failed: ${stats.failed}, skipped: ${stats.skipped}`,
-        );
-      }
+      logSweepSummary(stats);
     },
   });
 }

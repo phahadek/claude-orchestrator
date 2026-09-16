@@ -41,6 +41,7 @@ const mockedRm = vi.mocked(fs.promises.rm);
 
 const BASE_DIR = '/fake/tmp';
 const ORPHAN_AGE_MS = 2 * 60 * 60_000;
+const GENERIC_ORPHAN_AGE_MS = 6 * 60 * 60_000;
 
 function makeDirent(name: string, isDirectory = true) {
   return {
@@ -55,6 +56,8 @@ function makeStat(mtimeMs: number) {
 
 const OLD_MTIME = Date.now() - ORPHAN_AGE_MS - 60_000;
 const FRESH_MTIME = Date.now() - 60_000;
+const OLD_GENERIC_MTIME = Date.now() - GENERIC_ORPHAN_AGE_MS - 60_000;
+const FRESH_GENERIC_MTIME = Date.now() - GENERIC_ORPHAN_AGE_MS + 60_000;
 
 let livePid: number;
 
@@ -351,7 +354,7 @@ describe('TempClusterReconciler', () => {
     expect(mockedRm).not.toHaveBeenCalled();
   });
 
-  it('prefilters by the tmp* name shape: only the single tmp* candidate among 1000 unrelated dirs is accessed/stat-ed, and skipped/scanned are reported honestly', async () => {
+  it('prefilters by the tmp* name shape: only the single tmp* candidate among 1000 unrelated dirs is access-ed for a Postgres cluster; the rest route to the generic sweep instead', async () => {
     const clusterName = 'tmpabc12345';
     const entryPath = `${BASE_DIR}/${clusterName}`;
     const clusterDir = `${entryPath}/data`;
@@ -388,10 +391,10 @@ describe('TempClusterReconciler', () => {
       expect.objectContaining({ recursive: true, force: true }),
     );
     expect(mockedLoggerInfo).toHaveBeenCalledWith(
-      expect.stringContaining('scanned: 1'),
+      expect.stringContaining('postgres scanned: 1, removed: 1'),
     );
     expect(mockedLoggerInfo).toHaveBeenCalledWith(
-      expect.stringContaining('skipped: 1000'),
+      expect.stringContaining('generic scanned: 1000, removed: 0'),
     );
   });
 
@@ -486,5 +489,116 @@ describe('TempClusterReconciler', () => {
 
     expect(maxInFlight).toBeGreaterThan(0);
     expect(maxInFlight).toBeLessThanOrEqual(CONCURRENCY_LIMIT);
+  });
+});
+
+describe('TempClusterReconciler generic mkdtemp sweep', () => {
+  function setupGenericEntry(name: string, mtimeMs: number) {
+    const entryPath = `${BASE_DIR}/${name}`;
+    mockedReaddir.mockResolvedValue([makeDirent(name)] as unknown as ReturnType<
+      typeof fs.readdirSync
+    >);
+    // No PG_VERSION at any depth — not a Postgres cluster.
+    mockedAccess.mockRejectedValue(new Error('ENOENT'));
+    mockedStat.mockImplementation(async (p: unknown) => {
+      if (String(p) === entryPath) return makeStat(mtimeMs);
+      throw new Error('ENOENT');
+    });
+    return entryPath;
+  }
+
+  it('removes a non-Postgres mkdtemp dir older than GENERIC_ORPHAN_AGE_MS', async () => {
+    const entryPath = setupGenericEntry('oc-abc123', OLD_GENERIC_MTIME);
+
+    await runBootTempClusterReconciliation({ baseDir: BASE_DIR });
+
+    expect(mockedRm).toHaveBeenCalledWith(
+      entryPath,
+      expect.objectContaining({ recursive: true, force: true }),
+    );
+  });
+
+  it('spares a non-Postgres mkdtemp dir within GENERIC_ORPHAN_AGE_MS', async () => {
+    setupGenericEntry('mcp-fresh', FRESH_GENERIC_MTIME);
+
+    await runBootTempClusterReconciliation({ baseDir: BASE_DIR });
+
+    expect(mockedRm).not.toHaveBeenCalled();
+  });
+
+  it('never removes a dir within the safety margin even under the old (2h) Postgres age', async () => {
+    // A generic dir aged past ORPHAN_AGE_MS but not past GENERIC_ORPHAN_AGE_MS
+    // must survive — the Postgres age margin does not apply to it.
+    setupGenericEntry('flaky-xyz', OLD_MTIME);
+
+    await runBootTempClusterReconciliation({ baseDir: BASE_DIR });
+
+    expect(mockedRm).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'systemd-private-abc123-foo.service-xyz',
+    '.X11-unix',
+    '.ICE-unix',
+    '.font-unix',
+    'ssh-AbCdEf',
+    'snap.some-app',
+  ])(
+    'never removes the known system entry %s regardless of age',
+    async (name) => {
+      setupGenericEntry(name, OLD_GENERIC_MTIME);
+
+      await runBootTempClusterReconciliation({ baseDir: BASE_DIR });
+
+      expect(mockedRm).not.toHaveBeenCalled();
+      expect(mockedStat).not.toHaveBeenCalledWith(`${BASE_DIR}/${name}`);
+    },
+  );
+
+  it('treats a stat error on a generic candidate as skip, not remove', async () => {
+    mockedReaddir.mockResolvedValue([
+      makeDirent('proj-service-1'),
+    ] as unknown as ReturnType<typeof fs.readdirSync>);
+    mockedAccess.mockRejectedValue(new Error('ENOENT'));
+    mockedStat.mockRejectedValue(new Error('EACCES'));
+
+    await runBootTempClusterReconciliation({ baseDir: BASE_DIR });
+
+    expect(mockedRm).not.toHaveBeenCalled();
+  });
+
+  it('reports removed/failed counts for the generic category separately from the postgres category', async () => {
+    const removableEntry = 'orch-route-old';
+    const failingEntry = 'yaml-stub-old';
+    const entries = [removableEntry, failingEntry];
+
+    mockedReaddir.mockResolvedValue(
+      entries.map((n) => makeDirent(n)) as unknown as ReturnType<
+        typeof fs.readdirSync
+      >,
+    );
+    mockedAccess.mockRejectedValue(new Error('ENOENT'));
+    mockedStat.mockImplementation(async (p: unknown) => {
+      const target = String(p);
+      if (target === `${BASE_DIR}/${removableEntry}`) {
+        return makeStat(OLD_GENERIC_MTIME);
+      }
+      if (target === `${BASE_DIR}/${failingEntry}`) {
+        return makeStat(OLD_GENERIC_MTIME);
+      }
+      throw new Error('ENOENT');
+    });
+    mockedRm.mockImplementation(async (p: unknown) => {
+      if (String(p) === `${BASE_DIR}/${failingEntry}`) {
+        throw new Error('EBUSY');
+      }
+      return undefined;
+    });
+
+    await runBootTempClusterReconciliation({ baseDir: BASE_DIR });
+
+    expect(mockedLoggerInfo).toHaveBeenCalledWith(
+      expect.stringContaining('generic scanned: 2, removed: 1, failed: 1'),
+    );
   });
 });
