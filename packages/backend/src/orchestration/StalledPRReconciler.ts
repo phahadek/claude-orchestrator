@@ -844,7 +844,10 @@ export class StalledPRReconciler {
    * does, so the PR always surfaces to a human within a bounded number of
    * reconciler ticks either way.
    */
-  private recordUnchargedRefusal(pr: PullRequestRow, kind: StalledPRKind): void {
+  private recordUnchargedRefusal(
+    pr: PullRequestRow,
+    kind: StalledPRKind,
+  ): void {
     const key = this.unchargedRefusalStreakKey(pr);
     const streak = (this.unchargedRefusalStreaks.get(key) ?? 0) + 1;
     const cap = this.options.retryCap ?? DEFAULT_RETRY_CAP;
