@@ -87,9 +87,11 @@ beforeEach(() => {
  * everything that happens after it.
  *
  * Spawn call order inside runAutofix:
- *  (getChangedFiles: git diff --name-only <base>...HEAD — queued separately
- *   by the caller via queueChangedFiles, since it runs before the autofix
- *   command itself)
+ *  (getChangedFiles: git show-ref --verify refs/remotes/origin/<base> (ref
+ *   resolution — not found in these tests, so getChangedFiles falls back to
+ *   the plain local <base> ref) then git diff --name-only <base>...HEAD —
+ *   both queued separately by the caller via queueChangedFiles, since they
+ *   run before the autofix command itself)
  *  (the autofix command(s) themselves — queued by the caller)
  *  0: git status --porcelain (dirty check)
  *  1: git add -- <changedFiles>
@@ -105,6 +107,7 @@ beforeEach(() => {
  * 11: git rev-parse HEAD (synced sha)
  */
 function queueChangedFiles(stagedFile = 'src/foo.py') {
+  spawnQueue.push({ exitCode: 1, stdout: '' }); // git show-ref --verify refs/remotes/origin/<base> (not found)
   spawnQueue.push({ exitCode: 0, stdout: `${stagedFile}\n` }); // git diff --name-only <base>...HEAD
 }
 
