@@ -1,10 +1,9 @@
 import {
   listLivePlanningSessionRows,
   listLiveSessionRows,
-  getSessionLastActivityMs,
   archiveSession,
   getSession,
-  hasUndispositionedStagedIntentsForSession,
+  getUndispositionedStagedIntentSessionIds,
   TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED,
 } from '../db/queries';
 import { isPlanningSession } from './sessionPredicates';
@@ -13,7 +12,7 @@ import { revokeRouteCredential } from '../auth/SessionRouteAuth';
 import { recordEvent } from '../audit/AuditLog';
 import { runtimeSettings } from '../config';
 import {
-  isSessionProcessAlive,
+  readLiveSessionProcessIds,
   scanClaudeSessionProcesses,
   killWorktreeProcessTree,
   type ClaudeSessionProcess,
@@ -77,8 +76,21 @@ export function __resetLivenessSweepSummaryStateForTests(): void {
 }
 
 export interface SessionLivenessReconcilerDeps {
-  /** Overridable for tests; defaults to the real `ps`-backed check. */
+  /**
+   * Overridable for tests. When set, takes priority over
+   * snapshotLiveProcessIds below and is called once per candidate row, as
+   * before — kept for tests that want per-session control over the
+   * verdict. Real sweeps leave this unset so the sweep takes exactly one
+   * /proc snapshot instead (see snapshotLiveProcessIds).
+   */
   isProcessAlive?: (sessionId: string) => boolean;
+  /**
+   * Overridable for tests; defaults to the real in-process /proc scan
+   * (processLiveness.ts's readLiveSessionProcessIds). Called at most once
+   * per sweep — every row's liveness verdict is a membership test against
+   * this one snapshot, never a fresh scan per row.
+   */
+  snapshotLiveProcessIds?: () => Set<string> | null;
   /** Drops the session's stale in-memory entry, if any — SessionManager wires this to evictDeadSessionEntry. */
   evictSessionMapEntry?: (sessionId: string) => void;
   nowFn?: () => number;
@@ -183,13 +195,9 @@ function runLivenessSweep(
     return { reconciled: [], examined: 0, alive: 0 };
   }
 
-  const isProcessAlive = deps.isProcessAlive ?? isSessionProcessAlive;
   const evictSessionMapEntry = deps.evictSessionMapEntry ?? (() => {});
   const now = deps.nowFn ? deps.nowFn() : Date.now();
   const bootTimeMs = deps.bootTimeMs ?? BACKEND_BOOT_MS;
-  const hasUndispositionedStagedIntents =
-    deps.hasUndispositionedStagedIntents ??
-    hasUndispositionedStagedIntentsForSession;
 
   const examined = rows.length;
   let alive = 0;
@@ -205,14 +213,47 @@ function runLivenessSweep(
     return { reconciled: [], examined, alive: 0 };
   }
 
-  for (const row of rows) {
+  // Only a 'running' row can be acted on by the non-planning population:
+  // every other status falls straight into the idle steady-state branch
+  // below regardless of what the process check would have said (see that
+  // branch's comment), so there is nothing for a per-row process check to
+  // decide for those rows — skip it rather than pay for a verdict nobody
+  // consults. The planning population's tryMarkPlanningTerminal path can
+  // still act on an idle row, so it keeps checking every row.
+  const actionableRows =
+    population === 'non-planning'
+      ? rows.filter((row) => row.status === 'running')
+      : rows;
+  if (population === 'non-planning') {
+    for (const row of rows) {
+      if (row.status !== 'running') idleProcessAbsentIds.push(row.session_id);
+    }
+  }
+
+  let isProcessAlive = deps.isProcessAlive;
+  if (!isProcessAlive) {
+    const liveIds = (
+      deps.snapshotLiveProcessIds ?? readLiveSessionProcessIds
+    )();
+    isProcessAlive = (sessionId: string) => liveIds?.has(sessionId) ?? true;
+  }
+
+  let hasUndispositionedStagedIntents = deps.hasUndispositionedStagedIntents;
+  if (!hasUndispositionedStagedIntents) {
+    const staged = getUndispositionedStagedIntentSessionIds(
+      actionableRows.map((row) => row.session_id),
+    );
+    hasUndispositionedStagedIntents = (sessionId: string) =>
+      staged.has(sessionId);
+  }
+
+  for (const row of actionableRows) {
     if (isProcessAlive(row.session_id)) {
       alive++;
       continue;
     }
 
-    const lastActivity =
-      getSessionLastActivityMs(row.session_id) ?? row.started_at;
+    const lastActivity = row.last_event_at ?? row.started_at;
     if (now - lastActivity < LIVENESS_RECONCILE_GRACE_MS) {
       // Not yet clear of the process-race grace floor — neither confirmed
       // dead nor counted alive; the process check itself did not say alive.

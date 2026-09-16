@@ -19,40 +19,105 @@ vi.mock('../../logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+const readdirSyncMock = vi.fn();
+const readFileSyncMock = vi.fn();
+
+vi.mock('fs', () => ({
+  default: {
+    readdirSync: (...args: unknown[]) => readdirSyncMock(...args),
+    readFileSync: (...args: unknown[]) => readFileSyncMock(...args),
+  },
+}));
+
 import {
   isSessionProcessAlive,
+  readLiveSessionProcessIds,
   scanWorktreeProcesses,
   killWorktreeProcessTree,
 } from '../processLiveness';
 
 beforeEach(() => {
   execSyncMock.mockReset();
+  readdirSyncMock.mockReset();
+  readFileSyncMock.mockReset();
+});
+
+/** Builds a fixture /proc tree: pid -> NUL-separated argv string. */
+function mockProcTree(pidToCmdline: Record<string, string>): void {
+  readdirSyncMock.mockReturnValue(Object.keys(pidToCmdline));
+  readFileSyncMock.mockImplementation((path: string) => {
+    const match = path.match(/^\/proc\/(\d+)\/cmdline$/);
+    const pid = match?.[1];
+    if (pid && pid in pidToCmdline) return pidToCmdline[pid];
+    throw new Error('ENOENT');
+  });
+}
+
+describe('readLiveSessionProcessIds', () => {
+  it('parses a fixture /proc tree and returns exactly the session ids present', () => {
+    mockProcTree({
+      '100': ['claude', '--session-id', 'abc-123', '--other-flag'].join(
+        '\0',
+      ) + '\0',
+      '101': ['claude', '--resume', 'def-456'].join('\0') + '\0',
+      '102': ['claude', 'remote-control'].join('\0') + '\0',
+      'not-a-pid': 'ignored',
+    });
+
+    const ids = readLiveSessionProcessIds();
+
+    expect(ids).toEqual(new Set(['abc-123', 'def-456']));
+  });
+
+  it('returns null when /proc is unreadable', () => {
+    readdirSyncMock.mockImplementation(() => {
+      throw new Error('EACCES');
+    });
+
+    expect(readLiveSessionProcessIds()).toBeNull();
+  });
+
+  it('skips a pid whose cmdline disappears between readdir and read, without failing the whole scan', () => {
+    readdirSyncMock.mockReturnValue(['100', '101']);
+    readFileSyncMock.mockImplementation((path: string) => {
+      if (path === '/proc/100/cmdline') {
+        throw new Error('ENOENT');
+      }
+      return ['claude', '--session-id', 'still-here'].join('\0') + '\0';
+    });
+
+    expect(readLiveSessionProcessIds()).toEqual(new Set(['still-here']));
+  });
 });
 
 describe('isSessionProcessAlive', () => {
   it('returns true when a fresh spawn --session-id <id> is in the process table', () => {
-    execSyncMock.mockReturnValue('claude --session-id abc-123 --other-flag\n');
+    mockProcTree({
+      '100': ['claude', '--session-id', 'abc-123'].join('\0') + '\0',
+    });
 
     expect(isSessionProcessAlive('abc-123')).toBe(true);
   });
 
   it('returns true when a resumed spawn --resume <id> is in the process table', () => {
-    execSyncMock.mockReturnValue('claude --resume abc-123 --other-flag\n');
+    mockProcTree({
+      '100': ['claude', '--resume', 'abc-123'].join('\0') + '\0',
+    });
 
     expect(isSessionProcessAlive('abc-123')).toBe(true);
   });
 
   it('returns false when neither --session-id nor --resume for this id appears', () => {
-    execSyncMock.mockReturnValue(
-      'claude --session-id other-session\nsome-unrelated-proc\n',
-    );
+    mockProcTree({
+      '100': ['claude', '--session-id', 'other-session'].join('\0') + '\0',
+    });
 
     expect(isSessionProcessAlive('abc-123')).toBe(false);
   });
 
   it('fails safe (returns true) when the process table is unreadable', () => {
-    execSyncMock.mockImplementation(() => {
-      throw new Error('ps failed');
+    readdirSyncMock.mockImplementation(() => {
+      throw new Error('EACCES');
     });
 
     expect(isSessionProcessAlive('abc-123')).toBe(true);
