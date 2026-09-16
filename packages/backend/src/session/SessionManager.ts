@@ -4827,16 +4827,21 @@ export class SessionManager extends EventEmitter {
    * verify it actually did and escalate to a forceful kill if not.
    *
    * Callers must only invoke this once a session's row has genuinely
-   * reached a terminal status (done / error / killed) — idle is never
-   * terminal (a session parked awaiting an operator disposition is
+   * reached a terminal status (done / error / killed / superseded) — idle
+   * is never terminal (a session parked awaiting an operator disposition is
    * legitimately alive with a live process), so a non-terminal row here is
-   * refused rather than risking a kill of a live session.
+   * refused rather than risking a kill of a live session. Checked against
+   * TERMINAL_STATUSES (includes 'superseded'), not the narrower
+   * TERMINAL_SESSION_STATUSES — supersedeReviewSession marks a row
+   * 'superseded' immediately before calling this, and that write must
+   * already be visible to this guard or the intended teardown silently
+   * no-ops against the still-idle/running row.
    */
   endSession(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (session) {
       const row = getSession(sessionId);
-      if (row && !TERMINAL_SESSION_STATUSES.has(row.status)) {
+      if (row && !TERMINAL_STATUSES.has(row.status)) {
         logger.warn(
           `[SessionManager] endSession called for non-terminal session ${sessionId.slice(0, 8)} (status=${row.status}) — refusing to escalate against a live session`,
         );

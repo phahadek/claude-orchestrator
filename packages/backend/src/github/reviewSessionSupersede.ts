@@ -40,6 +40,13 @@ export function supersedeReviewSession(
   ) {
     return;
   }
-  sessionManager.endSession(prev);
+  // markSessionSuperseded first: SessionManager.endSession() refuses to
+  // touch a session whose DB row isn't already terminal (see its doc
+  // comment), and 'superseded' only became a status endSession() accepts
+  // once its own guard was widened to TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED
+  // (see SessionManager.ts) — calling endSession() first would find the row
+  // still idle/running and no-op, leaking the live subprocess under the new
+  // 'superseded' label instead of actually tearing it down.
   markSessionSuperseded(prev, Date.now(), reason);
+  sessionManager.endSession(prev);
 }
