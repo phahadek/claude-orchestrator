@@ -143,8 +143,10 @@ async function reconcileBaseDir(baseDir: string): Promise<SweepStats> {
     candidatePaths.push(path.join(baseDir, dirent.name));
   }
 
-  await runWithConcurrency(candidatePaths, FIND_CLUSTER_CONCURRENCY, (entryPath) =>
-    reconcileEntry(entryPath, stats, now),
+  await runWithConcurrency(
+    candidatePaths,
+    FIND_CLUSTER_CONCURRENCY,
+    (entryPath) => reconcileEntry(entryPath, stats, now),
   );
 
   return stats;
