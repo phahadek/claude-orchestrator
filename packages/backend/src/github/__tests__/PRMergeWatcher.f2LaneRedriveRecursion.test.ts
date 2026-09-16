@@ -84,6 +84,11 @@ vi.mock('../../session/analyzeGating', () => ({
 
 vi.mock('../../orchestration/testRequestLane', () => ({
   evaluateF2LaneFlakyDisposition: vi.fn().mockReturnValue(true),
+  // PRMergeWatcher's constructor subscribes to this — a mock lacking it
+  // throws "testRequestLaneEvents.on is not a function" the instant `new
+  // PRMergeWatcher(...)` runs. This suite never emits a settle, so a bare
+  // .on stub is enough.
+  testRequestLaneEvents: { on: vi.fn() },
 }));
 
 vi.mock('../../audit/AuditLog', () => ({ recordEvent: vi.fn() }));

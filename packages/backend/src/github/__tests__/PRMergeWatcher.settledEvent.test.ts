@@ -7,7 +7,12 @@ import { EventEmitter } from 'events';
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
-const laneEvents = new EventEmitter();
+// vi.mock factories below are hoisted above ordinary top-level statements
+// (including plain `const` declarations) — a bare `const laneEvents = new
+// EventEmitter()` here would be read before its own initialization inside
+// the factory. vi.hoisted() is initialized in lockstep with vi.mock, so
+// `laneEvents` is guaranteed to exist by the time the factory runs.
+const { laneEvents } = vi.hoisted(() => ({ laneEvents: new EventEmitter() }));
 
 vi.mock('../../orchestration/testRequestLane', () => ({
   evaluateF2LaneFlakyDisposition: vi.fn().mockReturnValue(true),
