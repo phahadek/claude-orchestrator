@@ -495,9 +495,9 @@ describe('TempClusterReconciler', () => {
 describe('TempClusterReconciler generic mkdtemp sweep', () => {
   function setupGenericEntry(name: string, mtimeMs: number) {
     const entryPath = `${BASE_DIR}/${name}`;
-    mockedReaddir.mockResolvedValue([
-      makeDirent(name),
-    ] as unknown as ReturnType<typeof fs.readdirSync>);
+    mockedReaddir.mockResolvedValue([makeDirent(name)] as unknown as ReturnType<
+      typeof fs.readdirSync
+    >);
     // No PG_VERSION at any depth — not a Postgres cluster.
     mockedAccess.mockRejectedValue(new Error('ENOENT'));
     mockedStat.mockImplementation(async (p: unknown) => {
@@ -543,14 +543,17 @@ describe('TempClusterReconciler generic mkdtemp sweep', () => {
     '.font-unix',
     'ssh-AbCdEf',
     'snap.some-app',
-  ])('never removes the known system entry %s regardless of age', async (name) => {
-    setupGenericEntry(name, OLD_GENERIC_MTIME);
+  ])(
+    'never removes the known system entry %s regardless of age',
+    async (name) => {
+      setupGenericEntry(name, OLD_GENERIC_MTIME);
 
-    await runBootTempClusterReconciliation({ baseDir: BASE_DIR });
+      await runBootTempClusterReconciliation({ baseDir: BASE_DIR });
 
-    expect(mockedRm).not.toHaveBeenCalled();
-    expect(mockedStat).not.toHaveBeenCalledWith(`${BASE_DIR}/${name}`);
-  });
+      expect(mockedRm).not.toHaveBeenCalled();
+      expect(mockedStat).not.toHaveBeenCalledWith(`${BASE_DIR}/${name}`);
+    },
+  );
 
   it('treats a stat error on a generic candidate as skip, not remove', async () => {
     mockedReaddir.mockResolvedValue([
@@ -595,9 +598,7 @@ describe('TempClusterReconciler generic mkdtemp sweep', () => {
     await runBootTempClusterReconciliation({ baseDir: BASE_DIR });
 
     expect(mockedLoggerInfo).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'generic scanned: 2, removed: 1, failed: 1',
-      ),
+      expect.stringContaining('generic scanned: 2, removed: 1, failed: 1'),
     );
   });
 });
