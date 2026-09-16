@@ -129,7 +129,7 @@ function setupSingleEntry(opts: EntryFixture) {
 describe('TempClusterReconciler', () => {
   it('removes an entry whose cluster sits at <entry>/data/PG_VERSION (testing.postgresql shape) with a stale pid and old mtime', async () => {
     const { entryPath } = setupSingleEntry({
-      entryName: 'pg-cluster-data-shape',
+      entryName: 'tmppgclusterdatashape',
       pgVersionAt: 'data',
       postmasterPidContents: undefined,
       entryMtimeMs: OLD_MTIME,
@@ -145,7 +145,7 @@ describe('TempClusterReconciler', () => {
 
   it('removes an entry whose cluster sits directly at <entry>/PG_VERSION (legacy shape) — no regression', async () => {
     const { entryPath } = setupSingleEntry({
-      entryName: 'pg-cluster-top-shape',
+      entryName: 'tmppgclustertopshape',
       pgVersionAt: 'top',
       postmasterPidContents: undefined,
       entryMtimeMs: OLD_MTIME,
@@ -161,7 +161,7 @@ describe('TempClusterReconciler', () => {
 
   it('skips a data/-shaped cluster whose postmaster.pid names a live pid', async () => {
     setupSingleEntry({
-      entryName: 'pg-cluster-live',
+      entryName: 'tmppgclusterlive',
       pgVersionAt: 'data',
       postmasterPidContents: `${livePid}\n`,
       entryMtimeMs: OLD_MTIME,
@@ -175,7 +175,7 @@ describe('TempClusterReconciler', () => {
   it('skips a data/-shaped cluster with a dead pid but mtime inside the safety margin', async () => {
     const deadPid = 999999;
     setupSingleEntry({
-      entryName: 'pg-cluster-fresh',
+      entryName: 'tmppgclusterfresh',
       pgVersionAt: 'data',
       postmasterPidContents: `${deadPid}\n`,
       entryMtimeMs: FRESH_MTIME,
@@ -190,7 +190,7 @@ describe('TempClusterReconciler', () => {
   it('spares a data/-shaped cluster whose wrapper mtime is fresh even if the cluster dir mtime is old', async () => {
     const deadPid = 999999;
     setupSingleEntry({
-      entryName: 'pg-cluster-mixed-mtime',
+      entryName: 'tmppgclustermixedmtime',
       pgVersionAt: 'data',
       postmasterPidContents: `${deadPid}\n`,
       entryMtimeMs: FRESH_MTIME,
@@ -205,7 +205,7 @@ describe('TempClusterReconciler', () => {
   it('removes a dir with a dead pid and old mtime (legacy top shape)', async () => {
     const deadPid = 999999;
     const { entryPath } = setupSingleEntry({
-      entryName: 'pg-cluster-4',
+      entryName: 'tmppgcluster4',
       pgVersionAt: 'top',
       postmasterPidContents: `${deadPid}\n`,
       entryMtimeMs: OLD_MTIME,
@@ -221,7 +221,7 @@ describe('TempClusterReconciler', () => {
 
   it('never touches a dir with no PG_VERSION at either depth regardless of age/pid state', async () => {
     setupSingleEntry({
-      entryName: 'unrelated-tmp-dir',
+      entryName: 'tmpunrelateddir',
       pgVersionAt: 'none',
       postmasterPidContents: undefined,
       entryMtimeMs: OLD_MTIME,
@@ -234,10 +234,11 @@ describe('TempClusterReconciler', () => {
 
   it('treats a stat error on a candidate as skip, not remove', async () => {
     mockedReaddir.mockResolvedValue([
-      makeDirent('pg-cluster-5'),
+      makeDirent('tmppgcluster5'),
     ] as unknown as ReturnType<typeof fs.readdirSync>);
     mockedAccess.mockImplementation(async (p: unknown) => {
-      if (String(p) === `${BASE_DIR}/pg-cluster-5/PG_VERSION`) return undefined;
+      if (String(p) === `${BASE_DIR}/tmppgcluster5/PG_VERSION`)
+        return undefined;
       throw new Error('ENOENT');
     });
     mockedStat.mockRejectedValue(new Error('EACCES'));
@@ -250,19 +251,19 @@ describe('TempClusterReconciler', () => {
   it('counts scanned/removed across multiple orphaned clusters at both depths and skips non-directory entries without descending into them', async () => {
     const clusters: EntryFixture[] = [
       {
-        entryName: 'orphan-top-1',
+        entryName: 'tmporphantop1',
         pgVersionAt: 'top',
         postmasterPidContents: undefined,
         entryMtimeMs: OLD_MTIME,
       },
       {
-        entryName: 'orphan-top-2',
+        entryName: 'tmporphantop2',
         pgVersionAt: 'top',
         postmasterPidContents: undefined,
         entryMtimeMs: OLD_MTIME,
       },
       {
-        entryName: 'orphan-data-1',
+        entryName: 'tmporphandata1',
         pgVersionAt: 'data',
         postmasterPidContents: undefined,
         entryMtimeMs: OLD_MTIME,
@@ -348,5 +349,142 @@ describe('TempClusterReconciler', () => {
     expect(mockedStat).not.toHaveBeenCalled();
     expect(mockedAccess).not.toHaveBeenCalled();
     expect(mockedRm).not.toHaveBeenCalled();
+  });
+
+  it('prefilters by the tmp* name shape: only the single tmp* candidate among 1000 unrelated dirs is accessed/stat-ed, and skipped/scanned are reported honestly', async () => {
+    const clusterName = 'tmpabc12345';
+    const entryPath = `${BASE_DIR}/${clusterName}`;
+    const clusterDir = `${entryPath}/data`;
+
+    const unrelatedDirents = Array.from({ length: 1000 }, (_, i) =>
+      makeDirent(`local-backend-test-${i}`),
+    );
+
+    mockedReaddir.mockResolvedValue([
+      ...unrelatedDirents,
+      makeDirent(clusterName),
+    ] as unknown as ReturnType<typeof fs.readdirSync>);
+
+    mockedAccess.mockImplementation(async (p: unknown) => {
+      if (String(p) === `${clusterDir}/PG_VERSION`) return undefined;
+      throw new Error('ENOENT');
+    });
+
+    mockedStat.mockImplementation(async (p: unknown) => {
+      const target = String(p);
+      if (target === entryPath || target === clusterDir) {
+        return makeStat(OLD_MTIME);
+      }
+      throw new Error('ENOENT');
+    });
+
+    mockedReadFile.mockRejectedValue(new Error('ENOENT'));
+
+    await runBootTempClusterReconciliation({ baseDir: BASE_DIR });
+
+    expect(mockedAccess).toHaveBeenCalledTimes(2);
+    expect(mockedRm).toHaveBeenCalledWith(
+      entryPath,
+      expect.objectContaining({ recursive: true, force: true }),
+    );
+    expect(mockedLoggerInfo).toHaveBeenCalledWith(
+      expect.stringContaining('scanned: 1'),
+    );
+    expect(mockedLoggerInfo).toHaveBeenCalledWith(
+      expect.stringContaining('skipped: 1000'),
+    );
+  });
+
+  it('recognises and removes both the tmpXXXXXXXX/data/PG_VERSION and tmp.XXXXXXXXXX/PG_VERSION name shapes when not live', async () => {
+    const entries: { entryName: string; pgVersionAt: 'top' | 'data' }[] = [
+      { entryName: 'tmpabcdefgh', pgVersionAt: 'data' },
+      { entryName: 'tmp.abcdefghij', pgVersionAt: 'top' },
+    ];
+
+    mockedReaddir.mockResolvedValue(
+      entries.map((e) => makeDirent(e.entryName)) as unknown as ReturnType<
+        typeof fs.readdirSync
+      >,
+    );
+
+    mockedAccess.mockImplementation(async (p: unknown) => {
+      const target = String(p);
+      for (const e of entries) {
+        const entryPath = `${BASE_DIR}/${e.entryName}`;
+        if (e.pgVersionAt === 'top' && target === `${entryPath}/PG_VERSION`) {
+          return undefined;
+        }
+        if (
+          e.pgVersionAt === 'data' &&
+          target === `${entryPath}/data/PG_VERSION`
+        ) {
+          return undefined;
+        }
+      }
+      throw new Error('ENOENT');
+    });
+
+    mockedStat.mockImplementation(async (p: unknown) => {
+      const target = String(p);
+      for (const e of entries) {
+        const entryPath = `${BASE_DIR}/${e.entryName}`;
+        const clusterDir =
+          e.pgVersionAt === 'data' ? `${entryPath}/data` : entryPath;
+        if (target === entryPath || target === clusterDir) {
+          return makeStat(OLD_MTIME);
+        }
+      }
+      throw new Error('ENOENT');
+    });
+
+    mockedReadFile.mockRejectedValue(new Error('ENOENT'));
+
+    await runBootTempClusterReconciliation({ baseDir: BASE_DIR });
+
+    for (const e of entries) {
+      expect(mockedRm).toHaveBeenCalledWith(
+        `${BASE_DIR}/${e.entryName}`,
+        expect.objectContaining({ recursive: true, force: true }),
+      );
+    }
+  });
+
+  it('skips a regular file whose name matches the tmp* shape, without any access call', async () => {
+    mockedReaddir.mockResolvedValue([
+      makeDirent('tmpfoo12345', false),
+    ] as unknown as ReturnType<typeof fs.readdirSync>);
+
+    await runBootTempClusterReconciliation({ baseDir: BASE_DIR });
+
+    expect(mockedAccess).not.toHaveBeenCalled();
+    expect(mockedRm).not.toHaveBeenCalled();
+  });
+
+  it('bounds findClusterDir concurrency to the configured limit across 50 tmp* candidates', async () => {
+    const CONCURRENCY_LIMIT = 8;
+    const names = Array.from(
+      { length: 50 },
+      (_, i) => `tmpcandidate${String(i).padStart(2, '0')}`,
+    );
+    mockedReaddir.mockResolvedValue(
+      names.map((n) => makeDirent(n)) as unknown as ReturnType<
+        typeof fs.readdirSync
+      >,
+    );
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    mockedAccess.mockImplementation(async () => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      inFlight--;
+      throw new Error('ENOENT');
+    });
+
+    await runBootTempClusterReconciliation({ baseDir: BASE_DIR });
+
+    expect(maxInFlight).toBeGreaterThan(0);
+    expect(maxInFlight).toBeLessThanOrEqual(CONCURRENCY_LIMIT);
   });
 });
