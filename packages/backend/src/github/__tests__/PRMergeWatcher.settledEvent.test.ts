@@ -7,17 +7,16 @@ import { EventEmitter } from 'events';
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
-// vi.mock factories below are hoisted above ordinary top-level statements
-// (including plain `const` declarations) — a bare `const laneEvents = new
-// EventEmitter()` here would be read before its own initialization inside
-// the factory. vi.hoisted() is initialized in lockstep with vi.mock, so
-// `laneEvents` is guaranteed to exist by the time the factory runs.
-const { laneEvents } = vi.hoisted(() => ({ laneEvents: new EventEmitter() }));
-
+// The mock's testRequestLaneEvents is a real EventEmitter, constructed
+// inside the factory itself (never a reference to an outer `const` — vi.mock
+// factories are hoisted above ordinary top-level statements, so an outer
+// variable would still be in its temporal dead zone when this runs). The
+// factory only executes once per module load, so this instance is the same
+// singleton PRMergeWatcher subscribes to and the test below emits on.
 vi.mock('../../orchestration/testRequestLane', () => ({
   evaluateF2LaneFlakyDisposition: vi.fn().mockReturnValue(true),
   runProjectTestRequest: vi.fn(),
-  testRequestLaneEvents: laneEvents,
+  testRequestLaneEvents: new EventEmitter(),
 }));
 
 vi.mock('../../db/queries', () => ({
@@ -99,7 +98,10 @@ import {
 } from '../../db/queries';
 import { getProjectByGithubRepo } from '../../config';
 import { computeWholeTreeContentHash } from '../../session/analyzeGating';
-import { runProjectTestRequest } from '../../orchestration/testRequestLane';
+import {
+  runProjectTestRequest,
+  testRequestLaneEvents,
+} from '../../orchestration/testRequestLane';
 import { isTerminalStalePR } from '../pollUtils';
 import {
   recordGitHubRateLimit,
@@ -191,7 +193,7 @@ describe('PRMergeWatcher — testRequestLane settled-event subscription', () => 
   beforeEach(() => {
     vi.clearAllMocks();
     __resetGitHubRateLimitForTests();
-    laneEvents.removeAllListeners();
+    testRequestLaneEvents.removeAllListeners();
 
     vi.mocked(getProjectByGithubRepo).mockReturnValue({
       id: PROJECT_ID,
@@ -217,7 +219,7 @@ describe('PRMergeWatcher — testRequestLane settled-event subscription', () => 
   });
 
   afterEach(() => {
-    laneEvents.removeAllListeners();
+    testRequestLaneEvents.removeAllListeners();
     __resetGitHubRateLimitForTests();
   });
 
@@ -239,7 +241,7 @@ describe('PRMergeWatcher — testRequestLane settled-event subscription', () => 
       .spyOn(watcher, 'checkMergeabilityNow')
       .mockResolvedValue(undefined);
 
-    laneEvents.emit('settled', {
+    testRequestLaneEvents.emit('settled', {
       projectId: PROJECT_ID,
       contentHash: `hash-of-${WORKTREE_BY_SESSION['session-1']}`,
       runKind: 'full',
@@ -266,8 +268,8 @@ describe('PRMergeWatcher — testRequestLane settled-event subscription', () => 
       runKind: 'full' as const,
       state: 'passed' as const,
     };
-    laneEvents.emit('settled', settledEvent);
-    laneEvents.emit('settled', settledEvent);
+    testRequestLaneEvents.emit('settled', settledEvent);
+    testRequestLaneEvents.emit('settled', settledEvent);
 
     expect(spy).toHaveBeenCalledTimes(1);
   });
@@ -292,7 +294,7 @@ describe('PRMergeWatcher — testRequestLane settled-event subscription', () => 
       .spyOn(watcher, 'checkMergeabilityNow')
       .mockResolvedValue(undefined);
 
-    laneEvents.emit('settled', {
+    testRequestLaneEvents.emit('settled', {
       projectId: PROJECT_ID,
       contentHash: `hash-of-${WORKTREE_BY_SESSION['session-1']}`,
       runKind: 'full',
@@ -314,7 +316,7 @@ describe('PRMergeWatcher — testRequestLane settled-event subscription', () => 
       .spyOn(watcher, 'checkMergeabilityNow')
       .mockResolvedValue(undefined);
 
-    laneEvents.emit('settled', {
+    testRequestLaneEvents.emit('settled', {
       projectId: PROJECT_ID,
       contentHash: `hash-of-${WORKTREE_BY_SESSION['session-1']}`,
       runKind: 'full',
@@ -330,7 +332,7 @@ describe('PRMergeWatcher — testRequestLane settled-event subscription', () => 
 
     await primeContentHash(pr1);
 
-    laneEvents.emit('settled', {
+    testRequestLaneEvents.emit('settled', {
       projectId: PROJECT_ID,
       contentHash: `hash-of-${WORKTREE_BY_SESSION['session-1']}`,
       runKind: 'full',
