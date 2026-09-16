@@ -534,6 +534,110 @@ describe('PRReviewService.buildPrompt()', () => {
       "This is a real record from the orchestrator's own F2 test gate",
     );
   });
+
+  it('falls back to test_run_summaries totals when structured_result was cleared by the dedup sweep', () => {
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    const finishedAt = Date.parse('2024-01-02T03:04:05Z');
+    const testRun = {
+      id: 'run-1',
+      project_id: 'proj-1',
+      content_hash: 'abc',
+      session_id: 'session-xyz',
+      state: 'failed',
+      output: '',
+      requested_at: finishedAt - 1000,
+      started_at: finishedAt - 1000,
+      finished_at: finishedAt,
+      structured_result: null,
+      failure_reason: null,
+      concurrent_run_count: 0,
+      oom_killed: 0,
+      test_report_acquisition_attempted: 1,
+      run_origin: null,
+      producer: null,
+      run_kind: 'full',
+      base_sha: null,
+      foreign_concurrent_run_count: 0,
+    } as any;
+    const testRunSummary = {
+      test_request_run_id: 'run-1',
+      project_id: 'proj-1',
+      passed_count: 11993,
+      failed_count: 1,
+      skipped_count: 24,
+      error_count: 0,
+      other_count: 0,
+      total_count: 12018,
+      total_duration_ms: 60000,
+      concurrent_run_count: 0,
+      oom_killed: 0,
+      incomplete: 0,
+      created_at: finishedAt,
+    } as any;
+
+    const prompt = service.buildPrompt(
+      mockPR,
+      mockDiff,
+      mockTaskBody,
+      null,
+      testRun,
+      testRunSummary,
+    );
+
+    expect(prompt).toContain('## Orchestrator-Verified Test Run');
+    expect(prompt).not.toContain('(no structured result recorded)');
+    expect(prompt).toContain('11993 passed, 1 failed, 24 skipped, 0 errors');
+  });
+
+  it('still renders as unexplained when structured_result is null and no test_run_summaries row exists (genuine crash)', () => {
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    const finishedAt = Date.parse('2024-01-02T03:04:05Z');
+    const testRun = {
+      id: 'run-2',
+      project_id: 'proj-1',
+      content_hash: 'abc',
+      session_id: 'session-xyz',
+      state: 'failed',
+      output: '',
+      requested_at: finishedAt - 1000,
+      started_at: finishedAt - 1000,
+      finished_at: finishedAt,
+      structured_result: null,
+      failure_reason: null,
+      concurrent_run_count: 0,
+      oom_killed: 0,
+      test_report_acquisition_attempted: 1,
+      run_origin: null,
+      producer: null,
+      run_kind: 'full',
+      base_sha: null,
+      foreign_concurrent_run_count: 0,
+    } as any;
+
+    const prompt = service.buildPrompt(
+      mockPR,
+      mockDiff,
+      mockTaskBody,
+      null,
+      testRun,
+      undefined,
+    );
+
+    expect(prompt).toContain('## Orchestrator-Verified Test Run');
+    expect(prompt).toContain('(no structured result recorded)');
+  });
 });
 
 // ── parseReviewResult() ───────────────────────────────────────────────────────
