@@ -223,6 +223,32 @@ const MCP_UNREACHABLE_GRACE_MS = 3 * 60_000;
  */
 const MAX_MCP_UNREACHABLE_RESPAWNS = 2;
 
+/** Reason respawnForMcpUnreachable declined to respawn — see its doc comment. */
+type McpRespawnDeclineReason =
+  | 'worktree_missing'
+  | 'project_missing'
+  | 'usage_deferred';
+
+type McpRespawnResult =
+  | { ok: true }
+  | { ok: false; reason: McpRespawnDeclineReason };
+
+/**
+ * Pre-detection screen for reconcileMcpUnreachableSessions: a row that is
+ * not currently 'running' (idle, paused, terminal) can never be respawned
+ * by this path, and one already exhausted has already been surfaced to the
+ * operator and must not be re-detected. Consulted before isMcpUnreachable
+ * is even evaluated, so a level-triggered non-respawnable session (e.g. a
+ * parked idle session whose worktree was cleaned) never produces a
+ * session_mcp_unreachable_detected row at all.
+ */
+function isRespawnable(
+  row: Pick<Session, 'status'>,
+  exhausted: boolean,
+): boolean {
+  return row.status === 'running' && !exhausted;
+}
+
 /**
  * Parse file paths from the task spec's "Files" section, read each file from
  * the project directory, and return a markdown block with their contents.
@@ -4434,19 +4460,22 @@ export class SessionManager extends EventEmitter {
    * client, so only a genuinely fresh process (this respawn) can recover
    * the connection — poking or re-prompting the same process cannot.
    *
-   * Declines cleanly (returns false, no event, no error) when the
+   * Declines cleanly (returns { ok: false, reason }, no error) when the
    * session's worktree is missing, mirroring respawnForCapabilityGrant's
-   * own guard — there is nothing to resume onto.
+   * own guard — there is nothing to resume onto. The caller
+   * (reconcileMcpUnreachableSessions) records the decline as an audit row
+   * and an attempt, so a permanently un-respawnable session still reaches
+   * the exhaustion cap instead of being re-detected forever.
    */
   private async respawnForMcpUnreachable(
     sessionId: string,
     attemptNumber: number,
-  ): Promise<boolean> {
+  ): Promise<McpRespawnResult> {
     const row = getSession(sessionId);
-    if (!row) return false;
+    if (!row) return { ok: false, reason: 'project_missing' };
 
     const project = getProjectById(row.project_id ?? '');
-    if (!project) return false;
+    if (!project) return { ok: false, reason: 'project_missing' };
     const projectDir = normalizePath(project.projectDir);
     const defaultWorktreePath = path.join(
       projectDir,
@@ -4467,7 +4496,7 @@ export class SessionManager extends EventEmitter {
       logger.warn(
         `[SessionManager] respawnForMcpUnreachable: worktree missing for ${sessionId.slice(0, 8)} — declining respawn`,
       );
-      return false;
+      return { ok: false, reason: 'worktree_missing' };
     }
 
     // This kill is not a real death — see respawnForCapabilityGrant's
@@ -4524,7 +4553,7 @@ export class SessionManager extends EventEmitter {
       } catch {
         // Best-effort — DB may be unavailable or mocked without this function.
       }
-      return false;
+      return { ok: false, reason: 'usage_deferred' };
     }
     this.wireSession(sessionId, session, projectDir, recordedPath);
 
@@ -4537,7 +4566,7 @@ export class SessionManager extends EventEmitter {
       payload: { session_id: sessionId, attempt_number: attemptNumber },
     });
 
-    return true;
+    return { ok: true };
   }
 
   /**
@@ -4553,35 +4582,58 @@ export class SessionManager extends EventEmitter {
    * observed elsewhere (a session dies, the orphan sweeper reverts its task
    * to Ready, a fresh session launches, repeat).
    *
-   * Candidate population: every live (non-terminal) session. Skipped
-   * entirely in api session_mode, mirroring the other liveness
-   * reconcilers' skip — an ApiSessionRunner session has no CLI subprocess
-   * and no MCP client to fail.
+   * Candidate population: every live session that isRespawnable — running,
+   * not already exhausted. Skipped entirely in api session_mode, mirroring
+   * the other liveness reconcilers' skip — an ApiSessionRunner session has
+   * no CLI subprocess and no MCP client to fail. A row that isn't running
+   * (e.g. idle) or is already exhausted is skipped before isMcpUnreachable
+   * is even evaluated, so a level-triggered non-respawnable session (a
+   * parked idle session whose worktree was cleaned, say) never produces a
+   * session_mcp_unreachable_detected row at all.
    *
    * Grace window: no detection fires until MCP_UNREACHABLE_GRACE_MS has
    * elapsed since the session's most recent spawn — its original
    * started_at, or its latest respawn attempt's timestamp once this
    * reconciler has already respawned it once (getLatestMcpUnreachableRespawnTimestamp).
-   * That reference moves forward on every respawn, so the grace window
+   * That reference moves forward on every successful respawn (not on a
+   * decline — no new process was actually spawned), so the grace window
    * restarts each time: a session whose new process's init reports the
    * orchestrator server connected is never flagged again
    * (getLatestOrchestratorMcpStatusSince finds that status), and one whose
    * init still doesn't report connected — or hasn't reported at all once
-   * the grace window elapses — gets re-detected, up to
-   * MAX_MCP_UNREACHABLE_RESPAWNS before escalating to the operator instead
-   * of counting the respawn as a successful recovery.
+   * the grace window elapses — gets re-detected.
+   *
+   * Each detection either respawns, or declines and records
+   * session_mcp_unreachable_respawn_declined (missing worktree/project, or
+   * a deferred usage admission) — a declined respawn counts as an attempt
+   * exactly like a respawned one, so a session that can never be respawned
+   * (e.g. its worktree was cleaned) still reaches MAX_MCP_UNREACHABLE_RESPAWNS
+   * and escalates to the operator once, rather than being redetected on
+   * every sweep forever.
    */
   async reconcileMcpUnreachableSessions(): Promise<{
     detected: string[];
     respawned: string[];
     exhausted: string[];
+    declined: string[];
+    skippedNotRespawnable: number;
+    itemsProcessed: number;
   }> {
     const detected: string[] = [];
     const respawned: string[] = [];
     const exhausted: string[] = [];
+    const declined: string[] = [];
+    let skippedNotRespawnable = 0;
 
     if (runtimeSettings.session_mode === 'api') {
-      return { detected, respawned, exhausted };
+      return {
+        detected,
+        respawned,
+        exhausted,
+        declined,
+        skippedNotRespawnable,
+        itemsProcessed: 0,
+      };
     }
 
     const now = Date.now();
@@ -4593,7 +4645,10 @@ export class SessionManager extends EventEmitter {
 
     for (const row of liveRows) {
       const facts = sweepFacts.get(row.session_id);
-      if (facts?.exhausted) continue;
+      if (!isRespawnable(row, facts?.exhausted ?? false)) {
+        skippedNotRespawnable++;
+        continue;
+      }
 
       const lastSpawnMs = facts?.lastRespawnTs ?? row.started_at;
       const orchestratorMcpStatus = resolveLatestOrchestratorMcpStatus(
@@ -4650,11 +4705,27 @@ export class SessionManager extends EventEmitter {
       }
 
       try {
-        const ok = await this.respawnForMcpUnreachable(
+        const result = await this.respawnForMcpUnreachable(
           row.session_id,
           attemptNumber,
         );
-        if (ok) respawned.push(row.session_id);
+        if (result.ok) {
+          respawned.push(row.session_id);
+        } else {
+          recordEvent({
+            event_type: 'session_mcp_unreachable_respawn_declined',
+            actor_type: 'system',
+            actor_id: row.session_id,
+            project_id: row.project_id ?? null,
+            task_id: row.task_id ?? null,
+            payload: {
+              session_id: row.session_id,
+              attempt_number: attemptNumber,
+              reason: result.reason,
+            },
+          });
+          declined.push(row.session_id);
+        }
       } catch (err) {
         logger.error(
           `[SessionManager] reconcileMcpUnreachableSessions: respawn failed for ${row.session_id.slice(0, 8)}: ${err}`,
@@ -4662,7 +4733,14 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    return { detected, respawned, exhausted };
+    return {
+      detected,
+      respawned,
+      exhausted,
+      declined,
+      skippedNotRespawnable,
+      itemsProcessed: respawned.length + exhausted.length,
+    };
   }
 
   /**

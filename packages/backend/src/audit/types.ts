@@ -133,6 +133,7 @@ type EventType =
   | 'mcp_connection_closed'
   | 'session_mcp_unreachable_detected'
   | 'session_mcp_unreachable_respawned'
+  | 'session_mcp_unreachable_respawn_declined'
   | 'session_mcp_unreachable_respawn_exhausted'
   | 'session_orchestrator_mcp_connect_failed'
   | 'session_orchestrator_mcp_status_reported'
