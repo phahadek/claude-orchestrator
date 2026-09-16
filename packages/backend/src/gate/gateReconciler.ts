@@ -1,6 +1,6 @@
 import { logger } from '../logger';
 import type { Scheduler } from '../orchestration/Scheduler';
-import { getProjectById, runtimeSettings } from '../config';
+import { runtimeSettings } from '../config';
 import { typedGetSetting } from '../config/settings';
 import { computeAvailableCapacity } from '../orchestration/DispatchTriggerEvaluator';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -37,7 +37,7 @@ import {
   nextRunnableGateItems,
   nextPendingGateItems,
   appendGateItemEvent,
-  createLocalAsyncGitAncestrySource,
+  defaultAncestrySourceForProject,
   isFollowupTaskDone,
   proposeGateItemReclassification,
   GATE_VERIFICATION_RECONCILER_JOB,
@@ -414,18 +414,6 @@ export interface GateReconcileTickResult {
    * so the two cases are distinguishable without a schema change.
    */
   skippedForBudget: number;
-}
-
-function defaultAncestrySourceForProject(
-  project: string,
-): AsyncDeployAncestrySource {
-  let projectDir: string | undefined;
-  try {
-    projectDir = getProjectById(project)?.projectDir;
-  } catch {
-    projectDir = undefined;
-  }
-  return createLocalAsyncGitAncestrySource(projectDir);
 }
 
 /** Most recent `fail` event carrying a filedFollowon, or undefined if the item has never failed-with-followup. */

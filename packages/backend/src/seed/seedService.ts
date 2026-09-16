@@ -1,7 +1,7 @@
 import * as seedStore from './seedStore';
 import type { SeedItem } from './seedStore';
 import {
-  gitAncestrySource,
+  defaultSyncAncestrySourceForProject,
   type DeployAncestrySource,
 } from '../gate/gateService';
 import type { SeedItemEventOutcome } from '../db/types';
@@ -114,7 +114,8 @@ export function nextApplyableSeedItems(
   deploySha: string,
   options: NextApplyableSeedItemsOptions = {},
 ): SeedItem[] {
-  const ancestry = options.ancestrySource ?? gitAncestrySource;
+  const ancestry =
+    options.ancestrySource ?? defaultSyncAncestrySourceForProject(project);
   const limit = Math.min(
     options.limit !== undefined && options.limit > 0
       ? Math.floor(options.limit)

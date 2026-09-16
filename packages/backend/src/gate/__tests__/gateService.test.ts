@@ -11,7 +11,8 @@
  * approveGateItem releases a Prod-Mutating item held at pending-approval.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll, vi } from 'vitest';
+import { execFileSync } from 'child_process';
 
 vi.mock('../../db/db.js', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
@@ -35,6 +36,7 @@ import {
 import {
   getGateReadiness,
   reconcileGateRunnability,
+  defaultAncestrySourceForProject,
   nextRunnableGateItems,
   nextPendingGateItems,
   getGateItem,
@@ -49,6 +51,7 @@ import {
   proposeGateItemReclassification,
   type DeployAncestrySource,
 } from '../gateService.js';
+import { ProjectService } from '../../projects/ProjectService.js';
 
 beforeEach(() => {
   db.prepare('DELETE FROM gate_item_event').run();
@@ -715,6 +718,56 @@ describe('reconcileGateRunnability', () => {
     // event loop at least once per item processed — a same-tick,
     // all-microtask pass would starve the sentinel and resolve first.
     expect(events).toEqual(['sentinel', 'tick-complete']);
+  });
+
+  describe('with the per-project git-ancestry source', () => {
+    // Real commit shas from this repo's own history, so
+    // createLocalAsyncGitAncestrySource's `git merge-base --is-ancestor` has
+    // a genuine ancestry relationship to check against, with project_dir
+    // pointed at this checkout (mirrors opsLoad.test.ts's
+    // dep-deploy-gating suite).
+    const repoDir = process.cwd();
+    const headSha = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: repoDir,
+    })
+      .toString()
+      .trim();
+    const ancestorSha = execFileSync('git', ['rev-parse', 'HEAD~3'], {
+      cwd: repoDir,
+    })
+      .toString()
+      .trim();
+
+    beforeAll(() => {
+      ProjectService.create({
+        id: 'gate-ancestry-project',
+        name: 'Gate Ancestry Project',
+        projectDir: repoDir,
+      });
+    });
+
+    it('marks an item whose mergeCommit is an ancestor of the deploy sha runnable, using the per-project clone', async () => {
+      const item = makeItem({
+        project: 'gate-ancestry-project',
+        sources: [
+          { sourceTaskId: 'notion:ancestry', sourceTaskTitle: 'Add env var' },
+        ],
+      });
+      mergeSource(
+        item.id,
+        ancestorSha,
+        new Date(1).toISOString(),
+        'notion:ancestry',
+      );
+
+      const result = await reconcileGateRunnability(headSha, {
+        project: 'gate-ancestry-project',
+        ancestrySource: defaultAncestrySourceForProject('gate-ancestry-project'),
+      });
+
+      expect(result.markedRunnable).toEqual([item.id]);
+      expect(getGateItem(item.id)?.state).toBe('runnable');
+    });
   });
 });
 
