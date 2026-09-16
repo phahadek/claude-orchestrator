@@ -219,7 +219,10 @@ async function reconcileBaseDir(baseDir: string): Promise<CombinedSweepStats> {
       stats.skipped++;
       continue;
     }
-    candidates.push({ path: path.join(baseDir, dirent.name), name: dirent.name });
+    candidates.push({
+      path: path.join(baseDir, dirent.name),
+      name: dirent.name,
+    });
   }
 
   await runWithConcurrency(candidates, FIND_CLUSTER_CONCURRENCY, (c) =>
