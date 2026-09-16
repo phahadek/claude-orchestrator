@@ -801,7 +801,7 @@ describe('TaskCacheRefresher', () => {
 
       const backend = makeBackend({
         fetchReadyTasks: vi.fn().mockImplementation(async (fetchId) => {
-          if (fetchId === 'src-wrapped') {
+          if (fetchId === 'wrapped-m') {
             upsertTaskCache('notion:wrapped-task', JSON.stringify({ v: 1 }));
             return [{ task: { id: 'notion:wrapped-task' } }];
           }
@@ -832,7 +832,7 @@ describe('TaskCacheRefresher', () => {
       await refresher.refreshOnce();
 
       expect(backend.fetchReadyTasks).toHaveBeenCalledTimes(1);
-      expect(backend.fetchReadyTasks).toHaveBeenCalledWith('src-open');
+      expect(backend.fetchReadyTasks).toHaveBeenCalledWith('open-m');
       expect(getTaskCache('notion:wrapped-task')).toBeDefined();
       expect(getTaskCache('notion:open-task')).toBeDefined();
     });
@@ -848,7 +848,7 @@ describe('TaskCacheRefresher', () => {
       let openIds = ['notion:kept', 'notion:vanishing'];
       const backend = makeBackend({
         fetchReadyTasks: vi.fn().mockImplementation(async (fetchId) => {
-          if (fetchId === 'src-wrapped') {
+          if (fetchId === 'wrapped-m') {
             upsertTaskCache('notion:wrapped-task', JSON.stringify({ v: 1 }));
             return [{ task: { id: 'notion:wrapped-task' } }];
           }
@@ -903,11 +903,8 @@ describe('TaskCacheRefresher', () => {
       await refresher.refreshProjectById('p1', true);
 
       expect(backend.fetchReadyTasks).toHaveBeenCalledTimes(2);
-      expect(backend.fetchReadyTasks).toHaveBeenCalledWith(
-        'src-wrapped',
-        true,
-      );
-      expect(backend.fetchReadyTasks).toHaveBeenCalledWith('src-open', true);
+      expect(backend.fetchReadyTasks).toHaveBeenCalledWith('wrapped-m', true);
+      expect(backend.fetchReadyTasks).toHaveBeenCalledWith('open-m', true);
     });
 
     it('broadcasts task_cache_updated once per refreshed non-wrapped milestone, none for wrapped', async () => {
