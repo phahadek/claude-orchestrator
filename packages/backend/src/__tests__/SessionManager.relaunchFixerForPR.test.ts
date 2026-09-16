@@ -352,6 +352,78 @@ describe('relaunchFixerForPR() idle + no worktree: operator-surfaced, no relaunc
   });
 });
 
+describe('relaunchFixerForPR() archived + status still running + worktree gone: treated as terminal-equivalent', () => {
+  it('recreates a worktree and respawns instead of refusing forever via the idle-worktree-missing path', async () => {
+    // Mirrors sessionLivenessReconciler.runLivenessSweep: a dead-process
+    // session is archived (archiveSession) without touching status, which
+    // stays 'running'. If relaunchFixerForPR only checked status, this row
+    // would fall into the idle+no-worktree operator-surface branch and
+    // refuse (return null) on every single reconciler tick forever.
+    vi.mocked(queries.getSession).mockReturnValue({
+      ...BASE_SESSION_ROW,
+      status: 'running',
+      archived: 1,
+      archive_kind: 'machine_park',
+    } as never);
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+
+    const sm = new SessionManager();
+    const result = await sm.relaunchFixerForPR(PR, 'gate failure feedback');
+
+    expect(result).toBe(SESSION_ID);
+    expect(queries.setSessionPauseReason).not.toHaveBeenCalledWith(
+      SESSION_ID,
+      'stalled_idle',
+    );
+    const addCalls = vi
+      .mocked(exec)
+      .mock.calls.map((c) => c[0] as string)
+      .filter((c) => c.includes('worktree add'));
+    expect(addCalls.length).toBeGreaterThan(0);
+    expect(queries.updateSessionStatus).toHaveBeenCalledWith(
+      SESSION_ID,
+      'running',
+    );
+  });
+});
+
+describe('relaunchFixerForPR() operator-archived + status still running + worktree gone: NOT terminal-equivalent', () => {
+  it('still surfaces to the operator (stalled_idle) rather than resurrecting an explicitly parked session', async () => {
+    // An operator-initiated archive (routes/sessions.ts PATCH /:id/archive ->
+    // archiveAndEndSession -> archiveSession(id, 'operator')) also leaves
+    // status='running' untouched, producing the same archived+running shape
+    // as the liveness reconciler's machine_park archival — but it's the
+    // opposite signal: a human explicitly said this session is done. Only
+    // archive_kind='machine_park' is terminal-equivalent here; 'operator'
+    // must still refuse via the idle-worktree-missing path.
+    vi.mocked(queries.getSession).mockReturnValue({
+      ...BASE_SESSION_ROW,
+      status: 'running',
+      archived: 1,
+      archive_kind: 'operator',
+    } as never);
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+
+    const sm = new SessionManager();
+    const result = await sm.relaunchFixerForPR(PR, 'gate failure feedback');
+
+    expect(result).toBeNull();
+    expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
+      SESSION_ID,
+      'stalled_idle',
+    );
+    const addCalls = vi
+      .mocked(exec)
+      .mock.calls.map((c) => c[0] as string)
+      .filter((c) => c.includes('worktree add'));
+    expect(addCalls).toHaveLength(0);
+    expect(queries.updateSessionStatus).not.toHaveBeenCalledWith(
+      SESSION_ID,
+      'running',
+    );
+  });
+});
+
 describe('relaunchFixerForPR() does not consult hasLiveSessionForTask', () => {
   it('never calls hasLiveSessionForTask during a relaunch', async () => {
     vi.mocked(queries.getSession).mockReturnValue({
