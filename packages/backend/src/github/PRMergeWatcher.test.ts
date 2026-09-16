@@ -1173,6 +1173,47 @@ describe('PRMergeWatcher.handleMerged()', () => {
       expect.anything(),
     );
   });
+
+  it('regression: after three successive review iterations were each superseded on spawn, handleMerged terminalizes only the current review_session_id — zero review sessions remain non-terminal', async () => {
+    // Models the terminalize-on-supersede fix: PRReviewService.
+    // supersedeReviewSession marks a replaced review session 'superseded' at
+    // each fresh-spawn/clear site (before the PR row's review_session_id
+    // pointer moves on to the next iteration's id), so only the
+    // *current* id is ever left non-terminal — exactly what handleMerged's
+    // single markSessionDone(pr.review_session_id, ...) call reaches.
+    const sessionStatuses: Record<string, string> = {
+      'review-session-1': 'superseded',
+      'review-session-2': 'superseded',
+      'review-session-3': 'idle',
+    };
+    vi.mocked(markSessionDone).mockImplementation((sessionId: string) => {
+      sessionStatuses[sessionId] = 'done';
+    });
+
+    const pr = makePRRow({
+      session_id: null,
+      review_session_id: 'review-session-3',
+      pr_url: 'https://github.com/owner/repo/pull/42',
+    });
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.handleMerged(pr, 'abc123');
+
+    expect(vi.mocked(markSessionDone)).toHaveBeenCalledWith(
+      'review-session-3',
+      expect.any(Number),
+      'https://github.com/owner/repo/pull/42',
+      'pr_merge_watcher',
+    );
+    const TERMINAL = new Set(['done', 'error', 'killed', 'superseded']);
+    expect(
+      Object.values(sessionStatuses).every((status) => TERMINAL.has(status)),
+    ).toBe(true);
+  });
 });
 
 // ── merge_completed signal ───────────────────────────────────────────────────

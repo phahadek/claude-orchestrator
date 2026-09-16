@@ -33,6 +33,13 @@ vi.mock('../db/queries.js', () => ({
   getMergedPRForTask: vi.fn().mockReturnValue(undefined),
   getMergedLocalBranchForTaskId: vi.fn().mockReturnValue(undefined),
   getLatestTestRequestRunForSession: vi.fn().mockReturnValue(undefined),
+  markSessionSuperseded: vi.fn(),
+  TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED: new Set([
+    'done',
+    'error',
+    'killed',
+    'superseded',
+  ]),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({

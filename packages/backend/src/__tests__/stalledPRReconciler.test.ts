@@ -18,6 +18,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../db/queries.js', () => ({
   getAllOpenPRs: vi.fn(),
   getSession: vi.fn(),
+  getPRByNumber: vi.fn(() => null),
   setPauseReason: vi.fn(),
   incrementStalledPRRetryCount: vi.fn(),
   clearReviewSessionId: vi.fn(),
@@ -34,6 +35,13 @@ vi.mock('../db/queries.js', () => ({
   resetStalledPRRetryCountForBaseRecovery: vi.fn(),
   setReconcileExhausted: vi.fn(),
   hasQueuedOrRunningTestRunForSession: vi.fn(() => false),
+  markSessionSuperseded: vi.fn(),
+  TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED: new Set([
+    'done',
+    'error',
+    'killed',
+    'superseded',
+  ]),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -57,6 +65,7 @@ vi.mock('../session/sessionLifecycle.js', () => ({
 import {
   getAllOpenPRs,
   getSession,
+  getPRByNumber,
   setPauseReason,
   incrementStalledPRRetryCount,
   clearReviewSessionId,
@@ -72,6 +81,7 @@ import {
   setStalledRetryBaseExhausted,
   setReconcileExhausted,
   hasQueuedOrRunningTestRunForSession,
+  markSessionSuperseded,
 } from '../db/queries.js';
 import {
   recordEvent,
@@ -138,6 +148,7 @@ function makeSessionManager() {
   return {
     relaunchFixerForPR: vi.fn().mockResolvedValue('session-1'),
     redeliverUndeliveredFeedback: vi.fn().mockResolvedValue(true),
+    endSession: vi.fn(),
   };
 }
 
@@ -234,6 +245,7 @@ describe('StalledPRReconciler', () => {
     const ro = makeReviewOrchestrator();
     const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
     reconciler.setReviewOrchestrator(ro as any);
+    reconciler.setSessionManager(makeSessionManager() as any);
 
     await reconciler.reconcileOnce();
 
@@ -241,6 +253,75 @@ describe('StalledPRReconciler', () => {
     expect(ro.enqueueReview).toHaveBeenCalledWith(
       expect.objectContaining({ prNumber: 42, repo: 'org/repo' }),
     );
+  });
+
+  it('bails out (does not clear review_session_id, does not enqueue) when sessionManager is not wired, instead of clearing without a supersede', async () => {
+    const pr = makePR({
+      review_result: null,
+      head_sha: 'sha1',
+      last_reviewed_sha: null,
+      review_session_id: 'dead-review-session',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+    vi.mocked(getSession).mockReturnValue({
+      status: 'error',
+      session_id: 'dead-review-session',
+    } as any);
+
+    const { fn: broadcast } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+    // Deliberately not calling setSessionManager — models the narrow
+    // startup/wiring race the depth review flagged.
+
+    await reconciler.reconcileOnce();
+
+    expect(clearReviewSessionId).not.toHaveBeenCalled();
+    expect(markSessionSuperseded).not.toHaveBeenCalled();
+    expect(ro.enqueueReview).not.toHaveBeenCalled();
+  });
+
+  it('supersedes the abandoned review session before clearing review_session_id for an errored review session', async () => {
+    const pr = makePR({
+      review_result: null,
+      head_sha: 'sha1',
+      last_reviewed_sha: null,
+      review_session_id: 'dead-review-session',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...pr,
+      review_session_id: 'dead-review-session',
+    } as any);
+    // Classification reads the session as error (first call) — but by the
+    // time the clear site's supersede check re-reads it, the session has
+    // become live again (idle) — the exact race supersedeReviewSession's
+    // live re-read guards against, rather than trusting the classification
+    // snapshot.
+    let calls = 0;
+    vi.mocked(getSession).mockImplementation((id: string) => {
+      if (id !== 'dead-review-session') return null as any;
+      calls += 1;
+      return { status: calls === 1 ? 'error' : 'idle' } as any;
+    });
+
+    const { fn: broadcast } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const sm = makeSessionManager();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+    reconciler.setSessionManager(sm as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(sm.endSession).toHaveBeenCalledWith('dead-review-session');
+    expect(vi.mocked(markSessionSuperseded)).toHaveBeenCalledWith(
+      'dead-review-session',
+      expect.any(Number),
+      'review_session_cleared',
+    );
+    expect(clearReviewSessionId).toHaveBeenCalledWith(42, 'org/repo');
   });
 
   it('relaunches the fixer (not a re-review) for a gate-failed PR without requiring a new push', async () => {
@@ -958,6 +1039,7 @@ describe('StalledPRReconciler', () => {
     const ro = makeReviewOrchestrator();
     const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
     reconciler.setReviewOrchestrator(ro as any);
+    reconciler.setSessionManager(makeSessionManager() as any);
 
     await reconciler.reconcileOnce();
 
@@ -1582,6 +1664,7 @@ describe('StalledPRReconciler', () => {
     const ro = makeReviewOrchestrator(false, false); // enqueueReview reports it did not queue
     const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
     reconciler.setReviewOrchestrator(ro as any);
+    reconciler.setSessionManager(makeSessionManager() as any);
 
     await reconciler.reconcileOnce();
 
@@ -1618,6 +1701,7 @@ describe('StalledPRReconciler', () => {
     const ro = makeReviewOrchestrator();
     const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
     reconciler.setReviewOrchestrator(ro as any);
+    reconciler.setSessionManager(makeSessionManager() as any);
 
     await reconciler.reconcileOnce();
 

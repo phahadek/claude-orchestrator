@@ -46,6 +46,7 @@ import {
   formatCIFailureFeedback,
   formatMergeConflictFeedback,
 } from '../github/reviewUtils';
+import { supersedeReviewSession } from '../github/reviewSessionSupersede';
 
 /**
  * Replacement for the retired whole-tree base-attributability check: true
@@ -485,6 +486,24 @@ export class StalledPRReconciler {
     ) {
       // Clear any stale review_session_id so PRReviewService spawns a fresh
       // session rather than calling sendOrResume on a terminal session.
+      // Bails out entirely (matching relaunchFixerForPR/
+      // redeliverUndeliveredFeedback's established convention elsewhere in
+      // this file) rather than clearing without superseding when
+      // sessionManager isn't wired yet — clearing unconditionally here would
+      // silently reintroduce the orphaned-idle-review-session leak this PR
+      // exists to close, for exactly the PRs this branch targets.
+      if (!this.sessionManager) {
+        logger.warn(
+          `[StalledPRReconciler] sessionManager not set — cannot supersede review session for PR #${prNumber}, skipping re-drive`,
+        );
+        return false;
+      }
+      supersedeReviewSession(
+        this.sessionManager,
+        prNumber,
+        repo,
+        'review_session_cleared',
+      );
       clearReviewSessionId(prNumber, repo);
     }
 
