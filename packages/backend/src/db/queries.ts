@@ -11823,40 +11823,10 @@ export function isPlanningKillSuppressed(
 }
 
 /**
- * The most recently reported orchestrator MCP server status (from a
- * session_orchestrator_mcp_status_reported audit event, recorded off the
- * CLI init event's `mcp_servers` array — see AgentSession.getOrchestratorMcpStatus)
- * for this session with ts > sinceMs, or undefined if no init has been
- * reported yet in that window. The detection signal
- * SessionManager.reconcileMcpUnreachableSessions checks per spawn/respawn
- * window (see AgentSession.isMcpUnreachable) — undefined means "still
- * initialising", not "unreachable".
- */
-export function getLatestOrchestratorMcpStatusSince(
-  sessionId: string,
-  sinceMs: number,
-): string | undefined {
-  const row = db
-    .prepare<[string, number], { payload: string }>(
-      `SELECT payload FROM audit_log
-       WHERE event_type = 'session_orchestrator_mcp_status_reported' AND actor_id = ? AND ts > ?
-       ORDER BY ts DESC LIMIT 1`,
-    )
-    .get(sessionId, sinceMs);
-  if (!row) return undefined;
-  try {
-    const payload = JSON.parse(row.payload) as { status?: string };
-    return typeof payload.status === 'string' ? payload.status : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
  * Count of session_mcp_unreachable_respawned audit events recorded for this
  * session — doubles as both the respawn-attempt counter (next attempt
  * number = this + 1) and the grace-window anchor's fallback source (see
- * getLatestMcpUnreachableRespawnTimestamp).
+ * getMcpUnreachableSweepFacts's lastRespawnTs).
  */
 export function countMcpUnreachableRespawnAttempts(sessionId: string): number {
   const row = db
@@ -11866,40 +11836,6 @@ export function countMcpUnreachableRespawnAttempts(sessionId: string): number {
     )
     .get(sessionId);
   return row?.cnt ?? 0;
-}
-
-/**
- * ts of the most recent session_mcp_unreachable_respawned event for this
- * session, or null if it has never been respawned for MCP-unreachability —
- * the reconciler's grace-window anchor falls back to the session's own
- * started_at in that case.
- */
-export function getLatestMcpUnreachableRespawnTimestamp(
-  sessionId: string,
-): number | null {
-  const row = db
-    .prepare<[string], { ts: number | null }>(
-      `SELECT MAX(ts) AS ts FROM audit_log
-       WHERE event_type = 'session_mcp_unreachable_respawned' AND actor_id = ?`,
-    )
-    .get(sessionId);
-  return row?.ts ?? null;
-}
-
-/**
- * True when a session_mcp_unreachable_respawn_exhausted event has already
- * been recorded for this session — once true, reconcileMcpUnreachableSessions
- * leaves the session alone permanently rather than re-surfacing it every
- * sweep.
- */
-export function hasMcpUnreachableExhaustedEvent(sessionId: string): boolean {
-  const row = db
-    .prepare<[string], { cnt: number }>(
-      `SELECT COUNT(*) AS cnt FROM audit_log
-       WHERE event_type = 'session_mcp_unreachable_respawn_exhausted' AND actor_id = ?`,
-    )
-    .get(sessionId);
-  return (row?.cnt ?? 0) > 0;
 }
 
 export interface McpUnreachableSweepFacts {
