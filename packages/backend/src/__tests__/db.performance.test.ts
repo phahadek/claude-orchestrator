@@ -1570,16 +1570,7 @@ describe('querySessionEventsByProjectRowsOffMainThread — concurrency', () => {
       });
 
       expect(timerElapsedMs).not.toBeNull();
-      // Widened from 1000ms: under full-suite concurrency (many other files
-      // concurrently spawning worker threads and doing synchronous
-      // better-sqlite3 disk I/O), main-thread timer dispatch has been
-      // observed stretching into the low seconds from scheduling contention
-      // alone. Deployed SHA 175b5d74's actual failure mode (see gate item
-      // 585ffbee-e989-4016-a3e4-83897035f5c6) was the in-process LIKE scan
-      // blocking the event loop for multiple seconds — this bound only needs
-      // to catch that class of regression, not discriminate at the
-      // millisecond level against ordinary CI load.
-      expect(timerElapsedMs as number).toBeLessThan(8000);
+      expect(timerElapsedMs as number).toBeLessThan(1000);
 
       const rows = await queryPromise;
       expect(rows.length).toBeGreaterThan(0);
@@ -1587,12 +1578,7 @@ describe('querySessionEventsByProjectRowsOffMainThread — concurrency', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
-    // Widened from 60000: the 80k-row seed plus a real worker-thread
-    // dispatch already pays disk I/O and ts-node registration overhead in
-    // isolation; under full-suite concurrency with many other files
-    // spawning their own worker threads that overhead compounds well past
-    // 60s on a contended host, independent of this test's own correctness.
-  }, 120000);
+  }, 60000);
 });
 
 // ── flagged_flaky_tests_rollup — incremental recompute ──────────────────────
@@ -1948,12 +1934,10 @@ describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
     // on-disk sqlite file. In isolation that's ~1-2s; under a full-suite run
     // where many other files are concurrently spawning their own worker
     // threads and doing heavy synchronous better-sqlite3 I/O, that startup
-    // cost has been observed stretching past 20s — and, on a sufficiently
-    // contended host, past the previous 60s bound too — a resource-
-    // contention timeout, not a correctness failure (see
-    // flakyTestRollupOffMainThread.test.ts for the same pattern). Widened
-    // further so it survives that contention.
-  }, 120000);
+    // cost has been observed stretching past 20s — a resource-contention
+    // timeout, not a correctness failure (see flakyTestRollupOffMainThread.test.ts
+    // for the same pattern). Generous timeout so it survives that contention.
+  }, 60000);
 });
 
 // ── getLatestTestRequestRunForSession — no temp b-tree over structured_result ──

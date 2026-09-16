@@ -43,11 +43,7 @@ describe('queries.ts prepares every statement lazily', () => {
 
     vi.doUnmock('../db.js');
     vi.resetModules();
-    // Same full-suite transpile-contention exposure as the sibling test
-    // below (fresh vi.resetModules() + dynamic import of the whole
-    // config/settings.js -> db/queries.js graph) — generous explicit
-    // timeout rather than Vitest's 5000ms default.
-  }, 60000);
+  });
 });
 
 describe('lazily-prepared statements are cached, not re-prepared', () => {
@@ -95,13 +91,5 @@ describe('lazily-prepared statements are cached, not re-prepared', () => {
 
     vi.doUnmock('../db.js');
     vi.resetModules();
-    // vi.resetModules() forces a fresh transpile of the whole queries.ts
-    // module graph on every dynamic import() below — cheap in isolation,
-    // but under full-suite concurrency (many other files concurrently doing
-    // synchronous better-sqlite3 disk I/O and worker-thread spawns) this has
-    // been observed exceeding Vitest's 5000ms default timeout purely from
-    // contention, the same class of false failure the sibling db.performance
-    // and schema.migration on-disk tests already carry a generous explicit
-    // timeout for.
-  }, 60000);
+  });
 });
