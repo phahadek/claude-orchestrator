@@ -4905,8 +4905,11 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
 
     // budget = commands.length(1) * test_timeout_sec(300) = 300s;
     // bound = 2 * budget = 600s (10 min) — same formula recordF2VerdictPending
-    // uses for the ordinary pending case.
-    vi.useFakeTimers();
+    // uses for the ordinary pending case. Date.now() is spied directly
+    // (rather than vi.useFakeTimers()) so no timer/scheduling machinery is
+    // swapped in — just the one function this bound check reads.
+    const baseMs = 1_800_000_000_000;
+    const dateNowSpy = vi.spyOn(Date, 'now').mockReturnValue(baseMs);
     try {
       // Tick 1: eligible — triggers (enqueues) the rerun.
       await watcher.poll();
@@ -4921,7 +4924,7 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
       vi.mocked(getLatestTestRequestRun).mockReturnValue(undefined);
 
       // Still under the bound — stays pending, no pause, no re-trigger.
-      vi.setSystemTime(Date.now() + 9 * 60 * 1000);
+      dateNowSpy.mockReturnValue(baseMs + 9 * 60 * 1000);
       await watcher.poll();
       expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
       expect(
@@ -4930,7 +4933,7 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
 
       // Past the bound — the stuck rerun is treated as failed: paused,
       // session nudged, retry budget charged, marker cleared.
-      vi.setSystemTime(Date.now() + 2 * 60 * 1000);
+      dateNowSpy.mockReturnValue(baseMs + 11 * 60 * 1000);
       await watcher.poll();
 
       expect(vi.mocked(setCiRemediationAttemptedSha)).toHaveBeenCalledWith(
@@ -4955,7 +4958,7 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
         vi.mocked(reviewOrchestrator.rerunFlakyTests),
       ).toHaveBeenCalledTimes(1);
     } finally {
-      vi.useRealTimers();
+      dateNowSpy.mockRestore();
     }
   });
 
