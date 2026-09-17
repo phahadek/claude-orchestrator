@@ -91,11 +91,7 @@ vi.mock('../pollUtils', () => ({
 }));
 
 import { PRMergeWatcher } from '../PRMergeWatcher';
-import {
-  getAllOpenPRs,
-  getPRByNumber,
-  getSession,
-} from '../../db/queries';
+import { getAllOpenPRs, getPRByNumber, getSession } from '../../db/queries';
 import { getProjectByGithubRepo } from '../../config';
 import { computeWholeTreeContentHash } from '../../session/analyzeGating';
 import {
