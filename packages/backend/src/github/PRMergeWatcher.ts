@@ -249,10 +249,25 @@ export class PRMergeWatcher extends EventEmitter {
    * longer matches the PR's current content hash (a new push landed while
    * the rerun was in flight) is stale and is dropped unconsumed — the new
    * content hash gets its own fresh verdict cycle.
+   *
+   * `triggeredAt` bounds the marker itself: if the enqueued run never
+   * produces a settled test_request_runs row at all — a silent admission
+   * failure, a crash before the row is even inserted, a worker that dies
+   * without ever transitioning the row out of 'running' — the content-hash
+   * read stays undefined forever, so this marker would otherwise sit
+   * unconsumed indefinitely with no pause/nudge and no operator-visible
+   * signal (unlike the ordinary push-triggered pending case, where a live
+   * pipeline is still expected to eventually produce a row). See the bound
+   * check in runMergeabilityCheck's `!testResult` branch.
    */
   private readonly pendingF2FlakeReruns = new Map<
     string,
-    { contentHash: string; maxRetries: number; justRestored: boolean }
+    {
+      contentHash: string;
+      maxRetries: number;
+      justRestored: boolean;
+      triggeredAt: number;
+    }
   >();
   /**
    * (pr_number, repo) -> the whole-tree content hash runMergeabilityCheck
@@ -898,6 +913,66 @@ export class PRMergeWatcher extends EventEmitter {
         ? getLatestTestRequestRun(project.id, contentHash, 'full')
         : undefined;
       if (!testResult && contentHash && worktreePath) {
+        // A flake-recovery rerun triggered earlier for this exact content
+        // hash but never produced a settled row at all — silent admission
+        // failure, a crash before the row was even inserted, a worker that
+        // died without ever transitioning the row out of 'running' — must
+        // not leave its marker (and this PR) stuck forever with no
+        // operator-visible signal. Unlike the ordinary push-triggered
+        // pending case below, there is no still-live pipeline to eventually
+        // produce a row here, so this is bounded independently, on the same
+        // budget recordF2VerdictPending uses, and treated as a failed
+        // disposition attempt: the marker is cleared, the retry budget is
+        // charged, and the PR is paused + the session nudged exactly like
+        // any other unrecovered F2 failure.
+        const pendingRerunKey = this.prKey(pr);
+        const pendingRerun = this.pendingF2FlakeReruns.get(pendingRerunKey);
+        if (pendingRerun && pendingRerun.contentHash === contentHash) {
+          const budgetMs =
+            2 * config.test.length * config.test_timeout_sec * 1000;
+          if (Date.now() - pendingRerun.triggeredAt > budgetMs) {
+            this.pendingF2FlakeReruns.delete(pendingRerunKey);
+            recordEvent({
+              event_type: 'flake_recovery_f2_rerun',
+              actor_type: 'system',
+              project_id: project.id,
+              task_id: pr.task_id ?? null,
+              payload: {
+                prNumber: pr.pr_number,
+                repo: pr.repo,
+                sha: pr.head_sha,
+                outcome: 'failed',
+              },
+            });
+            await this.applyFlakeRecoveryOutcome(
+              pr,
+              'failed',
+              pendingRerun.maxRetries,
+              pendingRerun.justRestored,
+              false,
+            );
+            setCiRemediationAttemptedSha(pr.pr_number, pr.repo, pr.head_sha);
+            const stuckMsg = `Flake-recovery re-run for PR #${pr.pr_number} never produced a settled result within ${Math.round(budgetMs / 1000)}s for content hash ${contentHash.slice(0, 12)} — treating as failed.`;
+            setPauseReason(pr.pr_number, pr.repo, 'ci_failing', stuckMsg);
+            const verifyMsg = formatCIFailureFeedback({
+              source: 'verify',
+              failedCommand: config.test.join(' && '),
+              truncatedOutput: stuckMsg,
+              conflicted: pr.merge_state === 'dirty',
+              baseBranch: pr.base_branch ?? undefined,
+            });
+            this.sessions
+              .sendOrResume(pr.session_id!, verifyMsg)
+              .catch((err: unknown) =>
+                logger.warn(
+                  `[PRMergeWatcher] sendOrResume failed for session ${pr.session_id}:`,
+                  (err as Error).message,
+                ),
+              );
+            return;
+          }
+        }
+
         // No full-run verdict yet for this content hash. The poll only
         // reads settled verdicts — triggering a full-suite run belongs to
         // the push-driven pipeline (PreReviewPipeline/ReviewOrchestrator),
@@ -1499,6 +1574,7 @@ export class PRMergeWatcher extends EventEmitter {
         contentHash,
         maxRetries,
         justRestored,
+        triggeredAt: Date.now(),
       });
       return;
     }
@@ -1880,6 +1956,7 @@ export class PRMergeWatcher extends EventEmitter {
       contentHash,
       maxRetries,
       justRestored,
+      triggeredAt: Date.now(),
     });
     return true;
   }

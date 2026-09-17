@@ -4867,6 +4867,98 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
     );
   });
 
+  it('bounds a triggered rerun that never produces a settled row — pauses + nudges, charges the retry budget, and clears the marker instead of leaking it forever', async () => {
+    flagTest('tests.unit.test_foo.test_bar', PR_CREATED_AT_MS);
+    const runId = 'f2-run-stuck';
+    seedRunFailures(runId, [
+      { testId: 'tests.unit.test_foo.test_bar', name: 'test_bar' },
+    ]);
+
+    const pr = makePRRow({
+      head_sha: 'sha-stuck-rerun',
+      session_id: 'coding-session',
+      ci_remediation_attempted_sha: null,
+      created_at: PR_CREATED_AT_ISO,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: runId,
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
+      state: 'failed',
+      output: 'FAIL',
+      started_at: 1000,
+      finished_at: 2000,
+    } as any);
+    vi.mocked(getChangedFiles).mockResolvedValue(['src/unrelated.ts']);
+
+    const github = makeMockGitHub();
+    const sessions = makeMockSessions();
+    const reviewOrchestrator = makeMockReviewOrchestratorWithF2();
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    // budget = commands.length(1) * test_timeout_sec(300) = 300s;
+    // bound = 2 * budget = 600s (10 min) — same formula recordF2VerdictPending
+    // uses for the ordinary pending case.
+    vi.useFakeTimers();
+    try {
+      // Tick 1: eligible — triggers (enqueues) the rerun.
+      await watcher.poll();
+      expect(
+        vi.mocked(reviewOrchestrator.rerunFlakyTests),
+      ).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
+
+      // The enqueued run never produces a settled row for this content hash
+      // at all — a silent admission failure or crash before/without ever
+      // inserting or completing the row.
+      vi.mocked(getLatestTestRequestRun).mockReturnValue(undefined);
+
+      // Still under the bound — stays pending, no pause, no re-trigger.
+      vi.setSystemTime(Date.now() + 9 * 60 * 1000);
+      await watcher.poll();
+      expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
+      expect(
+        vi.mocked(reviewOrchestrator.rerunFlakyTests),
+      ).toHaveBeenCalledTimes(1);
+
+      // Past the bound — the stuck rerun is treated as failed: paused,
+      // session nudged, retry budget charged, marker cleared.
+      vi.setSystemTime(Date.now() + 2 * 60 * 1000);
+      await watcher.poll();
+
+      expect(vi.mocked(setCiRemediationAttemptedSha)).toHaveBeenCalledWith(
+        42,
+        'owner/repo',
+        'sha-stuck-rerun',
+      );
+      expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+        42,
+        'owner/repo',
+        'ci_failing',
+        expect.stringContaining('never produced a settled result'),
+      );
+      expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalled();
+
+      // Bounded, not leaked: a further tick neither re-fires the pause nor
+      // re-triggers a second rerun for the same stuck marker.
+      vi.mocked(setPauseReason).mockClear();
+      await watcher.poll();
+      expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
+      expect(
+        vi.mocked(reviewOrchestrator.rerunFlakyTests),
+      ).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('auto-recovers a deterministically-failing test (never flip-rate flagged) once it clears the breadth-of-trees guard instead', async () => {
     const testId = 'tests.unit.test_foo.test_deterministic';
     // Fails on 3 distinct trees before the PR was created — never alternates
