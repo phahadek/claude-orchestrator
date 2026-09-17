@@ -30,6 +30,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { EventEmitter } from 'events';
 import { Semaphore } from '../tasks/deferralClassifier';
 import {
   runTestCommands,
@@ -93,6 +94,28 @@ export function setTestRequestLaneBroadcast(
 
 function broadcastRunStatus(payload: TestRequestRunStatusPayload): void {
   broadcastFn?.({ type: 'test_request_run_status', ...payload });
+}
+
+/**
+ * In-process settle notifications, parallel to (never a replacement for) the
+ * WS broadcast above — a same-process reader like PRMergeWatcher that wants
+ * to react to a settle immediately can subscribe here instead of waiting for
+ * its own poll tick to re-read test_request_runs. Emitted right alongside
+ * every broadcastRunStatus call that reports a genuinely fresh settle
+ * (passed/failed), never for 'running' or for the boot-time interrupted-run
+ * recovery sweep, which settles rows nothing is live to react to.
+ */
+export interface TestRequestLaneSettledEvent {
+  projectId: string;
+  contentHash: string;
+  runKind: TestRunKind;
+  state: 'passed' | 'failed';
+}
+
+export const testRequestLaneEvents = new EventEmitter();
+
+function emitSettled(event: TestRequestLaneSettledEvent): void {
+  testRequestLaneEvents.emit('settled', event);
 }
 
 export interface TestRequestRunSpec {
@@ -677,6 +700,12 @@ async function executeTestRequestRun(
       startedAt,
       finishedAt: Date.now(),
     });
+    emitSettled({
+      projectId: spec.projectId,
+      contentHash: spec.contentHash,
+      runKind: spec.runKind ?? 'full',
+      state: result.passed ? 'passed' : 'failed',
+    });
     ingestTestRunResults({
       id: runId,
       project_id: spec.projectId,
@@ -714,6 +743,12 @@ async function executeTestRequestRun(
       requestedAt,
       startedAt,
       finishedAt: Date.now(),
+    });
+    emitSettled({
+      projectId: spec.projectId,
+      contentHash: spec.contentHash,
+      runKind: spec.runKind ?? 'full',
+      state: 'failed',
     });
     return { passed: false, output, runId };
   } finally {

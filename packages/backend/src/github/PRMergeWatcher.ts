@@ -27,7 +27,11 @@ import {
   getChangedFiles,
 } from '../session/autofix-runner';
 import { computeWholeTreeContentHash } from '../session/analyzeGating';
-import { evaluateF2LaneFlakyDisposition } from '../orchestration/testRequestLane';
+import {
+  evaluateF2LaneFlakyDisposition,
+  testRequestLaneEvents,
+  type TestRequestLaneSettledEvent,
+} from '../orchestration/testRequestLane';
 import { tailOfLog } from '../orchestration/verifyRunner';
 import {
   filterBaseAttributableFailures,
@@ -250,6 +254,22 @@ export class PRMergeWatcher extends EventEmitter {
     string,
     { contentHash: string; maxRetries: number; justRestored: boolean }
   >();
+  /**
+   * (pr_number, repo) -> the whole-tree content hash runMergeabilityCheck
+   * last computed for it (see the F2 gate block). Lets the settled-event
+   * handler below (handleLaneSettled) match a lane settle to the PR(s)
+   * currently sitting on that exact tree without recomputing
+   * computeWholeTreeContentHash per event — it just reuses whatever the most
+   * recent poll/checkMergeabilityNow already computed.
+   */
+  private readonly lastContentHashByPR = new Map<string, string>();
+  /**
+   * (pr, contentHash) pairs already re-checked in response to a lane settle
+   * — bounds handleLaneSettled to one checkMergeabilityNow call per pair,
+   * even if the lane emits more than one settled event for the same tree
+   * (e.g. a flaky-recovery re-run settling again at the same content hash).
+   */
+  private readonly laneSettledRechecked = new Set<string>();
 
   constructor(
     private github: GitHubClient,
@@ -270,6 +290,35 @@ export class PRMergeWatcher extends EventEmitter {
           payload as VerifiedFlakyDispositionPayload,
         ),
     );
+    testRequestLaneEvents.on('settled', (event: unknown) =>
+      this.handleLaneSettled(event as TestRequestLaneSettledEvent),
+    );
+  }
+
+  /**
+   * Reacts to a testRequestLane full-run settle by re-checking mergeability
+   * for whichever open PR(s) currently sit on that exact content hash —
+   * closing the gap between a suite settling and the next 5-minute poll
+   * tick. Read-only, like poll() itself: never triggers a test execution,
+   * only re-drives checkMergeabilityNow (which reads the now-settled
+   * test_request_runs row). Applies the same skip guards poll() applies
+   * (rate limit, orphan repo, isTerminalStalePR) so this path can never act
+   * where the poll itself would not.
+   */
+  private handleLaneSettled(event: TestRequestLaneSettledEvent): void {
+    if (event.runKind !== 'full') return;
+    if (isGitHubRateLimitActive(this.broadcast)) return;
+    for (const pr of getAllOpenPRs()) {
+      const project = getProjectByGithubRepo(pr.repo);
+      if (!project || project.id !== event.projectId) continue;
+      if (isTerminalStalePR(pr)) continue;
+      const key = this.prKey(pr);
+      if (this.lastContentHashByPR.get(key) !== event.contentHash) continue;
+      const dedupeKey = `${key}:${event.contentHash}`;
+      if (this.laneSettledRechecked.has(dedupeKey)) continue;
+      this.laneSettledRechecked.add(dedupeKey);
+      void this.checkMergeabilityNow(pr.pr_number, pr.repo);
+    }
   }
 
   setAutoMerger(autoMerger: AutoMerger): void {
@@ -839,6 +888,9 @@ export class PRMergeWatcher extends EventEmitter {
       const contentHash = worktreePath
         ? await computeWholeTreeContentHash(worktreePath)
         : null;
+      if (contentHash) {
+        this.lastContentHashByPR.set(this.prKey(pr), contentHash);
+      }
       // Explicitly scoped to 'full' — a settled row from a diff-scoped run
       // (test_scoped:) must never stand in for the full-suite verdict this
       // gate exists to enforce; see run_kind on test_request_runs.
