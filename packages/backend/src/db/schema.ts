@@ -3494,9 +3494,7 @@ export function runMigrations(target: Database.Database): void {
   // them) look up a queued/running run without a LIKE scan over `output`.
   // NULL on rows predating this column.
   try {
-    target.exec(
-      `ALTER TABLE test_request_runs ADD COLUMN worktree_path TEXT`,
-    );
+    target.exec(`ALTER TABLE test_request_runs ADD COLUMN worktree_path TEXT`);
   } catch {
     /* already exists */
   }

@@ -229,7 +229,10 @@ export class ReviewOrchestrator {
         const laneRunId = this.inFlightLaneRunIds.get(key);
         if (laneRunId) {
           const laneRun = getTestRequestRunById(laneRunId);
-          if (laneRun && (laneRun.state === 'queued' || laneRun.state === 'running')) {
+          if (
+            laneRun &&
+            (laneRun.state === 'queued' || laneRun.state === 'running')
+          ) {
             // Still waiting on (or running inside) the project's test-lane
             // semaphore — a slot this process doesn't control. Queue
             // pressure is never stall time; skip clearing this tick and
