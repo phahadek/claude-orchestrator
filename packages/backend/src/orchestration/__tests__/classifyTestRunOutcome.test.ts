@@ -8,10 +8,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { classifyTestRunOutcome } from '../testRequestLane';
-import {
-  insertTestRequestRun,
-  ingestTestRunResultsTx,
-} from '../../db/queries';
+import { insertTestRequestRun, ingestTestRunResultsTx } from '../../db/queries';
 import type { TestRequestRunRow } from '../../db/types';
 
 function makeRun(
