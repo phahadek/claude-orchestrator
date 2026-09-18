@@ -643,9 +643,9 @@ describe('TempClusterReconciler items_processed reporting', () => {
     const removable1 = 'orchestrator-run-aaa-111';
     const removable2 = 'orchestrator-run-bbb-222';
     mockedReaddir.mockResolvedValue(
-      [removable1, removable2].map((n) => makeDirent(n)) as unknown as ReturnType<
-        typeof fs.readdirSync
-      >,
+      [removable1, removable2].map((n) =>
+        makeDirent(n),
+      ) as unknown as ReturnType<typeof fs.readdirSync>,
     );
     mockedAccess.mockRejectedValue(new Error('ENOENT'));
     mockedStat.mockResolvedValue(makeStat(OLD_GENERIC_MTIME));
@@ -674,9 +674,9 @@ describe('TempClusterReconciler items_processed reporting', () => {
     const removable1 = 'orchestrator-run-ccc-333';
     const removable2 = 'orchestrator-run-ddd-444';
     mockedReaddir.mockResolvedValue(
-      [removable1, removable2].map((n) => makeDirent(n)) as unknown as ReturnType<
-        typeof fs.readdirSync
-      >,
+      [removable1, removable2].map((n) =>
+        makeDirent(n),
+      ) as unknown as ReturnType<typeof fs.readdirSync>,
     );
     mockedAccess.mockRejectedValue(new Error('ENOENT'));
     mockedStat.mockResolvedValue(makeStat(OLD_GENERIC_MTIME));

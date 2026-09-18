@@ -277,7 +277,9 @@ export function register(scheduler: Scheduler): void {
     run: async () => {
       const stats = await reconcileBaseDir(os.tmpdir());
       logSweepSummary(stats);
-      return { items_processed: stats.postgres.removed + stats.generic.removed };
+      return {
+        items_processed: stats.postgres.removed + stats.generic.removed,
+      };
     },
   });
 }
