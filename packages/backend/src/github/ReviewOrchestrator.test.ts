@@ -5709,3 +5709,141 @@ describe('ReviewOrchestrator — onSessionEnded session_type gate', () => {
     expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
   });
 });
+
+// ── PR-not-open admission gate ──────────────────────────────────────────────
+
+describe('ReviewOrchestrator — PR-not-open admission gate', () => {
+  const needsChangesResult2 = JSON.stringify({ verdict: 'needs_changes' });
+
+  it('onSessionEnded does not enqueue a re-review when the PR row is merged', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      session_id: 'source-session-id',
+      session_type: 'standard',
+      task_url: 'https://notion.so/task',
+    } as any);
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      ...basePRRow,
+      state: 'merged',
+      review_result: needsChangesResult2,
+      review_iteration: 0,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: 'source-session-id',
+    });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+  });
+
+  it.each(['merged', 'closed'] as const)(
+    'enqueueReview for a %s PR returns false and records exactly one review_job_skipped_pr_not_open audit row',
+    async (state) => {
+      vi.mocked(getPRByNumber).mockReturnValue({
+        ...basePRRow,
+        state,
+      } as any);
+
+      const sm = makeMockSessionManager();
+      const rs = makeMockReviewService();
+      const orch = new ReviewOrchestrator(rs, sm as any, true);
+
+      const queued = orch.enqueueReview({ ...baseJob });
+      await new Promise((r) => setTimeout(r, 20));
+
+      expect(queued).toBe(false);
+      expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+      const skippedEvents = vi
+        .mocked(recordEvent)
+        .mock.calls.filter(
+          ([evt]) => evt.event_type === 'review_job_skipped_pr_not_open',
+        );
+      expect(skippedEvents).toHaveLength(1);
+      expect(skippedEvents[0][0].payload).toMatchObject({
+        pr_number: baseJob.prNumber,
+        repo: baseJob.repo,
+        state,
+      });
+    },
+  );
+
+  it('onPrOpened for a merged PR returns false and records exactly one review_job_skipped_pr_not_open audit row', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      state: 'merged',
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('pr_opened', { ...baseJob });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+    const skippedEvents = vi
+      .mocked(recordEvent)
+      .mock.calls.filter(
+        ([evt]) => evt.event_type === 'review_job_skipped_pr_not_open',
+      );
+    expect(skippedEvents).toHaveLength(1);
+  });
+
+  it('executeReview returns before the pre-review pipeline runs when the PR flipped to merged after enqueue', async () => {
+    // First admission sees the PR open (so enqueueReview succeeds); by the
+    // time executeReview's own re-read happens, the row has flipped to merged.
+    vi.mocked(getPRByNumber)
+      .mockReturnValueOnce({ ...basePRRow, state: 'open' } as any)
+      .mockReturnValue({ ...basePRRow, state: 'merged' } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue([]);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+
+    const queued = orch.enqueueReview({ ...baseJob });
+    expect(queued).toBe(true);
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(vi.mocked(loadAutofixCommands)).not.toHaveBeenCalled();
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+  });
+
+  it('regression: an open PR with needs_changes and an ended session still enqueues a re-review', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      session_id: 'source-session-id',
+      session_type: 'standard',
+      task_url: 'https://notion.so/task',
+    } as any);
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      ...basePRRow,
+      state: 'open',
+      review_result: needsChangesResult2,
+      review_iteration: 0,
+    } as any);
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      state: 'open',
+      review_result: needsChangesResult2,
+      review_iteration: 0,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: 'source-session-id',
+    });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
+  });
+});

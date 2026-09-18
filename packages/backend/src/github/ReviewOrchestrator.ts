@@ -333,7 +333,7 @@ export class ReviewOrchestrator {
       );
       return;
     }
-    if (!this.admitJob(job)) return;
+    if (!this.admitJob(job, 'onPrOpened')) return;
     logger.info(
       `[ReviewOrchestrator] pr_opened received for PR #${job.prNumber} (${job.repo}) — queueing (queue depth before: ${this.queue.length})`,
     );
@@ -350,11 +350,31 @@ export class ReviewOrchestrator {
    * the PR row when the caller didn't already supply it, so the same-head
    * comparison has something to compare against.
    */
-  private admitJob(job: ReviewJob): boolean {
+  private admitJob(job: ReviewJob, trigger: string = 'enqueueReview'): boolean {
     const key = `${job.prNumber}:${job.repo}`;
+    const prRow = getPRByNumber(job.prNumber, job.repo);
     if (job.headSha === undefined) {
-      const prRow = getPRByNumber(job.prNumber, job.repo);
       job.headSha = prRow?.head_sha ?? null;
+    }
+
+    if (prRow && prRow.state !== 'open') {
+      logger.info(
+        `[ReviewOrchestrator] admitJob: PR #${job.prNumber} (${job.repo}) is no longer open (state=${prRow.state}) — refusing admission`,
+      );
+      recordEvent({
+        event_type: 'review_job_skipped_pr_not_open',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: null,
+        task_id: job.taskId || null,
+        payload: {
+          pr_number: job.prNumber,
+          repo: job.repo,
+          state: prRow.state,
+          trigger,
+        },
+      });
+      return false;
     }
 
     const alreadyQueued = this.queue.some(
@@ -1261,6 +1281,7 @@ export class ReviewOrchestrator {
 
     const pr = getPRBySessionId(sessionId);
     if (!pr || !pr.review_result) return;
+    if (pr.state !== 'open') return;
 
     let verdict: string | undefined;
     try {
@@ -1371,6 +1392,12 @@ export class ReviewOrchestrator {
 
     // Check iteration cap before starting a review
     const prRow = getPRByNumber(job.prNumber, job.repo);
+    if (prRow && prRow.state !== 'open') {
+      logger.info(
+        `[ReviewOrchestrator] executeReview: PR #${job.prNumber} (${job.repo}) is no longer open (state=${prRow.state}) — skipping pre-review pipeline`,
+      );
+      return;
+    }
     const maxIterations = getMaxReviewIterations();
     if (prRow && prRow.review_iteration >= maxIterations) {
       const message = `Review loop for PR #${job.prNumber} reached ${maxIterations} iterations without approval. Manual intervention needed.`;

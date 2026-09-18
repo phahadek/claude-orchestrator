@@ -54,6 +54,7 @@ type EventType =
   | 'stale_branch_abandoned'
   | 'review_side_effect_failed'
   | 'review_job_coalesced'
+  | 'review_job_skipped_pr_not_open'
   | 'pipeline_stage_entered'
   | 'pipeline_stage_passed'
   | 'pipeline_stage_failed'
