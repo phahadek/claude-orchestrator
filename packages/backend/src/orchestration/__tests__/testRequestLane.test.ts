@@ -2080,7 +2080,15 @@ describe('admitTestRequest — settled-run guard', () => {
       null,
       Date.now(),
     );
-    completeTestRequestRun(runId, 'passed', 'exited 0', null, null, false, true);
+    completeTestRequestRun(
+      runId,
+      'passed',
+      'exited 0',
+      null,
+      null,
+      false,
+      true,
+    );
     ingestTestRunResultsTx(
       runId,
       'proj-settled-9',

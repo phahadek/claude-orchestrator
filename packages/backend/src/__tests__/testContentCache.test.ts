@@ -154,7 +154,13 @@ describe('test_request_runs — F2 shared-cache read/invalidate', () => {
 
   it('the same post-sweep shape with no test_run_summaries row stays excluded — the genuine passed-but-vacuous case', () => {
     const id = nextRunId();
-    insertTestRequestRun(id, 'proj-1', 'hash-post-sweep-vacuous', null, Date.now());
+    insertTestRequestRun(
+      id,
+      'proj-1',
+      'hash-post-sweep-vacuous',
+      null,
+      Date.now(),
+    );
     completeTestRequestRun(id, 'passed', 'exited 0', null, null, false, true);
 
     expect(

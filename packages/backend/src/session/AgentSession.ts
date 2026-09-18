@@ -2427,7 +2427,9 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     // therefore means "not yet acquired" only when no summary row exists
     // yet either — once one does, the summary's own counts are the
     // vacuousness signal, not the now-cleared column.
-    const winningSummary = winningRun ? getTestRunSummary(winningRun.id) : undefined;
+    const winningSummary = winningRun
+      ? getTestRunSummary(winningRun.id)
+      : undefined;
     if (winningRun?.structured_result) {
       try {
         winningStructuredResult = JSON.parse(

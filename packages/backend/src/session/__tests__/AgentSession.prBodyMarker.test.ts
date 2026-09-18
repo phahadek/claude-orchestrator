@@ -701,7 +701,13 @@ describe('<pr-body> marker — test.request cache gate', () => {
       started_at: 0,
       finished_at: 1,
     } as never);
-    insertTestRequestRun('run-post-sweep-gate', 'proj', 'hash', null, Date.now());
+    insertTestRequestRun(
+      'run-post-sweep-gate',
+      'proj',
+      'hash',
+      null,
+      Date.now(),
+    );
     ingestTestRunResultsTx(
       'run-post-sweep-gate',
       'proj',
