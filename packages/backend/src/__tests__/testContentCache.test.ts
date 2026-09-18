@@ -11,6 +11,7 @@ import {
   completeTestRequestRun,
   getLatestTestRequestRun,
   deleteTestRequestRunsForContentHash,
+  ingestTestRunResultsTx,
 } from '../db/queries.js';
 
 // ── test_request_runs — F2's shared content-hash cache ───────────────────────
@@ -121,5 +122,43 @@ describe('test_request_runs — F2 shared-cache read/invalidate', () => {
 
     const result = getLatestTestRequestRun('proj-1', 'hash-no-structured');
     expect(result?.structured_result).toBeNull();
+  });
+
+  it('a passed row in the post-sweep shape (structured_result NULL, test_report_acquisition_attempted=1, with a matching test_run_summaries row) is still a cache hit', () => {
+    const id = nextRunId();
+    insertTestRequestRun(id, 'proj-1', 'hash-post-sweep', null, Date.now());
+    // The extraction drain (clearExtractedStructuredResultsBatch) durably
+    // records the report via test_run_summaries, then nulls structured_result
+    // on the run row itself — simulated here by completing with a null
+    // structured_result but a durable summary row already present.
+    completeTestRequestRun(id, 'passed', 'exited 0', null, null, false, true);
+    ingestTestRunResultsTx(
+      id,
+      'proj-1',
+      [
+        {
+          test_id: 'test-a',
+          name: 'test-a',
+          outcome: 'passed',
+          duration_ms: 5,
+        },
+      ],
+      null,
+      false,
+      false,
+    );
+
+    const result = getLatestTestRequestRun('proj-1', 'hash-post-sweep');
+    expect(result?.id).toBe(id);
+  });
+
+  it('the same post-sweep shape with no test_run_summaries row stays excluded — the genuine passed-but-vacuous case', () => {
+    const id = nextRunId();
+    insertTestRequestRun(id, 'proj-1', 'hash-post-sweep-vacuous', null, Date.now());
+    completeTestRequestRun(id, 'passed', 'exited 0', null, null, false, true);
+
+    expect(
+      getLatestTestRequestRun('proj-1', 'hash-post-sweep-vacuous'),
+    ).toBeUndefined();
   });
 });

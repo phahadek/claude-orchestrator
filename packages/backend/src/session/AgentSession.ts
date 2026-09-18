@@ -51,6 +51,7 @@ import {
   setTaskPauseReason,
   setHumanMergeOnly,
   getLatestTestRequestRun,
+  getTestRunSummary,
   getFailingTestIdsForRun,
   getUnexcusedFailingTestIdsForRun,
   setSessionLastErrorDetail,
@@ -68,6 +69,7 @@ import {
   type PrBodySectionsConfig,
 } from '../github/PRBodyValidator';
 import { runFilePollutionCheck as filePollutionCheckFn } from './filePollutionCheck';
+import { findQueuedOrRunningTestRequest } from '../orchestration/testRequestLane';
 import { computeWholeTreeContentHash } from './analyzeGating';
 import {
   loadOrchestratorConfig,
@@ -2377,11 +2379,27 @@ The full task spec and all rules are in your system prompt. Begin implementing d
           error: 'no passing test.request cache entry for the current tree',
         },
       });
-      this.sendMessage(
-        `I can't open a PR yet — there's no passing test.request result recorded for the current ` +
-          `tree. Please request a test run (test.request) for this tree, wait for it to pass, then ` +
-          `re-emit the \`<pr-body>\` marker so I can push and open the PR.`,
-      );
+      const queued = contentHash
+        ? findQueuedOrRunningTestRequest(this.projectId, contentHash)
+        : undefined;
+      if (queued) {
+        this.sendMessage(
+          queued.status === 'running'
+            ? `I can't open a PR yet — a test run (test.request) for this exact tree is already ` +
+                `running (run ${queued.runId}). Please wait for it to finish, then re-emit the ` +
+                `\`<pr-body>\` marker so I can push and open the PR.`
+            : `I can't open a PR yet — a test run (test.request) for this exact tree is already ` +
+                `queued (run ${queued.runId}, position ${queued.position} of ${queued.queueDepth}). ` +
+                `Please wait for it to run and pass, then re-emit the \`<pr-body>\` marker so I can ` +
+                `push and open the PR.`,
+        );
+      } else {
+        this.sendMessage(
+          `I can't open a PR yet — there's no passing test.request result recorded for the current ` +
+            `tree. Please request a test run (test.request) for this tree, wait for it to pass, then ` +
+            `re-emit the \`<pr-body>\` marker so I can push and open the PR.`,
+        );
+      }
       return;
     }
 
@@ -2402,6 +2420,14 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     );
     let winningStructuredResult: StructuredTestResult | null = null;
     let structuredResultParseFailed = false;
+    // structured_result is transient: the extraction drain
+    // (clearExtractedStructuredResultsBatch) nulls it on every row once its
+    // durable test_run_summaries counterpart has been written, whether or
+    // not this call lands before or after that sweep. A null value here
+    // therefore means "not yet acquired" only when no summary row exists
+    // yet either — once one does, the summary's own counts are the
+    // vacuousness signal, not the now-cleared column.
+    const winningSummary = winningRun ? getTestRunSummary(winningRun.id) : undefined;
     if (winningRun?.structured_result) {
       try {
         winningStructuredResult = JSON.parse(
@@ -2419,11 +2445,20 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         );
       }
     }
-    if (
-      acquisitionAttempted &&
-      !structuredResultParseFailed &&
-      isVacuousResult(winningStructuredResult)
-    ) {
+    // Once the durable summary exists, it is the source of truth for
+    // vacuousness — including when structured_result was already cleared by
+    // the extraction sweep (winningStructuredResult stays null in that
+    // case, which must not be misread as "vacuous").
+    const summaryExecutedCount = winningSummary
+      ? winningSummary.passed_count +
+        winningSummary.failed_count +
+        winningSummary.error_count
+      : null;
+    const isVacuous =
+      summaryExecutedCount !== null
+        ? summaryExecutedCount === 0
+        : isVacuousResult(winningStructuredResult);
+    if (acquisitionAttempted && !structuredResultParseFailed && isVacuous) {
       sessionLog(
         this.sessionId,
         'PR creation blocked: the passing test.request run executed zero assertions (nothing collected, or fully skipped)',

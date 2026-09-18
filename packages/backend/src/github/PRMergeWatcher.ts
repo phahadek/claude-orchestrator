@@ -81,6 +81,7 @@ import {
   setPRReviewResult,
   setPendingPush,
   getLatestTestRequestRun,
+  hasTestRunSummary,
   markSessionDone,
   updateSessionStatus,
   recordPrAnchoredCompletingSignal,
@@ -1070,11 +1071,15 @@ export class PRMergeWatcher extends EventEmitter {
       // whose underlying test exit code passed, so this never returns early.
       // Gating on the attempted flag (not just structured_result === null)
       // is what keeps a run that never tried acquisition (no test_report_glob
-      // declared) from being misread as a failed acquisition.
+      // declared) from being misread as a failed acquisition. structured_result
+      // is also transiently nulled by the extraction drain once a durable
+      // test_run_summaries row exists for the run — that row (not the
+      // cleared column) is what proves acquisition actually succeeded.
       if (
         testResult &&
         testResult.test_report_acquisition_attempted === 1 &&
         testResult.structured_result === null &&
+        !hasTestRunSummary(testResult.id) &&
         testResult.state !== 'failed'
       ) {
         setPauseReason(
@@ -1091,7 +1096,8 @@ export class PRMergeWatcher extends EventEmitter {
         this.autoMerger?.attempt(pr.pr_number, pr.repo);
       } else if (
         testResult &&
-        testResult.structured_result !== null &&
+        (testResult.structured_result !== null ||
+          hasTestRunSummary(testResult.id)) &&
         parsePauseReason(pr.pause_reason)?.reason ===
           'test_report_acquisition_failed'
       ) {

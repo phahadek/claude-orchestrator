@@ -42,6 +42,10 @@ vi.mock('../../db/queries', () =>
   }),
 );
 
+vi.mock('../../orchestration/testRequestLane', () => ({
+  findQueuedOrRunningTestRequest: vi.fn().mockReturnValue(undefined),
+}));
+
 vi.mock('../analyzeGating', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../analyzeGating')>();
   return {
@@ -155,9 +159,11 @@ import {
   insertTestRequestRun,
   insertTestRunResults,
   markTestResultExcused,
+  ingestTestRunResultsTx,
 } from '../../db/queries';
 import { validatePRBody } from '../../github/PRBodyValidator';
 import { recordEvent } from '../../audit/AuditLog';
+import { findQueuedOrRunningTestRequest } from '../../orchestration/testRequestLane';
 import { execSync } from 'child_process';
 import { runtimeSettings, getProjectById } from '../../config';
 import { getCorporateMode } from '../../config/corporateMode';
@@ -462,6 +468,7 @@ describe('<pr-body> marker — test.request cache gate', () => {
       throw new Error(`unexpected execSync: ${cmd}`);
     });
     vi.mocked(computeWholeTreeContentHash).mockResolvedValue('hash');
+    vi.mocked(findQueuedOrRunningTestRequest).mockReturnValue(undefined);
   });
 
   it('blocks push/PR-open when there is no passing cache entry for the tree', async () => {
@@ -484,6 +491,33 @@ describe('<pr-body> marker — test.request cache gate', () => {
         payload: expect.objectContaining({ stage: 'test_request_gate' }),
       }),
     );
+  });
+
+  it('names the already-queued run and its position instead of asking for a new test.request when one is already queued/running for the current tree', async () => {
+    vi.mocked(getLatestTestRequestRun).mockReturnValue(undefined);
+    vi.mocked(findQueuedOrRunningTestRequest).mockReturnValue({
+      runId: 'run-queued-1',
+      runKind: 'full',
+      status: 'queued',
+      position: 2,
+      queueDepth: 3,
+    });
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    const runner = (
+      session as unknown as {
+        runner: { sendMessage: ReturnType<typeof vi.fn> };
+      }
+    ).runner;
+
+    emitAssistantWithMarker(session, VALID_BODY);
+    await new Promise((r) => setImmediate(r));
+
+    expect(ghClient.createPR).not.toHaveBeenCalled();
+    const [message] = runner.sendMessage.mock.calls[0] as [string];
+    expect(message).toContain('run-queued-1');
+    expect(message).toContain('position 2 of 3');
+    expect(message).not.toContain('Please request a test run');
   });
 
   it('blocks push/PR-open when the latest cache entry for the tree failed', async () => {
@@ -640,6 +674,50 @@ describe('<pr-body> marker — test.request cache gate', () => {
       started_at: 0,
       finished_at: 1,
     } as never);
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(ghClient.createPR).toHaveBeenCalledWith(
+      'owner/repo',
+      expect.objectContaining({
+        head: 'feature/my-task',
+        base: 'dev',
+      }),
+    );
+  });
+
+  it('proceeds to open the PR for a settled passed row in the post-sweep shape (structured_result NULL, test_report_acquisition_attempted=1, non-vacuous per the durable test_run_summaries row)', async () => {
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-post-sweep-gate',
+      project_id: 'proj',
+      content_hash: 'hash',
+      state: 'passed',
+      output: '',
+      structured_result: null,
+      test_report_acquisition_attempted: 1,
+      started_at: 0,
+      finished_at: 1,
+    } as never);
+    insertTestRequestRun('run-post-sweep-gate', 'proj', 'hash', null, Date.now());
+    ingestTestRunResultsTx(
+      'run-post-sweep-gate',
+      'proj',
+      [
+        {
+          test_id: 'test-a',
+          name: 'test-a',
+          outcome: 'passed',
+          duration_ms: 5,
+        },
+      ],
+      null,
+      false,
+      false,
+    );
+
     const ghClient = makeGithubClient();
     const session = makeSession(ghClient);
     emitAssistantWithMarker(session, VALID_BODY);

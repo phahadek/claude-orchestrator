@@ -2070,6 +2070,43 @@ describe('admitTestRequest — settled-run guard', () => {
     expect(replay.unchangedReplay).toBe(true);
     expect(replay.passed).toBe(true);
   });
+
+  it('admitTestRequest returns unchangedReplay: true for a settled passed row in the post-sweep shape (structured_result NULL, test_report_acquisition_attempted=1, with a durable test_run_summaries row)', async () => {
+    const runId = 'settled-post-sweep-run';
+    insertTestRequestRun(
+      runId,
+      'proj-settled-9',
+      'settled-9-hash',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun(runId, 'passed', 'exited 0', null, null, false, true);
+    ingestTestRunResultsTx(
+      runId,
+      'proj-settled-9',
+      [
+        {
+          test_id: 'test-a',
+          name: 'test-a',
+          outcome: 'passed',
+          duration_ms: 5,
+        },
+      ],
+      null,
+      false,
+      false,
+    );
+
+    const admission = admitTestRequest(
+      baseSpec({ projectId: 'proj-settled-9', contentHash: 'settled-9-hash' }),
+    );
+    const result = await admission.result;
+
+    expect(mockRunTestCommands).not.toHaveBeenCalled();
+    expect(result.unchangedReplay).toBe(true);
+    expect(result.passed).toBe(true);
+    expect(result.runId).toBe(runId);
+  });
 });
 
 describe('oom_killed', () => {

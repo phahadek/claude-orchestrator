@@ -558,6 +558,41 @@ export function admitTestRequest(
   };
 }
 
+/** A caller-facing snapshot of an in-flight lane entry — see findQueuedOrRunningTestRequest. */
+export interface QueuedOrRunningTestRequest {
+  runId: string;
+  runKind: TestRunKind;
+  status: TestRequestAdmissionStatus;
+  /** 1-indexed position among queued waiters; 0 while running. */
+  position: number;
+  queueDepth: number;
+}
+
+/**
+ * Read-only lookup of whether a run for (projectId, contentHash) is already
+ * queued/running in this lane, without admitting a new request — for a
+ * caller that wants to *tell* a session about an in-flight run rather than
+ * join or start one (AgentSession's PR-open gate refusal message). Matches
+ * any run_kind/base_sha for the pair, since the PR-open gate itself checks
+ * both a full and a scoped run and just needs to know "something is already
+ * in flight for this tree" to avoid telling a session to re-request one.
+ */
+export function findQueuedOrRunningTestRequest(
+  projectId: string,
+  contentHash: string,
+): QueuedOrRunningTestRequest | undefined {
+  const keyPrefix = `${projectId}:${contentHash}:`;
+  for (const [key, entry] of inFlightRuns) {
+    if (!key.startsWith(keyPrefix)) continue;
+    return {
+      runId: entry.runId,
+      runKind: entry.runKind,
+      ...entry.admission(),
+    };
+  }
+  return undefined;
+}
+
 /**
  * Runs (or joins an already-running/queued) test.request execution for
  * (spec.projectId, spec.contentHash) and resolves once it finishes — the

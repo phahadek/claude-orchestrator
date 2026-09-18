@@ -338,6 +338,23 @@ describe('AutoMerger merge eligibility — test gate', () => {
     expect(github.mergePR).toHaveBeenCalled();
   });
 
+  it('merges when the latest full test run is a settled passed row in the post-sweep shape (structured_result NULL, test_report_acquisition_attempted=1 — the extraction drain already durably recorded the report)', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
+    vi.mocked(getLatestTestRequestRun).mockReturnValue(
+      makeTestRun({
+        state: 'passed',
+        structured_result: null,
+        test_report_acquisition_attempted: 1,
+      }),
+    );
+    const github = makeMockGitHub();
+    const merger = new AutoMerger(github, makeMockWatcher(), () => {});
+
+    await runAttemptAndWait(merger);
+
+    expect(github.mergePR).toHaveBeenCalled();
+  });
+
   it('treats a base-attributable/verified-flaky excused failure as merge-eligible', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
     vi.mocked(getLatestTestRequestRun).mockReturnValue(
