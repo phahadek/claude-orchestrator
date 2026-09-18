@@ -57,7 +57,7 @@ import {
   listQueuedTestRequestRuns,
   listTestRequestRunsNeedingExtraction,
   countTestRequestRunsNeedingExtraction,
-  hasTestRunSummary,
+  runHasExtractedReport,
   getTestRunSummary,
   ingestTestRunResultsTx,
   listRecentValidTestDurations,
@@ -559,6 +559,41 @@ export function admitTestRequest(
   };
 }
 
+/** A caller-facing snapshot of an in-flight lane entry — see findQueuedOrRunningTestRequest. */
+export interface QueuedOrRunningTestRequest {
+  runId: string;
+  runKind: TestRunKind;
+  status: TestRequestAdmissionStatus;
+  /** 1-indexed position among queued waiters; 0 while running. */
+  position: number;
+  queueDepth: number;
+}
+
+/**
+ * Read-only lookup of whether a run for (projectId, contentHash) is already
+ * queued/running in this lane, without admitting a new request — for a
+ * caller that wants to *tell* a session about an in-flight run rather than
+ * join or start one (AgentSession's PR-open gate refusal message). Matches
+ * any run_kind/base_sha for the pair, since the PR-open gate itself checks
+ * both a full and a scoped run and just needs to know "something is already
+ * in flight for this tree" to avoid telling a session to re-request one.
+ */
+export function findQueuedOrRunningTestRequest(
+  projectId: string,
+  contentHash: string,
+): QueuedOrRunningTestRequest | undefined {
+  const keyPrefix = `${projectId}:${contentHash}:`;
+  for (const [key, entry] of inFlightRuns) {
+    if (!key.startsWith(keyPrefix)) continue;
+    return {
+      runId: entry.runId,
+      runKind: entry.runKind,
+      ...entry.admission(),
+    };
+  }
+  return undefined;
+}
+
 /**
  * Runs (or joins an already-running/queued) test.request execution for
  * (spec.projectId, spec.contentHash) and resolves once it finishes — the
@@ -839,13 +874,14 @@ export function recoverInterruptedTestRequestRuns(): void {
  * structured_result, no tests, or already extracted) — safe to call
  * unconditionally after every run and again from the boot sweep below, which
  * is what makes extraction re-derivable/idempotent rather than a one-shot
- * step that data loss can slip past. hasTestRunSummary (not hasTestRunResults)
- * is the idempotency check — an all-passing run writes zero test_run_results
- * rows, so that table alone can no longer answer "already extracted".
+ * step that data loss can slip past. runHasExtractedReport (not
+ * hasTestRunResults) is the idempotency check — an all-passing run writes
+ * zero test_run_results rows, so that table alone can no longer answer
+ * "already extracted".
  */
 export function ingestTestRunResults(run: TestRequestRunRow): void {
   if (!run.structured_result) return;
-  if (hasTestRunSummary(run.id)) return;
+  if (runHasExtractedReport(run.id)) return;
 
   let parsed: StructuredTestResult;
   try {
@@ -912,13 +948,16 @@ export function ingestTestRunResults(run: TestRequestRunRow): void {
  * StructuredTestResult.incomplete, see db/schema.ts) is what survives that
  * clear and lets an incomplete merge still classify as total_fail
  * post-sweep. structured_result is only consulted as a fallback for a run
- * that hasn't been swept (or extracted) yet.
+ * that hasn't been swept (or extracted) yet — gated by runHasExtractedReport,
+ * the same durable-record predicate every other structured_result-null
+ * reader now uses, rather than reading a null structured_result itself as
+ * "no report".
  */
 function classifyFailedRun(
   run: TestRequestRunRow,
 ): 'partial_fail' | 'total_fail' {
-  const summary = getTestRunSummary(run.id);
-  if (summary) {
+  if (runHasExtractedReport(run.id)) {
+    const summary = getTestRunSummary(run.id)!;
     if (summary.incomplete) return 'total_fail';
     return summary.total_count > 0 ? 'partial_fail' : 'total_fail';
   }

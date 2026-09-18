@@ -1505,6 +1505,27 @@ describe('PreReviewPipeline — tests record stage (non-blocking)', () => {
     expect(mockRunTestCommands).not.toHaveBeenCalled();
     expect(mockAdmitTestRequest).not.toHaveBeenCalled();
   });
+
+  it('skips tests (content-cache hit) for a settled passed row in the post-sweep shape (structured_result nulled by the extraction drain, test_report_acquisition_attempted=1)', async () => {
+    mockGetLatestTestRequestRun.mockReturnValue({
+      id: 'run-post-sweep',
+      project_id: 'proj-1',
+      content_hash: 'worktree-content-hash',
+      state: 'passed',
+      output: 'ok',
+      structured_result: null,
+      test_report_acquisition_attempted: 1,
+      started_at: 1000,
+      finished_at: 2000,
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    await pipeline.run(makeJob(), makeProject());
+
+    expect(mockRunTestCommands).not.toHaveBeenCalled();
+    expect(mockRunProjectTestRequest).not.toHaveBeenCalled();
+  });
 });
 
 describe('PreReviewPipeline — stage transition sequence', () => {

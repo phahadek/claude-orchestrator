@@ -120,6 +120,8 @@ import {
   recordTestPerfDigestSample,
   getApprovedDraftPRs,
   updatePRDraftStatus,
+  ingestTestRunResultsTx,
+  insertTestRequestRun,
 } from '../db/queries';
 import {
   loadAutofixCommands,
@@ -3887,6 +3889,60 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
     expect(vi.mocked(github.categorizeMergeability)).toHaveBeenCalled();
   });
 
+  it('proceeds to the mergeability decision (never records pr_f2_verdict_pending) for a settled passed row in the post-sweep shape (structured_result nulled by the extraction drain, test_report_acquisition_attempted=1, durable report already recorded)', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-post-sweep',
+      session_id: 'coding-session',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeClean(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-post-sweep',
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
+      state: 'passed',
+      output: 'All tests passed',
+      structured_result: null,
+      test_report_acquisition_attempted: 1,
+      started_at: 1000,
+      finished_at: 2000,
+    } as any);
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(github.categorizeMergeability)).toHaveBeenCalled();
+    const pendingEvents = vi
+      .mocked(recordEvent)
+      .mock.calls.filter(
+        (call) =>
+          (call[0] as { event_type: string }).event_type ===
+          'pr_f2_verdict_pending',
+      );
+    expect(pendingEvents).toHaveLength(0);
+  });
+
   it('a scoped-passed row never satisfies F2 — the poll stays pending and never triggers a run', async () => {
     const pr = makePRRow({
       head_sha: 'sha-scoped-only',
@@ -4578,6 +4634,94 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       'owner/repo',
       'test_report_acquisition_failed',
       expect.anything(),
+    );
+  });
+
+  it('does not set test_report_acquisition_failed when structured_result was cleared by the extraction drain but a durable test_run_summaries row exists for the run', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-pass',
+      session_id: 'coding-session',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeClean(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_report_glob: '**/junit.xml',
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-post-sweep-advisory',
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
+      state: 'passed',
+      output: 'All tests passed',
+      structured_result: null,
+      test_report_acquisition_attempted: 1,
+      started_at: 1000,
+      finished_at: 2000,
+    } as any);
+    insertTestRequestRun(
+      'run-post-sweep-advisory',
+      'proj-1',
+      'content-hash-x',
+      null,
+      Date.now(),
+    );
+    ingestTestRunResultsTx(
+      'run-post-sweep-advisory',
+      'proj-1',
+      [
+        {
+          test_id: 'test-a',
+          name: 'test-a',
+          outcome: 'passed',
+          duration_ms: 5,
+        },
+      ],
+      null,
+      false,
+      false,
+    );
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'test_report_acquisition_failed',
+      expect.anything(),
+    );
+    expect(vi.mocked(github.categorizeMergeability)).toHaveBeenCalled();
+
+    // This test is the only one in the file that writes real
+    // test_request_runs/test_run_summaries rows (via ingestTestRunResultsTx,
+    // needed to exercise the durable-summary escape) — clean them up so a
+    // later describe block's unconditional `DELETE FROM test_request_runs`
+    // (see the f2 lane-side flaky-disposition suite's beforeEach) never hits
+    // an orphaned test_run_summaries row and violates the foreign_keys=ON
+    // constraint.
+    db.prepare(
+      `DELETE FROM test_run_summaries WHERE test_request_run_id = ?`,
+    ).run('run-post-sweep-advisory');
+    db.prepare(`DELETE FROM test_request_runs WHERE id = ?`).run(
+      'run-post-sweep-advisory',
     );
   });
 

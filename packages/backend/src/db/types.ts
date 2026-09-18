@@ -1387,7 +1387,7 @@ export interface NewTestRunResultRow {
 /**
  * One row per test_request_run: outcome counts and total duration for the
  * whole run — see ingestTestRunResultsTx in db/queries.ts. Doubles as the
- * extraction idempotency/existence marker (hasTestRunSummary) now that an
+ * extraction idempotency/existence marker (runHasExtractedReport) now that an
  * all-passing run writes zero test_run_results rows.
  */
 export interface TestRunSummaryRow {

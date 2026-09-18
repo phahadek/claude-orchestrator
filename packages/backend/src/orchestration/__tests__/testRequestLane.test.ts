@@ -65,7 +65,7 @@ import {
   deleteTestRequestRunsForContentHash,
   listTestRunResultsForRun,
   ingestTestRunResultsTx,
-  hasTestRunSummary,
+  runHasExtractedReport,
   getTestRunSummary,
   getTestPerfBaseline,
   listRecentValidTestDurations,
@@ -2070,6 +2070,51 @@ describe('admitTestRequest — settled-run guard', () => {
     expect(replay.unchangedReplay).toBe(true);
     expect(replay.passed).toBe(true);
   });
+
+  it('admitTestRequest returns unchangedReplay: true for a settled passed row in the post-sweep shape (structured_result NULL, test_report_acquisition_attempted=1, with a durable test_run_summaries row)', async () => {
+    const runId = 'settled-post-sweep-run';
+    insertTestRequestRun(
+      runId,
+      'proj-settled-9',
+      'settled-9-hash',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun(
+      runId,
+      'passed',
+      'exited 0',
+      null,
+      null,
+      false,
+      true,
+    );
+    ingestTestRunResultsTx(
+      runId,
+      'proj-settled-9',
+      [
+        {
+          test_id: 'test-a',
+          name: 'test-a',
+          outcome: 'passed',
+          duration_ms: 5,
+        },
+      ],
+      null,
+      false,
+      false,
+    );
+
+    const admission = admitTestRequest(
+      baseSpec({ projectId: 'proj-settled-9', contentHash: 'settled-9-hash' }),
+    );
+    const result = await admission.result;
+
+    expect(mockRunTestCommands).not.toHaveBeenCalled();
+    expect(result.unchangedReplay).toBe(true);
+    expect(result.passed).toBe(true);
+    expect(result.runId).toBe(runId);
+  });
 });
 
 describe('oom_killed', () => {
@@ -2522,7 +2567,7 @@ describe('ingestTestRunResults', () => {
     ingestTestRunResults(run);
 
     expect(listTestRunResultsForRun('run-extract-3')).toHaveLength(0);
-    expect(hasTestRunSummary('run-extract-3')).toBe(false);
+    expect(runHasExtractedReport('run-extract-3')).toBe(false);
   });
 
   it("never clears the run's own structured_result — the lone-key own-row clear must not be inlined into the synchronous completion path, so a race with stagedIntents.ts's session-feedback digest read (which happens right after ingestTestRunResults returns) is impossible", () => {
@@ -2555,7 +2600,7 @@ describe('ingestTestRunResults', () => {
     // "other" row for clearSupersededStructuredResults to have cleared
     // either), yet the row's own blob must still be intact immediately after
     // ingestTestRunResults returns.
-    expect(hasTestRunSummary('run-extract-lonekey')).toBe(true);
+    expect(runHasExtractedReport('run-extract-lonekey')).toBe(true);
     const row = db
       .prepare(`SELECT structured_result FROM test_request_runs WHERE id = ?`)
       .get('run-extract-lonekey') as { structured_result: string | null };
@@ -2666,13 +2711,13 @@ describe('sweepTestRunResultsExtraction', () => {
 
     // No raw rows and no idempotency-check-detectable state for
     // hasTestRunResults — the boot-sweep case an all-passing run can no
-    // longer catch via that check alone; hasTestRunSummary is what makes
+    // longer catch via that check alone; runHasExtractedReport is what makes
     // this idempotent.
     expect(listTestRunResultsForRun('run-sweep-allpass')).toHaveLength(0);
-    expect(hasTestRunSummary('run-sweep-allpass')).toBe(false);
+    expect(runHasExtractedReport('run-sweep-allpass')).toBe(false);
 
     await sweepTestRunResultsExtraction();
-    expect(hasTestRunSummary('run-sweep-allpass')).toBe(true);
+    expect(runHasExtractedReport('run-sweep-allpass')).toBe(true);
     const durationsAfterFirstSweep = listRecentValidTestDurations('t1', 10);
     expect(durationsAfterFirstSweep).toEqual([5]);
 
@@ -2791,7 +2836,7 @@ describe('sweepTestRunResultsExtraction', () => {
 
     await sweepTestRunResultsExtraction();
 
-    expect(hasTestRunSummary('run-unextracted')).toBe(false);
+    expect(runHasExtractedReport('run-unextracted')).toBe(false);
     const row = db
       .prepare(`SELECT structured_result FROM test_request_runs WHERE id = ?`)
       .get('run-unextracted') as { structured_result: string | null };

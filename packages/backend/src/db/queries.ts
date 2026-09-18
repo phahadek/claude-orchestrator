@@ -9381,8 +9381,8 @@ export function countTestRequestRunsNeedingExtraction(): number {
  * is invisible here, so a fresh run is triggered instead of the crash being
  * served forever.
  *
- * A `passed` row is subject to the same squat-guard when it's vacuous: the
- * process exited 0 but test_report_acquisition_attempted = 1 (a
+ * A `passed` row is subject to the same squat-guard when it's genuinely
+ * vacuous: the process exited 0 but test_report_acquisition_attempted = 1 (a
  * `test_report_glob` was configured) and structured_result is still NULL,
  * meaning collectStructuredTestResult never matched a report file — exactly
  * the shape AgentSession's PR-open gate treats as isVacuousResult(null) and
@@ -9394,6 +9394,18 @@ export function countTestRequestRunsNeedingExtraction(): number {
  * structured_result there carries no vacuousness signal and is replayed as
  * today; only an explicit 1 (acquisition was attempted and still came back
  * empty) counts as evidence of vacuousness.
+ *
+ * structured_result is also transient independent of vacuousness: the
+ * test_run_results_extraction_drain scheduler job
+ * (clearExtractedStructuredResultsBatch) nulls it on every row once a
+ * durable test_run_summaries row has been written for it — usually within
+ * minutes of the run settling. Without an escape, that sweep made every
+ * passed row with an attempted acquisition permanently invisible here
+ * (structured_result NULL forever after), not just the genuinely vacuous
+ * ones. The EXISTS test_run_summaries clause below is that escape — the
+ * same shape as the failed-row clause's EXISTS test_run_results escape
+ * above, but against summaries, since a passing run never writes
+ * test_run_results rows (digest-at-ingest retains only failing detail).
  *
  * `includeUnsettledCrashRows` opts a caller back into seeing those crash
  * rows (failed-crash or passed-vacuous) — base-health classification
@@ -9462,6 +9474,10 @@ export function getLatestTestRequestRun(
            OR state != 'passed'
            OR structured_result IS NOT NULL
            OR test_report_acquisition_attempted IS NOT 1
+           OR EXISTS (
+             SELECT 1 FROM test_run_summaries
+             WHERE test_run_summaries.test_request_run_id = test_request_runs.id
+           )
          )
        ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
     )
@@ -9961,8 +9977,19 @@ export function insertTestRunResults(
 
 // ─── test_run_summaries ─────────────────────────────────────────────────────
 
-/** True once this run's ingestion (summary + failure rows + digest) has been written — the extraction idempotency check. */
-export function hasTestRunSummary(testRequestRunId: string): boolean {
+/**
+ * True once this run's ingestion (summary + failure rows + digest) has been
+ * written. Two roles, same predicate: the extraction sweep's own
+ * idempotency check (has this run already been processed), and — for every
+ * reader that used to branch on structured_result being null — the
+ * canonical "was this run's report durably captured" signal.
+ * structured_result itself is transient (clearExtractedStructuredResultsBatch
+ * nulls it once this row exists), so a null value there is ambiguous: "never
+ * acquired" pre-sweep, or "acquired and already recorded here" post-sweep.
+ * This is what disambiguates the two — see getLatestTestRequestRun's own
+ * EXISTS test_run_summaries escape for the SQL-level twin of this check.
+ */
+export function runHasExtractedReport(testRequestRunId: string): boolean {
   const row = db
     .prepare(`SELECT 1 FROM test_run_summaries WHERE test_request_run_id = ?`)
     .get(testRequestRunId);
