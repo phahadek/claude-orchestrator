@@ -1197,7 +1197,8 @@ export type TestRequestFailureReason =
   | 'execution_failed'
   | 'teardown_failed'
   | 'generic'
-  | 'interrupted_queued';
+  | 'interrupted_queued'
+  | 'superseded';
 
 /**
  * Explicit identity a caller states about the run it's originating —
@@ -1263,8 +1264,15 @@ export interface TestRequestRunRow {
   base_sha: string | null;
   /** Host-wide peer occupancy at admission — sum of every OTHER project's semaphore inUse(), captured alongside concurrent_run_count. Null for pre-existing rows; treated as 0 by the digest validity predicate. */
   foreign_concurrent_run_count: number | null;
-  /** Worktree this run executed against, captured at insertTestRequestRun time. Null for pre-existing rows and for runs with no worktree (spawn-failed before a path was known). */
+  /** Worktree this run executed against, captured at insertTestRequestRun time — also backs testRequestLane.ts's same-worktree supersession scan. Null for pre-existing rows and for runs with no worktree (spawn-failed before a path was known). */
   worktree_path: string | null;
+  /**
+   * Set only on a withdrawn row (failure_reason = 'superseded'): either the
+   * newer run's id, or one of the PR-driven markers 'pr_merged' /
+   * 'pr_closed' / 'head_moved' for a withdrawal with no single superseding
+   * run. Null otherwise.
+   */
+  superseded_by: string | null;
 }
 
 // ─── dependency_cache_entries ───────────────────────────────────────────────

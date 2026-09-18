@@ -9192,6 +9192,43 @@ export function insertTestRequestRun(
 }
 
 /**
+ * Withdraws a still-queued run: state -> 'failed', failure_reason ->
+ * 'superseded', finished_at set, superseded_by recording either the newer
+ * run's id or a PR-driven marker ('pr_merged' / 'pr_closed' / 'head_moved').
+ * Never touches a row that isn't 'queued' — the caller (testRequestLane.ts's
+ * withdrawal scan) only calls this after Semaphore.withdraw itself confirmed
+ * the run was still queued, so this is never raced against
+ * markTestRequestRunRunning.
+ */
+export function withdrawTestRequestRun(id: string, supersededBy: string): void {
+  db.prepare(
+    `UPDATE test_request_runs
+     SET state = 'failed', failure_reason = 'superseded', finished_at = ?, superseded_by = ?
+     WHERE id = ? AND state = 'queued'`,
+  ).run(Date.now(), supersededBy, id);
+}
+
+/**
+ * Every run still `queued` for a (project_id, worktree_path) pair — the
+ * same-worktree supersession scan's read (see admitTestRequest's stale-run
+ * withdrawal and the PR-driven withdrawal on pr_merged/pr_closed/push_detected
+ * in PRMergeWatcher.ts). worktree_path is the only link a pr_gate run (whose
+ * session_id is always null) has back to its originating worktree.
+ */
+export function listQueuedTestRequestRunsForWorktree(
+  projectId: string,
+  worktreePath: string,
+): TestRequestRunRow[] {
+  return db
+    .prepare(
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
+       FROM test_request_runs
+       WHERE project_id = ? AND worktree_path = ? AND state = 'queued'`,
+    )
+    .all(projectId, worktreePath) as TestRequestRunRow[];
+}
+
+/**
  * Transitions a 'queued' row (inserted at admission, before the per-project
  * semaphore permit was granted — see admitTestRequest in testRequestLane.ts)
  * to 'running' once that permit is acquired, overwriting the placeholder
@@ -9250,7 +9287,7 @@ export function updateTestRequestRunState(
   );
 }
 
-const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha, foreign_concurrent_run_count, worktree_path`;
+const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha, foreign_concurrent_run_count, worktree_path, superseded_by`;
 
 /** Every run still `running` — used by the boot-time crash-recovery sweep. */
 export function listRunningTestRequestRuns(): TestRequestRunRow[] {
@@ -9446,6 +9483,7 @@ export function getLatestTestRequestRun(
       `SELECT ${TEST_REQUEST_RUN_COLUMNS}
        FROM test_request_runs
        WHERE project_id = @project_id AND content_hash = @content_hash AND state NOT IN ('running', 'queued')
+         AND failure_reason IS NOT 'superseded'
          AND (@run_kind IS NULL OR run_kind = @run_kind)
          AND (@base_sha_provided = 0 OR base_sha IS @base_sha)
          AND (

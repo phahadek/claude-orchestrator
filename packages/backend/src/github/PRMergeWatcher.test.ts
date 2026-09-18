@@ -86,6 +86,12 @@ vi.mock('../session/analyzeGating.js', () => ({
 const mockRunProjectTestRequest = vi
   .fn()
   .mockResolvedValue({ passed: true, output: '' });
+// withdrawQueuedRunsForWorktree's real implementation is exercised end-to-end
+// (semaphore + db + audit event) in testRequestLane.test.ts — here it's a spy
+// so PRMergeWatcher's own wiring (which worktree/reason/prContext it calls
+// with, on which of the three trigger points) can be asserted without
+// standing up a live semaphore waiter for every test.
+const mockWithdrawQueuedRunsForWorktree = vi.fn().mockReturnValue(0);
 vi.mock('../orchestration/testRequestLane.js', async (importOriginal) => {
   const actual =
     await importOriginal<typeof import('../orchestration/testRequestLane')>();
@@ -93,6 +99,8 @@ vi.mock('../orchestration/testRequestLane.js', async (importOriginal) => {
     ...actual,
     runProjectTestRequest: (...args: unknown[]) =>
       mockRunProjectTestRequest(...args),
+    withdrawQueuedRunsForWorktree: (...args: unknown[]) =>
+      mockWithdrawQueuedRunsForWorktree(...args),
   };
 });
 
@@ -1368,6 +1376,114 @@ describe('PRMergeWatcher merge_completed signal', () => {
       notion_task_id: 'notion:task-abc',
       merge_commit: 'abc123',
     });
+  });
+});
+
+// ── queued test.request run withdrawal wiring ───────────────────────────────
+// The withdrawal itself (semaphore + db row + audit event) is exercised
+// end-to-end against a real db in testRequestLane.test.ts. Here
+// withdrawQueuedRunsForWorktree is a spy (see the vi.mock factory above) —
+// these tests only assert PRMergeWatcher calls it with the right
+// (projectId, worktreePath, reason, prContext) at each of the three trigger
+// points: pr_merged, pr_closed, and push_detected with a new head.
+
+describe('PRMergeWatcher — queued test.request run withdrawal wiring', () => {
+  beforeEach(() => {
+    mockWithdrawQueuedRunsForWorktree.mockClear();
+  });
+
+  it('withdraws queued runs for the session worktree on pr_merged', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/wt/withdraw-merge',
+    } as any);
+    const pr = makePRRow({ session_id: 'coding-session' });
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+
+    await watcher.handleMerged(pr, 'abc123');
+
+    expect(mockWithdrawQueuedRunsForWorktree).toHaveBeenCalledWith(
+      'proj-1',
+      '/wt/withdraw-merge',
+      'pr_merged',
+      { prNumber: 42, repo: 'owner/repo' },
+    );
+  });
+
+  it('withdraws queued runs for the session worktree on pr_closed', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/wt/withdraw-close',
+    } as any);
+    const pr = makePRRow({ session_id: 'coding-session' });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    vi.mocked(github.getPRState).mockResolvedValue({
+      state: 'closed',
+      headSha: null,
+    });
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+
+    await watcher.poll();
+
+    expect(mockWithdrawQueuedRunsForWorktree).toHaveBeenCalledWith(
+      'proj-1',
+      '/wt/withdraw-close',
+      'pr_closed',
+      { prNumber: 42, repo: 'owner/repo' },
+    );
+  });
+
+  it('withdraws queued runs for the session worktree when a push moves the head', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/wt/withdraw-push',
+    } as any);
+    const pr = makePRRow({
+      head_sha: 'sha-old',
+      session_id: 'coding-session',
+    });
+    const github = makeMockGitHub();
+    vi.mocked(github.fetchPR as ReturnType<typeof vi.fn>).mockResolvedValue({
+      headSha: 'sha-new',
+    });
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+
+    await watcher.handlePushDetected(pr);
+
+    expect(mockWithdrawQueuedRunsForWorktree).toHaveBeenCalledWith(
+      'proj-1',
+      '/wt/withdraw-push',
+      'head_moved',
+      { prNumber: 42, repo: 'owner/repo' },
+    );
+  });
+
+  it('does not withdraw when the PR has no coding session (no worktree to key on)', async () => {
+    vi.mocked(getSession).mockReturnValue(null);
+    const pr = makePRRow({ session_id: null, review_session_id: null });
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+
+    await watcher.handleMerged(pr, 'abc123');
+
+    expect(mockWithdrawQueuedRunsForWorktree).not.toHaveBeenCalled();
   });
 });
 

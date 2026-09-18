@@ -3492,7 +3492,11 @@ export function runMigrations(target: Database.Database): void {
   // (StalledPRReconciler's second-layer stall guard — pr_gate runs carry
   // session_id NULL, so hasQueuedOrRunningTestRunForSession can't match
   // them) look up a queued/running run without a LIKE scan over `output`.
-  // NULL on rows predating this column.
+  // Also backs the same-worktree supersession scan (see admitTestRequest's
+  // stale-run withdrawal in orchestration/testRequestLane.ts), which finds
+  // every other queued run against the same tree without going through
+  // session_id, which is null for every pr_gate run. NULL on rows predating
+  // this column.
   try {
     target.exec(`ALTER TABLE test_request_runs ADD COLUMN worktree_path TEXT`);
   } catch {
@@ -3502,6 +3506,22 @@ export function runMigrations(target: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_test_request_runs_worktree_state
       ON test_request_runs(worktree_path, state);
   `);
+  target.exec(`
+    CREATE INDEX IF NOT EXISTS idx_test_request_runs_project_worktree_state
+      ON test_request_runs(project_id, worktree_path, state);
+  `);
+
+  // superseded_by: set only on a withdrawn (failure_reason = 'superseded')
+  // row — either the newer run's id, or one of the PR-driven markers
+  // ('pr_merged' / 'pr_closed' / 'head_moved') for a withdrawal with no
+  // single superseding run. NULL otherwise.
+  try {
+    target.exec(
+      `ALTER TABLE test_request_runs ADD COLUMN superseded_by TEXT`,
+    );
+  } catch {
+    /* already exists */
+  }
 }
 
 // ─── test_run_results → test_perf_baselines digest backfill ────────────────

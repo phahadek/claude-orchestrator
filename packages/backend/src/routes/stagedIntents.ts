@@ -209,6 +209,7 @@ import {
   admitTestRequest,
   type TestRequestAdmission,
   type TestRequestAdmissionStatus,
+  type TestRequestRunResult,
 } from '../orchestration/testRequestLane';
 import {
   getSessionTestRequestCycleCount,
@@ -6433,6 +6434,11 @@ export async function triggerTestRequestExecution(
   // apply, and this must never be charged against the session's retry
   // budget.
   const executionFailed = !!result.spawnFailed;
+  // A withdrawn run never executed at all — same non-informative shape as
+  // executionFailed (no verdict about this tree exists), so it must not be
+  // charged against the session's test_request_cycle budget either. See
+  // testRequestLane.ts's same-worktree/PR-driven supersession.
+  const superseded = !!(result as TestRequestRunResult).superseded;
 
   // Filter a raw failure against the cross-SHA failure-breadth corpus
   // before anything downstream (commit annotation, audit event, session
@@ -6486,7 +6492,7 @@ export async function triggerTestRequestExecution(
   if (filterResult && filterResult.outcome !== 'unfiltered') {
     result = { ...result, passed: filterResult.passed };
   }
-  if (executionFailed && intent.sessionId) {
+  if ((executionFailed || superseded) && intent.sessionId) {
     decrementSessionTestRequestCycleCount(intent.sessionId);
   }
   // A fully-excused failure must also flip the stored run's state — the
@@ -6512,10 +6518,13 @@ export async function triggerTestRequestExecution(
     task_id: (intent.payload as TestRequestPayload).taskId ?? null,
     payload: {
       intentId: intent.id,
-      disposition: 'test_request_completed',
+      disposition: superseded
+        ? 'test_request_superseded'
+        : 'test_request_completed',
       passed: result.passed,
       joined,
       unchangedReplay,
+      superseded,
       provenance: 'auto',
       ...(filterResult && filterResult.outcome !== 'unfiltered'
         ? { baseAttributableFilterOutcome: filterResult.outcome }
@@ -6543,7 +6552,9 @@ export async function triggerTestRequestExecution(
   const structuredResult = runId
     ? getTestRequestRunById(runId)?.structured_result
     : null;
-  const output = executionFailed
+  const output = superseded
+    ? `[test.request] This run was withdrawn before it executed — a newer request (or a PR merge/close/push) superseded it. Nothing to act on here; the tree this ran against is no longer current.`
+    : executionFailed
     ? `[test.request] The test run could not be executed — the test runner process failed to start, so no test result exists. This is an infrastructure failure, not a test failure; it does not indicate your changes are broken. Retry the request.\n\n${truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP)}`
     : (filterResult &&
         filterResult.outcome !== 'unfiltered' &&
@@ -6560,6 +6571,7 @@ export async function triggerTestRequestExecution(
         output,
         ...(unchangedReplay ? { unchangedReplay: true } : {}),
         ...(executionFailed ? { executionFailed: true } : {}),
+        ...(superseded ? { superseded: true } : {}),
       }),
     );
   } catch (err) {

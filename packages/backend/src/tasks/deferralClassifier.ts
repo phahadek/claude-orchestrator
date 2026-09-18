@@ -361,10 +361,26 @@ async function classifyDeferralOnce(body: string): Promise<Advisory> {
  * orchestration/testRequestLane.ts) — same bounded-concurrency need, just a
  * separate pool keyed per project instead of one process-wide pool.
  */
+/**
+ * Thrown to a queued waiter's acquire() promise when Semaphore.withdraw
+ * removes it before it was ever granted a permit — see testRequestLane.ts's
+ * same-worktree/PR-driven supersession, the sole producer of withdrawals.
+ */
+export class LaneRunWithdrawnError extends Error {
+  constructor(public readonly supersededBy: string) {
+    super(`lane run withdrawn — superseded by ${supersededBy}`);
+    this.name = 'LaneRunWithdrawnError';
+  }
+}
+
 export class Semaphore {
   private available: number;
   private size: number;
-  private readonly queue: { id: string | null; wake: () => void }[] = [];
+  private readonly queue: {
+    id: string | null;
+    wake: () => void;
+    reject: (err: Error) => void;
+  }[] = [];
 
   constructor(size: number) {
     this.available = size;
@@ -430,15 +446,32 @@ export class Semaphore {
       this.available--;
       return () => this.release();
     }
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       this.queue.push({
         id,
         wake: () => {
           this.available--;
           resolve(() => this.release());
         },
+        reject,
       });
     });
+  }
+
+  /**
+   * Removes a still-queued waiter without granting it a permit — its
+   * acquire() promise rejects with LaneRunWithdrawnError instead of ever
+   * resolving. Returns false (no-op) when `id` is not currently queued —
+   * either it's already running (holds a permit) or was never tracked.
+   * Never touches `available`/`size`: a queued waiter never held a permit,
+   * so there is nothing to release.
+   */
+  withdraw(id: string, supersededBy: string): boolean {
+    const idx = this.queue.findIndex((entry) => entry.id === id);
+    if (idx === -1) return false;
+    const [entry] = this.queue.splice(idx, 1);
+    entry.reject(new LaneRunWithdrawnError(supersededBy));
+    return true;
   }
 
   private release(): void {
