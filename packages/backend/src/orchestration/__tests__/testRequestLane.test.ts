@@ -2122,6 +2122,10 @@ describe('admitTestRequest — same-worktree supersession', () => {
       task_source: 'notion',
       test_request_max_concurrent: 1,
     });
+    // insertProject's INSERT statement doesn't include test_request_max_concurrent
+    // (see updateProject, which does) — set it via a follow-up update so the
+    // project's semaphore is actually capacity-1, not the global default.
+    updateProject('proj-supersede-1', { test_request_max_concurrent: 1 });
     const resolvers = queueingRunTestCommands();
     const worktreePath = '/tmp/wt-supersede-1';
 
@@ -2208,6 +2212,7 @@ describe('admitTestRequest — same-worktree supersession', () => {
       task_source: 'notion',
       test_request_max_concurrent: 2,
     });
+    updateProject('proj-supersede-2', { test_request_max_concurrent: 2 });
     const resolvers = queueingRunTestCommands();
     const worktreePath = '/tmp/wt-supersede-2';
 
@@ -2254,6 +2259,7 @@ describe('admitTestRequest — same-worktree supersession', () => {
       task_source: 'notion',
       test_request_max_concurrent: 1,
     });
+    updateProject('proj-supersede-3', { test_request_max_concurrent: 1 });
     queueingRunTestCommands();
     const worktreePath = '/tmp/wt-supersede-3';
     const sharedHash = 'sup3-shared';
@@ -2320,6 +2326,7 @@ describe('withdrawQueuedRunsForWorktree — PR-driven withdrawal', () => {
       task_source: 'notion',
       test_request_max_concurrent: 1,
     });
+    updateProject('proj-pr-withdraw-1', { test_request_max_concurrent: 1 });
     const resolvers = queueingRunTestCommands();
     const worktreePath = '/tmp/wt-pr-withdraw-1';
 
