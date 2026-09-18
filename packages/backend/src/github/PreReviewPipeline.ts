@@ -44,11 +44,11 @@ import {
   formatToolchainMismatch,
 } from '../orchestration/gateEnv';
 import { runTestCommands } from '../session/test-runner';
-import {
-  runProjectTestRequest,
-  admitTestRequest,
+import { admitTestRequest } from '../orchestration/testRequestLane';
+import type {
+  TestRequestRunResult,
+  TestRequestRunSpec,
 } from '../orchestration/testRequestLane';
-import type { TestRequestRunResult } from '../orchestration/testRequestLane';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
 import { formatCIFailureFeedback } from './reviewUtils';
 import { recordEvent } from '../audit/AuditLog';
@@ -593,7 +593,7 @@ export class PreReviewPipeline {
         }
 
         const result = contentHash
-          ? await runProjectTestRequest({
+          ? await this.runTestsStageThroughLane(ctx, {
               projectId: ctx.project.id,
               contentHash,
               worktreePath: ctx.worktreePath,
@@ -630,6 +630,41 @@ export class PreReviewPipeline {
         }
       },
     };
+  }
+
+  /**
+   * Runs the tests stage's lane request through admitTestRequest directly
+   * (rather than the runProjectTestRequest convenience wrapper) so the
+   * admitted runId is available the moment admission happens — before the
+   * run itself starts, let alone finishes. Broadcasts pr_gate_lane_run_admitted
+   * immediately so ReviewOrchestrator's stall detector can record it against
+   * this PR's in-flight entry (see inFlightLaneRunIds there) and skip
+   * force-clearing the slot while this run is still queued behind the
+   * project's test lane semaphore — queue wait is never stall time. Broadcasts
+   * pr_gate_lane_run_settled once the run resolves so that record is cleared
+   * again regardless of outcome.
+   */
+  private async runTestsStageThroughLane(
+    ctx: StageContext,
+    spec: TestRequestRunSpec,
+  ): Promise<TestRequestRunResult> {
+    const admission = admitTestRequest(spec);
+    this.sessionManager.emit('message', {
+      type: 'pr_gate_lane_run_admitted',
+      prNumber: ctx.prNumber,
+      repo: ctx.repo,
+      runId: admission.runId,
+    });
+    try {
+      return await admission.result;
+    } finally {
+      this.sessionManager.emit('message', {
+        type: 'pr_gate_lane_run_settled',
+        prNumber: ctx.prNumber,
+        repo: ctx.repo,
+        runId: admission.runId,
+      });
+    }
   }
 
   /**

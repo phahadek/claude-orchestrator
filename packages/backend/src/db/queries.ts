@@ -9166,10 +9166,11 @@ export function insertTestRequestRun(
   state: TestRequestRunState = 'running',
   runKind: TestRunKind = 'full',
   baseSha?: string | null,
+  worktreePath?: string | null,
 ): void {
   db.prepare(
-    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, concurrent_run_count, run_origin, producer, run_kind, base_sha)
-     VALUES (?, ?, ?, ?, ?, '', ?, ?, NULL, NULL, ?, ?, ?, ?, ?)`,
+    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, concurrent_run_count, run_origin, producer, run_kind, base_sha, worktree_path)
+     VALUES (?, ?, ?, ?, ?, '', ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     projectId,
@@ -9186,6 +9187,7 @@ export function insertTestRequestRun(
     producer ?? null,
     runKind,
     baseSha ?? null,
+    worktreePath ?? null,
   );
 }
 
@@ -9248,7 +9250,7 @@ export function updateTestRequestRunState(
   );
 }
 
-const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha, foreign_concurrent_run_count`;
+const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha, foreign_concurrent_run_count, worktree_path`;
 
 /** Every run still `running` — used by the boot-time crash-recovery sweep. */
 export function listRunningTestRequestRuns(): TestRequestRunRow[] {
@@ -9293,6 +9295,26 @@ export function hasQueuedOrRunningTestRunForSession(
        WHERE session_id = ? AND state IN ('queued', 'running')`,
     )
     .get(sessionId);
+  return (row?.cnt ?? 0) > 0;
+}
+
+/**
+ * Worktree-keyed counterpart to hasQueuedOrRunningTestRunForSession — for a
+ * pipeline (pr_gate) run, session_id is always NULL (see
+ * PreReviewPipeline.ts's runOrigin: 'pr_pipeline' spec), so a lookup that
+ * needs to find such a run in flight has nothing to key on but the worktree
+ * it ran against. Reads the worktree_path column persisted at
+ * insertTestRequestRun time rather than scanning `output` for the path.
+ */
+export function hasQueuedOrRunningTestRunForWorktree(
+  worktreePath: string,
+): boolean {
+  const row = db
+    .prepare<[string], { cnt: number }>(
+      `SELECT COUNT(*) AS cnt FROM test_request_runs
+       WHERE worktree_path = ? AND state IN ('queued', 'running')`,
+    )
+    .get(worktreePath);
   return (row?.cnt ?? 0) > 0;
 }
 

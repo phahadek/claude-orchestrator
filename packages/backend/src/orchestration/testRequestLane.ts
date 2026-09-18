@@ -504,6 +504,7 @@ export function admitTestRequest(
     'queued',
     runKind,
     baseSha,
+    spec.worktreePath,
   );
   const semaphore = getProjectSemaphore(spec.projectId);
   const permitPromise = semaphore.acquire(runId);
@@ -726,6 +727,7 @@ async function executeTestRequestRun(
       run_kind: spec.runKind ?? 'full',
       base_sha: spec.baseSha ?? null,
       foreign_concurrent_run_count: foreignConcurrentRunCount,
+      worktree_path: spec.worktreePath,
     });
     return { ...result, runId };
   } catch (err) {

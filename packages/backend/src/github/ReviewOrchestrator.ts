@@ -31,6 +31,7 @@ import {
   enqueueFeedbackItem,
   hasDispositionReplyBeenPosted,
   recordDispositionReply,
+  getTestRequestRunById,
 } from '../db/queries';
 import { syncToOrigin } from './PRFileReverter';
 import type {
@@ -132,6 +133,15 @@ export class ReviewOrchestrator {
    * false while a sibling holder is still genuinely running.
    */
   private inFlightRefCounts = new Map<string, number>();
+  /**
+   * The pr_gate lane run id the tests stage most recently admitted for each
+   * "prNumber:repo" key, set on pr_gate_lane_run_admitted and cleared on
+   * pr_gate_lane_run_settled (see PreReviewPipeline.runTestsStageThroughLane).
+   * Read by the stall detector so time spent queued behind the project's
+   * test-lane semaphore — outside this process's own control — is never
+   * counted as stall time.
+   */
+  private inFlightLaneRunIds = new Map<string, string>();
   /** In-flight post-revert worktree sync promises, keyed by "prNumber:repo". */
   private pendingSyncs = new Map<string, Promise<void>>();
   /** Resolves once all incomplete pending_review_sync rows from the previous run are retried. */
@@ -214,16 +224,39 @@ export class ReviewOrchestrator {
       const now = Date.now();
       for (const [key, startTime] of this.inFlightStartTimes) {
         const elapsedMs = now - startTime;
-        if (elapsedMs > timeoutMs) {
-          logger.error(
-            `[ReviewOrchestrator] STALL DETECTED for ${key} — review has been running for ${Math.round(elapsedMs / 60000)} min. Force-clearing slot.`,
-          );
-          this.inFlightPRKeys.delete(key);
-          this.inFlightStartTimes.delete(key);
-          this.inFlightRefCounts.delete(key);
-          this.running = Math.max(0, this.running - 1);
-          void this.drain();
+        if (elapsedMs <= timeoutMs) continue;
+
+        const laneRunId = this.inFlightLaneRunIds.get(key);
+        if (laneRunId) {
+          const laneRun = getTestRequestRunById(laneRunId);
+          if (laneRun && (laneRun.state === 'queued' || laneRun.state === 'running')) {
+            // Still waiting on (or running inside) the project's test-lane
+            // semaphore — a slot this process doesn't control. Queue
+            // pressure is never stall time; skip clearing this tick and
+            // re-check on the next one.
+            continue;
+          }
         }
+
+        logger.error(
+          `[ReviewOrchestrator] STALL DETECTED for ${key} — review has been running for ${Math.round(elapsedMs / 60000)} min. Force-clearing slot.`,
+        );
+        // Decrement running by the refcount this key actually held (an
+        // upper bound on how many of drain()'s own `running++` calls this
+        // key is still owed a release for) rather than a flat 1, floored at
+        // zero — never below zero. The original job(s) this force-clear is
+        // abandoning still run their own finally block later and will
+        // attempt their own decrement; that decrement is separately floored
+        // at zero (see drain()'s finally) so the double-accounting can never
+        // push `running` negative.
+        const refCount = this.inFlightRefCounts.get(key) ?? 1;
+        this.inFlightPRKeys.delete(key);
+        this.inFlightStartTimes.delete(key);
+        this.inFlightRefCounts.delete(key);
+        this.inFlightHeadShas.delete(key);
+        this.inFlightLaneRunIds.delete(key);
+        this.running = Math.max(0, this.running - refCount);
+        void this.drain();
       }
     }, intervalMs);
     // Don't keep the Node process alive for the stall detector alone.
@@ -376,6 +409,19 @@ export class ReviewOrchestrator {
   }
 
   private onMessage(msg: ServerMessage): void {
+    if (msg.type === 'pr_gate_lane_run_admitted') {
+      this.inFlightLaneRunIds.set(`${msg.prNumber}:${msg.repo}`, msg.runId);
+      return;
+    }
+    if (msg.type === 'pr_gate_lane_run_settled') {
+      const key = `${msg.prNumber}:${msg.repo}`;
+      // Only clear if it's still this run's id — a newer admission for the
+      // same PR could have already overwritten it.
+      if (this.inFlightLaneRunIds.get(key) === msg.runId) {
+        this.inFlightLaneRunIds.delete(key);
+      }
+      return;
+    }
     if (!this.enabled) return;
     if (msg.type === 'session_ended') {
       this.onSessionEnded(msg.sessionId);
@@ -509,7 +555,11 @@ export class ReviewOrchestrator {
             );
           }
         } finally {
-          this.running--;
+          // Floored at zero: a stall-detector force-clear may already have
+          // decremented `running` for this key's full refcount (see
+          // startStallDetector) — this job's own release must never push
+          // the count negative on top of that.
+          this.running = Math.max(0, this.running - 1);
           if (key !== null) {
             this.releaseInFlight(key);
           }

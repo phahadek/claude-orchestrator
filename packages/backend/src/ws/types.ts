@@ -457,6 +457,18 @@ export type ServerMessage =
       failedCommand?: string;
     }
   | {
+      type: 'pr_gate_lane_run_admitted';
+      prNumber: number;
+      repo: string;
+      runId: string;
+    }
+  | {
+      type: 'pr_gate_lane_run_settled';
+      prNumber: number;
+      repo: string;
+      runId: string;
+    }
+  | {
       type: 'local_branch_submitted';
       projectId: string;
       sessionId: string;

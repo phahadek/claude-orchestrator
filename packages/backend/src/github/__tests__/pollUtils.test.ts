@@ -169,6 +169,29 @@ describe('classifyStalledPR — pre_review_interrupted', () => {
 
     expect(result).toEqual({ kind: 'pre_review_interrupted' });
   });
+
+  it('does not classify as pre_review_interrupted for a PR at pre_review_stage=tests whose worktree has a queued pr_gate run (session_id NULL)', () => {
+    const pr = makePR({
+      review_result: null,
+      pending_push: 0,
+      pre_review_stage: 'tests',
+    });
+
+    const result = classifyStalledPR(
+      pr,
+      null,
+      null,
+      false,
+      null,
+      Infinity,
+      false,
+      false, // isAwaitingOperatorDecision
+      false, // isPreReviewPipelineInFlight — false, e.g. after a stall-detector force-clear
+      true, // hasQueuedOrRunningTestRun — the worktree-keyed lookup found a queued pr_gate run
+    );
+
+    expect(result).toBeNull();
+  });
 });
 
 describe('classifyStalledPR — errored_review_session', () => {

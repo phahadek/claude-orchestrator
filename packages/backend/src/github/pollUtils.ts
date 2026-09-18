@@ -195,12 +195,23 @@ export function classifyStalledPR(
   // is currently in flight (isPreReviewPipelineInFlight) — pre_review_stage
   // reads 'autofix'/'verify'/'tests' while it runs, but that alone can't
   // distinguish "running" from "stale after a restart," so the in-memory
-  // in-flight signal (which is false after a restart) does instead.
+  // in-flight signal (which is false after a restart) does instead. Also
+  // excludes the case where the in-memory signal was force-cleared (e.g. by
+  // ReviewOrchestrator's 30-minute stall detector) while this PR's tests
+  // stage still has a queued/running pr_gate lane run against its worktree
+  // — hasQueuedOrRunningTestRun is the same second-layer DB-backed signal
+  // the session_inert branch below uses, checked here too so a lane queued
+  // behind other projects' test-lane pressure never gets read as
+  // "interrupted" and re-enqueued into a duplicate pipeline.
   if (
     !pr.review_result &&
     !pr.pending_push &&
     !reviewSessionStatus &&
-    !isPreReviewPipelineInFlight
+    !isPreReviewPipelineInFlight &&
+    !(
+      (pr.pre_review_stage === 'verify' || pr.pre_review_stage === 'tests') &&
+      hasQueuedOrRunningTestRun
+    )
   ) {
     return { kind: 'pre_review_interrupted' };
   }
