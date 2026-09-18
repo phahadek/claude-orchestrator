@@ -6555,12 +6555,12 @@ export async function triggerTestRequestExecution(
   const output = superseded
     ? `[test.request] This run was withdrawn before it executed — a newer request (or a PR merge/close/push) superseded it. Nothing to act on here; the tree this ran against is no longer current.`
     : executionFailed
-    ? `[test.request] The test run could not be executed — the test runner process failed to start, so no test result exists. This is an infrastructure failure, not a test failure; it does not indicate your changes are broken. Retry the request.\n\n${truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP)}`
-    : (filterResult &&
-        filterResult.outcome !== 'unfiltered' &&
-        renderBaseAttributableFilterDigest(filterResult, guardBlocked)) ||
-      (structuredResult && buildTestResultDigest(structuredResult)) ||
-      truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP);
+      ? `[test.request] The test run could not be executed — the test runner process failed to start, so no test result exists. This is an infrastructure failure, not a test failure; it does not indicate your changes are broken. Retry the request.\n\n${truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP)}`
+      : (filterResult &&
+          filterResult.outcome !== 'unfiltered' &&
+          renderBaseAttributableFilterDigest(filterResult, guardBlocked)) ||
+        (structuredResult && buildTestResultDigest(structuredResult)) ||
+        truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP);
   try {
     await sessionManager.enqueueFeedback(
       intent.sessionId,

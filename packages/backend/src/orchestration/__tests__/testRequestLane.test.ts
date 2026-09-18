@@ -56,7 +56,10 @@ import {
   __resetProjectSemaphoresForTest,
   withdrawQueuedRunsForWorktree,
 } from '../testRequestLane';
-import { Semaphore, LaneRunWithdrawnError } from '../../tasks/deferralClassifier';
+import {
+  Semaphore,
+  LaneRunWithdrawnError,
+} from '../../tasks/deferralClassifier';
 import {
   insertTestRequestRun,
   completeTestRequestRun,

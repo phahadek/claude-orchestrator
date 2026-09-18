@@ -342,7 +342,9 @@ function withdrawQueuedRun(
       runId: run.id,
       reason,
       supersededBy,
-      ...(prContext ? { prNumber: prContext.prNumber, repo: prContext.repo } : {}),
+      ...(prContext
+        ? { prNumber: prContext.prNumber, repo: prContext.repo }
+        : {}),
     },
   });
   return true;
@@ -712,7 +714,11 @@ async function executeTestRequestRun(
   requestedAt: number,
   permitPromise: Promise<() => void>,
 ): Promise<
-  TestCommandResult & { runId: string; superseded?: boolean; supersededBy?: string }
+  TestCommandResult & {
+    runId: string;
+    superseded?: boolean;
+    supersededBy?: string;
+  }
 > {
   let release: () => void;
   try {

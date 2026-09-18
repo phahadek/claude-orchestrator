@@ -638,7 +638,11 @@ export class PreReviewPipeline {
           `[PreReviewPipeline] tests ${result.passed ? 'PASSED' : 'FAILED'} for PR #${ctx.prNumber} SHA ${ctx.headSha.slice(0, 7)}`,
         );
 
-        if (contentHash && !result.passed && !(result as TestRequestRunResult).superseded) {
+        if (
+          contentHash &&
+          !result.passed &&
+          !(result as TestRequestRunResult).superseded
+        ) {
           await this.applyBaseAttributableF2GateFilter(
             ctx,
             (result as TestRequestRunResult).runId,

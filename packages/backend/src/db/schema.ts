@@ -3516,9 +3516,7 @@ export function runMigrations(target: Database.Database): void {
   // ('pr_merged' / 'pr_closed' / 'head_moved') for a withdrawal with no
   // single superseding run. NULL otherwise.
   try {
-    target.exec(
-      `ALTER TABLE test_request_runs ADD COLUMN superseded_by TEXT`,
-    );
+    target.exec(`ALTER TABLE test_request_runs ADD COLUMN superseded_by TEXT`);
   } catch {
     /* already exists */
   }
