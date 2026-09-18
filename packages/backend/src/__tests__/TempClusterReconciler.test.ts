@@ -29,7 +29,11 @@ vi.mock('../logger.js', () => ({
 
 import fs from 'node:fs';
 import { logger } from '../logger.js';
-import { runBootTempClusterReconciliation } from '../orchestration/TempClusterReconciler.js';
+import {
+  runBootTempClusterReconciliation,
+  reconcileBaseDir,
+  register,
+} from '../orchestration/TempClusterReconciler.js';
 
 const mockedLoggerInfo = vi.mocked(logger.info);
 
@@ -360,7 +364,7 @@ describe('TempClusterReconciler', () => {
     const clusterDir = `${entryPath}/data`;
 
     const unrelatedDirents = Array.from({ length: 1000 }, (_, i) =>
-      makeDirent(`local-backend-test-${i}`),
+      makeDirent(`orchestrator-run-${i}-XXXXXX`),
     );
 
     mockedReaddir.mockResolvedValue([
@@ -377,6 +381,9 @@ describe('TempClusterReconciler', () => {
       const target = String(p);
       if (target === entryPath || target === clusterDir) {
         return makeStat(OLD_MTIME);
+      }
+      if (target.startsWith(`${BASE_DIR}/orchestrator-run-`)) {
+        return makeStat(FRESH_GENERIC_MTIME);
       }
       throw new Error('ENOENT');
     });
@@ -492,7 +499,7 @@ describe('TempClusterReconciler', () => {
   });
 });
 
-describe('TempClusterReconciler generic mkdtemp sweep', () => {
+describe('TempClusterReconciler generic orchestrator-run sweep', () => {
   function setupGenericEntry(name: string, mtimeMs: number) {
     const entryPath = `${BASE_DIR}/${name}`;
     mockedReaddir.mockResolvedValue([makeDirent(name)] as unknown as ReturnType<
@@ -507,8 +514,11 @@ describe('TempClusterReconciler generic mkdtemp sweep', () => {
     return entryPath;
   }
 
-  it('removes a non-Postgres mkdtemp dir older than GENERIC_ORPHAN_AGE_MS', async () => {
-    const entryPath = setupGenericEntry('oc-abc123', OLD_GENERIC_MTIME);
+  it('removes an orchestrator-run-* leak dir older than GENERIC_ORPHAN_AGE_MS', async () => {
+    const entryPath = setupGenericEntry(
+      'orchestrator-run-abc-XYZ123',
+      OLD_GENERIC_MTIME,
+    );
 
     await runBootTempClusterReconciliation({ baseDir: BASE_DIR });
 
@@ -518,18 +528,18 @@ describe('TempClusterReconciler generic mkdtemp sweep', () => {
     );
   });
 
-  it('spares a non-Postgres mkdtemp dir within GENERIC_ORPHAN_AGE_MS', async () => {
-    setupGenericEntry('mcp-fresh', FRESH_GENERIC_MTIME);
+  it('spares an orchestrator-run-* leak dir within GENERIC_ORPHAN_AGE_MS', async () => {
+    setupGenericEntry('orchestrator-run-abc-XYZ123', FRESH_GENERIC_MTIME);
 
     await runBootTempClusterReconciliation({ baseDir: BASE_DIR });
 
     expect(mockedRm).not.toHaveBeenCalled();
   });
 
-  it('never removes a dir within the safety margin even under the old (2h) Postgres age', async () => {
+  it('never removes an orchestrator-run-* dir within the safety margin even under the old (2h) Postgres age', async () => {
     // A generic dir aged past ORPHAN_AGE_MS but not past GENERIC_ORPHAN_AGE_MS
     // must survive — the Postgres age margin does not apply to it.
-    setupGenericEntry('flaky-xyz', OLD_MTIME);
+    setupGenericEntry('orchestrator-run-flaky-xyz', OLD_MTIME);
 
     await runBootTempClusterReconciliation({ baseDir: BASE_DIR });
 
@@ -555,9 +565,34 @@ describe('TempClusterReconciler generic mkdtemp sweep', () => {
     },
   );
 
-  it('treats a stat error on a generic candidate as skip, not remove', async () => {
+  it.each([
+    'claude-1000',
+    'cc-socks',
+    'orchestrator-backup',
+    'pytest-of-paulie',
+    'snap-private-tmp',
+    'node-jiti',
+  ])(
+    'spares non-leak-shaped entry %s (7 days old) and counts it in skipped, without stat-ing it',
+    async (name) => {
+      mockedReaddir.mockResolvedValue([
+        makeDirent(name),
+      ] as unknown as ReturnType<typeof fs.readdirSync>);
+      mockedAccess.mockRejectedValue(new Error('ENOENT'));
+      mockedStat.mockRejectedValue(new Error('should not be stat-ed'));
+
+      const stats = await reconcileBaseDir(BASE_DIR);
+
+      expect(mockedRm).not.toHaveBeenCalled();
+      expect(mockedStat).not.toHaveBeenCalledWith(`${BASE_DIR}/${name}`);
+      expect(stats.skipped).toBe(1);
+      expect(stats.generic.scanned).toBe(0);
+    },
+  );
+
+  it('treats a stat error on an orchestrator-run-* candidate as skip, not remove', async () => {
     mockedReaddir.mockResolvedValue([
-      makeDirent('proj-service-1'),
+      makeDirent('orchestrator-run-proj-1-abc'),
     ] as unknown as ReturnType<typeof fs.readdirSync>);
     mockedAccess.mockRejectedValue(new Error('ENOENT'));
     mockedStat.mockRejectedValue(new Error('EACCES'));
@@ -568,8 +603,8 @@ describe('TempClusterReconciler generic mkdtemp sweep', () => {
   });
 
   it('reports removed/failed counts for the generic category separately from the postgres category', async () => {
-    const removableEntry = 'orch-route-old';
-    const failingEntry = 'yaml-stub-old';
+    const removableEntry = 'orchestrator-run-route-old-abc';
+    const failingEntry = 'orchestrator-run-stub-old-xyz';
     const entries = [removableEntry, failingEntry];
 
     mockedReaddir.mockResolvedValue(
@@ -600,5 +635,67 @@ describe('TempClusterReconciler generic mkdtemp sweep', () => {
     expect(mockedLoggerInfo).toHaveBeenCalledWith(
       expect.stringContaining('generic scanned: 2, removed: 1, failed: 1'),
     );
+  });
+});
+
+describe('TempClusterReconciler items_processed reporting', () => {
+  it('runBootTempClusterReconciliation resolves items_processed = number of dirs removed', async () => {
+    const removable1 = 'orchestrator-run-aaa-111';
+    const removable2 = 'orchestrator-run-bbb-222';
+    mockedReaddir.mockResolvedValue(
+      [removable1, removable2].map((n) =>
+        makeDirent(n),
+      ) as unknown as ReturnType<typeof fs.readdirSync>,
+    );
+    mockedAccess.mockRejectedValue(new Error('ENOENT'));
+    mockedStat.mockResolvedValue(makeStat(OLD_GENERIC_MTIME));
+
+    const result = await runBootTempClusterReconciliation({
+      baseDir: BASE_DIR,
+    });
+
+    expect(result).toEqual({ items_processed: 2 });
+  });
+
+  it('runBootTempClusterReconciliation resolves items_processed = 0 when nothing is removed', async () => {
+    mockedReaddir.mockResolvedValue([
+      makeDirent('claude-1000'),
+    ] as unknown as ReturnType<typeof fs.readdirSync>);
+    mockedAccess.mockRejectedValue(new Error('ENOENT'));
+
+    const result = await runBootTempClusterReconciliation({
+      baseDir: BASE_DIR,
+    });
+
+    expect(result).toEqual({ items_processed: 0 });
+  });
+
+  it("registered job's run() resolves to { items_processed } matching dirs removed", async () => {
+    const removable1 = 'orchestrator-run-ccc-333';
+    const removable2 = 'orchestrator-run-ddd-444';
+    mockedReaddir.mockResolvedValue(
+      [removable1, removable2].map((n) =>
+        makeDirent(n),
+      ) as unknown as ReturnType<typeof fs.readdirSync>,
+    );
+    mockedAccess.mockRejectedValue(new Error('ENOENT'));
+    mockedStat.mockResolvedValue(makeStat(OLD_GENERIC_MTIME));
+
+    const registerCall = vi.fn();
+    const scheduler = { register: registerCall } as unknown as {
+      register: (opts: {
+        run: () => Promise<{ items_processed?: number } | void>;
+      }) => void;
+    };
+
+    register(scheduler as never);
+
+    expect(registerCall).toHaveBeenCalledOnce();
+    const opts = registerCall.mock.calls[0][0] as {
+      run: () => Promise<{ items_processed?: number } | void>;
+    };
+    const result = await opts.run();
+
+    expect(result).toEqual({ items_processed: 2 });
   });
 });
