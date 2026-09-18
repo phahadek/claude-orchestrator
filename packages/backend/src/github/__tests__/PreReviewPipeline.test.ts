@@ -115,6 +115,11 @@ function mockLaneResult(result: {
 const mockRunVerifyAsGate = vi.fn().mockResolvedValue({ passed: true });
 vi.mock('../../orchestration/verifyRunner', () => ({
   runVerifyAsGate: (...args: unknown[]) => mockRunVerifyAsGate(...args),
+  // Real (pure, side-effect-free) implementation — buildVerifyStage's lane
+  // path calls this unconditionally to compute truncatedOutput, so it must
+  // behave like the genuine tail-of-log helper rather than being undefined.
+  tailOfLog: (output: string, chars = 750) =>
+    output.length > chars ? output.slice(output.length - chars) : output,
 }));
 
 const mockFilterBaseAttributableFailuresForF2Gate = vi.fn().mockResolvedValue({
