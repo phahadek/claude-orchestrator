@@ -879,6 +879,18 @@ export class AutoMerger {
     }
   }
 
+  /**
+   * The AutoMerger merge path: on a successful `mergePR`, delegates straight
+   * to `this.mergeWatcher.handleMerged` for every post-merge side effect —
+   * session teardown, task status, branch deletion, and (per the "withdraw a
+   * queued lane run the moment it's superseded" design) withdrawing every
+   * still-queued test.request lane run for this PR's session worktree, since
+   * a merge makes that tree permanently stale. There is deliberately no
+   * separate withdrawal call here: PRMergeWatcher.handleMerged is the single
+   * pr_merged convergence point both this path and PRMergeWatcher's own
+   * poll-detected state-change path route through, so withdrawal logic lives
+   * exactly once.
+   */
   private async attemptMerge(
     pr: PullRequestRow,
     ciCheckNames: string[] = [],

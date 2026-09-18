@@ -381,7 +381,19 @@ describe('AutoMerger.attempt() — CI green', () => {
     await new Promise((r) => setTimeout(r, 50));
 
     expect(github.mergePR).toHaveBeenCalledWith(42, 'feat: test', 'owner/repo');
-    expect(watcher.handleMerged).toHaveBeenCalled();
+    // AutoMerger's own merge path has no separate queued-lane-run withdrawal
+    // call of its own — it feeds the exact same PRMergeWatcher.handleMerged
+    // this PR's session's worktree withdrawal runs through (see
+    // attemptMerge's doc comment), so asserting this delegation with the
+    // merged PR/sha is what proves AutoMerger's merge path reaches
+    // withdrawal. The withdrawal behavior itself (queued run -> failed/
+    // superseded, one test_run_withdrawn audit event) is exercised against a
+    // real PRMergeWatcher.handleMerged in PRMergeWatcher.test.ts's "queued
+    // test.request run withdrawal wiring" suite.
+    expect(watcher.handleMerged).toHaveBeenCalledWith(
+      expect.objectContaining({ pr_number: 42, repo: 'owner/repo' }),
+      'merged-sha',
+    );
     expect(setPauseReason).not.toHaveBeenCalled();
     expect(recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
