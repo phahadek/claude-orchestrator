@@ -208,6 +208,28 @@ function baseSpec(
   };
 }
 
+/**
+ * Raw row lookup by (project, content-hash, run_kind), bypassing
+ * getLatestTestRequestRun's settled-run "crash guard" (a failed row with no
+ * structured_result and no test_run_results is excluded there on purpose —
+ * it can't be told apart from a whole-process crash, so it must never be
+ * served as a cached verdict). Tests asserting a column this task added
+ * (failed_command, failure_reason) on a report-less failing row need the
+ * unfiltered row, not the cache-lookup's opinion about replay-worthiness.
+ */
+function getRawRun(
+  contentHash: string,
+  runKind: string,
+): { failed_command: string | null; failure_reason: string | null } | undefined {
+  return db
+    .prepare(
+      `SELECT failed_command, failure_reason FROM test_request_runs WHERE project_id = ? AND content_hash = ? AND run_kind = ?`,
+    )
+    .get('proj-1', contentHash, runKind) as
+    | { failed_command: string | null; failure_reason: string | null }
+    | undefined;
+}
+
 describe('runProjectTestRequest — coalescing', () => {
   it('two concurrent requests for the same (project, content-hash) share one execution; the joiner reports joined=true and the shared runId', async () => {
     let resolveRun: (v: { passed: boolean; output: string }) => void;
@@ -1038,11 +1060,10 @@ describe('runProjectTestRequest — verify run_kind (failFast/env/failed_command
       }),
     );
 
-    const run = getLatestTestRequestRun(
-      'proj-1',
-      'hash-verify-failed-command',
-      'verify',
-    )!;
+    // A report-less failing row is intentionally excluded from
+    // getLatestTestRequestRun's own lookup (see getRawRun's doc comment) —
+    // query the raw row to confirm the column was persisted regardless.
+    const run = getRawRun('hash-verify-failed-command', 'verify')!;
     expect(run.failed_command).toBe('uv run pyright');
   });
 
@@ -1089,6 +1110,21 @@ describe('runProjectTestRequest — verify run_kind (failFast/env/failed_command
       passed: false,
       output: 'tsc failed',
       failedCommand: 'tsc',
+    });
+    // getLatestTestRequestRun's settled-run guard only ever replays a
+    // failed row that carries evidence of having actually executed
+    // (structured_result, or a test_run_results row) — a report-less
+    // failure is deliberately excluded (see getRawRun's doc comment) so it
+    // is never mistaken for a genuine verdict. Give this run a
+    // structured_result so it's eligible to be replayed at all.
+    mockLoadOrchestratorConfig.mockReturnValue({
+      test_report_glob: 'reports/*.xml',
+    });
+    mockCollectStructuredTestResult.mockReturnValue({
+      format: 'junit-xml',
+      suites: [],
+      totals: { passed: 0, failed: 1, skipped: 0, errors: 0 },
+      durationMsTotal: 10,
     });
 
     await runProjectTestRequest(
@@ -1138,11 +1174,10 @@ describe('runProjectTestRequest — verify run_kind (failFast/env/failed_command
     expect((result as { isToolInfraFailure?: boolean }).isToolInfraFailure).toBe(
       true,
     );
-    const run = getLatestTestRequestRun(
-      'proj-1',
-      'hash-verify-tool-mismatch',
-      'verify',
-    )!;
+    // Excluded from getLatestTestRequestRun's own lookup — a report-less
+    // failure carries no evidence of having executed (see getRawRun's doc
+    // comment) — so assert against the raw row instead.
+    const run = getRawRun('hash-verify-tool-mismatch', 'verify')!;
     expect(run.failure_reason).toBe('tool_infra_failure');
   });
 });
