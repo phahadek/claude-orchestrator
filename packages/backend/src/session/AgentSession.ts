@@ -52,6 +52,7 @@ import {
   setHumanMergeOnly,
   getLatestTestRequestRun,
   getTestRunSummary,
+  runHasExtractedReport,
   getFailingTestIdsForRun,
   getUnexcusedFailingTestIdsForRun,
   setSessionLastErrorDetail,
@@ -2423,13 +2424,14 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     // structured_result is transient: the extraction drain
     // (clearExtractedStructuredResultsBatch) nulls it on every row once its
     // durable test_run_summaries counterpart has been written, whether or
-    // not this call lands before or after that sweep. A null value here
-    // therefore means "not yet acquired" only when no summary row exists
-    // yet either — once one does, the summary's own counts are the
-    // vacuousness signal, not the now-cleared column.
-    const winningSummary = winningRun
-      ? getTestRunSummary(winningRun.id)
-      : undefined;
+    // not this call lands before or after that sweep. runHasExtractedReport
+    // is the canonical predicate that disambiguates "not yet acquired" from
+    // "acquired and already recorded" — once it's true, the summary's own
+    // counts are the vacuousness signal, not the now-cleared column.
+    const winningSummary =
+      winningRun && runHasExtractedReport(winningRun.id)
+        ? getTestRunSummary(winningRun.id)
+        : undefined;
     if (winningRun?.structured_result) {
       try {
         winningStructuredResult = JSON.parse(

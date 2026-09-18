@@ -9955,8 +9955,19 @@ export function insertTestRunResults(
 
 // ─── test_run_summaries ─────────────────────────────────────────────────────
 
-/** True once this run's ingestion (summary + failure rows + digest) has been written — the extraction idempotency check. */
-export function hasTestRunSummary(testRequestRunId: string): boolean {
+/**
+ * True once this run's ingestion (summary + failure rows + digest) has been
+ * written. Two roles, same predicate: the extraction sweep's own
+ * idempotency check (has this run already been processed), and — for every
+ * reader that used to branch on structured_result being null — the
+ * canonical "was this run's report durably captured" signal.
+ * structured_result itself is transient (clearExtractedStructuredResultsBatch
+ * nulls it once this row exists), so a null value there is ambiguous: "never
+ * acquired" pre-sweep, or "acquired and already recorded here" post-sweep.
+ * This is what disambiguates the two — see getLatestTestRequestRun's own
+ * EXISTS test_run_summaries escape for the SQL-level twin of this check.
+ */
+export function runHasExtractedReport(testRequestRunId: string): boolean {
   const row = db
     .prepare(`SELECT 1 FROM test_run_summaries WHERE test_request_run_id = ?`)
     .get(testRequestRunId);

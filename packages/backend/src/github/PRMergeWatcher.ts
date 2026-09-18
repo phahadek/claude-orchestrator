@@ -81,7 +81,7 @@ import {
   setPRReviewResult,
   setPendingPush,
   getLatestTestRequestRun,
-  hasTestRunSummary,
+  runHasExtractedReport,
   markSessionDone,
   updateSessionStatus,
   recordPrAnchoredCompletingSignal,
@@ -1079,7 +1079,7 @@ export class PRMergeWatcher extends EventEmitter {
         testResult &&
         testResult.test_report_acquisition_attempted === 1 &&
         testResult.structured_result === null &&
-        !hasTestRunSummary(testResult.id) &&
+        !runHasExtractedReport(testResult.id) &&
         testResult.state !== 'failed'
       ) {
         setPauseReason(
@@ -1097,7 +1097,7 @@ export class PRMergeWatcher extends EventEmitter {
       } else if (
         testResult &&
         (testResult.structured_result !== null ||
-          hasTestRunSummary(testResult.id)) &&
+          runHasExtractedReport(testResult.id)) &&
         parsePauseReason(pr.pause_reason)?.reason ===
           'test_report_acquisition_failed'
       ) {
