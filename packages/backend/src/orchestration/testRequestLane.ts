@@ -31,7 +31,8 @@
 
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
-import { Semaphore } from '../tasks/deferralClassifier';
+import { Semaphore, LaneRunWithdrawnError } from '../tasks/deferralClassifier';
+import { recordEvent } from '../audit/AuditLog';
 import {
   runTestCommands,
   collectStructuredTestResult,
@@ -67,6 +68,8 @@ import {
   getFailingTestIdsForRun,
   getProjectRowById,
   getLatestTestRequestRun,
+  listQueuedTestRequestRunsForWorktree,
+  withdrawTestRequestRun,
 } from '../db/queries';
 import type {
   TestRequestFailureReason,
@@ -177,6 +180,18 @@ export interface TestRequestRunResult extends TestCommandResult {
    * sanctioned flaky path (F2's flaky disposition / flaky.confirm) instead.
    */
   unchangedReplay: boolean;
+  /**
+   * True when this run was withdrawn while still queued — never executed —
+   * because a newer request superseded it: either a same-worktree request
+   * with a different content_hash (see admitTestRequest's stale-run
+   * withdrawal), or a PR-driven event (merge/close/new-head, see
+   * withdrawQueuedRunsForWorktree). A caller must treat this as neither a
+   * pass nor a genuine fail — see this module's doc comment on the reverse
+   * of the "stale run keeps executing" decision.
+   */
+  superseded?: boolean;
+  /** The newer run's id, or a PR-driven marker ('pr_merged' | 'pr_closed' | 'head_moved'). Present only when `superseded` is true. */
+  supersededBy?: string;
 }
 
 /** A caller's live standing in the per-project lane: running now, or queued behind others. */
@@ -289,6 +304,99 @@ export function __resetProjectSemaphoresForTest(): void {
   projectSemaphores.clear();
 }
 
+/**
+ * Withdraws one still-queued row: removes it from its per-project
+ * Semaphore's wait queue (rejecting its parked executeTestRequestRun's
+ * permitPromise with LaneRunWithdrawnError — caught there and resolved as a
+ * `superseded: true` result, never a hard failure/reject the caller has to
+ * handle), marks the durable row failed/superseded, broadcasts a
+ * 'withdrawn' status, and records one test_run_withdrawn audit event.
+ * Returns false (no-op) when the row is no longer queued (already running,
+ * or already withdrawn by a race) — Semaphore.withdraw is the single source
+ * of truth for that race, not a separate DB read.
+ */
+function withdrawQueuedRun(
+  run: TestRequestRunRow,
+  reason: 'same_worktree' | 'pr_merged' | 'pr_closed' | 'head_moved',
+  supersededBy: string,
+  prContext?: { prNumber: number; repo: string },
+): boolean {
+  const semaphore = getProjectSemaphore(run.project_id);
+  if (!semaphore.withdraw(run.id, supersededBy)) return false;
+  withdrawTestRequestRun(run.id, supersededBy);
+  broadcastRunStatus({
+    runId: run.id,
+    projectId: run.project_id,
+    contentHash: run.content_hash,
+    status: 'withdrawn',
+    sessionId: run.session_id,
+    requestedAt: run.requested_at ?? undefined,
+    startedAt: run.started_at,
+    finishedAt: Date.now(),
+  });
+  recordEvent({
+    event_type: 'test_run_withdrawn',
+    actor_type: 'system',
+    project_id: run.project_id,
+    payload: {
+      runId: run.id,
+      reason,
+      supersededBy,
+      ...(prContext
+        ? { prNumber: prContext.prNumber, repo: prContext.repo }
+        : {}),
+    },
+  });
+  return true;
+}
+
+/**
+ * Same-worktree supersession: withdraws every still-queued run for
+ * (projectId, worktreePath) whose content_hash differs from the arriving
+ * request's — those runs were staged against a tree that's since moved on
+ * and would produce a verdict nobody reads. A queued run with the *same*
+ * content_hash (a scoped run alongside a full run, e.g.) is left alone —
+ * that's a distinct execution against the identical tree, not stale.
+ * Applies regardless of session_id/producer: a session's own queued full
+ * run and the pipeline's pr_gate request share this same worktree-scoped
+ * check.
+ */
+function withdrawStaleSameWorktreeRuns(
+  projectId: string,
+  worktreePath: string,
+  contentHash: string,
+  newRunId: string,
+): void {
+  const queued = listQueuedTestRequestRunsForWorktree(projectId, worktreePath);
+  for (const run of queued) {
+    if (run.content_hash === contentHash) continue;
+    withdrawQueuedRun(run, 'same_worktree', newRunId);
+  }
+}
+
+/**
+ * PR-driven withdrawal: withdraws every still-queued run for (projectId,
+ * worktreePath) regardless of content_hash — called on pr_merged/pr_closed
+ * (PRMergeWatcher's state-change path and AutoMerger's merge path) and on
+ * push_detected with a new head (PRMergeWatcher.handlePushDetected), where
+ * every queued run against that worktree is stale the moment the PR
+ * terminalized or its head moved. Returns the count actually withdrawn, for
+ * callers that want to log/short-circuit.
+ */
+export function withdrawQueuedRunsForWorktree(
+  projectId: string,
+  worktreePath: string,
+  reason: 'pr_merged' | 'pr_closed' | 'head_moved',
+  prContext?: { prNumber: number; repo: string },
+): number {
+  const queued = listQueuedTestRequestRunsForWorktree(projectId, worktreePath);
+  let count = 0;
+  for (const run of queued) {
+    if (withdrawQueuedRun(run, reason, reason, prContext)) count++;
+  }
+  return count;
+}
+
 interface InFlightEntry {
   runId: string;
   contentHash: string;
@@ -397,6 +505,12 @@ export function admitTestRequest(
         pending.runKind === runKind &&
         pending.baseSha === baseSha
       ) {
+        withdrawStaleSameWorktreeRuns(
+          spec.projectId,
+          spec.worktreePath,
+          spec.contentHash,
+          pending.runId,
+        );
         return {
           runId: pending.runId,
           reused: true,
@@ -427,6 +541,12 @@ export function admitTestRequest(
       unchangedReplay: false,
     }));
     if (sKey) pendingBySession.set(sKey, existing);
+    withdrawStaleSameWorktreeRuns(
+      spec.projectId,
+      spec.worktreePath,
+      spec.contentHash,
+      existing.runId,
+    );
     return {
       runId: existing.runId,
       reused: false,
@@ -464,7 +584,17 @@ export function admitTestRequest(
     runKind,
     baseSha,
   );
-  if (settled && settled.failure_reason !== 'execution_failed') {
+  if (
+    settled &&
+    settled.failure_reason !== 'execution_failed' &&
+    settled.failure_reason !== 'superseded'
+  ) {
+    withdrawStaleSameWorktreeRuns(
+      spec.projectId,
+      spec.worktreePath,
+      spec.contentHash,
+      settled.id,
+    );
     const replayResult: TestRequestRunResult = {
       passed: settled.state === 'passed',
       output: settled.output,
@@ -505,6 +635,12 @@ export function admitTestRequest(
     runKind,
     baseSha,
     spec.worktreePath,
+  );
+  withdrawStaleSameWorktreeRuns(
+    spec.projectId,
+    spec.worktreePath,
+    spec.contentHash,
+    runId,
   );
   const semaphore = getProjectSemaphore(spec.projectId);
   const permitPromise = semaphore.acquire(runId);
@@ -612,8 +748,34 @@ async function executeTestRequestRun(
   runId: string,
   requestedAt: number,
   permitPromise: Promise<() => void>,
-): Promise<TestCommandResult & { runId: string }> {
-  const release = await permitPromise;
+): Promise<
+  TestCommandResult & {
+    runId: string;
+    superseded?: boolean;
+    supersededBy?: string;
+  }
+> {
+  let release: () => void;
+  try {
+    release = await permitPromise;
+  } catch (err) {
+    if (err instanceof LaneRunWithdrawnError) {
+      // The durable row/broadcast/audit event were already written by
+      // whichever withdrawStaleSameWorktreeRuns/withdrawQueuedRunsForWorktree
+      // call withdrew this run from the semaphore's queue — nothing left to
+      // record here, just resolve (never reject) so admitTestRequest's
+      // `result` promise settles with a superseded verdict instead of an
+      // unhandled rejection.
+      return {
+        passed: false,
+        output: `[testRequestLane] withdrawn — superseded by ${err.supersededBy}`,
+        runId,
+        superseded: true,
+        supersededBy: err.supersededBy,
+      };
+    }
+    throw err;
+  }
   await waitForMemoryAdmission(
     spec.projectId,
     getEffectiveProjectLimit(spec.projectId),
@@ -763,6 +925,7 @@ async function executeTestRequestRun(
       base_sha: spec.baseSha ?? null,
       foreign_concurrent_run_count: foreignConcurrentRunCount,
       worktree_path: spec.worktreePath,
+      superseded_by: null,
     });
     return { ...result, runId };
   } catch (err) {

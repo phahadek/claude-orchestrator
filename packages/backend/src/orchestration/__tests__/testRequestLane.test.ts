@@ -54,7 +54,12 @@ import {
   sweepTestRunResultsExtraction,
   computeTestPerfBaseline,
   __resetProjectSemaphoresForTest,
+  withdrawQueuedRunsForWorktree,
 } from '../testRequestLane';
+import {
+  Semaphore,
+  LaneRunWithdrawnError,
+} from '../../tasks/deferralClassifier';
 import {
   insertTestRequestRun,
   completeTestRequestRun,
@@ -77,6 +82,7 @@ import {
   insertProject,
   updateProject,
   getFailingTestIdsForRun,
+  getTestRequestRunById,
 } from '../../db/queries';
 import {
   withCheckoutInstallLock,
@@ -2114,6 +2120,304 @@ describe('admitTestRequest — settled-run guard', () => {
     expect(result.unchangedReplay).toBe(true);
     expect(result.passed).toBe(true);
     expect(result.runId).toBe(runId);
+  });
+});
+
+describe('Semaphore.withdraw', () => {
+  it('withdraws a queued waiter (rejecting its acquire promise with LaneRunWithdrawnError) and leaves a running id untouched', async () => {
+    const sem = new Semaphore(1);
+    const release = await sem.acquire('run-a');
+    const pendingB = sem.acquire('run-b');
+    pendingB.catch(() => {});
+    expect(sem.queueDepth()).toBe(1);
+
+    // A running (already-acquired) id is not in the queue — no-op.
+    expect(sem.withdraw('run-a', 'newer')).toBe(false);
+
+    expect(sem.withdraw('run-b', 'newer')).toBe(true);
+    await expect(pendingB).rejects.toBeInstanceOf(LaneRunWithdrawnError);
+    await expect(pendingB).rejects.toMatchObject({ supersededBy: 'newer' });
+    expect(sem.queueDepth()).toBe(0);
+
+    // Already withdrawn / unknown id — no-op.
+    expect(sem.withdraw('run-b', 'newer')).toBe(false);
+
+    release();
+  });
+});
+
+describe('admitTestRequest — same-worktree supersession', () => {
+  /** Queues every runTestCommands call behind a resolver the test controls. */
+  function queueingRunTestCommands() {
+    const resolvers: Array<(v: { passed: boolean; output: string }) => void> =
+      [];
+    mockRunTestCommands.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    return resolvers;
+  }
+
+  it('withdraws a still-queued run for the same worktree when a newer request arrives with a different content_hash — the withdrawn run resolves superseded rather than executing, and only two of three requests ever run', async () => {
+    insertProject({
+      id: 'proj-supersede-1',
+      name: 'Supersede 1',
+      project_dir: '/tmp/proj-supersede-1',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+      test_request_max_concurrent: 1,
+    });
+    // insertProject's INSERT statement doesn't include test_request_max_concurrent
+    // (see updateProject, which does) — set it via a follow-up update so the
+    // project's semaphore is actually capacity-1, not the global default.
+    updateProject('proj-supersede-1', { test_request_max_concurrent: 1 });
+    const resolvers = queueingRunTestCommands();
+    const worktreePath = '/tmp/wt-supersede-1';
+
+    const first = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-supersede-1',
+        worktreePath,
+        contentHash: 'sup1-a',
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
+
+    const second = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-supersede-1',
+        worktreePath,
+        contentHash: 'sup1-b',
+      }),
+    );
+    expect(second.status).toBe('queued');
+
+    const third = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-supersede-1',
+        worktreePath,
+        contentHash: 'sup1-c',
+      }),
+    );
+
+    // `second` was withdrawn the moment `third` arrived — never dequeued,
+    // never called runTestCommands.
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    const secondResult = await second.result;
+    expect(secondResult.superseded).toBe(true);
+    expect(secondResult.supersededBy).toBe(third.runId);
+    expect(secondResult.passed).toBe(false);
+
+    const row = getTestRequestRunById(second.runId);
+    expect(row?.state).toBe('failed');
+    expect(row?.failure_reason).toBe('superseded');
+    expect(row?.superseded_by).toBe(third.runId);
+
+    const auditRows = (
+      db
+        .prepare(
+          `SELECT payload FROM audit_log WHERE event_type = 'test_run_withdrawn'`,
+        )
+        .all() as { payload: string }[]
+    )
+      .map((r) => JSON.parse(r.payload) as { runId: string })
+      .filter((p) => p.runId === second.runId);
+    expect(auditRows).toHaveLength(1);
+    expect(auditRows[0]).toMatchObject({
+      runId: second.runId,
+      reason: 'same_worktree',
+      supersededBy: third.runId,
+    });
+
+    // Complete `first`, freeing the slot for `third` to actually run.
+    resolvers[0]({ passed: true, output: 'ok' });
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
+    );
+    resolvers[1]({ passed: true, output: 'ok' });
+
+    const [firstResult, thirdResult] = await Promise.all([
+      first.result,
+      third.result,
+    ]);
+    expect(firstResult.superseded).toBeFalsy();
+    expect(thirdResult.superseded).toBeFalsy();
+  });
+
+  it('never withdraws a running run, even when a newer same-worktree request arrives with a different content_hash', async () => {
+    insertProject({
+      id: 'proj-supersede-2',
+      name: 'Supersede 2',
+      project_dir: '/tmp/proj-supersede-2',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+      test_request_max_concurrent: 2,
+    });
+    updateProject('proj-supersede-2', { test_request_max_concurrent: 2 });
+    const resolvers = queueingRunTestCommands();
+    const worktreePath = '/tmp/wt-supersede-2';
+
+    const first = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-supersede-2',
+        worktreePath,
+        contentHash: 'sup2-a',
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
+    expect(first.status).toBe('running');
+
+    const second = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-supersede-2',
+        worktreePath,
+        contentHash: 'sup2-b',
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
+    );
+    expect(second.status).toBe('running');
+
+    resolvers.forEach((resolve) => resolve({ passed: true, output: 'ok' }));
+    const [firstResult, secondResult] = await Promise.all([
+      first.result,
+      second.result,
+    ]);
+    expect(firstResult.superseded).toBeFalsy();
+    expect(secondResult.superseded).toBeFalsy();
+  });
+
+  it('does not withdraw a queued run when a newer request shares its content_hash but declares a different run_kind', async () => {
+    insertProject({
+      id: 'proj-supersede-3',
+      name: 'Supersede 3',
+      project_dir: '/tmp/proj-supersede-3',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+      test_request_max_concurrent: 1,
+    });
+    updateProject('proj-supersede-3', { test_request_max_concurrent: 1 });
+    queueingRunTestCommands();
+    const worktreePath = '/tmp/wt-supersede-3';
+    const sharedHash = 'sup3-shared';
+
+    // Fills the one running slot with an unrelated tree so everything below
+    // queues.
+    admitTestRequest(
+      baseSpec({
+        projectId: 'proj-supersede-3',
+        worktreePath,
+        contentHash: 'sup3-other',
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
+
+    const queuedFull = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-supersede-3',
+        worktreePath,
+        contentHash: sharedHash,
+        runKind: 'full',
+      }),
+    );
+    expect(queuedFull.status).toBe('queued');
+
+    // Same content_hash as queuedFull, but a different run_kind — must not
+    // withdraw it.
+    const queuedScoped = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-supersede-3',
+        worktreePath,
+        contentHash: sharedHash,
+        runKind: 'scoped',
+      }),
+    );
+    expect(queuedScoped.status).toBe('queued');
+
+    expect(getTestRequestRunById(queuedFull.runId)?.state).toBe('queued');
+  });
+});
+
+describe('withdrawQueuedRunsForWorktree — PR-driven withdrawal', () => {
+  function queueingRunTestCommands() {
+    const resolvers: Array<(v: { passed: boolean; output: string }) => void> =
+      [];
+    mockRunTestCommands.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    return resolvers;
+  }
+
+  it('withdraws every still-queued run for the worktree, tagging each with the given reason/marker, and never touches the running one', async () => {
+    insertProject({
+      id: 'proj-pr-withdraw-1',
+      name: 'PR Withdraw 1',
+      project_dir: '/tmp/proj-pr-withdraw-1',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+      test_request_max_concurrent: 1,
+    });
+    updateProject('proj-pr-withdraw-1', { test_request_max_concurrent: 1 });
+    const resolvers = queueingRunTestCommands();
+    const worktreePath = '/tmp/wt-pr-withdraw-1';
+
+    const running = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-pr-withdraw-1',
+        worktreePath,
+        contentHash: 'pr-withdraw-1-running',
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
+
+    const queued = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-pr-withdraw-1',
+        worktreePath,
+        contentHash: 'pr-withdraw-1-queued',
+      }),
+    );
+    expect(queued.status).toBe('queued');
+
+    const withdrawnCount = withdrawQueuedRunsForWorktree(
+      'proj-pr-withdraw-1',
+      worktreePath,
+      'pr_merged',
+      { prNumber: 7, repo: 'owner/repo' },
+    );
+    expect(withdrawnCount).toBe(1);
+
+    const queuedResult = await queued.result;
+    expect(queuedResult.superseded).toBe(true);
+    expect(queuedResult.supersededBy).toBe('pr_merged');
+
+    const row = getTestRequestRunById(queued.runId);
+    expect(row?.failure_reason).toBe('superseded');
+    expect(row?.superseded_by).toBe('pr_merged');
+
+    // The running one is untouched — completing it settles normally.
+    resolvers[0]({ passed: true, output: 'ok' });
+    const runningResult = await running.result;
+    expect(runningResult.superseded).toBeFalsy();
   });
 });
 

@@ -101,7 +101,11 @@ export interface AdmissionStallState {
  * /test-request-runs is the fetch/apply source of truth for an on-load
  * snapshot, this message only tells a connected client to refetch.
  */
-type TestRequestRunStatus = 'running' | 'passed' | 'failed-with-cause';
+type TestRequestRunStatus =
+  | 'running'
+  | 'passed'
+  | 'failed-with-cause'
+  | 'withdrawn';
 
 export interface TestRequestRunStatusPayload {
   runId: string;

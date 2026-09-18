@@ -30,6 +30,7 @@ import { computeWholeTreeContentHash } from '../session/analyzeGating';
 import {
   evaluateF2LaneFlakyDisposition,
   testRequestLaneEvents,
+  withdrawQueuedRunsForWorktree,
   type TestRequestLaneSettledEvent,
 } from '../orchestration/testRequestLane';
 import { tailOfLog } from '../orchestration/verifyRunner';
@@ -628,6 +629,7 @@ export class PRMergeWatcher extends EventEmitter {
       clearTerminalPRFlags(pr.pr_number, pr.repo, 'closed');
       clearSessionInitiatedPRClose(pr.pr_number, pr.repo);
       deleteAllAutofixShasForPR(pr.pr_number, pr.repo);
+      this.withdrawQueuedRunsForPR(pr, 'pr_closed');
       // Transition coding session idle → error on close-without-merge
       if (pr.session_id) {
         this.sessions.markSessionErrored(pr.session_id, 'error', 'pr_closed');
@@ -1923,6 +1925,10 @@ export class PRMergeWatcher extends EventEmitter {
           fetchError = undefined;
           if (headSha !== prRow.head_sha) {
             setHeadSha(prRow.pr_number, prRow.repo, headSha);
+            // The tree every queued run against this worktree was staged
+            // against is now behind the new head — withdraw them rather
+            // than let them execute to completion against a stale push.
+            this.withdrawQueuedRunsForPR(prRow, 'head_moved');
             // A fix was actually pushed — the load-bearing signal that
             // un-sticks a reconcile_exhausted escalation, independent of
             // whatever verdict the re-review below produces.
@@ -2365,6 +2371,37 @@ export class PRMergeWatcher extends EventEmitter {
   }
 
   /**
+   * Withdraws every still-queued test.request lane run against this PR's
+   * session worktree — called on pr_merged/pr_closed and on push_detected
+   * with a new head, the three ways a queued run's tree stops being current
+   * before it ever executes. A no-op when the PR has no coding session (no
+   * worktree to key the withdrawal on) or the project can't be resolved from
+   * pr.repo.
+   */
+  private withdrawQueuedRunsForPR(
+    pr: PullRequestRow,
+    reason: 'pr_merged' | 'pr_closed' | 'head_moved',
+  ): void {
+    const worktreePath = pr.session_id
+      ? getSession(pr.session_id)?.worktree_path
+      : null;
+    if (!worktreePath) return;
+    const project = getProjectByGithubRepo(pr.repo);
+    if (!project) return;
+    const withdrawn = withdrawQueuedRunsForWorktree(
+      project.id,
+      worktreePath,
+      reason,
+      { prNumber: pr.pr_number, repo: pr.repo },
+    );
+    if (withdrawn > 0) {
+      logger.info(
+        `[PRMergeWatcher] withdrew ${withdrawn} queued test.request run(s) for PR #${pr.pr_number} (${reason})`,
+      );
+    }
+  }
+
+  /**
    * @param options.silent When true, the SQLite state transition still happens
    *   (and sessions/Notion updates run) but the pr_merged broadcast is
    *   suppressed. Used by poll() on the first cycle after boot to avoid
@@ -2378,6 +2415,7 @@ export class PRMergeWatcher extends EventEmitter {
     updatePRState(pr.pr_number, pr.repo, 'merged');
     clearTerminalPRFlags(pr.pr_number, pr.repo, 'merged');
     deleteAllAutofixShasForPR(pr.pr_number, pr.repo);
+    this.withdrawQueuedRunsForPR(pr, 'pr_merged');
 
     const mergeCommit = await this.completeMerge(pr, sha);
 

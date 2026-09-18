@@ -581,48 +581,68 @@ export class PreReviewPipeline {
         const config = loadOrchestratorConfig(ctx.project.projectDir);
         if (!config.test?.length) return;
 
-        const contentHash = await computeWholeTreeContentHash(ctx.worktreePath);
-        if (
-          contentHash &&
-          getLatestTestRequestRun(ctx.project.id, contentHash, 'full')
-        ) {
-          logger.info(
-            `[PreReviewPipeline] tests content-cache hit PR #${ctx.prNumber} SHA ${ctx.headSha.slice(0, 7)} — skipping`,
-          );
-          return;
-        }
-
-        const result = contentHash
-          ? await this.runTestsStageThroughLane(ctx, {
-              projectId: ctx.project.id,
-              contentHash,
-              worktreePath: ctx.worktreePath,
-              commands: config.test,
-              timeoutSec: config.test_timeout_sec,
-              maxRssMb: config.test_max_rss_mb,
-              sessionId: null,
-              runOrigin: 'pr_pipeline',
-              producer: 'pr_gate',
-            })
-          : await runTestCommands(
-              ctx.worktreePath,
-              config.test,
-              config.test_timeout_sec,
-              (msg) =>
-                logger.info(
-                  `[PreReviewPipeline] test PR #${ctx.prNumber}: ${msg}`,
-                ),
-              {
-                maxRssMb: config.test_max_rss_mb,
-                failFast: config.test_fail_fast,
-              },
+        // A superseded result means this run was withdrawn before it ever
+        // executed (a newer request, or a PR merge/close/push, superseded it
+        // on the same worktree — see testRequestLane.ts's supersession).
+        // That's never a failed gate: re-hash the (by definition since-moved)
+        // tree and re-admit once more, rather than reporting a gate failure
+        // for a run that never produced a verdict.
+        let contentHash: string | null = null;
+        let result: Awaited<ReturnType<typeof runTestCommands>> | undefined;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          contentHash = await computeWholeTreeContentHash(ctx.worktreePath);
+          if (
+            contentHash &&
+            getLatestTestRequestRun(ctx.project.id, contentHash, 'full')
+          ) {
+            logger.info(
+              `[PreReviewPipeline] tests content-cache hit PR #${ctx.prNumber} SHA ${ctx.headSha.slice(0, 7)} — skipping`,
             );
+            return;
+          }
+
+          result = contentHash
+            ? await this.runTestsStageThroughLane(ctx, {
+                projectId: ctx.project.id,
+                contentHash,
+                worktreePath: ctx.worktreePath,
+                commands: config.test,
+                timeoutSec: config.test_timeout_sec,
+                maxRssMb: config.test_max_rss_mb,
+                sessionId: null,
+                runOrigin: 'pr_pipeline',
+                producer: 'pr_gate',
+              })
+            : await runTestCommands(
+                ctx.worktreePath,
+                config.test,
+                config.test_timeout_sec,
+                (msg) =>
+                  logger.info(
+                    `[PreReviewPipeline] test PR #${ctx.prNumber}: ${msg}`,
+                  ),
+                {
+                  maxRssMb: config.test_max_rss_mb,
+                  failFast: config.test_fail_fast,
+                },
+              );
+
+          if (!(result as TestRequestRunResult).superseded) break;
+          logger.info(
+            `[PreReviewPipeline] tests run for PR #${ctx.prNumber} was superseded — re-hashing and re-admitting once`,
+          );
+        }
+        if (!result) return;
 
         logger.info(
           `[PreReviewPipeline] tests ${result.passed ? 'PASSED' : 'FAILED'} for PR #${ctx.prNumber} SHA ${ctx.headSha.slice(0, 7)}`,
         );
 
-        if (contentHash && !result.passed) {
+        if (
+          contentHash &&
+          !result.passed &&
+          !(result as TestRequestRunResult).superseded
+        ) {
           await this.applyBaseAttributableF2GateFilter(
             ctx,
             (result as TestRequestRunResult).runId,
