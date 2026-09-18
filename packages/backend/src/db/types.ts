@@ -1263,6 +1263,8 @@ export interface TestRequestRunRow {
   base_sha: string | null;
   /** Host-wide peer occupancy at admission — sum of every OTHER project's semaphore inUse(), captured alongside concurrent_run_count. Null for pre-existing rows; treated as 0 by the digest validity predicate. */
   foreign_concurrent_run_count: number | null;
+  /** Worktree this run executed against, captured at insertTestRequestRun time. Null for pre-existing rows and for runs with no worktree (spawn-failed before a path was known). */
+  worktree_path: string | null;
 }
 
 // ─── dependency_cache_entries ───────────────────────────────────────────────

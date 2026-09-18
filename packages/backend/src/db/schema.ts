@@ -3486,6 +3486,22 @@ export function runMigrations(target: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_audit_log_actor_event_ts
       ON audit_log(actor_id, event_type, ts);
   `);
+
+  // worktree_path: the worktree a run executed against, captured at
+  // insertTestRequestRun time — lets a caller that only has a worktree path
+  // (StalledPRReconciler's second-layer stall guard — pr_gate runs carry
+  // session_id NULL, so hasQueuedOrRunningTestRunForSession can't match
+  // them) look up a queued/running run without a LIKE scan over `output`.
+  // NULL on rows predating this column.
+  try {
+    target.exec(`ALTER TABLE test_request_runs ADD COLUMN worktree_path TEXT`);
+  } catch {
+    /* already exists */
+  }
+  target.exec(`
+    CREATE INDEX IF NOT EXISTS idx_test_request_runs_worktree_state
+      ON test_request_runs(worktree_path, state);
+  `);
 }
 
 // ─── test_run_results → test_perf_baselines digest backfill ────────────────

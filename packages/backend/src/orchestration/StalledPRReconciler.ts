@@ -19,6 +19,7 @@ import {
   setPendingPush,
   getSessionLastActivityMs,
   hasQueuedOrRunningTestRunForSession,
+  hasQueuedOrRunningTestRunForWorktree,
   setStalledRetryBaseExhausted,
   resetStalledPRRetryCountForBaseRecovery,
   setReconcileExhausted,
@@ -314,10 +315,22 @@ export class StalledPRReconciler {
       // running" case as isPreReviewPipelineInFlight, scoped to the
       // verify/tests stages where a polimarket full suite run can take
       // 10-21 minutes — see classifyStalledPR's session_inert branch.
+      // hasQueuedOrRunningTestRunForSession alone cannot see a pr_gate
+      // (PreReviewPipeline tests-stage) run — those are recorded with
+      // session_id NULL (see runOrigin: 'pr_pipeline' in
+      // PreReviewPipeline.ts) — so it's paired with a worktree-keyed lookup
+      // that can.
+      const worktreePath = pr.session_id
+        ? (getSession(pr.session_id)?.worktree_path ?? null)
+        : null;
       const hasQueuedOrRunningTestRun =
-        pr.session_id &&
-        (pr.pre_review_stage === 'verify' || pr.pre_review_stage === 'tests')
-          ? hasQueuedOrRunningTestRunForSession(pr.session_id)
+        pr.pre_review_stage === 'verify' || pr.pre_review_stage === 'tests'
+          ? (pr.session_id
+              ? hasQueuedOrRunningTestRunForSession(pr.session_id)
+              : false) ||
+            (worktreePath
+              ? hasQueuedOrRunningTestRunForWorktree(worktreePath)
+              : false)
           : false;
 
       const stalled = classifyStalledPR(

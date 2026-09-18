@@ -1430,9 +1430,17 @@ describe('PreReviewPipeline — tests record stage (non-blocking)', () => {
   });
 
   it('records test result and continues to awaiting_review even when tests fail', async () => {
-    mockRunProjectTestRequest.mockResolvedValue({
-      passed: false,
-      output: 'test failures',
+    mockAdmitTestRequest.mockReturnValue({
+      runId: 'run-enqueued',
+      status: 'running',
+      position: 0,
+      queueDepth: 0,
+      reused: false,
+      unchangedReplay: false,
+      result: Promise.resolve({
+        passed: false,
+        output: 'test failures',
+      }),
     });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
@@ -1440,7 +1448,7 @@ describe('PreReviewPipeline — tests record stage (non-blocking)', () => {
     const result = await pipeline.run(makeJob(), makeProject());
 
     expect(result.passed).toBe(true);
-    expect(mockRunProjectTestRequest).toHaveBeenCalledWith(
+    expect(mockAdmitTestRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         projectId: 'proj-1',
         contentHash: 'worktree-content-hash',
@@ -1454,9 +1462,17 @@ describe('PreReviewPipeline — tests record stage (non-blocking)', () => {
   });
 
   it('does not call setPreReviewStage(blocked_tests) — tests is non-blocking', async () => {
-    mockRunProjectTestRequest.mockResolvedValue({
-      passed: false,
-      output: 'FAIL',
+    mockAdmitTestRequest.mockReturnValue({
+      runId: 'run-enqueued',
+      status: 'running',
+      position: 0,
+      queueDepth: 0,
+      reused: false,
+      unchangedReplay: false,
+      result: Promise.resolve({
+        passed: false,
+        output: 'FAIL',
+      }),
     });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
@@ -1487,7 +1503,7 @@ describe('PreReviewPipeline — tests record stage (non-blocking)', () => {
     await pipeline.run(makeJob(), makeProject());
 
     expect(mockRunTestCommands).not.toHaveBeenCalled();
-    expect(mockRunProjectTestRequest).not.toHaveBeenCalled();
+    expect(mockAdmitTestRequest).not.toHaveBeenCalled();
   });
 });
 

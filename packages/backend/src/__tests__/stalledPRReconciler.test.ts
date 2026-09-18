@@ -35,6 +35,7 @@ vi.mock('../db/queries.js', () => ({
   resetStalledPRRetryCountForBaseRecovery: vi.fn(),
   setReconcileExhausted: vi.fn(),
   hasQueuedOrRunningTestRunForSession: vi.fn(() => false),
+  hasQueuedOrRunningTestRunForWorktree: vi.fn(() => false),
   markSessionSuperseded: vi.fn(),
   TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED: new Set([
     'done',
@@ -81,6 +82,7 @@ import {
   setStalledRetryBaseExhausted,
   setReconcileExhausted,
   hasQueuedOrRunningTestRunForSession,
+  hasQueuedOrRunningTestRunForWorktree,
   markSessionSuperseded,
 } from '../db/queries.js';
 import {
@@ -1255,6 +1257,42 @@ describe('StalledPRReconciler', () => {
     expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
 
     vi.mocked(hasQueuedOrRunningTestRunForSession).mockReturnValue(false);
+  });
+
+  it('does not re-drive a PR at pre_review_stage=tests as pre_review_interrupted when its worktree has a queued pr_gate run (session_id NULL, force-cleared in-flight signal)', async () => {
+    const pr = makePR({
+      review_result: null,
+      review_session_id: null,
+      pending_push: 0,
+      pause_reason: null,
+      pre_review_stage: 'tests',
+      session_id: 'session-1',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+    vi.mocked(getSession).mockReturnValue({
+      status: 'running',
+      session_id: 'session-1',
+      worktree_path: '/repos/wt-1',
+    } as any);
+    // The pr_gate run is recorded with session_id NULL, so the
+    // session-keyed lookup can't see it — only the worktree-keyed one can.
+    vi.mocked(hasQueuedOrRunningTestRunForSession).mockReturnValue(false);
+    vi.mocked(hasQueuedOrRunningTestRunForWorktree).mockReturnValue(true);
+
+    const { fn: broadcast } = makeBroadcast();
+    // isReviewInFlight false — simulates the stall detector having
+    // force-cleared ReviewOrchestrator's in-memory in-flight entry while
+    // the pr_gate lane run is still genuinely queued.
+    const ro = makeReviewOrchestrator(false);
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(ro.enqueueReview).not.toHaveBeenCalled();
+    expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
+
+    vi.mocked(hasQueuedOrRunningTestRunForWorktree).mockReturnValue(false);
   });
 
   it('skips analyze_failing PR with pending_push (push flow handles it)', async () => {

@@ -31,6 +31,7 @@ vi.mock('../db/queries.js', () =>
     enqueueFeedbackItem: vi.fn(),
     upsertDepthReviewVerdict: vi.fn(),
     getDepthReviewVerdict: vi.fn().mockReturnValue(undefined),
+    getTestRequestRunById: vi.fn().mockReturnValue(undefined),
   }),
 );
 
@@ -127,6 +128,7 @@ import {
   enqueueFeedbackItem,
   upsertDepthReviewVerdict,
   getDepthReviewVerdict,
+  getTestRequestRunById,
 } from '../db/queries';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
@@ -5025,6 +5027,171 @@ describe('ReviewOrchestrator — stall detector', () => {
       expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledTimes(2);
 
       resolveStuck();
+      orch.destroy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not clear an in-flight PR whose recorded lane run is still queued', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.resetAllMocks();
+
+      vi.mocked(getPRByNumber).mockReturnValue({
+        ...basePRRow,
+        session_id: null,
+      } as any);
+      vi.mocked(loadAutofixCommands).mockReturnValue([]);
+      vi.mocked(loadOrchestratorConfig).mockReturnValue({
+        verify: [],
+        test: [],
+        test_timeout_sec: 60,
+        test_max_rss_mb: 0,
+        test_fail_fast: true,
+      } as any);
+      vi.mocked(getAllPendingReviewSyncs).mockReturnValue([]);
+      // The PR's tests stage admitted a lane run that's still queued behind
+      // other projects' test-lane pressure.
+      vi.mocked(getTestRequestRunById).mockReturnValue({
+        id: 'lane-run-1',
+        state: 'queued',
+      } as any);
+
+      let resolveStuck!: () => void;
+      const stuckDone = new Promise<void>((r) => {
+        resolveStuck = r;
+      });
+
+      const rs = {
+        reviewPR: vi.fn().mockImplementationOnce(async () => {
+          await stuckDone;
+          return {
+            prNumber: 1,
+            repo: 'owner/repo',
+            verdict: 'approved',
+            dimensions: [],
+            summary: 'ok',
+            reviewedAt: '',
+          };
+        }),
+        sendReReview: vi.fn(),
+        reReviewPR: vi.fn(),
+      } as unknown as PRReviewService;
+
+      const sm = makeMockSessionManager();
+
+      const orch = new ReviewOrchestrator(
+        rs,
+        sm as any,
+        true,
+        undefined,
+        200,
+        500,
+      );
+
+      sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect((orch as any).running).toBe(1);
+
+      // Record the admitted lane run against PR 1's in-flight entry, the
+      // way PreReviewPipeline.runTestsStageThroughLane's broadcast does.
+      sm.emit('message', {
+        type: 'pr_gate_lane_run_admitted',
+        prNumber: 1,
+        repo: 'owner/repo',
+        runId: 'lane-run-1',
+      });
+
+      // Advance well past the stall threshold — the detector must skip
+      // clearing PR 1's slot because its recorded lane run is still queued.
+      await vi.advanceTimersByTimeAsync(700);
+
+      expect((orch as any).inFlightPRKeys.has('1:owner/repo')).toBe(true);
+      expect((orch as any).inFlightStartTimes.size).toBe(1);
+      expect((orch as any).running).toBe(1);
+      expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledTimes(1);
+
+      resolveStuck();
+      orch.destroy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('running never goes negative when the original job releases after a force-clear', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.resetAllMocks();
+
+      vi.mocked(getPRByNumber).mockReturnValue({
+        ...basePRRow,
+        session_id: null,
+      } as any);
+      vi.mocked(loadAutofixCommands).mockReturnValue([]);
+      vi.mocked(loadOrchestratorConfig).mockReturnValue({
+        verify: [],
+        test: [],
+        test_timeout_sec: 60,
+        test_max_rss_mb: 0,
+        test_fail_fast: true,
+      } as any);
+      vi.mocked(getAllPendingReviewSyncs).mockReturnValue([]);
+      vi.mocked(getTestRequestRunById).mockReturnValue(undefined);
+
+      let resolveStuck!: () => void;
+      const stuckDone = new Promise<void>((r) => {
+        resolveStuck = r;
+      });
+
+      const rs = {
+        reviewPR: vi.fn().mockImplementationOnce(async () => {
+          await stuckDone;
+          return {
+            prNumber: 1,
+            repo: 'owner/repo',
+            verdict: 'approved',
+            dimensions: [],
+            summary: 'ok',
+            reviewedAt: '',
+          };
+        }),
+        sendReReview: vi.fn(),
+        reReviewPR: vi.fn(),
+      } as unknown as PRReviewService;
+
+      const sm = makeMockSessionManager();
+
+      const orch = new ReviewOrchestrator(
+        rs,
+        sm as any,
+        true,
+        undefined,
+        200,
+        500,
+      );
+
+      sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect((orch as any).running).toBe(1);
+
+      // Stall detector force-clears PR 1's slot.
+      await vi.advanceTimersByTimeAsync(700);
+      expect((orch as any).running).toBe(0);
+
+      // The original stuck job now finishes and runs its own finally block —
+      // its own running-- must not push the count negative on top of the
+      // stall detector's decrement.
+      resolveStuck();
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect((orch as any).running).toBe(0);
+
       orch.destroy();
     } finally {
       vi.useRealTimers();
