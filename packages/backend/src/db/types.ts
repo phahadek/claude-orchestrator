@@ -1162,7 +1162,7 @@ export type TestRequestRunState = 'queued' | 'running' | 'passed' | 'failed';
  * and settled-run guard). Defaults to 'full' for every row and caller that
  * never states otherwise.
  */
-export type TestRunKind = 'full' | 'scoped';
+export type TestRunKind = 'full' | 'scoped' | 'verify';
 
 /**
  * Failure sub-reason for a `failed` run — distinguishes a hard timeout, an
@@ -1198,7 +1198,8 @@ export type TestRequestFailureReason =
   | 'teardown_failed'
   | 'generic'
   | 'interrupted_queued'
-  | 'superseded';
+  | 'superseded'
+  | 'tool_infra_failure';
 
 /**
  * Explicit identity a caller states about the run it's originating —
@@ -1273,6 +1274,8 @@ export interface TestRequestRunRow {
    * run. Null otherwise.
    */
   superseded_by: string | null;
+  /** First command (from `commands`) that exited non-zero, for a fail-fast run. Null for a passing run and for rows predating this column. */
+  failed_command: string | null;
 }
 
 // ─── dependency_cache_entries ───────────────────────────────────────────────

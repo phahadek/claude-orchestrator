@@ -45,6 +45,12 @@ export interface TestCommandResult {
    * caller must not treat this run as safely settled.
    */
   teardownVerificationFailed?: boolean;
+  /** First command (from the `commands` array) that failed — set once, on the first failure, regardless of failFast. Undefined when every command passed. */
+  failedCommand?: string;
+  /** True when a declared expected_tool_versions check failed before any command ran — a host toolchain mismatch, not a code defect. Set only by testRequestLane.ts's executeTestRequestRun. */
+  isToolInfraFailure?: boolean;
+  /** Names the mismatched version_command and versions, for operator triage. Set alongside isToolInfraFailure. */
+  toolFailureReason?: string;
 }
 
 export interface TestRunOptions {
@@ -501,6 +507,7 @@ export async function runTestCommands(
   let anyOomKilled = false;
   let anySpawnFailed = false;
   let anyTeardownVerificationFailed = false;
+  let failedCommand: string | undefined;
 
   for (const cmd of commands) {
     log(`[test-runner] running: ${cmd}\n`);
@@ -521,6 +528,7 @@ export async function runTestCommands(
     );
     outputParts.push(`$ ${cmd}\n${output}`);
 
+    const wasPassing = allPassed;
     if (spawnFailed) {
       log(`[test-runner] SPAWN FAILED: ${cmd}\n`);
       allPassed = false;
@@ -548,6 +556,7 @@ export async function runTestCommands(
       log(`[test-runner] passed: ${cmd}\n`);
     }
 
+    if (wasPassing && !allPassed) failedCommand = cmd;
     if (!allPassed && failFast) break;
   }
 
@@ -558,6 +567,7 @@ export async function runTestCommands(
     oomKilled: anyOomKilled,
     spawnFailed: anySpawnFailed,
     teardownVerificationFailed: anyTeardownVerificationFailed,
+    failedCommand,
   };
 }
 

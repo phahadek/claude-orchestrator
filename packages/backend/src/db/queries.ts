@@ -9253,9 +9253,10 @@ export function completeTestRequestRun(
   structuredResult?: string | null,
   oomKilled?: boolean,
   acquisitionAttempted?: boolean,
+  failedCommand?: string | null,
 ): void {
   db.prepare(
-    `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ?, failure_reason = ?, structured_result = ?, oom_killed = ?, test_report_acquisition_attempted = ? WHERE id = ?`,
+    `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ?, failure_reason = ?, structured_result = ?, oom_killed = ?, test_report_acquisition_attempted = ?, failed_command = ? WHERE id = ?`,
   ).run(
     state,
     output,
@@ -9264,6 +9265,7 @@ export function completeTestRequestRun(
     structuredResult ?? null,
     oomKilled ? 1 : 0,
     acquisitionAttempted === undefined ? null : acquisitionAttempted ? 1 : 0,
+    failedCommand ?? null,
     id,
   );
 }
@@ -9287,7 +9289,7 @@ export function updateTestRequestRunState(
   );
 }
 
-const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha, foreign_concurrent_run_count, worktree_path, superseded_by`;
+const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha, foreign_concurrent_run_count, worktree_path, superseded_by, failed_command`;
 
 /** Every run still `running` — used by the boot-time crash-recovery sweep. */
 export function listRunningTestRequestRuns(): TestRequestRunRow[] {

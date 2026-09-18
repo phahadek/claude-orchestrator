@@ -93,6 +93,26 @@ describe('getLaneHealthRollup', () => {
     });
   });
 
+  it('includes run_kind=verify rows in totalRuns/passRate alongside full/scoped — the rollup is unfiltered by run_kind', () => {
+    db.prepare(
+      `INSERT INTO test_request_runs
+         (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, run_kind)
+       VALUES ('verify-1', 'proj-1', 'h-verify', NULL, 'passed', '', 1000, 1000, 1100, NULL, 'verify')`,
+    ).run();
+    insertRun({
+      projectId: 'proj-1',
+      state: 'failed',
+      requestedAt: 1000,
+      startedAt: 1000,
+      finishedAt: 1200,
+      failureReason: 'generic',
+    });
+
+    const result = getLaneHealthRollup('proj-1');
+    expect(result.totalRuns).toBe(2);
+    expect(result.passRate).toBe(0.5);
+  });
+
   it('excludes still-running runs from every aggregate', () => {
     db.prepare(
       `INSERT INTO test_request_runs

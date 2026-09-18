@@ -984,6 +984,211 @@ describe('runProjectTestRequest — the lane never fails fast', () => {
   });
 });
 
+describe('runProjectTestRequest — verify run_kind (failFast/env/failed_command)', () => {
+  it('forwards spec.failFast through to runTestCommands, and defaults to false when omitted', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    await runProjectTestRequest(
+      baseSpec({
+        contentHash: 'hash-verify-failfast',
+        runKind: 'verify',
+        failFast: true,
+      }),
+    );
+
+    expect(mockRunTestCommands).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Array),
+      expect.any(Number),
+      expect.any(Function),
+      expect.objectContaining({ failFast: true }),
+    );
+  });
+
+  it('forwards spec.env through to runTestCommands', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+    const env = { ...process.env, UV_CACHE_DIR: '/tmp/scoped-cache' };
+
+    await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-verify-env', runKind: 'verify', env }),
+    );
+
+    expect(mockRunTestCommands).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Array),
+      expect.any(Number),
+      expect.any(Function),
+      expect.objectContaining({ env }),
+    );
+  });
+
+  it('persists the first failing command onto test_request_runs.failed_command for a fail-fast verify run', async () => {
+    mockRunTestCommands.mockResolvedValue({
+      passed: false,
+      output: 'pyright failed',
+      failedCommand: 'uv run pyright',
+    });
+
+    await runProjectTestRequest(
+      baseSpec({
+        contentHash: 'hash-verify-failed-command',
+        runKind: 'verify',
+        failFast: true,
+        commands: ['uv run pyright', 'uv run task test'],
+      }),
+    );
+
+    const run = getLatestTestRequestRun(
+      'proj-1',
+      'hash-verify-failed-command',
+      'verify',
+    )!;
+    expect(run.failed_command).toBe('uv run pyright');
+  });
+
+  it('leaves failed_command null for a passing run', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    await runProjectTestRequest(
+      baseSpec({
+        contentHash: 'hash-verify-passed',
+        runKind: 'verify',
+        failFast: true,
+      }),
+    );
+
+    const run = getLatestTestRequestRun(
+      'proj-1',
+      'hash-verify-passed',
+      'verify',
+    )!;
+    expect(run.failed_command).toBeNull();
+  });
+
+  it('a verify run and a full run against the identical content-hash never coalesce, and each is independently queryable by run_kind', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-verify-vs-full', runKind: 'full' }),
+    );
+    await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-verify-vs-full', runKind: 'verify' }),
+    );
+
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
+    expect(
+      getLatestTestRequestRun('proj-1', 'hash-verify-vs-full', 'full'),
+    ).toBeTruthy();
+    expect(
+      getLatestTestRequestRun('proj-1', 'hash-verify-vs-full', 'verify'),
+    ).toBeTruthy();
+  });
+
+  it("a settled verify run's failed_command is replayed on a cache hit against an unchanged tree, with no fresh execution", async () => {
+    mockRunTestCommands.mockResolvedValue({
+      passed: false,
+      output: 'tsc failed',
+      failedCommand: 'tsc',
+    });
+
+    await runProjectTestRequest(
+      baseSpec({
+        contentHash: 'hash-verify-replay',
+        runKind: 'verify',
+        failFast: true,
+      }),
+    );
+    mockRunTestCommands.mockClear();
+
+    const replay = await runProjectTestRequest(
+      baseSpec({
+        contentHash: 'hash-verify-replay',
+        runKind: 'verify',
+        failFast: true,
+      }),
+    );
+
+    expect(mockRunTestCommands).not.toHaveBeenCalled();
+    expect(replay.passed).toBe(false);
+    expect(replay.failedCommand).toBe('tsc');
+    expect((replay as { unchangedReplay: boolean }).unchangedReplay).toBe(
+      true,
+    );
+  });
+
+  it('a toolchain-version mismatch completes a verify run as failed with tool_infra_failure and never spawns a command', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    const result = await runProjectTestRequest(
+      baseSpec({
+        contentHash: 'hash-verify-tool-mismatch',
+        runKind: 'verify',
+        failFast: true,
+        expectedToolVersions: [
+          {
+            version_command: 'echo actual-version',
+            expected: 'never-matches-this-string',
+          },
+        ],
+      }),
+    );
+
+    expect(mockRunTestCommands).not.toHaveBeenCalled();
+    expect(result.passed).toBe(false);
+    expect((result as { isToolInfraFailure?: boolean }).isToolInfraFailure).toBe(
+      true,
+    );
+    const run = getLatestTestRequestRun(
+      'proj-1',
+      'hash-verify-tool-mismatch',
+      'verify',
+    )!;
+    expect(run.failure_reason).toBe('tool_infra_failure');
+  });
+});
+
+describe('run_kind=verify samples in the per-test flip-rate / duration rollups', () => {
+  it('commingle with full-run samples for the same test_id — listRecentValidTestDurations and computeTestFlipRateFlag are unfiltered by run_kind', () => {
+    insertOutcomeSample('shared-test', 'passed', 100, {
+      concurrentRunCount: 0,
+      contentHash: 'tree-shared',
+    });
+    const verifyRunId = `verify-flip-run-${sampleSeq++}`;
+    insertTestRequestRun(
+      verifyRunId,
+      'proj-1',
+      'tree-shared',
+      null,
+      Date.now(),
+      0,
+      null,
+      'pr_gate',
+      'passed',
+      'verify',
+    );
+    ingestTestRunResultsTx(
+      verifyRunId,
+      'proj-1',
+      [{ test_id: 'shared-test', name: 'shared-test', outcome: 'failed', duration_ms: 150 }],
+      0,
+      false,
+      false,
+      null,
+      'tree-shared',
+    );
+
+    // Both samples (one from an ordinary run, one from a 'verify' run) land
+    // in the same digest, keyed only by test_id — a decision this task
+    // deliberately keeps unfiltered rather than partitioning by run_kind.
+    expect(listRecentValidTestDurations('shared-test', 10)).toEqual([
+      150, 100,
+    ]);
+    const flag = computeTestFlipRateFlag('shared-test', 10, 1);
+    expect(flag.sampleCount).toBe(2);
+    expect(flag.transitionCount).toBe(1);
+  });
+});
+
 describe('recoverInterruptedTestRequestRuns', () => {
   it('marks a leftover running row as failed with failure_reason execution_failed and its existing output string, and invokes clearSupersededStructuredResults + broadcastRunStatus', () => {
     insertTestRequestRun('run-1', 'proj-1', 'hash-x', null, Date.now());

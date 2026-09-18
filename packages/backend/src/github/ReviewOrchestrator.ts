@@ -134,12 +134,12 @@ export class ReviewOrchestrator {
    */
   private inFlightRefCounts = new Map<string, number>();
   /**
-   * The pr_gate lane run id the tests stage most recently admitted for each
-   * "prNumber:repo" key, set on pr_gate_lane_run_admitted and cleared on
-   * pr_gate_lane_run_settled (see PreReviewPipeline.runTestsStageThroughLane).
-   * Read by the stall detector so time spent queued behind the project's
-   * test-lane semaphore — outside this process's own control — is never
-   * counted as stall time.
+   * The pr_gate lane run id the tests/verify stage most recently admitted
+   * for each "prNumber:repo" key, set on pr_gate_lane_run_admitted and
+   * cleared on pr_gate_lane_run_settled (see
+   * PreReviewPipeline.runThroughTestLane). Read by the stall detector so
+   * time spent queued behind the project's test-lane semaphore — outside
+   * this process's own control — is never counted as stall time.
    */
   private inFlightLaneRunIds = new Map<string, string>();
   /** In-flight post-revert worktree sync promises, keyed by "prNumber:repo". */
