@@ -429,8 +429,7 @@ export class PreReviewPipeline {
 
         if (outcome.isToolInfraFailure) {
           return {
-            summary:
-              outcome.toolFailureReason ?? 'toolchain version mismatch',
+            summary: outcome.toolFailureReason ?? 'toolchain version mismatch',
             isToolInfraFailure: true,
             toolFailureReason: outcome.toolFailureReason,
           };

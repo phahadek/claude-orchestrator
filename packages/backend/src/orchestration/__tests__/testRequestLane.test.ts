@@ -220,7 +220,9 @@ function baseSpec(
 function getRawRun(
   contentHash: string,
   runKind: string,
-): { failed_command: string | null; failure_reason: string | null } | undefined {
+):
+  | { failed_command: string | null; failure_reason: string | null }
+  | undefined {
   return db
     .prepare(
       `SELECT failed_command, failure_reason FROM test_request_runs WHERE project_id = ? AND content_hash = ? AND run_kind = ?`,
@@ -1147,9 +1149,7 @@ describe('runProjectTestRequest — verify run_kind (failFast/env/failed_command
     expect(mockRunTestCommands).not.toHaveBeenCalled();
     expect(replay.passed).toBe(false);
     expect(replay.failedCommand).toBe('tsc');
-    expect((replay as { unchangedReplay: boolean }).unchangedReplay).toBe(
-      true,
-    );
+    expect((replay as { unchangedReplay: boolean }).unchangedReplay).toBe(true);
   });
 
   it('a toolchain-version mismatch completes a verify run as failed with tool_infra_failure and never spawns a command', async () => {
@@ -1171,9 +1171,9 @@ describe('runProjectTestRequest — verify run_kind (failFast/env/failed_command
 
     expect(mockRunTestCommands).not.toHaveBeenCalled();
     expect(result.passed).toBe(false);
-    expect((result as { isToolInfraFailure?: boolean }).isToolInfraFailure).toBe(
-      true,
-    );
+    expect(
+      (result as { isToolInfraFailure?: boolean }).isToolInfraFailure,
+    ).toBe(true);
     // Excluded from getLatestTestRequestRun's own lookup — a report-less
     // failure carries no evidence of having executed (see getRawRun's doc
     // comment) — so assert against the raw row instead.
@@ -1204,7 +1204,14 @@ describe('run_kind=verify samples in the per-test flip-rate / duration rollups',
     ingestTestRunResultsTx(
       verifyRunId,
       'proj-1',
-      [{ test_id: 'shared-test', name: 'shared-test', outcome: 'failed', duration_ms: 150 }],
+      [
+        {
+          test_id: 'shared-test',
+          name: 'shared-test',
+          outcome: 'failed',
+          duration_ms: 150,
+        },
+      ],
       0,
       false,
       false,
@@ -1215,9 +1222,7 @@ describe('run_kind=verify samples in the per-test flip-rate / duration rollups',
     // Both samples (one from an ordinary run, one from a 'verify' run) land
     // in the same digest, keyed only by test_id — a decision this task
     // deliberately keeps unfiltered rather than partitioning by run_kind.
-    expect(listRecentValidTestDurations('shared-test', 10)).toEqual([
-      150, 100,
-    ]);
+    expect(listRecentValidTestDurations('shared-test', 10)).toEqual([150, 100]);
     const flag = computeTestFlipRateFlag('shared-test', 10, 1);
     expect(flag.sampleCount).toBe(2);
     expect(flag.transitionCount).toBe(1);
