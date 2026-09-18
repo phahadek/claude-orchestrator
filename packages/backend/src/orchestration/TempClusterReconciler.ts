@@ -19,14 +19,20 @@ const MAINTENANCE_INTERVAL_MS = 30 * 60_000;
 // mkdtemp dirs (oc-*, co-*, mcp-*, flaky-*, etc.) don't share this shape.
 const TEMP_CLUSTER_ENTRY_RE = /^tmp[A-Za-z0-9_.]{6,}$/;
 
-// Backend tests create plain mkdtemp dirs (oc-*, co-*, mcp-*, flaky-*, etc. —
-// no shared naming convention) normally removed in afterEach/afterAll; a
-// killed/timed-out/crashed run leaks the dir with no analog to postmaster.pid
-// to prove liveness. Age is the only safety net here, so the margin is set
-// well beyond the default test_timeout_sec (300s, orchestrator-config.ts) plus
-// GRACE_PERIOD_MS (test-runner.ts) — and beyond any realistic per-project
-// override — rather than reusing the Postgres-specific ORPHAN_AGE_MS.
+// Every test-lane run gets its own TMPDIR shaped orchestrator-run-<runId>-XXXXXX
+// (test-runner.ts:276), removed on settle (test-runner.ts:353-361). A
+// killed/timed-out/crashed run leaks exactly that shape and nothing else, with
+// no analog to postmaster.pid to prove liveness. Age is the only safety net
+// here, so the margin is set well beyond the default test_timeout_sec (300s,
+// orchestrator-config.ts) plus GRACE_PERIOD_MS (test-runner.ts) — and beyond
+// any realistic per-project override — rather than reusing the
+// Postgres-specific ORPHAN_AGE_MS.
 const GENERIC_ORPHAN_AGE_MS = 6 * 60 * 60_000; // 6h
+
+// The one leak shape the test lane can still produce — see test-runner.ts:276.
+// Only entries matching this allow-list reach the generic age-based sweep;
+// everything else in /tmp belongs to something other than the test lane.
+const GENERIC_LEAK_PATTERNS: RegExp[] = [/^orchestrator-run-/];
 
 // Bounds fs.access/stat concurrency across all candidates (Postgres-shaped
 // or generic) so a polluted /tmp with tens of thousands of entries can't
@@ -161,8 +167,13 @@ async function reconcileEntry(
     // Not a live Postgres cluster dir — either the name doesn't have the
     // tmp*/tmp.* shape testing.postgresql/mktemp produce, or it does but no
     // PG_VERSION was found at either depth. Fall back to the generic
-    // mkdtemp-leak check.
+    // per-run-TMPDIR leak check.
     if (isSystemEntry(name)) {
+      stats.skipped++;
+      return;
+    }
+
+    if (!GENERIC_LEAK_PATTERNS.some((pattern) => pattern.test(name))) {
       stats.skipped++;
       return;
     }
@@ -194,7 +205,9 @@ async function reconcileEntry(
   }
 }
 
-async function reconcileBaseDir(baseDir: string): Promise<CombinedSweepStats> {
+export async function reconcileBaseDir(
+  baseDir: string,
+): Promise<CombinedSweepStats> {
   const stats: CombinedSweepStats = {
     postgres: { scanned: 0, removed: 0, failed: 0 },
     generic: { scanned: 0, removed: 0, failed: 0 },
@@ -248,10 +261,11 @@ function logSweepSummary(stats: CombinedSweepStats): void {
 
 export async function runBootTempClusterReconciliation(options?: {
   baseDir?: string;
-}): Promise<void> {
+}): Promise<{ items_processed: number }> {
   const baseDir = options?.baseDir ?? os.tmpdir();
   const stats = await reconcileBaseDir(baseDir);
   logSweepSummary(stats);
+  return { items_processed: stats.postgres.removed + stats.generic.removed };
 }
 
 export function register(scheduler: Scheduler): void {
@@ -263,6 +277,7 @@ export function register(scheduler: Scheduler): void {
     run: async () => {
       const stats = await reconcileBaseDir(os.tmpdir());
       logSweepSummary(stats);
+      return { items_processed: stats.postgres.removed + stats.generic.removed };
     },
   });
 }
