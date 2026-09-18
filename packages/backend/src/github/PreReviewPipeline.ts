@@ -37,7 +37,7 @@ import {
   matchesTransientOutputPattern,
 } from '../session/analyzeGating';
 import { validateAndRepairGitConfig } from '../orchestration/gitConfigIntegrity';
-import { runVerifyAsGate } from '../orchestration/verifyRunner';
+import { runVerifyAsGate, tailOfLog } from '../orchestration/verifyRunner';
 import {
   buildScopedEnv,
   checkToolchainVersions,
@@ -56,7 +56,7 @@ import type { SessionManager } from '../session/SessionManager';
 import type { GitHubClient } from './GitHubClient';
 import type { ReviewJob, FlakeRecoveryOutcome } from './types';
 import type { ProjectConfig } from '../config';
-import type { PauseReason } from '../db/types';
+import type { PauseReason, StructuredTestResult } from '../db/types';
 import { parsePauseReason } from '../db/pauseReason';
 
 interface GateFailureDetail {
@@ -319,42 +319,139 @@ export class PreReviewPipeline {
       skipIf: (ctx) => !ctx.worktreePath,
       run: async (ctx) => {
         const config = loadOrchestratorConfig(ctx.project.projectDir);
-        const result = await runVerifyAsGate(
-          ctx.worktreePath,
-          config.verify,
-          config.test_report_glob,
-          {
-            cacheEnv: config.cache_env,
-            expectedToolVersions: config.expected_tool_versions,
+
+        // Run through the test lane — content-hash cached, bounded by the
+        // project's concurrency semaphore, durably recorded in
+        // test_request_runs (run_kind 'verify') — rather than the old
+        // unbounded/uncached inline execution runVerifyAsGate performed.
+        // Falls back to runVerifyAsGate only when the content hash itself
+        // couldn't be computed (e.g. a git error against this worktree),
+        // matching buildTestsStage's own fallback: verify must still run
+        // against an unchanged tree rather than being silently skipped.
+        interface NormalizedVerifyOutcome {
+          passed: boolean;
+          failedCommand?: string;
+          truncatedOutput: string;
+          isToolInfraFailure?: boolean;
+          toolFailureReason?: string;
+          isTimeoutInfraFailure?: boolean;
+          structuredResult: StructuredTestResult | null;
+        }
+
+        let contentHash: string | null = null;
+        let outcome: NormalizedVerifyOutcome | undefined;
+        // A superseded result means this run was withdrawn before it ever
+        // executed (a newer request, or a PR merge/close/push, superseded it
+        // on the same worktree — see testRequestLane.ts's supersession).
+        // That's never a verify failure: re-hash the (by definition
+        // since-moved) tree and re-admit once more, mirroring
+        // buildTestsStage's own retry — never report a gate failure for a
+        // run that never produced a verdict.
+        for (let attempt = 0; attempt < 2; attempt++) {
+          contentHash = await computeWholeTreeContentHash(ctx.worktreePath);
+          if (!contentHash) break;
+
+          const laneResult = await this.runThroughTestLane(ctx, {
+            projectId: ctx.project.id,
+            contentHash,
+            worktreePath: ctx.worktreePath,
+            commands: config.verify,
             timeoutSec: config.test_timeout_sec,
             maxRssMb: config.test_max_rss_mb,
-          },
-        );
-        if (result.isToolInfraFailure) {
+            sessionId: null,
+            runOrigin: 'pr_pipeline',
+            producer: 'pr_gate',
+            runKind: 'verify',
+            failFast: true,
+            env: buildScopedEnv(ctx.worktreePath, config.cache_env),
+            expectedToolVersions: config.expected_tool_versions,
+          });
+          if (laneResult.superseded) {
+            logger.info(
+              `[PreReviewPipeline] verify run for PR #${ctx.prNumber} was superseded — re-hashing and re-admitting once`,
+            );
+            continue;
+          }
+          const run = getTestRequestRunById(laneResult.runId);
+          let structuredResult: StructuredTestResult | null = null;
+          if (run?.structured_result) {
+            try {
+              structuredResult = JSON.parse(
+                run.structured_result,
+              ) as StructuredTestResult;
+            } catch {
+              structuredResult = null;
+            }
+          }
+          outcome = {
+            passed: laneResult.passed,
+            failedCommand: laneResult.failedCommand,
+            truncatedOutput: tailOfLog(laneResult.output),
+            isToolInfraFailure: laneResult.isToolInfraFailure,
+            toolFailureReason: laneResult.toolFailureReason,
+            isTimeoutInfraFailure: laneResult.timedOut,
+            structuredResult,
+          };
+          break;
+        }
+        if (!outcome && contentHash) {
+          // Both attempts were superseded — extremely unlikely (would need
+          // back-to-back withdrawals), but never silently pass a gate stage
+          // with no verdict. Treat as a transient infra hiccup rather than a
+          // verify failure.
           return {
-            summary: result.toolFailureReason ?? 'toolchain version mismatch',
-            isToolInfraFailure: true,
-            toolFailureReason: result.toolFailureReason,
+            summary: 'verify run was repeatedly superseded — will retry',
+            isTimeoutInfraFailure: true,
           };
         }
-        if (result.isTimeoutInfraFailure) {
+        if (!outcome) {
+          const gateResult = await runVerifyAsGate(
+            ctx.worktreePath,
+            config.verify,
+            config.test_report_glob,
+            {
+              cacheEnv: config.cache_env,
+              expectedToolVersions: config.expected_tool_versions,
+              timeoutSec: config.test_timeout_sec,
+              maxRssMb: config.test_max_rss_mb,
+            },
+          );
+          outcome = {
+            passed: gateResult.passed,
+            failedCommand: gateResult.failedCommand,
+            truncatedOutput: gateResult.truncatedOutput ?? '',
+            isToolInfraFailure: gateResult.isToolInfraFailure,
+            toolFailureReason: gateResult.toolFailureReason,
+            isTimeoutInfraFailure: gateResult.isTimeoutInfraFailure,
+            structuredResult: gateResult.structuredResult ?? null,
+          };
+        }
+
+        if (outcome.isToolInfraFailure) {
           return {
-            failedCommand: result.failedCommand,
-            truncatedOutput: result.truncatedOutput,
-            summary: result.failedCommand
-              ? `verify timed out: ${result.failedCommand}`
+            summary: outcome.toolFailureReason ?? 'toolchain version mismatch',
+            isToolInfraFailure: true,
+            toolFailureReason: outcome.toolFailureReason,
+          };
+        }
+        if (outcome.isTimeoutInfraFailure) {
+          return {
+            failedCommand: outcome.failedCommand,
+            truncatedOutput: outcome.truncatedOutput,
+            summary: outcome.failedCommand
+              ? `verify timed out: ${outcome.failedCommand}`
               : 'verify timed out',
             isTimeoutInfraFailure: true,
           };
         }
-        if (!result.passed) {
+        if (!outcome.passed) {
           let filtered: Awaited<
             ReturnType<typeof filterVerifyFailureByBaseHealth>
           > = null;
           try {
             filtered = await filterVerifyFailureByBaseHealth(
               ctx.project,
-              result.structuredResult,
+              outcome.structuredResult,
             );
           } catch (err) {
             logger.warn(
@@ -373,16 +470,16 @@ export class PreReviewPipeline {
               return null;
             }
             return {
-              failedCommand: result.failedCommand,
+              failedCommand: outcome.failedCommand,
               truncatedOutput: digest,
               summary: `verify failed: ${filtered.remainingTests.length} non-base-attributable failure(s)`,
             };
           }
           return {
-            failedCommand: result.failedCommand,
-            truncatedOutput: result.truncatedOutput,
-            summary: result.failedCommand
-              ? `verify failed: ${result.failedCommand}`
+            failedCommand: outcome.failedCommand,
+            truncatedOutput: outcome.truncatedOutput,
+            summary: outcome.failedCommand
+              ? `verify failed: ${outcome.failedCommand}`
               : 'verify failed',
           };
         }
@@ -602,7 +699,7 @@ export class PreReviewPipeline {
           }
 
           result = contentHash
-            ? await this.runTestsStageThroughLane(ctx, {
+            ? await this.runThroughTestLane(ctx, {
                 projectId: ctx.project.id,
                 contentHash,
                 worktreePath: ctx.worktreePath,
@@ -653,18 +750,18 @@ export class PreReviewPipeline {
   }
 
   /**
-   * Runs the tests stage's lane request through admitTestRequest directly
-   * (rather than the runProjectTestRequest convenience wrapper) so the
-   * admitted runId is available the moment admission happens — before the
-   * run itself starts, let alone finishes. Broadcasts pr_gate_lane_run_admitted
-   * immediately so ReviewOrchestrator's stall detector can record it against
-   * this PR's in-flight entry (see inFlightLaneRunIds there) and skip
-   * force-clearing the slot while this run is still queued behind the
-   * project's test lane semaphore — queue wait is never stall time. Broadcasts
-   * pr_gate_lane_run_settled once the run resolves so that record is cleared
-   * again regardless of outcome.
+   * Runs a gate/record stage's lane request (tests, verify) through
+   * admitTestRequest directly (rather than the runProjectTestRequest
+   * convenience wrapper) so the admitted runId is available the moment
+   * admission happens — before the run itself starts, let alone finishes.
+   * Broadcasts pr_gate_lane_run_admitted immediately so ReviewOrchestrator's
+   * stall detector can record it against this PR's in-flight entry (see
+   * inFlightLaneRunIds there) and skip force-clearing the slot while this
+   * run is still queued behind the project's test lane semaphore — queue
+   * wait is never stall time. Broadcasts pr_gate_lane_run_settled once the
+   * run resolves so that record is cleared again regardless of outcome.
    */
-  private async runTestsStageThroughLane(
+  private async runThroughTestLane(
     ctx: StageContext,
     spec: TestRequestRunSpec,
   ): Promise<TestRequestRunResult> {

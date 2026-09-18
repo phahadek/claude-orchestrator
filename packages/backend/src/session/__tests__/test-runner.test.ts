@@ -416,6 +416,7 @@ describe('runTestCommands — fail-fast', () => {
     expect(callCount).toBe(1);
     expect(result.passed).toBe(false);
     expect(result.output).not.toContain('cmd2');
+    expect(result.failedCommand).toBe('cmd1');
   });
 
   it('runs all commands when failFast is false', async () => {
@@ -437,6 +438,10 @@ describe('runTestCommands — fail-fast', () => {
 
     expect(callCount).toBe(2);
     expect(result.passed).toBe(false);
+    // failedCommand names the first failing command even when every
+    // subsequent one still runs — it is never overwritten by a later
+    // failure.
+    expect(result.failedCommand).toBe('cmd1');
   });
 
   it('stops on timeout when failFast is true', async () => {

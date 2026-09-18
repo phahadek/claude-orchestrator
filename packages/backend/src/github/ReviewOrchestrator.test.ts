@@ -5096,7 +5096,7 @@ describe('ReviewOrchestrator — stall detector', () => {
       expect((orch as any).running).toBe(1);
 
       // Record the admitted lane run against PR 1's in-flight entry, the
-      // way PreReviewPipeline.runTestsStageThroughLane's broadcast does.
+      // way PreReviewPipeline.runThroughTestLane's broadcast does.
       sm.emit('message', {
         type: 'pr_gate_lane_run_admitted',
         prNumber: 1,

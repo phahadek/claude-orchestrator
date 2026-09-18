@@ -82,9 +82,44 @@ vi.mock('../../orchestration/testRequestLane', () => ({
   admitTestRequest: (...args: unknown[]) => mockAdmitTestRequest(...args),
 }));
 
+/**
+ * The verify stage (and the tests stage) both go through
+ * PreReviewPipeline.runThroughTestLane, i.e. admitTestRequest directly, not
+ * the runProjectTestRequest wrapper — so a test that wants to control what
+ * the lane hands back sets this admission shape, not a bare
+ * TestCommandResult. Sets mockAdmitTestRequest unconditionally (every call,
+ * any spec) — use only where a test doesn't also need the tests stage's own
+ * lane call to behave differently (see the runKind-discriminated
+ * .mockImplementation calls in the "tests record stage" describe block for
+ * that case).
+ */
+function mockLaneResult(result: {
+  passed: boolean;
+  output: string;
+  failedCommand?: string;
+  timedOut?: boolean;
+  isToolInfraFailure?: boolean;
+  toolFailureReason?: string;
+}): void {
+  mockAdmitTestRequest.mockReturnValue({
+    runId: 'run-enqueued',
+    status: 'running',
+    position: 0,
+    queueDepth: 0,
+    reused: false,
+    unchangedReplay: false,
+    result: Promise.resolve(result),
+  });
+}
+
 const mockRunVerifyAsGate = vi.fn().mockResolvedValue({ passed: true });
 vi.mock('../../orchestration/verifyRunner', () => ({
   runVerifyAsGate: (...args: unknown[]) => mockRunVerifyAsGate(...args),
+  // Real (pure, side-effect-free) implementation — buildVerifyStage's lane
+  // path calls this unconditionally to compute truncatedOutput, so it must
+  // behave like the genuine tail-of-log helper rather than being undefined.
+  tailOfLog: (output: string, chars = 750) =>
+    output.length > chars ? output.slice(output.length - chars) : output,
 }));
 
 const mockFilterBaseAttributableFailuresForF2Gate = vi.fn().mockResolvedValue({
@@ -244,6 +279,20 @@ beforeEach(() => {
   });
   mockRunTestCommands.mockResolvedValue({ passed: true, output: '' });
   mockRunProjectTestRequest.mockResolvedValue({ passed: true, output: '' });
+  // vi.clearAllMocks() (above) clears call history but not a mock's
+  // configured implementation/return value — a prior test's
+  // .mockImplementation()/.mockReturnValue() on this mock would otherwise
+  // leak into the next test. Reset to the harmless "always passes"
+  // admission shape every test; individual tests override as needed.
+  mockAdmitTestRequest.mockReturnValue({
+    runId: 'run-enqueued',
+    status: 'running',
+    position: 0,
+    queueDepth: 0,
+    reused: false,
+    unchangedReplay: false,
+    result: Promise.resolve({ passed: true, output: '' }),
+  });
   mockGetLatestTestRequestRun.mockReturnValue(undefined);
   mockGetTestRequestRunById.mockReturnValue(undefined);
   mockHasAnalyzeResultForSha.mockReturnValue(false);
@@ -552,14 +601,14 @@ describe('PreReviewPipeline — autofix no-diff retry short-circuit', () => {
       summary: 'fixed',
       commitSha: 'deadbeef',
     });
-    mockRunVerifyAsGate.mockResolvedValue({ passed: true });
+    mockLaneResult({ passed: true, output: '' });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 
     const result = await pipeline.run(makeJob(), makeProject());
 
     expect(result.passed).toBe(true);
-    expect(mockRunVerifyAsGate).toHaveBeenCalledOnce();
+    expect(mockAdmitTestRequest).toHaveBeenCalledOnce();
     expect(sm.emit).toHaveBeenCalledWith(
       'message',
       expect.objectContaining({
@@ -812,14 +861,33 @@ describe('PreReviewPipeline — verify gate', () => {
 
     await pipeline.run(makeJob(), makeProject());
 
+    expect(mockAdmitTestRequest).not.toHaveBeenCalled();
+    expect(mockRunVerifyAsGate).not.toHaveBeenCalled();
+  });
+
+  it('runs verify through the test lane, with run_kind verify / producer pr_gate / run_origin pr_pipeline', async () => {
+    mockLaneResult({ passed: true, output: '' });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    await pipeline.run(makeJob(), makeProject());
+
+    expect(mockAdmitTestRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runKind: 'verify',
+        producer: 'pr_gate',
+        runOrigin: 'pr_pipeline',
+        failFast: true,
+      }),
+    );
     expect(mockRunVerifyAsGate).not.toHaveBeenCalled();
   });
 
   it('gates on verify failure: canonical 5-step', async () => {
-    mockRunVerifyAsGate.mockResolvedValue({
+    mockLaneResult({
       passed: false,
+      output: 'type error',
       failedCommand: 'tsc',
-      truncatedOutput: 'type error',
     });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
@@ -867,7 +935,7 @@ describe('PreReviewPipeline — verify gate', () => {
   });
 
   it('passes when verify succeeds', async () => {
-    mockRunVerifyAsGate.mockResolvedValue({ passed: true });
+    mockLaneResult({ passed: true, output: '' });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 
@@ -897,11 +965,13 @@ describe('PreReviewPipeline — verify gate', () => {
       totals: { passed: 6686, failed: 4, skipped: 0, errors: 0 },
       durationMsTotal: 1000,
     };
-    mockRunVerifyAsGate.mockResolvedValue({
+    mockLaneResult({
       passed: false,
       failedCommand: 'pytest',
-      truncatedOutput: '4 failed, 6686 passed',
-      structuredResult,
+      output: '4 failed, 6686 passed',
+    });
+    mockGetTestRequestRunById.mockReturnValue({
+      structured_result: JSON.stringify(structuredResult),
     });
     mockFilterVerifyFailureByBaseHealth.mockResolvedValue({
       outcome: 'filtered_pass',
@@ -946,11 +1016,13 @@ describe('PreReviewPipeline — verify gate', () => {
       totals: { passed: 10, failed: 2, skipped: 0, errors: 0 },
       durationMsTotal: 1000,
     };
-    mockRunVerifyAsGate.mockResolvedValue({
+    mockLaneResult({
       passed: false,
       failedCommand: 'pytest',
-      truncatedOutput: '2 failed',
-      structuredResult,
+      output: '2 failed',
+    });
+    mockGetTestRequestRunById.mockReturnValue({
+      structured_result: JSON.stringify(structuredResult),
     });
     mockFilterVerifyFailureByBaseHealth.mockResolvedValue({
       outcome: 'filtered_partial',
@@ -985,12 +1057,12 @@ describe('PreReviewPipeline — verify gate', () => {
   });
 
   it('leaves verify failure unfiltered when the failing command produced no structured report', async () => {
-    mockRunVerifyAsGate.mockResolvedValue({
+    mockLaneResult({
       passed: false,
       failedCommand: 'tsc',
-      truncatedOutput: 'type error',
-      structuredResult: null,
+      output: 'type error',
     });
+    mockGetTestRequestRunById.mockReturnValue({ structured_result: null });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 
@@ -1021,11 +1093,13 @@ describe('PreReviewPipeline — verify gate', () => {
       totals: { passed: 5, failed: 1, skipped: 0, errors: 0 },
       durationMsTotal: 500,
     };
-    mockRunVerifyAsGate.mockResolvedValue({
+    mockLaneResult({
       passed: false,
       failedCommand: 'pytest',
-      truncatedOutput: '1 failed',
-      structuredResult,
+      output: '1 failed',
+    });
+    mockGetTestRequestRunById.mockReturnValue({
+      structured_result: JSON.stringify(structuredResult),
     });
     // filterVerifyFailureByBaseHealth returns 'unfiltered' when the base
     // probe outcome is unknown/inconclusive — fail closed, same as today.
@@ -1430,18 +1504,24 @@ describe('PreReviewPipeline — tests record stage (non-blocking)', () => {
   });
 
   it('records test result and continues to awaiting_review even when tests fail', async () => {
-    mockAdmitTestRequest.mockReturnValue({
+    // config.verify is [] in this describe block's beforeEach, but the
+    // verify stage still calls admitTestRequest (via runThroughTestLane)
+    // with an empty commands array (same as it always harmlessly did
+    // against runVerifyAsGate) — distinguish that call from the tests
+    // stage's own via runKind, since both land on this same mocked
+    // function now that both stages go through admitTestRequest directly.
+    mockAdmitTestRequest.mockImplementation((spec: { runKind?: string }) => ({
       runId: 'run-enqueued',
       status: 'running',
       position: 0,
       queueDepth: 0,
       reused: false,
       unchangedReplay: false,
-      result: Promise.resolve({
-        passed: false,
-        output: 'test failures',
-      }),
-    });
+      result:
+        spec.runKind === 'verify'
+          ? Promise.resolve({ passed: true, output: '' })
+          : Promise.resolve({ passed: false, output: 'test failures' }),
+    }));
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 
@@ -1462,18 +1542,18 @@ describe('PreReviewPipeline — tests record stage (non-blocking)', () => {
   });
 
   it('does not call setPreReviewStage(blocked_tests) — tests is non-blocking', async () => {
-    mockAdmitTestRequest.mockReturnValue({
+    mockAdmitTestRequest.mockImplementation((spec: { runKind?: string }) => ({
       runId: 'run-enqueued',
       status: 'running',
       position: 0,
       queueDepth: 0,
       reused: false,
       unchangedReplay: false,
-      result: Promise.resolve({
-        passed: false,
-        output: 'FAIL',
-      }),
-    });
+      result:
+        spec.runKind === 'verify'
+          ? Promise.resolve({ passed: true, output: '' })
+          : Promise.resolve({ passed: false, output: 'FAIL' }),
+    }));
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 
@@ -1503,7 +1583,17 @@ describe('PreReviewPipeline — tests record stage (non-blocking)', () => {
     await pipeline.run(makeJob(), makeProject());
 
     expect(mockRunTestCommands).not.toHaveBeenCalled();
-    expect(mockAdmitTestRequest).not.toHaveBeenCalled();
+    // The tests stage's own content-cache check (getLatestTestRequestRun,
+    // checked directly rather than through the lane's own settled-run
+    // guard, which this unit test doesn't exercise since admitTestRequest
+    // is mocked) short-circuits before ever calling the lane for the
+    // 'full' test commands. The verify stage (config.verify: []) still
+    // calls the lane with an empty commands array, same as it always
+    // harmlessly did against runVerifyAsGate, so the assertion is scoped to
+    // the tests stage's own commands rather than "never called at all".
+    expect(mockAdmitTestRequest).not.toHaveBeenCalledWith(
+      expect.objectContaining({ commands: ['npm test'] }),
+    );
   });
 
   it('skips tests (content-cache hit) for a settled passed row in the post-sweep shape (structured_result nulled by the extraction drain, test_report_acquisition_attempted=1)', async () => {
@@ -1549,7 +1639,7 @@ describe('PreReviewPipeline — stage transition sequence', () => {
   });
 
   it('emits pipeline_stage_entered when verify stage runs', async () => {
-    mockRunVerifyAsGate.mockResolvedValue({ passed: true });
+    mockLaneResult({ passed: true, output: '' });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 
@@ -1572,10 +1662,10 @@ describe('PreReviewPipeline — stage transition sequence', () => {
   });
 
   it('emits pipeline_stage_failed and audit event on gate failure', async () => {
-    mockRunVerifyAsGate.mockResolvedValue({
+    mockLaneResult({
       passed: false,
       failedCommand: 'tsc',
-      truncatedOutput: 'error',
+      output: 'error',
     });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
@@ -1600,7 +1690,7 @@ describe('PreReviewPipeline — stage transition sequence', () => {
 
 describe('PreReviewPipeline — setPreReviewStage transitions', () => {
   it('sets running stage before each active stage', async () => {
-    mockRunVerifyAsGate.mockResolvedValue({ passed: true });
+    mockLaneResult({ passed: true, output: '' });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 
@@ -1619,9 +1709,10 @@ describe('PreReviewPipeline — setPreReviewStage transitions', () => {
   });
 
   it('sets blocked_verify on verify failure, not awaiting_review', async () => {
-    mockRunVerifyAsGate.mockResolvedValue({
+    mockLaneResult({
       passed: false,
       failedCommand: 'tsc',
+      output: '',
     });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);

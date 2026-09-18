@@ -3399,6 +3399,18 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
+  // failed_command: the first command (from a fail-fast run_kind='verify'
+  // run's `commands` list) that exited non-zero — lets a settled-run replay
+  // (see testRequestLane.ts's settled-run guard) reconstruct the same
+  // GateFailureDetail.failedCommand a fresh execution would have produced,
+  // without re-running the tree. NULL for a passing run, and for every row
+  // predating this column.
+  try {
+    target.exec(`ALTER TABLE test_request_runs ADD COLUMN failed_command TEXT`);
+  } catch {
+    /* already exists */
+  }
+
   // last_signalled_head_sha: durable counterpart to AgentSession's
   // in-memory lastSignalledHeadSha instance field — a resumed session
   // constructs a fresh AgentSession with that field null, so without a

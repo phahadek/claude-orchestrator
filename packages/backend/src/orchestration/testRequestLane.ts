@@ -41,11 +41,15 @@ import {
   type TestCommandResult,
 } from '../session/test-runner';
 import { hasTestRequestAdmission } from './memoryAdmission';
-import { loadOrchestratorConfig } from '../session/orchestrator-config';
+import {
+  loadOrchestratorConfig,
+  type ToolVersionCheck,
+} from '../session/orchestrator-config';
 import {
   withCheckoutTestRunLock,
   sharesCheckoutNodeModules,
 } from './checkoutInstallLock';
+import { checkToolchainVersions, formatToolchainMismatch } from './gateEnv';
 import { typedGetSetting } from '../config/settings';
 import {
   insertTestRequestRun,
@@ -158,6 +162,31 @@ export interface TestRequestRunSpec {
    * marker-exclusion scoped run that has no base dependency.
    */
   baseSha?: string | null;
+  /**
+   * Stop running subsequent commands after the first failure — forwarded to
+   * runTestCommands, which otherwise always runs every declared command
+   * (see that function's own doc comment on why: a session/base-probe run
+   * wants a complete per-command failing set). A verify run wants the
+   * opposite — it fails fast, same as runVerifyAsGate did — so this
+   * defaults to false, preserving every existing caller's behavior, and only
+   * PreReviewPipeline's verify stage passes true.
+   */
+  failFast?: boolean;
+  /**
+   * Env to spawn each command with, instead of `process.env` — see
+   * gateEnv.ts's buildScopedEnv. Omitted (default) = today's
+   * inherited-environment behavior, unchanged.
+   */
+  env?: NodeJS.ProcessEnv;
+  /**
+   * Toolchain versions this run expects (see gateEnv.ts's
+   * checkToolchainVersions) — checked once, before any command runs, right
+   * after the semaphore permit is acquired. A mismatch completes the run as
+   * `failed` with failure_reason 'tool_infra_failure' and no command is ever
+   * spawned. Omitted/empty (default) skips the check entirely, unchanged
+   * from today's behavior.
+   */
+  expectedToolVersions?: ToolVersionCheck[];
 }
 
 /**
@@ -229,6 +258,7 @@ export interface TestRequestAdmission {
 }
 
 function failureReasonFor(result: TestCommandResult): TestRequestFailureReason {
+  if (result.isToolInfraFailure) return 'tool_infra_failure';
   if (result.spawnFailed) return 'execution_failed';
   // Checked ahead of timedOut/oomKilled: a surviving process means teardown
   // itself failed, which is the more actionable/alarming fact regardless of
@@ -600,6 +630,8 @@ export function admitTestRequest(
       output: settled.output,
       timedOut: settled.failure_reason === 'timeout',
       oomKilled: !!settled.oom_killed,
+      failedCommand: settled.failed_command ?? undefined,
+      isToolInfraFailure: settled.failure_reason === 'tool_infra_failure',
       runId: settled.id,
       joined: false,
       unchangedReplay: true,
@@ -811,6 +843,49 @@ async function executeTestRequestRun(
       requestedAt,
       startedAt,
     });
+    // Toolchain-version preflight, checked once before any command runs —
+    // mirrors runVerifyAsGate's own pre-execution check. A mismatch reflects
+    // the invoking host's toolchain, not the code under review, so it
+    // completes the run without ever spawning a command.
+    if (spec.expectedToolVersions && spec.expectedToolVersions.length > 0) {
+      const mismatch = await checkToolchainVersions(
+        spec.worktreePath,
+        spec.expectedToolVersions,
+      );
+      if (mismatch) {
+        const reason = formatToolchainMismatch(mismatch);
+        completeTestRequestRun(runId, 'failed', reason, 'tool_infra_failure');
+        clearSupersededStructuredResults(
+          spec.projectId,
+          spec.contentHash,
+          runId,
+        );
+        broadcastRunStatus({
+          runId,
+          projectId: spec.projectId,
+          contentHash: spec.contentHash,
+          status: 'failed-with-cause',
+          output: reason,
+          sessionId: spec.sessionId,
+          requestedAt,
+          startedAt,
+          finishedAt: Date.now(),
+        });
+        emitSettled({
+          projectId: spec.projectId,
+          contentHash: spec.contentHash,
+          runKind: spec.runKind ?? 'full',
+          state: 'failed',
+        });
+        return {
+          passed: false,
+          output: reason,
+          runId,
+          isToolInfraFailure: true,
+          toolFailureReason: reason,
+        };
+      }
+    }
     // Acquisition is attempted regardless of pass/fail — a failing test run
     // still writes its report file, and that's exactly the case structured
     // per-test detail matters most for. The glob is resolved here, from the
@@ -828,12 +903,14 @@ async function executeTestRequestRun(
     if (testReportGlob) {
       clearReportFiles(spec.worktreePath, testReportGlob);
     }
-    // The test.request lane never fails fast: every declared command runs
-    // regardless of an earlier one failing, so a base probe or session run
-    // always yields a complete per-command failing set. Each command is
-    // still bounded independently — timeoutSec applies per loop iteration
-    // inside runCommandWithTimeout — so this cannot push a run past its
-    // configured timeout, only make a run with an early failure run longer.
+    // Every ordinary test.request caller wants failFast: false — every
+    // declared command runs regardless of an earlier one failing, so a base
+    // probe or session run always yields a complete per-command failing set.
+    // A verify run (spec.failFast) wants the opposite, matching
+    // runVerifyAsGate's own fail-fast semantics. Each command is still
+    // bounded independently — timeoutSec applies per loop iteration inside
+    // runCommandWithTimeout — so this cannot push a run past its configured
+    // timeout, only make a run with an early failure run longer.
     const runCommands = () =>
       runTestCommands(
         spec.worktreePath,
@@ -844,7 +921,12 @@ async function executeTestRequestRun(
         // (see sessionCgroup.ts's spawnIntoTestRunCgroup) — reusing this
         // run's own durable id means a surviving process is traceable back
         // to this exact test_request_runs row.
-        { maxRssMb: spec.maxRssMb, failFast: false, runId },
+        {
+          maxRssMb: spec.maxRssMb,
+          failFast: spec.failFast ?? false,
+          runId,
+          env: spec.env,
+        },
       );
     // A worktree with no bootstrap_script has no node_modules of its own —
     // it resolves modules through the project checkout's, the same tree a
@@ -885,6 +967,7 @@ async function executeTestRequestRun(
       structuredResultJson,
       oomKilled,
       acquisitionAttempted,
+      result.passed ? null : (result.failedCommand ?? null),
     );
     clearSupersededStructuredResults(spec.projectId, spec.contentHash, runId);
     broadcastRunStatus({
@@ -926,6 +1009,7 @@ async function executeTestRequestRun(
       foreign_concurrent_run_count: foreignConcurrentRunCount,
       worktree_path: spec.worktreePath,
       superseded_by: null,
+      failed_command: result.passed ? null : (result.failedCommand ?? null),
     });
     return { ...result, runId };
   } catch (err) {
