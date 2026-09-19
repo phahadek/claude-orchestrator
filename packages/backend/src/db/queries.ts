@@ -9271,6 +9271,52 @@ export function completeTestRequestRun(
 }
 
 /**
+ * Mirrors a settled run's verdict onto a new row under a different run_kind,
+ * at the same (project_id, content_hash) — the write-side half of
+ * PreReviewPipeline.ts's cross-kind reuse (a passed verify run, whose
+ * command set is a superset of config.test, satisfies the tests stage too).
+ * Every existing getLatestTestRequestRun caller filters strictly by
+ * run_kind (see that function's own doc comment — several callers, notably
+ * PRMergeWatcher's F2 merge gate, predate run_kind and assume 'full'), so
+ * the reused verdict is written under the requested kind rather than
+ * widening any of those readers. Copies structured_result/output/state
+ * as-is rather than re-deriving them — the source run already proved the
+ * verdict this mirror exists to make visible under the new kind.
+ */
+export function mirrorTestRequestRunAsKind(
+  source: TestRequestRunRow,
+  newId: string,
+  newRunKind: TestRunKind,
+): void {
+  db.prepare(
+    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha, foreign_concurrent_run_count, worktree_path, superseded_by, failed_command)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+  ).run(
+    newId,
+    source.project_id,
+    source.content_hash,
+    source.session_id,
+    source.state,
+    source.output,
+    source.requested_at,
+    source.started_at,
+    source.finished_at,
+    source.failure_reason,
+    source.structured_result,
+    source.concurrent_run_count,
+    source.oom_killed,
+    source.test_report_acquisition_attempted,
+    source.run_origin,
+    source.producer,
+    newRunKind,
+    source.base_sha,
+    source.foreign_concurrent_run_count,
+    source.worktree_path,
+    source.failed_command,
+  );
+}
+
+/**
  * Overwrites just `state` on an already-completed run — used when the
  * base/flaky-attribution filter (baseAttributableFilter.ts) fully excuses a
  * raw failure (`filtered_pass`) after completeTestRequestRun already stored
