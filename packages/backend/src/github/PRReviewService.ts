@@ -538,6 +538,7 @@ function buildTestRunEvidenceSection(
   summary?: TestRunSummaryRow,
 ): string {
   if (!run || run.state === 'running' || run.state === 'queued') return '';
+  if (run.failure_reason === 'superseded') return '';
   const finishedAt = run.finished_at
     ? new Date(run.finished_at).toISOString()
     : '(unknown)';
