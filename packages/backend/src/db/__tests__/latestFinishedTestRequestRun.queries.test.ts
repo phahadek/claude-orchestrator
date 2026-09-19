@@ -95,13 +95,7 @@ describe('getLatestFinishedTestRequestRunForSession', () => {
   });
 
   it('skips a withdrawn (superseded) run and returns the earlier passed run', () => {
-    insertTestRequestRun(
-      'run-passed',
-      PROJECT_ID,
-      'hash-1',
-      SESSION_ID,
-      1000,
-    );
+    insertTestRequestRun('run-passed', PROJECT_ID, 'hash-1', SESSION_ID, 1000);
     completeTestRequestRun('run-passed', 'passed', 'ok');
 
     insertTestRequestRun(
