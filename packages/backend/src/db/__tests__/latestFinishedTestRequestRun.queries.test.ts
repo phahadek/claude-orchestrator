@@ -93,4 +93,67 @@ describe('getLatestFinishedTestRequestRunForSession', () => {
     );
     expect(finished).toBeUndefined();
   });
+
+  it('skips a withdrawn (superseded) run and returns the earlier passed run', () => {
+    insertTestRequestRun('run-passed', PROJECT_ID, 'hash-1', SESSION_ID, 1000);
+    completeTestRequestRun('run-passed', 'passed', 'ok');
+
+    insertTestRequestRun(
+      'run-superseded',
+      PROJECT_ID,
+      'hash-2',
+      SESSION_ID,
+      2000,
+    );
+    completeTestRequestRun('run-superseded', 'failed', '', 'superseded');
+
+    const finished = getLatestFinishedTestRequestRunForSession(
+      PROJECT_ID,
+      SESSION_ID,
+    );
+    expect(finished?.id).toBe('run-passed');
+  });
+
+  it('returns undefined when the only finished run is superseded', () => {
+    insertTestRequestRun(
+      'run-superseded-only',
+      PROJECT_ID,
+      'hash-1',
+      SESSION_ID,
+      1000,
+    );
+    completeTestRequestRun('run-superseded-only', 'failed', '', 'superseded');
+
+    const finished = getLatestFinishedTestRequestRunForSession(
+      PROJECT_ID,
+      SESSION_ID,
+    );
+    expect(finished).toBeUndefined();
+  });
+
+  it('still returns a genuinely failed run even when it is newer than a passed run', () => {
+    insertTestRequestRun(
+      'run-passed-2',
+      PROJECT_ID,
+      'hash-1',
+      SESSION_ID,
+      1000,
+    );
+    completeTestRequestRun('run-passed-2', 'passed', 'ok');
+
+    insertTestRequestRun(
+      'run-failed-generic',
+      PROJECT_ID,
+      'hash-2',
+      SESSION_ID,
+      2000,
+    );
+    completeTestRequestRun('run-failed-generic', 'failed', '', 'generic');
+
+    const finished = getLatestFinishedTestRequestRunForSession(
+      PROJECT_ID,
+      SESSION_ID,
+    );
+    expect(finished?.id).toBe('run-failed-generic');
+  });
 });

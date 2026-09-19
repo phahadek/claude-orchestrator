@@ -9688,6 +9688,7 @@ export function getLatestFinishedTestRequestRunForSession(
     `SELECT id
      FROM test_request_runs
      WHERE project_id = @project_id AND session_id = @session_id AND state NOT IN ('running', 'queued')
+       AND (failure_reason IS NULL OR failure_reason != 'superseded')
      ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
   );
   const finished = _stmtLatestFinishedTestRequestRunIdForSession.get({
