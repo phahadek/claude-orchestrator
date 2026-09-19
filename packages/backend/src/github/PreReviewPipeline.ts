@@ -159,6 +159,7 @@ export class PreReviewPipeline {
         let success = true;
         let summary = 'no worktree available — autofix skipped';
         let noDiff = true;
+        let restoredPaths: string[] | undefined;
 
         if (ctx.worktreePath) {
           const autofixCfg = loadOrchestratorConfig(ctx.project.projectDir);
@@ -205,6 +206,7 @@ export class PreReviewPipeline {
             success = result.success;
             summary = result.summary;
             noDiff = !result.commitSha;
+            restoredPaths = result.restoredPaths;
 
             // When autofix commands exit 1 and leave violations they could not
             // fix automatically (e.g. ruff E501), route a nudge to the
@@ -288,13 +290,20 @@ export class PreReviewPipeline {
           repo: ctx.repo,
           success,
           summary,
+          restoredPaths,
         });
         recordEvent({
           event_type: 'autofix_complete',
           actor_type: 'system',
           project_id: ctx.project.id,
           task_id: ctx.job.taskId ?? null,
-          payload: { prNumber: ctx.prNumber, repo: ctx.repo, success, summary },
+          payload: {
+            prNumber: ctx.prNumber,
+            repo: ctx.repo,
+            success,
+            summary,
+            restoredPaths,
+          },
         });
 
         ctx.autofixNoDiff = noDiff;

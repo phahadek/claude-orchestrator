@@ -647,6 +647,7 @@ export class ReviewOrchestrator {
 
     let autofixSuccess = true;
     let autofixSummary = 'no worktree available — autofix skipped';
+    let autofixRestoredPaths: string[] | undefined;
 
     if (worktreePath) {
       try {
@@ -665,6 +666,7 @@ export class ReviewOrchestrator {
         );
         autofixSuccess = result.success;
         autofixSummary = result.summary;
+        autofixRestoredPaths = result.restoredPaths;
         if (result.commitSha) {
           addAutofixSha(prNumber, repo, result.commitSha);
           if (prRow?.session_id && result.touchedFiles?.length) {
@@ -711,6 +713,7 @@ export class ReviewOrchestrator {
       repo,
       success: autofixSuccess,
       summary: autofixSummary,
+      restoredPaths: autofixRestoredPaths,
     });
 
     if (!autofixSuccess) {

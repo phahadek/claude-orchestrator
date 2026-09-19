@@ -437,6 +437,7 @@ export type ServerMessage =
       repo: string;
       success: boolean;
       summary?: string;
+      restoredPaths?: string[];
     }
   | { type: 'review_started'; prNumber: number; sessionId: string }
   | {
