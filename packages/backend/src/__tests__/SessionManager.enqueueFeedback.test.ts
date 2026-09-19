@@ -185,12 +185,7 @@ vi.mock('../db/queries', () => ({
     },
   ),
   enqueueFeedbackItemDropped: vi.fn(
-    (
-      sessionId: string,
-      source: string,
-      payload: string,
-      dedupeKey: string,
-    ) => {
+    (sessionId: string, source: string, payload: string, dedupeKey: string) => {
       const id = nextInboxId++;
       droppedInboxIds.add(id);
       if (source === 'ai-reviewer') {
@@ -793,9 +788,7 @@ describe('SessionManager.enqueueFeedback(): holding while awaiting a lane result
     );
 
     expect(sendSpy).not.toHaveBeenCalled();
-    expect(queries.listUndeliveredInboxItems('sess-lane-hold')).toHaveLength(
-      1,
-    );
+    expect(queries.listUndeliveredInboxItems('sess-lane-hold')).toHaveLength(1);
     expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
       expect.objectContaining({
         event_type: 'feedback_delivery_deferred',
@@ -847,9 +840,9 @@ describe('SessionManager.enqueueFeedback(): holding while awaiting a lane result
     expect(combined).toContain('Needs changes');
     expect(combined).toContain('"passed":true');
     expect(queries.markInboxItemsDelivered).toHaveBeenCalledTimes(1);
-    expect(
-      queries.listUndeliveredInboxItems('sess-lane-hold-2'),
-    ).toHaveLength(0);
+    expect(queries.listUndeliveredInboxItems('sess-lane-hold-2')).toHaveLength(
+      0,
+    );
   });
 
   it('idle session with no queued/running lane run: an ai-reviewer item is resumed immediately', async () => {

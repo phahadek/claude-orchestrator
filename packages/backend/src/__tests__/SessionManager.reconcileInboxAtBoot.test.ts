@@ -319,9 +319,7 @@ describe('reconcileInboxAtBoot(): items held for a lane result at restart', () =
       { persistTextOnDefer: false },
     );
     expect(queries.markInboxItemsDelivered).toHaveBeenCalledWith([20]);
-    expect(queries.listUndeliveredInboxItems('sess-was-held')).toHaveLength(
-      0,
-    );
+    expect(queries.listUndeliveredInboxItems('sess-was-held')).toHaveLength(0);
   });
 });
 

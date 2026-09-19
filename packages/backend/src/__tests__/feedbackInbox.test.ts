@@ -234,9 +234,7 @@ describe('feedbackInbox queries', () => {
       'Needs changes@sha-1',
     );
 
-    expect(listUndeliveredInboxItems('sess-dropped-at-insert')).toHaveLength(
-      0,
-    );
+    expect(listUndeliveredInboxItems('sess-dropped-at-insert')).toHaveLength(0);
     expect(countUndeliveredInboxItems('sess-dropped-at-insert')).toBe(0);
 
     const row = db
