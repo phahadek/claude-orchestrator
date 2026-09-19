@@ -693,7 +693,9 @@ describe('PRReviewService.buildPrompt()', () => {
       undefined,
     );
 
-    expect(prompt).not.toContain('## Orchestrator-Verified Test Run');
+    expect(prompt).not.toContain(
+      "This is a real record from the orchestrator's own F2 test gate",
+    );
   });
 });
 
@@ -3083,7 +3085,6 @@ describe('PRReviewService.reReviewPR()', () => {
 
     const [, followUp] = (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mock
       .calls[0];
-    expect(followUp).not.toContain('## Orchestrator-Verified Test Run');
     expect(followUp).not.toContain(
       "This is a real record from the orchestrator's own F2 test gate",
     );
