@@ -377,6 +377,46 @@ export class ReviewOrchestrator {
       return false;
     }
 
+    // Scoped to the pr_opened path only: onSessionEnded's own needs_changes
+    // re-review request also lands here via enqueueReview with headSha
+    // resolved to the PR's current (unreviewed-since) head, and must still
+    // fire even without a head move (PR #668 regression) — it already has
+    // its own verdict/iteration-cap/in-flight gating above this call.
+    if (
+      trigger === 'onPrOpened' &&
+      prRow &&
+      job.headSha != null &&
+      prRow.last_reviewed_sha === job.headSha &&
+      prRow.review_result != null
+    ) {
+      let previousVerdict: string | undefined;
+      try {
+        previousVerdict = (
+          JSON.parse(prRow.review_result) as { verdict?: string }
+        ).verdict;
+      } catch {
+        previousVerdict = undefined;
+      }
+      logger.info(
+        `[ReviewOrchestrator] admitJob: PR #${job.prNumber} (${job.repo}) head ${job.headSha} already reviewed (verdict=${previousVerdict ?? 'unknown'}) — refusing admission`,
+      );
+      recordEvent({
+        event_type: 'review_job_coalesced',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: null,
+        task_id: job.taskId || null,
+        payload: {
+          pr_number: job.prNumber,
+          repo: job.repo,
+          reason: 'head_already_reviewed',
+          head_sha: job.headSha,
+          previous_verdict: previousVerdict ?? null,
+        },
+      });
+      return false;
+    }
+
     const alreadyQueued = this.queue.some(
       (q) =>
         this.prKey(q) === key &&

@@ -1,6 +1,7 @@
 import {
   upsertPullRequest,
   getPRByNumber,
+  getPRBySessionId,
   getProjectRowById,
   getSession,
   insertSessionAudit,
@@ -194,6 +195,18 @@ export async function recoverSession(
           const repo = prMatch[1];
           const prNumber = parseInt(prMatch[2], 10);
           existingPrState = getPRByNumber(prNumber, repo)?.state;
+          // A resumed session constructs a fresh AgentSession whose
+          // prDetectedLive starts false even though pull_requests already
+          // has a row for this session's PR — the earlier session instance
+          // (or handlePRDetected in this same run) already emitted
+          // pr_opened for it. Re-detecting it here on clean exit must not
+          // re-emit pr_opened — mirrors the guard in
+          // AgentSession.handlePRDetected verbatim.
+          const existingPRBySession = getPRBySessionId(sessionId);
+          const alreadyTracked =
+            !!existingPRBySession &&
+            existingPRBySession.pr_number === prNumber &&
+            existingPRBySession.repo === repo;
           const now = new Date().toISOString();
           let headSha: string | null = null;
           let headBranch: string | null = null;
@@ -231,14 +244,30 @@ export async function recoverSession(
               head_sha: headSha,
               conflict_nudge_sha: null,
             });
-            // pr_opened emission is skipped for periodic scope or phantom URLs.
-            if (upserted && !prDetectedLive && scope !== 'periodic') {
+            // pr_opened emission is skipped for periodic scope, phantom
+            // URLs, or a PR row already tracked for this session (see
+            // alreadyTracked above).
+            if (
+              upserted &&
+              !prDetectedLive &&
+              scope !== 'periodic' &&
+              !alreadyTracked
+            ) {
               emitPrOpened({
                 prNumber,
                 repo,
                 taskId,
                 taskUrl,
                 contextUrl: projectContextUrl,
+              });
+            } else if (upserted && alreadyTracked && scope !== 'periodic') {
+              recordEvent({
+                event_type: 'pr_detected_again',
+                actor_type: 'ai',
+                actor_id: sessionId,
+                project_id: projectId || null,
+                task_id: taskId || null,
+                payload: { pr_number: prNumber, repo, pr_url: prUrl, scope },
               });
             }
           }
