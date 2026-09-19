@@ -100,15 +100,20 @@ beforeEach(() => {
  *  4: git commit --no-verify
  *  5: git rev-parse HEAD (sha after commit)
  *  6: git diff --name-only HEAD~1 HEAD (touchedFiles)
- *  7: git rev-parse --abbrev-ref HEAD (branch name)
- *  8: git push origin HEAD
- *  9: git fetch origin <branch>
- * 10: git reset --hard origin/<branch>
- * 11: git rev-parse HEAD (synced sha)
+ *  7: git status --porcelain (post-commit out-of-scope restore snapshot)
+ *  8: git rev-parse --abbrev-ref HEAD (branch name)
+ *  9: git push origin HEAD
+ * 10: git fetch origin <branch>
+ * 11: git reset --hard origin/<branch>
+ * 12: git rev-parse HEAD (synced sha)
  */
 function queueChangedFiles(stagedFile = 'src/foo.py') {
   spawnQueue.push({ exitCode: 1, stdout: '' }); // git show-ref --verify refs/remotes/origin/<base> (not found)
   spawnQueue.push({ exitCode: 0, stdout: `${stagedFile}\n` }); // git diff --name-only <base>...HEAD
+}
+
+function queuePreRunSnapshot() {
+  spawnQueue.push({ exitCode: 0, stdout: '' }); // git status --porcelain (pre-run dirty snapshot)
 }
 
 function queueGitSuccess(stagedFile = 'src/foo.py') {
@@ -120,6 +125,7 @@ function queueGitSuccess(stagedFile = 'src/foo.py') {
     { exitCode: 0, stdout: '' }, // git commit
     { exitCode: 0, stdout: 'deadbeef\n' }, // git rev-parse HEAD
     { exitCode: 0, stdout: `${stagedFile}\n` }, // git diff --name-only HEAD~1 HEAD
+    { exitCode: 0, stdout: '' }, // git status --porcelain (post-commit restore snapshot)
     { exitCode: 0, stdout: 'feature/test\n' }, // git rev-parse --abbrev-ref HEAD
     { exitCode: 0, stdout: '' }, // git push
     { exitCode: 0, stdout: '' }, // git fetch
@@ -133,6 +139,7 @@ function queueGitSuccess(stagedFile = 'src/foo.py') {
 describe('git commit --no-verify', () => {
   it('includes --no-verify so the target repo pre-commit hooks do not run', async () => {
     queueChangedFiles();
+    queuePreRunSnapshot();
     // Autofix command: succeeds (exit 0)
     spawnQueue.push({ exitCode: 0, stdout: 'fixed 1 file' });
     queueGitSuccess();
@@ -155,6 +162,7 @@ describe('unfixable violations (exit 1 with output)', () => {
     const violationOutput =
       'src/foo.py:42:89: E501 Line too long (92 > 88 characters)';
     queueChangedFiles();
+    queuePreRunSnapshot();
     // Autofix command exits 1 with violation output (e.g. ruff couldn't fix E501)
     spawnQueue.push({ exitCode: 1, stdout: violationOutput });
     queueGitSuccess();
@@ -173,6 +181,7 @@ describe('unfixable violations (exit 1 with output)', () => {
 
   it('omits unfixableViolations when exit-1 produces no output', async () => {
     queueChangedFiles();
+    queuePreRunSnapshot();
     // exit 1 with empty output → treated as fatal failure, added to
     // `failures`. The git commit/push flow still runs (the worktree is
     // still dirty), but the fatal failure keeps the final success flag
@@ -198,6 +207,7 @@ describe('unfixable violations (exit 1 with output)', () => {
 describe('fatal error (exit >= 2)', () => {
   it('returns success=false when a command exits 2 (e.g. ruff internal error)', async () => {
     queueChangedFiles();
+    queuePreRunSnapshot();
     spawnQueue.push({
       exitCode: 2,
       stdout: 'internal error: config parse failed',
@@ -211,6 +221,7 @@ describe('fatal error (exit >= 2)', () => {
     spawnQueue.push({ exitCode: 0 }); // git commit
     spawnQueue.push({ exitCode: 0, stdout: 'deadbeef\n' }); // rev-parse
     spawnQueue.push({ exitCode: 0, stdout: 'src/foo.py\n' }); // diff HEAD~1 HEAD
+    spawnQueue.push({ exitCode: 0, stdout: '' }); // git status --porcelain (post-commit restore snapshot)
     spawnQueue.push({ exitCode: 0, stdout: 'feature/test\n' }); // branch
     spawnQueue.push({ exitCode: 1 }); // git push fails → success=false
 
@@ -234,6 +245,7 @@ describe('banned-file-only stage', () => {
     vi.mocked(isHardBanned).mockReturnValue(true);
 
     queueChangedFiles('CLAUDE.md');
+    queuePreRunSnapshot();
     // Autofix command succeeds
     spawnQueue.push({ exitCode: 0, stdout: 'fixed CLAUDE.md' });
     // git status: dirty

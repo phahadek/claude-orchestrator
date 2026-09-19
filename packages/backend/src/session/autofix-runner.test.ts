@@ -31,7 +31,11 @@ async function setupTestRepo(): Promise<{
   await git(['config', 'core.autocrlf', 'false'], worktreeDir);
 
   fs.writeFileSync(path.join(worktreeDir, 'readme.txt'), 'hello\n');
-  await git(['add', 'readme.txt'], worktreeDir);
+  fs.writeFileSync(
+    path.join(worktreeDir, 'out_of_scope.txt'),
+    'pre-existing\n',
+  );
+  await git(['add', 'readme.txt', 'out_of_scope.txt'], worktreeDir);
   await git([...GIT_AUTHOR, 'commit', '-m', 'init'], worktreeDir);
   await git(['branch', '-M', 'feature/test'], worktreeDir);
 
@@ -76,6 +80,127 @@ describe('runAutofix()', () => {
         worktreeDir,
       );
       expect(commitMsg).toMatch(/\[skip ci\]$/);
+    } finally {
+      cleanup();
+    }
+  }, 15000);
+
+  it('restores an out-of-scope tracked file the formatter touched, while committing the in-scope one', async () => {
+    const { worktreeDir, cleanup } = await setupTestRepo();
+    try {
+      const beforeSha = await git(
+        ['rev-parse', 'HEAD:out_of_scope.txt'],
+        worktreeDir,
+      );
+      const autofixCmd =
+        `node -e "require('fs').writeFileSync('autofix_output.txt', 'reformatted'); ` +
+        `require('fs').writeFileSync('out_of_scope.txt', 'reformatted-out-of-scope')"`;
+
+      const result = await runAutofix(
+        worktreeDir,
+        worktreeDir,
+        [autofixCmd],
+        () => {},
+      );
+
+      expect(result.commitSha).toBeDefined();
+      const inScopeContent = fs.readFileSync(
+        path.join(worktreeDir, 'autofix_output.txt'),
+        'utf-8',
+      );
+      expect(inScopeContent).toBe('reformatted');
+
+      const outOfScopeContent = fs.readFileSync(
+        path.join(worktreeDir, 'out_of_scope.txt'),
+        'utf-8',
+      );
+      expect(outOfScopeContent).toBe('pre-existing\n');
+      const afterSha = await git(
+        ['rev-parse', 'HEAD:out_of_scope.txt'],
+        worktreeDir,
+      );
+      expect(afterSha).toBe(beforeSha);
+
+      expect(result.restoredPaths).toContain('out_of_scope.txt');
+
+      const status = await git(['status', '--porcelain'], worktreeDir);
+      expect(status).toBe('');
+    } finally {
+      cleanup();
+    }
+  }, 15000);
+
+  it('skips the commit and leaves a clean worktree when only out-of-scope files are touched', async () => {
+    const { worktreeDir, cleanup } = await setupTestRepo();
+    try {
+      const autofixCmd = `node -e "require('fs').writeFileSync('out_of_scope.txt', 'reformatted-out-of-scope')"`;
+
+      const result = await runAutofix(
+        worktreeDir,
+        worktreeDir,
+        [autofixCmd],
+        () => {},
+      );
+
+      expect(result.commitSha).toBeUndefined();
+      expect(result.summary).toMatch(/no in-scope changes staged/);
+      expect(result.restoredPaths).toContain('out_of_scope.txt');
+
+      const status = await git(['status', '--porcelain'], worktreeDir);
+      expect(status).toBe('');
+
+      const content = fs.readFileSync(
+        path.join(worktreeDir, 'out_of_scope.txt'),
+        'utf-8',
+      );
+      expect(content).toBe('pre-existing\n');
+    } finally {
+      cleanup();
+    }
+  }, 15000);
+
+  it('leaves a file the session had already modified before autofix ran untouched', async () => {
+    const { worktreeDir, cleanup } = await setupTestRepo();
+    try {
+      // Session's own in-flight, uncommitted change to an out-of-scope file —
+      // dirty at the pre-run snapshot, so autofix must not restore it even
+      // though the formatter also rewrites it.
+      fs.writeFileSync(
+        path.join(worktreeDir, 'out_of_scope.txt'),
+        'session-in-progress-edit\n',
+      );
+
+      const autofixCmd = `node -e "require('fs').writeFileSync('out_of_scope.txt', 'reformatted-out-of-scope')"`;
+
+      const result = await runAutofix(
+        worktreeDir,
+        worktreeDir,
+        [autofixCmd],
+        () => {},
+      );
+
+      expect(result.restoredPaths ?? []).not.toContain('out_of_scope.txt');
+      const content = fs.readFileSync(
+        path.join(worktreeDir, 'out_of_scope.txt'),
+        'utf-8',
+      );
+      expect(content).toBe('reformatted-out-of-scope');
+    } finally {
+      cleanup();
+    }
+  }, 15000);
+
+  it('produces the same whole-tree content hash before and after an out-of-scope-only autofix', async () => {
+    const { computeWholeTreeContentHash } = await import('./analyzeGating');
+    const { worktreeDir, cleanup } = await setupTestRepo();
+    try {
+      const beforeHash = await computeWholeTreeContentHash(worktreeDir);
+
+      const autofixCmd = `node -e "require('fs').writeFileSync('out_of_scope.txt', 'reformatted-out-of-scope')"`;
+      await runAutofix(worktreeDir, worktreeDir, [autofixCmd], () => {});
+
+      const afterHash = await computeWholeTreeContentHash(worktreeDir);
+      expect(afterHash).toBe(beforeHash);
     } finally {
       cleanup();
     }

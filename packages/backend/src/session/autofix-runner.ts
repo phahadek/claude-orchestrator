@@ -38,6 +38,12 @@ export interface AutofixResult {
   isToolInfraFailure?: boolean;
   /** Names the tool and the reason it could not run, for operator triage. */
   toolFailureReason?: string;
+  /**
+   * Out-of-scope paths the autofix commands modified but that were restored
+   * to their pre-run state (not staged/committed). Empty/absent when there
+   * was nothing to restore.
+   */
+  restoredPaths?: string[];
 }
 
 // Conservative: only patterns that unambiguously indicate the tool itself
@@ -151,6 +157,82 @@ function spawnShell(
 async function isWorktreeDirty(cwd: string): Promise<boolean> {
   const { stdout } = await spawnCmd('git', ['status', '--porcelain'], { cwd });
   return stdout.trim().length > 0;
+}
+
+/** Parses `git status --porcelain` output into the set of paths it reports as dirty. */
+function parsePorcelainPaths(porcelain: string): Set<string> {
+  const paths = new Set<string>();
+  for (const line of porcelain.split('\n')) {
+    if (!line) continue;
+    const entry = line.slice(3);
+    const arrowIdx = entry.indexOf(' -> ');
+    if (arrowIdx !== -1) {
+      paths.add(entry.slice(0, arrowIdx).trim());
+      paths.add(entry.slice(arrowIdx + 4).trim());
+    } else {
+      paths.add(entry.trim());
+    }
+  }
+  return paths;
+}
+
+async function snapshotDirtyPaths(cwd: string): Promise<Set<string>> {
+  const { stdout } = await spawnCmd('git', ['status', '--porcelain'], { cwd });
+  return parsePorcelainPaths(stdout);
+}
+
+/**
+ * Restores every path that is dirty in the worktree right now but was NOT
+ * dirty at `preRunDirtyPaths` (captured before the autofix commands ran).
+ * This undoes out-of-scope formatter modifications while leaving alone
+ * anything the session itself had already changed. Tracked paths are
+ * reverted with a path-scoped checkout; untracked paths the formatter
+ * created are removed. Returns the restored paths.
+ */
+async function restoreOutOfScopeChanges(
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  preRunDirtyPaths: Set<string>,
+  log: (msg: string) => void,
+): Promise<string[]> {
+  const { stdout } = await spawnCmd('git', ['status', '--porcelain'], { cwd });
+  const trackedToRestore: string[] = [];
+  const untrackedToRemove: string[] = [];
+  for (const line of stdout.split('\n')) {
+    if (!line) continue;
+    const status = line.slice(0, 2);
+    const entry = line.slice(3);
+    const arrowIdx = entry.indexOf(' -> ');
+    const actualPath = (
+      arrowIdx !== -1 ? entry.slice(arrowIdx + 4) : entry
+    ).trim();
+    if (preRunDirtyPaths.has(actualPath)) continue;
+    if (status === '??') {
+      untrackedToRemove.push(actualPath);
+    } else {
+      trackedToRestore.push(actualPath);
+    }
+  }
+
+  if (trackedToRestore.length > 0) {
+    await spawnCmd('git', ['checkout', '--', ...trackedToRestore], {
+      cwd,
+      env,
+    });
+  }
+  for (const f of untrackedToRemove) {
+    try {
+      fs.rmSync(path.join(cwd, f), { force: true });
+    } catch {
+      // best-effort
+    }
+  }
+
+  const restored = [...trackedToRestore, ...untrackedToRemove];
+  if (restored.length > 0) {
+    log(`[autofix] restored out-of-scope changes: ${restored.join(', ')}\n`);
+  }
+  return restored;
 }
 
 async function getHeadSha(cwd: string): Promise<string> {
@@ -275,6 +357,11 @@ export async function runAutofix(
   // whole-repo formatter can't sweep unrelated pre-existing debt into the commit.
   const changedFiles = await getChangedFiles(worktreePath, baseBranch);
 
+  // Snapshot what was already dirty before the autofix commands run, so any
+  // out-of-scope modification the formatter makes can be told apart from
+  // changes the session itself had in flight — the latter must be left alone.
+  const preRunDirtyPaths = await snapshotDirtyPaths(worktreePath);
+
   const failures: string[] = [];
   // exit-1 output from linting tools that fixed what they could but left violations behind
   const violationChunks: string[] = [];
@@ -392,14 +479,22 @@ export async function runAutofix(
     { cwd: worktreePath },
   );
   if (!remainingResult.stdout.trim()) {
+    const restoredPaths = await restoreOutOfScopeChanges(
+      worktreePath,
+      env,
+      preRunDirtyPaths,
+      log,
+    );
     if (failures.length > 0) {
       return {
         success: false,
+        restoredPaths,
         summary: `autofix: no in-scope changes staged; skipped commit (failures: ${failures.join('; ')})`,
       };
     }
     return {
       success: true,
+      restoredPaths,
       summary: 'autofix: no in-scope changes staged; skipped commit',
       unfixableViolations,
     };
@@ -450,6 +545,17 @@ export async function runAutofix(
     // best-effort
   }
 
+  // Restore out-of-scope changes before pushing/syncing: the sync-to-origin
+  // step below does a `git reset --hard`, which would otherwise silently
+  // discard this evidence (and, if left in place, the caller has no record
+  // of what was reverted for the audit payload).
+  const restoredPaths = await restoreOutOfScopeChanges(
+    worktreePath,
+    env,
+    preRunDirtyPaths,
+    log,
+  );
+
   // Capture current branch before pushing so we can sync to it afterward
   const { stdout: branchRaw } = await spawnCmd(
     'git',
@@ -473,6 +579,7 @@ export async function runAutofix(
         gitFailureReason: gitReason,
         commitSha: sha,
         touchedFiles,
+        restoredPaths,
         summary: gitReason
           ? `autofix committed ${sha} but ${msg}: ${gitReason}`
           : `autofix committed ${sha} but ${msg}`,
@@ -514,6 +621,7 @@ export async function runAutofix(
     commitSha: sha,
     syncedTo,
     touchedFiles,
+    restoredPaths,
     summary,
     unfixableViolations: success ? unfixableViolations : undefined,
   };
