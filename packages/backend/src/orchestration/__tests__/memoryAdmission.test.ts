@@ -14,7 +14,11 @@ vi.mock('../../config.js', () => ({
 
 import os from 'os';
 import { runtimeSettings } from '../../config.js';
-import { evaluateMemoryHeadroom, hasMemoryHeadroom } from '../memoryAdmission';
+import {
+  evaluateMemoryHeadroom,
+  hasMemoryHeadroom,
+  hasTestRequestAdmission,
+} from '../memoryAdmission';
 
 describe('evaluateMemoryHeadroom', () => {
   it('permits dispatch when projected free memory is at or above the budget', () => {
@@ -94,5 +98,21 @@ describe('hasMemoryHeadroom', () => {
         perSessionReserveMB: result.perSessionReserveMB,
       }),
     ).toBe(result.allowed);
+  });
+});
+
+describe('hasTestRequestAdmission', () => {
+  it('admits when inFlight is below perProjectLimit and memory headroom is fine', () => {
+    (os.freemem as ReturnType<typeof vi.fn>).mockReturnValue(
+      10 * 1024 * 1024 * 1024,
+    );
+    expect(hasTestRequestAdmission(1, 2)).toBe(true);
+  });
+
+  it('refuses when inFlight is at or above perProjectLimit, regardless of memory headroom', () => {
+    (os.freemem as ReturnType<typeof vi.fn>).mockReturnValue(
+      10 * 1024 * 1024 * 1024,
+    );
+    expect(hasTestRequestAdmission(2, 2)).toBe(false);
   });
 });
