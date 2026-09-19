@@ -23,6 +23,7 @@ import {
   getSessionLastActivityMs,
   upsertPullRequest,
   getTaskRepoAssignment,
+  getLatestTestRequestRunForSession,
 } from '../db/queries';
 import {
   sessionDidWork,
@@ -75,6 +76,30 @@ function stripVolatileFields(message: string): string {
  * ticks — status code plus a nonce-stripped message, rather than the raw
  * message (which embeds a fresh Notion request_id every call).
  */
+/**
+ * True when the session's own latest test-lane run is still queued or
+ * running and hasn't been waiting longer than AWAITING_LANE_RESULT_CEILING_MS
+ * — the session is legitimately waiting on the lane, not stalled. The nudge
+ * this exempts from ("open a PR now") pushes the branch, which withdraws the
+ * session's own queued run via withdrawQueuedRunsForWorktree, so nudging a
+ * session in this state actively destroys the result it's waiting for.
+ * Bounded (unlike the capability exemption): a run queued past the ceiling
+ * falls through to the normal nudge/surface path so a wedged lane can't park
+ * a session forever.
+ */
+function isSessionAwaitingLaneResult(session: Session): boolean {
+  if (!session.project_id) return false;
+  const run = getLatestTestRequestRunForSession(
+    session.project_id,
+    session.session_id,
+  );
+  if (!run || (run.state !== 'queued' && run.state !== 'running')) {
+    return false;
+  }
+  const queuedAt = run.requested_at ?? run.started_at;
+  return Date.now() - queuedAt < AWAITING_LANE_RESULT_CEILING_MS;
+}
+
 function failureReasonKey(err: unknown): string {
   if (err instanceof NotionApiError) {
     return `notion:${err.statusCode}:${stripVolatileFields(err.message)}`;
@@ -117,6 +142,13 @@ const MIN_NUDGE_SPACING_MS = 15 * 60 * 1000;
  * is surfaced instead of parked forever — see isOperatorDecisionPastWindow.
  */
 const AWAITING_OPERATOR_DECISION_WINDOW_MS = 24 * 60 * 60 * 1000;
+/**
+ * Bounded window a session may sit awaiting its own test-lane run before the
+ * exemption stops applying and it falls through to the normal nudge path —
+ * see isSessionAwaitingLaneResult. Generous relative to observed p50 queue
+ * wait (80-91 min) so a genuinely wedged lane cannot park a session forever.
+ */
+const AWAITING_LANE_RESULT_CEILING_MS = 3 * 60 * 60 * 1000;
 /** Nudge message sent to a stalled idle session that hasn't opened a PR. */
 const NO_PR_NUDGE_MESSAGE =
   'You appear to have finished your work but no PR was opened. Please open a draft PR now so your changes can be reviewed. If you are done with your task, follow the PR format in CLAUDE.md and emit the <pr-body>…</pr-body> marker.';
@@ -390,6 +422,20 @@ export class OrphanedTaskSweeper {
       latestSession?.status === 'idle' &&
       !isMachineParkedIdle(latestSession) &&
       isSessionAwaitingCapabilityDisposition(latestSession)
+    ) {
+      return;
+    }
+
+    // Same shape, bounded: an idle session whose own test-lane run is still
+    // queued or running is legitimately waiting on the lane, not stalled —
+    // the "open a PR now" nudge would push the branch and withdraw that very
+    // run (withdrawQueuedRunsForWorktree), so the session never receives the
+    // result it's waiting for. Unlike the capability exemption this is not
+    // indefinite — see isSessionAwaitingLaneResult's ceiling.
+    if (
+      latestSession?.status === 'idle' &&
+      !isMachineParkedIdle(latestSession) &&
+      isSessionAwaitingLaneResult(latestSession)
     ) {
       return;
     }
