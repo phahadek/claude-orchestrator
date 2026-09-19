@@ -49,6 +49,7 @@ vi.mock('../db/queries.js', () => ({
   getSession: vi.fn(() => undefined),
   listStagedIntentsBySession: vi.fn(() => []),
   isNoOpSuppressed: vi.fn(() => false),
+  getLatestTestRequestRunForSession: vi.fn(() => undefined),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -90,6 +91,7 @@ import {
   listStagedIntentsBySession,
   isNoOpSuppressed,
   getTaskRepoAssignment,
+  getLatestTestRequestRunForSession,
 } from '../db/queries.js';
 import {
   recordEvent,
@@ -215,6 +217,9 @@ describe('OrphanedTaskSweeper', () => {
     vi.mocked(isUsageAdmitted).mockReset().mockReturnValue({ allowed: true });
     vi.mocked(isNoOpSuppressed).mockReset().mockReturnValue(false);
     vi.mocked(getTaskRepoAssignment).mockReset().mockReturnValue(undefined);
+    vi.mocked(getLatestTestRequestRunForSession)
+      .mockReset()
+      .mockReturnValue(undefined);
     broadcast.mockClear();
   });
 
@@ -815,6 +820,133 @@ describe('OrphanedTaskSweeper', () => {
     expect(backend.updateStatus).not.toHaveBeenCalled();
     expect(setSessionPauseReason).not.toHaveBeenCalled();
     expect(recordEvent).not.toHaveBeenCalled();
+  });
+
+  it('never nudges an idle session whose own test-lane run is still queued', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    const endedAt = Date.now() - 10 * 60 * 1000; // ended 10 min ago (past grace)
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession('idle', 30 * 60 * 1000, endedAt) as ReturnType<
+        typeof getLatestCodeSessionByNotionTaskId
+      >,
+    );
+    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue({
+      state: 'queued',
+      requested_at: Date.now() - 20 * 60 * 1000, // queued 20 min ago — past recency gate
+      started_at: Date.now() - 20 * 60 * 1000,
+    } as ReturnType<typeof getLatestTestRequestRunForSession>);
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      enqueueFeedback,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(enqueueFeedback).not.toHaveBeenCalled();
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(setSessionPauseReason).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalled();
+  });
+
+  it('never nudges an idle session whose own test-lane run is still running', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    const endedAt = Date.now() - 10 * 60 * 1000;
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession('idle', 30 * 60 * 1000, endedAt) as ReturnType<
+        typeof getLatestCodeSessionByNotionTaskId
+      >,
+    );
+    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue({
+      state: 'running',
+      requested_at: Date.now() - 20 * 60 * 1000,
+      started_at: Date.now() - 15 * 60 * 1000,
+    } as ReturnType<typeof getLatestTestRequestRunForSession>);
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      enqueueFeedback,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(enqueueFeedback).not.toHaveBeenCalled();
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('nudges once the lane run has settled and the session stays idle past the recency gate', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    const endedAt = Date.now() - 10 * 60 * 1000;
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession('idle', 30 * 60 * 1000, endedAt) as ReturnType<
+        typeof getLatestCodeSessionByNotionTaskId
+      >,
+    );
+    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue({
+      state: 'passed',
+      requested_at: Date.now() - 40 * 60 * 1000,
+      started_at: Date.now() - 35 * 60 * 1000,
+    } as ReturnType<typeof getLatestTestRequestRunForSession>);
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      enqueueFeedback,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(enqueueFeedback).toHaveBeenCalledWith(
+      'sess-1',
+      'system:nudge',
+      expect.stringContaining('no PR was opened'),
+    );
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_nudged' }),
+    );
+  });
+
+  it('falls through to the normal nudge path once a queued lane run exceeds the bounded ceiling', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    const endedAt = Date.now() - 10 * 60 * 1000;
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession('idle', 30 * 60 * 1000, endedAt) as ReturnType<
+        typeof getLatestCodeSessionByNotionTaskId
+      >,
+    );
+    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue({
+      state: 'queued',
+      requested_at: Date.now() - 4 * 60 * 60 * 1000, // queued 4h ago — past the 3h ceiling
+      started_at: Date.now() - 4 * 60 * 60 * 1000,
+    } as ReturnType<typeof getLatestTestRequestRunForSession>);
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      enqueueFeedback,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(enqueueFeedback).toHaveBeenCalledWith(
+      'sess-1',
+      'system:nudge',
+      expect.stringContaining('no PR was opened'),
+    );
   });
 
   it('never nudges or reverts an idle session parked awaiting an operator decision, within the bounded window', async () => {
