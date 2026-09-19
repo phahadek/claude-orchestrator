@@ -45,6 +45,7 @@ vi.mock('../memoryAdmission', () => ({
 }));
 
 import { db } from '../../db/db';
+import { logger } from '../../logger';
 import {
   runProjectTestRequest,
   admitTestRequest,
@@ -390,6 +391,88 @@ describe('runProjectTestRequest — coalescing', () => {
       expect(row.requested_at).toBe(before);
       expect(row.started_at).toBeGreaterThan(row.requested_at);
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waitForMemoryAdmission checks peer occupancy, not the caller's own held permit — with capacity 2 and both permits held, the second run is admitted immediately instead of waiting out the deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      insertProject({
+        id: 'proj-admission-peer',
+        name: 'Admission Peer',
+        project_dir: '/tmp/admission-peer',
+        context_url: null,
+        github_repo: null,
+        task_source: 'notion',
+        test_request_max_concurrent: 2,
+      });
+
+      // Admits when peer occupancy (inFlight passed to hasTestRequestAdmission)
+      // is below the limit, refuses at/above it — exactly the predicate's own
+      // contract. The bug passed inUse() (which includes the caller's own
+      // just-acquired permit) instead of inUse() - 1, so with two permits held
+      // this would see inFlight=2 and never admit within the poll loop.
+      mockHasAdmission.mockImplementation((inFlight: number) => inFlight < 2);
+
+      const resolvers: Array<(v: { passed: boolean; output: string }) => void> =
+        [];
+      mockRunTestCommands.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolvers.push(resolve);
+          }),
+      );
+
+      const p1 = runProjectTestRequest(
+        baseSpec({
+          projectId: 'proj-admission-peer',
+          contentHash: 'admission-peer-a',
+          worktreePath: '/tmp/admission-peer',
+        }),
+      );
+      const p2 = runProjectTestRequest(
+        baseSpec({
+          projectId: 'proj-admission-peer',
+          contentHash: 'admission-peer-b',
+          worktreePath: '/tmp/admission-peer',
+        }),
+      );
+
+      // Both permits are held (capacity 2, two callers), yet both should
+      // clear admission without a single poll tick — advancing time by less
+      // than one ADMISSION_POLL_MS is enough for a correct implementation.
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() =>
+        expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
+      );
+
+      resolvers.forEach((resolve) => resolve({ passed: true, output: 'ok' }));
+      await Promise.all([p1, p2]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still blocks and logs the exhaustion warning when host headroom stays below threshold — the memory half of the admission predicate is preserved', async () => {
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      mockHasAdmission.mockReturnValue(false);
+      mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+      const run = runProjectTestRequest(
+        baseSpec({ contentHash: 'hash-admission-exhausted' }),
+      );
+
+      await vi.advanceTimersByTimeAsync(5 * 60_000 + 1_000);
+      await run;
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('memory admission wait exhausted'),
+      );
+    } finally {
+      warnSpy.mockRestore();
       vi.useRealTimers();
     }
   });
