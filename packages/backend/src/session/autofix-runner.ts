@@ -545,6 +545,17 @@ export async function runAutofix(
     // best-effort
   }
 
+  // Restore out-of-scope changes before pushing/syncing: the sync-to-origin
+  // step below does a `git reset --hard`, which would otherwise silently
+  // discard this evidence (and, if left in place, the caller has no record
+  // of what was reverted for the audit payload).
+  const restoredPaths = await restoreOutOfScopeChanges(
+    worktreePath,
+    env,
+    preRunDirtyPaths,
+    log,
+  );
+
   // Capture current branch before pushing so we can sync to it afterward
   const { stdout: branchRaw } = await spawnCmd(
     'git',
@@ -568,6 +579,7 @@ export async function runAutofix(
         gitFailureReason: gitReason,
         commitSha: sha,
         touchedFiles,
+        restoredPaths,
         summary: gitReason
           ? `autofix committed ${sha} but ${msg}: ${gitReason}`
           : `autofix committed ${sha} but ${msg}`,
@@ -598,13 +610,6 @@ export async function runAutofix(
       }
     }
   }
-
-  const restoredPaths = await restoreOutOfScopeChanges(
-    worktreePath,
-    env,
-    preRunDirtyPaths,
-    log,
-  );
 
   const success = failures.length === 0;
   const summary = success
