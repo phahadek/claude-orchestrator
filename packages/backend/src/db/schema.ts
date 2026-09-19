@@ -3532,6 +3532,20 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // dedupe_key: set only for source='ai-reviewer' rows — a stable string
+  // combining the verdict line and the PR's head_sha at enqueue time (see
+  // SessionManager.enqueueFeedback), so a duplicate verdict on an unchanged
+  // head can be detected by comparing against the session's most recent
+  // ai-reviewer item without re-parsing an already-delivered payload. NULL
+  // for every other source.
+  try {
+    target.exec(
+      `ALTER TABLE session_feedback_inbox ADD COLUMN dedupe_key TEXT`,
+    );
+  } catch {
+    /* already exists */
+  }
 }
 
 // ─── test_run_results → test_perf_baselines digest backfill ────────────────

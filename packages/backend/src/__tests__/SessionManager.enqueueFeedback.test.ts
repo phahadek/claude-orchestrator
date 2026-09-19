@@ -68,14 +68,33 @@ vi.mock('../config', () => ({
 
 const inboxItemsBySession = new Map<
   string,
-  Array<{ id: number; source: string; payload: string }>
+  Array<{
+    id: number;
+    source: string;
+    payload: string;
+    enqueued_at?: number;
+    dedupe_key?: string | null;
+  }>
 >();
 let nextInboxId = 1;
 const droppedInboxIds = new Set<number>();
+// Last ai-reviewer item (delivered, undelivered, or dropped) per session —
+// mirrors getLastAiReviewerInboxItem's "delivered or not" lookup, which
+// inboxItemsBySession alone can't answer once an item is removed from it.
+const lastAiReviewerItemBySession = new Map<
+  string,
+  { id: number; source: string; payload: string; dedupe_key: string | null }
+>();
 
 function seedInbox(
   sessionId: string,
-  items: Array<{ id: number; source: string; payload: string }>,
+  items: Array<{
+    id: number;
+    source: string;
+    payload: string;
+    enqueued_at?: number;
+    dedupe_key?: string | null;
+  }>,
 ) {
   inboxItemsBySession.set(sessionId, items);
 }
@@ -116,8 +135,9 @@ vi.mock('../db/queries', () => ({
     (inboxItemsBySession.get(sessionId) ?? []).map((i) => ({
       ...i,
       session_id: sessionId,
-      enqueued_at: 0,
+      enqueued_at: i.enqueued_at ?? 0,
       delivered_at: null,
+      dedupe_key: i.dedupe_key ?? null,
     })),
   ),
   markInboxItemsDelivered: vi.fn((ids: number[]) => {
@@ -138,12 +158,55 @@ vi.mock('../db/queries', () => ({
     }
   }),
   enqueueFeedbackItem: vi.fn(
-    (sessionId: string, source: string, payload: string) => {
+    (
+      sessionId: string,
+      source: string,
+      payload: string,
+      dedupeKey?: string | null,
+    ) => {
       const items = inboxItemsBySession.get(sessionId) ?? [];
-      items.push({ id: nextInboxId++, source, payload });
+      const id = nextInboxId++;
+      items.push({
+        id,
+        source,
+        payload,
+        enqueued_at: Date.now(),
+        dedupe_key: dedupeKey ?? null,
+      });
       inboxItemsBySession.set(sessionId, items);
+      if (source === 'ai-reviewer') {
+        lastAiReviewerItemBySession.set(sessionId, {
+          id,
+          source,
+          payload,
+          dedupe_key: dedupeKey ?? null,
+        });
+      }
     },
   ),
+  enqueueFeedbackItemDropped: vi.fn(
+    (
+      sessionId: string,
+      source: string,
+      payload: string,
+      dedupeKey: string,
+    ) => {
+      const id = nextInboxId++;
+      droppedInboxIds.add(id);
+      if (source === 'ai-reviewer') {
+        lastAiReviewerItemBySession.set(sessionId, {
+          id,
+          source,
+          payload,
+          dedupe_key: dedupeKey,
+        });
+      }
+    },
+  ),
+  getLastAiReviewerInboxItem: vi.fn((sessionId: string) =>
+    lastAiReviewerItemBySession.get(sessionId),
+  ),
+  getLatestTestRequestRunForSession: vi.fn(() => undefined),
   insertCompletingSignal: vi.fn(),
   listCompletingSignalsForSession: vi.fn().mockReturnValue([
     {
@@ -271,6 +334,10 @@ beforeEach(() => {
   inboxItemsBySession.clear();
   nextInboxId = 1;
   droppedInboxIds.clear();
+  lastAiReviewerItemBySession.clear();
+  vi.mocked(queries.getLatestTestRequestRunForSession).mockReturnValue(
+    undefined,
+  );
 });
 
 describe('SessionManager.enqueueFeedback()', () => {
@@ -698,6 +765,266 @@ describe('SessionManager.enqueueFeedback()', () => {
       expect(queries.markInboxItemsDelivered).not.toHaveBeenCalled();
       expect(queries.listUndeliveredInboxItems('sess-idle-3')).toHaveLength(1);
     });
+  });
+});
+
+describe('SessionManager.enqueueFeedback(): holding while awaiting a lane result', () => {
+  it('idle session with a queued lane run: an ai-reviewer item is not resumed and stays undelivered, and feedback_delivery_deferred is recorded', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-lane-hold',
+      status: 'idle',
+      project_id: 'proj-1',
+      task_id: 'task-1',
+    } as never);
+    vi.mocked(queries.getLatestTestRequestRunForSession).mockReturnValue({
+      id: 'run-1',
+      project_id: 'proj-1',
+      session_id: 'sess-lane-hold',
+      state: 'queued',
+    } as never);
+
+    const sm = new SessionManager();
+    const sendSpy = vi.spyOn(sm, 'sendOrResume');
+
+    await sm.enqueueFeedback(
+      'sess-lane-hold',
+      'ai-reviewer',
+      '## Review Feedback\n\n**Verdict:** Needs changes\n\nfix it',
+    );
+
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(queries.listUndeliveredInboxItems('sess-lane-hold')).toHaveLength(
+      1,
+    );
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'feedback_delivery_deferred',
+        actor_id: 'sess-lane-hold',
+        project_id: 'proj-1',
+        task_id: 'task-1',
+        payload: expect.objectContaining({
+          session_id: 'sess-lane-hold',
+          source: 'ai-reviewer',
+          run_id: 'run-1',
+        }),
+      }),
+    );
+  });
+
+  it('when the test_request result is then enqueued, one resume delivers both the result and the held item', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-lane-hold-2',
+      status: 'idle',
+      project_id: 'proj-1',
+      task_id: 'task-1',
+    } as never);
+    vi.mocked(queries.getLatestTestRequestRunForSession).mockReturnValue({
+      id: 'run-2',
+      project_id: 'proj-1',
+      session_id: 'sess-lane-hold-2',
+      state: 'queued',
+    } as never);
+
+    const sm = new SessionManager();
+    const sendSpy = vi.spyOn(sm, 'sendOrResume');
+
+    await sm.enqueueFeedback(
+      'sess-lane-hold-2',
+      'ai-reviewer',
+      '## Review Feedback\n\n**Verdict:** Needs changes\n\nfix it',
+    );
+    expect(sendSpy).not.toHaveBeenCalled();
+
+    sendSpy.mockResolvedValue('sess-lane-hold-2');
+    await sm.enqueueFeedback(
+      'sess-lane-hold-2',
+      'test_request',
+      JSON.stringify({ intentId: 'i1', passed: true, output: 'ok' }),
+    );
+
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const combined = sendSpy.mock.calls[0][1] as string;
+    expect(combined).toContain('Needs changes');
+    expect(combined).toContain('"passed":true');
+    expect(queries.markInboxItemsDelivered).toHaveBeenCalledTimes(1);
+    expect(
+      queries.listUndeliveredInboxItems('sess-lane-hold-2'),
+    ).toHaveLength(0);
+  });
+
+  it('idle session with no queued/running lane run: an ai-reviewer item is resumed immediately', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-no-lane',
+      status: 'idle',
+      project_id: 'proj-1',
+      task_id: 'task-1',
+    } as never);
+    vi.mocked(queries.getLatestTestRequestRunForSession).mockReturnValue(
+      undefined,
+    );
+
+    const sm = new SessionManager();
+    const sendSpy = vi
+      .spyOn(sm, 'sendOrResume')
+      .mockResolvedValue('sess-no-lane');
+
+    await sm.enqueueFeedback(
+      'sess-no-lane',
+      'ai-reviewer',
+      '## Review Feedback\n\n**Verdict:** Needs changes\n\nfix it',
+    );
+
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(queries.markInboxItemsDelivered).toHaveBeenCalledTimes(1);
+  });
+
+  it('a human:* item is delivered immediately even while a lane run is queued', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-human',
+      status: 'idle',
+      project_id: 'proj-1',
+      task_id: 'task-1',
+    } as never);
+    vi.mocked(queries.getLatestTestRequestRunForSession).mockReturnValue({
+      id: 'run-3',
+      project_id: 'proj-1',
+      session_id: 'sess-human',
+      state: 'running',
+    } as never);
+
+    const sm = new SessionManager();
+    const sendSpy = vi
+      .spyOn(sm, 'sendOrResume')
+      .mockResolvedValue('sess-human');
+
+    await sm.enqueueFeedback('sess-human', 'human:alice', 'please fix X');
+
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(queries.markInboxItemsDelivered).toHaveBeenCalledTimes(1);
+  });
+
+  it('a held item older than the ceiling is delivered by the next enqueue regardless of lane state', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-stale-hold',
+      status: 'idle',
+      project_id: 'proj-1',
+      task_id: 'task-1',
+    } as never);
+    vi.mocked(queries.getLatestTestRequestRunForSession).mockReturnValue({
+      id: 'run-4',
+      project_id: 'proj-1',
+      session_id: 'sess-stale-hold',
+      state: 'queued',
+    } as never);
+
+    // Seed an already-held item well past the hold ceiling (3h).
+    seedInbox('sess-stale-hold', [
+      {
+        id: 1,
+        source: 'ai-reviewer',
+        payload: 'old feedback',
+        enqueued_at: Date.now() - 4 * 60 * 60 * 1000,
+      },
+    ]);
+    nextInboxId = 2;
+
+    const sm = new SessionManager();
+    const sendSpy = vi
+      .spyOn(sm, 'sendOrResume')
+      .mockResolvedValue('sess-stale-hold');
+
+    await sm.enqueueFeedback(
+      'sess-stale-hold',
+      'system:nudge',
+      'a fresh nudge',
+    );
+
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const combined = sendSpy.mock.calls[0][1] as string;
+    expect(combined).toContain('old feedback');
+    expect(combined).toContain('a fresh nudge');
+    expect(queries.markInboxItemsDelivered).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('SessionManager.enqueueFeedback(): duplicate ai-reviewer verdict dedupe', () => {
+  it('a second ai-reviewer item with the same verdict and head SHA as the last one is dropped, records feedback_duplicate_dropped, and causes no resume', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-dupe',
+      status: 'idle',
+      project_id: 'proj-1',
+      task_id: 'task-1',
+    } as never);
+
+    const sm = new SessionManager();
+    const sendSpy = vi.spyOn(sm, 'sendOrResume').mockResolvedValue('sess-dupe');
+
+    await sm.enqueueFeedback(
+      'sess-dupe',
+      'ai-reviewer',
+      '## Review Feedback\n\n**Verdict:** Needs changes\n\nfirst pass',
+      { headSha: 'sha-aaa' },
+    );
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    sendSpy.mockClear();
+
+    await sm.enqueueFeedback(
+      'sess-dupe',
+      'ai-reviewer',
+      '## Review Feedback\n\n**Verdict:** Needs changes\n\nsecond pass, same head',
+      { headSha: 'sha-aaa' },
+    );
+
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(queries.enqueueFeedbackItemDropped).toHaveBeenCalledWith(
+      'sess-dupe',
+      'ai-reviewer',
+      expect.stringContaining('second pass'),
+      'Needs changes@sha-aaa',
+    );
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'feedback_duplicate_dropped',
+        actor_id: 'sess-dupe',
+        payload: expect.objectContaining({
+          session_id: 'sess-dupe',
+          source: 'ai-reviewer',
+          dedupe_key: 'Needs changes@sha-aaa',
+        }),
+      }),
+    );
+  });
+
+  it('a third item with a different head SHA is delivered (not a duplicate)', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-dupe-2',
+      status: 'idle',
+      project_id: 'proj-1',
+      task_id: 'task-1',
+    } as never);
+
+    const sm = new SessionManager();
+    const sendSpy = vi
+      .spyOn(sm, 'sendOrResume')
+      .mockResolvedValue('sess-dupe-2');
+
+    await sm.enqueueFeedback(
+      'sess-dupe-2',
+      'ai-reviewer',
+      '## Review Feedback\n\n**Verdict:** Needs changes\n\nfirst pass',
+      { headSha: 'sha-aaa' },
+    );
+    sendSpy.mockClear();
+
+    await sm.enqueueFeedback(
+      'sess-dupe-2',
+      'ai-reviewer',
+      '## Review Feedback\n\n**Verdict:** Needs changes\n\nnew head, new push',
+      { headSha: 'sha-bbb' },
+    );
+
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(queries.enqueueFeedbackItemDropped).not.toHaveBeenCalled();
   });
 });
 

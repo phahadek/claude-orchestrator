@@ -113,6 +113,7 @@ vi.mock('../db/queries', () =>
         );
       }
     }),
+    getLatestTestRequestRunForSession: vi.fn(() => undefined),
   }),
 );
 
@@ -279,6 +280,48 @@ describe('reconcileInboxAtBoot()', () => {
     expect(sendSpy).not.toHaveBeenCalled();
     expect(queries.markInboxItemsDelivered).toHaveBeenCalledWith([3]);
     expect(queries.listUndeliveredInboxItems('sess-done')).toHaveLength(0);
+  });
+});
+
+describe('reconcileInboxAtBoot(): items held for a lane result at restart', () => {
+  it('delivers an item that enqueueFeedback had held for an awaiting-lane-result session, without consulting lane state', async () => {
+    // Simulates the on-disk state left behind by enqueueFeedback's hold: the
+    // row exists and is undelivered, exactly as if it had never been
+    // delivered because a lane run was queued/running at enqueue time.
+    // reconcileInboxAtBoot must deliver it regardless — it drives through
+    // deliverUndeliveredInboxItems directly, never through enqueueFeedback's
+    // hold check, so a restart can't leave a held item stranded forever.
+    seedInbox('sess-was-held', [
+      { id: 20, source: 'ai-reviewer', payload: 'held verdict text' },
+    ]);
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-was-held',
+      status: 'idle',
+    } as never);
+    // Even if the lane run is still queued/running at boot time, the boot
+    // reconciliation path must not hold — only enqueueFeedback's own
+    // pre-delivery check does that, and this path never calls it.
+    vi.mocked(queries.getLatestTestRequestRunForSession).mockReturnValue({
+      id: 'run-still-queued',
+      state: 'queued',
+    } as never);
+
+    const sm = new SessionManager();
+    const sendSpy = vi
+      .spyOn(sm, 'sendOrResume')
+      .mockResolvedValue('sess-was-held');
+
+    await sm.reconcileInboxAtBoot();
+
+    expect(sendSpy).toHaveBeenCalledWith(
+      'sess-was-held',
+      expect.stringContaining('held verdict text'),
+      { persistTextOnDefer: false },
+    );
+    expect(queries.markInboxItemsDelivered).toHaveBeenCalledWith([20]);
+    expect(queries.listUndeliveredInboxItems('sess-was-held')).toHaveLength(
+      0,
+    );
   });
 });
 

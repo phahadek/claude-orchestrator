@@ -9066,11 +9066,52 @@ export function enqueueFeedbackItem(
   sessionId: string,
   source: string,
   payload: string,
+  dedupeKey?: string | null,
 ): void {
   db.prepare(
-    `INSERT INTO session_feedback_inbox (session_id, source, payload, enqueued_at)
-     VALUES (?, ?, ?, ?)`,
-  ).run(sessionId, source, payload, Date.now());
+    `INSERT INTO session_feedback_inbox (session_id, source, payload, enqueued_at, dedupe_key)
+     VALUES (?, ?, ?, ?, ?)`,
+  ).run(sessionId, source, payload, Date.now(), dedupeKey ?? null);
+}
+
+/**
+ * Inserts an ai-reviewer item that is already known to duplicate the last
+ * one delivered to this session (see enqueueFeedback's dedupe check) with
+ * dropped_at set at insertion time — the record is kept for audit/history
+ * purposes, but it is never surfaced as undelivered and never triggers a
+ * resume.
+ */
+export function enqueueFeedbackItemDropped(
+  sessionId: string,
+  source: string,
+  payload: string,
+  dedupeKey: string,
+): void {
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO session_feedback_inbox (session_id, source, payload, enqueued_at, dedupe_key, dropped_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(sessionId, source, payload, now, dedupeKey, now);
+}
+
+/**
+ * The most recent ai-reviewer item enqueued for a session, delivered or not
+ * — used by enqueueFeedback to detect a verdict that duplicates the last one
+ * this session was told about (same dedupe_key: verdict line + head_sha).
+ * Dropped-as-duplicate rows are included so a run of identical verdicts
+ * dedupes against the last *distinct* one, not just the last delivered one.
+ */
+export function getLastAiReviewerInboxItem(
+  sessionId: string,
+): FeedbackInboxRow | undefined {
+  return db
+    .prepare(
+      `SELECT id, session_id, source, payload, enqueued_at, delivered_at, dropped_at, dedupe_key
+       FROM session_feedback_inbox
+       WHERE session_id = ? AND source = 'ai-reviewer'
+       ORDER BY enqueued_at DESC, id DESC LIMIT 1`,
+    )
+    .get(sessionId) as FeedbackInboxRow | undefined;
 }
 
 export function listUndeliveredInboxItems(
@@ -9078,7 +9119,7 @@ export function listUndeliveredInboxItems(
 ): FeedbackInboxRow[] {
   return db
     .prepare(
-      `SELECT id, session_id, source, payload, enqueued_at, delivered_at, dropped_at
+      `SELECT id, session_id, source, payload, enqueued_at, delivered_at, dropped_at, dedupe_key
        FROM session_feedback_inbox
        WHERE session_id = ? AND delivered_at IS NULL AND dropped_at IS NULL
        ORDER BY enqueued_at ASC`,

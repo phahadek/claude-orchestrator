@@ -9,6 +9,8 @@ import { db } from '../db/db.js';
 import {
   insertSession,
   enqueueFeedbackItem,
+  enqueueFeedbackItemDropped,
+  getLastAiReviewerInboxItem,
   listUndeliveredInboxItems,
   markInboxItemsDelivered,
   markInboxItemsDropped,
@@ -208,6 +210,86 @@ describe('feedbackInbox queries', () => {
 
     const ids = listNonTerminalSessionsWithUndeliveredInboxItems();
     expect(ids).not.toContain('sess-nt-dropped');
+  });
+
+  it('enqueueFeedbackItem persists a dedupe_key when given one', () => {
+    makeSession('sess-dedupe-key', 'idle');
+    enqueueFeedbackItem(
+      'sess-dedupe-key',
+      'ai-reviewer',
+      'verdict text',
+      'Needs changes@sha-1',
+    );
+
+    const [item] = listUndeliveredInboxItems('sess-dedupe-key');
+    expect(item.dedupe_key).toBe('Needs changes@sha-1');
+  });
+
+  it('enqueueFeedbackItemDropped inserts a row with dropped_at set at insertion time, never surfaced as undelivered', () => {
+    makeSession('sess-dropped-at-insert', 'idle');
+    enqueueFeedbackItemDropped(
+      'sess-dropped-at-insert',
+      'ai-reviewer',
+      'duplicate verdict text',
+      'Needs changes@sha-1',
+    );
+
+    expect(listUndeliveredInboxItems('sess-dropped-at-insert')).toHaveLength(
+      0,
+    );
+    expect(countUndeliveredInboxItems('sess-dropped-at-insert')).toBe(0);
+
+    const row = db
+      .prepare(
+        `SELECT payload, dedupe_key, delivered_at, dropped_at FROM session_feedback_inbox WHERE session_id = ?`,
+      )
+      .get('sess-dropped-at-insert') as {
+      payload: string;
+      dedupe_key: string | null;
+      delivered_at: number | null;
+      dropped_at: number | null;
+    };
+    expect(row.payload).toBe('duplicate verdict text');
+    expect(row.dedupe_key).toBe('Needs changes@sha-1');
+    expect(row.delivered_at).toBeNull();
+    expect(row.dropped_at).not.toBeNull();
+  });
+
+  it('getLastAiReviewerInboxItem returns the most recent ai-reviewer item regardless of delivered/dropped state', () => {
+    makeSession('sess-last-ai', 'idle');
+    enqueueFeedbackItem(
+      'sess-last-ai',
+      'ai-reviewer',
+      'first verdict',
+      'Needs changes@sha-1',
+    );
+    const [first] = listUndeliveredInboxItems('sess-last-ai');
+    markInboxItemsDelivered([first.id]);
+
+    enqueueFeedbackItemDropped(
+      'sess-last-ai',
+      'ai-reviewer',
+      'duplicate verdict',
+      'Needs changes@sha-1',
+    );
+
+    const last = getLastAiReviewerInboxItem('sess-last-ai');
+    expect(last?.payload).toBe('duplicate verdict');
+    expect(last?.dedupe_key).toBe('Needs changes@sha-1');
+  });
+
+  it('getLastAiReviewerInboxItem ignores items from other sources', () => {
+    makeSession('sess-last-ai-2', 'idle');
+    enqueueFeedbackItem(
+      'sess-last-ai-2',
+      'ai-reviewer',
+      'a verdict',
+      'Needs changes@sha-1',
+    );
+    enqueueFeedbackItem('sess-last-ai-2', 'human:alice', 'a human comment');
+
+    const last = getLastAiReviewerInboxItem('sess-last-ai-2');
+    expect(last?.payload).toBe('a verdict');
   });
 });
 
