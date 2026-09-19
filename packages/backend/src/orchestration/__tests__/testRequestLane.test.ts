@@ -395,7 +395,7 @@ describe('runProjectTestRequest — coalescing', () => {
     }
   });
 
-  it('waitForMemoryAdmission checks peer occupancy, not the caller\'s own held permit — with capacity 2 and both permits held, the second run is admitted immediately instead of waiting out the deadline', async () => {
+  it("waitForMemoryAdmission checks peer occupancy, not the caller's own held permit — with capacity 2 and both permits held, the second run is admitted immediately instead of waiting out the deadline", async () => {
     vi.useFakeTimers();
     try {
       insertProject({
@@ -413,9 +413,7 @@ describe('runProjectTestRequest — coalescing', () => {
       // contract. The bug passed inUse() (which includes the caller's own
       // just-acquired permit) instead of inUse() - 1, so with two permits held
       // this would see inFlight=2 and never admit within the poll loop.
-      mockHasAdmission.mockImplementation(
-        (inFlight: number) => inFlight < 2,
-      );
+      mockHasAdmission.mockImplementation((inFlight: number) => inFlight < 2);
 
       const resolvers: Array<(v: { passed: boolean; output: string }) => void> =
         [];
