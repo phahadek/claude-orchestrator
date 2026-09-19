@@ -178,6 +178,18 @@ to unstick a session, not even after a read-only check seems to make it safe:**
 - hand-mutate Orchestrator state (DB rows, pause flags, branches) to force a PR or session to
   a different outcome.
 
+**Carve-out — the milestone-close release.** The `git push` / managed-PR bullet above does not
+cover `/milestone-wrap`'s own automated wrap playbook merging the base branch into `main`
+(`--no-ff`), cutting the `v<x.y.0>` tag, and creating the GitHub release. That release is the
+wrap playbook's own sanctioned, operator-authorized action — not a session reaching into
+another session's territory — and is permitted only when **all** of: (i) it is run by
+`/milestone-wrap`'s own playbook, never improvised by hand in an unrelated session; (ii) the
+operator has named/confirmed the action in that session (the playbook's own confirm-gate steps
+already require this); and (iii) it runs from a throwaway clone exactly as the playbook does —
+never from the project checkout, never a fast-forward, never anything but `origin/<base>` into
+`main`. Everything else in the list above remains an absolute never. There is no version-bump
+PR in this flow — `pyproject.toml` / `package.json` version bumps are not a wrap precondition.
+
 These actions can be **catastrophic and irreversible** — corrupting branches, silently losing
 committed work, or breaking every future resume of a worktree — in ways you cannot foresee from
 the outside. Deliver fixes **only** as code changes to the Orchestrator's own source through the
