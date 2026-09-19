@@ -263,7 +263,7 @@ export async function recoverSession(
             } else if (upserted && alreadyTracked && scope !== 'periodic') {
               recordEvent({
                 event_type: 'pr_detected_again',
-                actor_type: 'system',
+                actor_type: 'ai',
                 actor_id: sessionId,
                 project_id: projectId || null,
                 task_id: taskId || null,

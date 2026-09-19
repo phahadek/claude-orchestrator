@@ -238,6 +238,7 @@ describe('recoverSession', () => {
     expect(recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         event_type: 'pr_detected_again',
+        actor_type: 'ai',
         payload: expect.objectContaining({ pr_number: 9, repo: 'owner/repo' }),
       }),
     );
