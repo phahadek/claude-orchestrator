@@ -377,7 +377,13 @@ export class ReviewOrchestrator {
       return false;
     }
 
+    // Scoped to the pr_opened path only: onSessionEnded's own needs_changes
+    // re-review request also lands here via enqueueReview with headSha
+    // resolved to the PR's current (unreviewed-since) head, and must still
+    // fire even without a head move (PR #668 regression) — it already has
+    // its own verdict/iteration-cap/in-flight gating above this call.
     if (
+      trigger === 'onPrOpened' &&
       prRow &&
       job.headSha != null &&
       prRow.last_reviewed_sha === job.headSha &&

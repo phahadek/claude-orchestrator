@@ -5851,7 +5851,7 @@ describe('ReviewOrchestrator — PR-not-open admission gate', () => {
 describe('ReviewOrchestrator — head-already-reviewed admission gate', () => {
   const approvedResult = JSON.stringify({ verdict: 'approved' });
 
-  it('refuses a job whose headSha matches last_reviewed_sha with a recorded verdict', async () => {
+  it('refuses a pr_opened job whose headSha matches last_reviewed_sha with a recorded verdict', async () => {
     vi.mocked(getPRByNumber).mockReturnValue({
       ...basePRRow,
       state: 'open',
@@ -5862,12 +5862,11 @@ describe('ReviewOrchestrator — head-already-reviewed admission gate', () => {
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
-    const queued = orch.enqueueReview({ ...baseJob, headSha: 'sha-abc' });
+    sm.emit('pr_opened', { ...baseJob, headSha: 'sha-abc' });
     await new Promise((r) => setTimeout(r, 20));
 
-    expect(queued).toBe(false);
     expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
     const coalesced = vi
       .mocked(recordEvent)
@@ -5884,7 +5883,7 @@ describe('ReviewOrchestrator — head-already-reviewed admission gate', () => {
     });
   });
 
-  it('admits a job whose headSha differs from last_reviewed_sha (a real push)', async () => {
+  it('admits a pr_opened job whose headSha differs from last_reviewed_sha (a real push)', async () => {
     vi.mocked(getPRByNumber).mockReturnValue({
       ...basePRRow,
       state: 'open',
@@ -5895,12 +5894,48 @@ describe('ReviewOrchestrator — head-already-reviewed admission gate', () => {
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
-    const queued = orch.enqueueReview({ ...baseJob, headSha: 'sha-new' });
+    sm.emit('pr_opened', { ...baseJob, headSha: 'sha-new' });
     await new Promise((r) => setTimeout(r, 20));
 
-    expect(queued).toBe(true);
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
+  });
+
+  it('does not block onSessionEnded re-review when head is unchanged since the last needs_changes verdict (PR #668 regression)', async () => {
+    const needsChangesResult = JSON.stringify({ verdict: 'needs_changes' });
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      state: 'open',
+      head_sha: 'sha-abc',
+      last_reviewed_sha: 'sha-abc',
+      review_result: needsChangesResult,
+      review_iteration: 0,
+    } as any);
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      ...basePRRow,
+      state: 'open',
+      head_sha: 'sha-abc',
+      last_reviewed_sha: 'sha-abc',
+      review_result: needsChangesResult,
+      review_iteration: 0,
+    } as any);
+    vi.mocked(getSession).mockReturnValue({
+      session_id: 'source-session-id',
+      session_type: 'standard',
+      task_url: 'https://notion.so/task',
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: 'source-session-id',
+    });
+    await new Promise((r) => setTimeout(r, 20));
+
     expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
   });
 });
