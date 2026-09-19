@@ -377,6 +377,31 @@ export class ReviewOrchestrator {
       return false;
     }
 
+    if (
+      prRow &&
+      job.headSha != null &&
+      prRow.last_reviewed_sha === job.headSha &&
+      prRow.review_result != null
+    ) {
+      logger.info(
+        `[ReviewOrchestrator] admitJob: PR #${job.prNumber} (${job.repo}) head ${job.headSha} already reviewed (verdict=${prRow.review_result}) — refusing admission`,
+      );
+      recordEvent({
+        event_type: 'review_job_coalesced',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: null,
+        task_id: job.taskId || null,
+        payload: {
+          pr_number: job.prNumber,
+          repo: job.repo,
+          reason: 'head_already_reviewed',
+          head_sha: job.headSha,
+        },
+      });
+      return false;
+    }
+
     const alreadyQueued = this.queue.some(
       (q) =>
         this.prKey(q) === key &&
