@@ -1716,7 +1716,7 @@ describe('PreReviewPipeline — cross-kind verify/tests reuse', () => {
             }
           : undefined,
     );
-    mockAdmitTestRequest.mockImplementation((spec: { commands: string[] }) => ({
+    mockAdmitTestRequest.mockImplementation((_spec: { commands: string[] }) => ({
       runId: 'run-enqueued',
       status: 'running',
       position: 0,
@@ -1788,7 +1788,7 @@ describe('PreReviewPipeline — cross-kind verify/tests reuse', () => {
       (_projectId: string, _contentHash: string, runKind?: string) =>
         runKind === 'full' ? fullRun : undefined,
     );
-    mockAdmitTestRequest.mockImplementation((spec: { commands: string[] }) => ({
+    mockAdmitTestRequest.mockImplementation((_spec: { commands: string[] }) => ({
       runId: 'run-enqueued',
       status: 'running',
       position: 0,
