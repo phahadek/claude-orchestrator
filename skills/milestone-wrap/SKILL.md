@@ -6,9 +6,9 @@ description: >-
   operator (which ones carry forward vs. stay closed), then update the
   Notion master page + context.md bookkeeping. Everything else (terminal
   check, gate/seed green check, DB wrapped_at, auto-launch repoint, advance
-  dev->main, cut the release tag) is the automated `wrap` playbook, run via
-  its dashboard button. Use when the user says "wrap up milestone X", "close
-  M11", "let's close out the milestone", or "triage the deferred items for
+  dev->main, cut the release tag) is the automated `wrap` playbook, launched
+  via POST /api/wrap/launch (no dashboard UI yet). Use when the user says
+  "wrap up milestone X", "close M11", "let's close out the milestone", or "triage the deferred items for
   the wrap". Distinct from /wrap (which closes a SESSION, not a milestone).
 ---
 
@@ -16,9 +16,17 @@ description: >-
 
 Closing a milestone is now mostly the automated `wrap` playbook (terminal check,
 gate/seed green check, `wrapped_at`, auto-launch repoint, advance `dev`->`main`, cut
-the release tag) — trigger it from the dashboard. This skill covers the **two things
-that stay human-driven** because they need operator judgment or live outside the
-playbook's sanctioned surfaces:
+the release tag). Launch is `POST /api/wrap/launch` (device-authed) — there is no
+dashboard UI for it yet (`WrapSection.tsx` hasn't landed). Until the playbook's
+integrate-milestone-branch step is made conditional on two-tier branching, a
+flat-branching project's wrap doesn't run through the playbook end-to-end; do it
+through the sanctioned per-step surfaces instead: `POST /api/milestones/:id/wrapped`,
+`PATCH /api/projects/:id` (`autoLaunchMilestoneId`), and the release merge + tag by
+hand from a throwaway clone — same throwaway-clone, `--no-ff` `origin/<base>` into
+`main`, tag, and GitHub-release shape the playbook itself uses (see the
+`/milestone-wrap`-playbook carve-out in `procedures.md` § Hard rule). This skill
+covers the **two things that stay human-driven** because they need operator judgment
+or live outside the playbook's sanctioned surfaces:
 
 1. **Triage deferred + pending gate items** — deciding which ones are genuinely
    resolved (leave them) vs. real postponements (carry forward) is a judgment call,
