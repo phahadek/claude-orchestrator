@@ -473,7 +473,11 @@ async function waitForMemoryAdmission(
   const deadline = Date.now() + ADMISSION_MAX_WAIT_MS;
   const semaphore = getProjectSemaphore(projectId);
   while (Date.now() < deadline) {
-    if (hasTestRequestAdmission(semaphore.inUse(), perProjectLimit)) return;
+    // inUse() includes the permit this call itself already holds — subtract
+    // it so the check reflects peer occupancy, matching hasTestRequestAdmission's
+    // documented "before admitting the caller's own request" contract (and how
+    // concurrentRunCount is computed a few lines below in the caller).
+    if (hasTestRequestAdmission(semaphore.inUse() - 1, perProjectLimit)) return;
     await new Promise((resolve) => setTimeout(resolve, ADMISSION_POLL_MS));
   }
   logger.warn(
