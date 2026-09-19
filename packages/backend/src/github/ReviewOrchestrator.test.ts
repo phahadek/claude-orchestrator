@@ -5880,6 +5880,7 @@ describe('ReviewOrchestrator — head-already-reviewed admission gate', () => {
       pr_number: baseJob.prNumber,
       repo: baseJob.repo,
       head_sha: 'sha-abc',
+      previous_verdict: 'approved',
     });
   });
 

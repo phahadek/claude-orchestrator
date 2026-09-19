@@ -389,8 +389,16 @@ export class ReviewOrchestrator {
       prRow.last_reviewed_sha === job.headSha &&
       prRow.review_result != null
     ) {
+      let previousVerdict: string | undefined;
+      try {
+        previousVerdict = (
+          JSON.parse(prRow.review_result) as { verdict?: string }
+        ).verdict;
+      } catch {
+        previousVerdict = undefined;
+      }
       logger.info(
-        `[ReviewOrchestrator] admitJob: PR #${job.prNumber} (${job.repo}) head ${job.headSha} already reviewed (verdict=${prRow.review_result}) — refusing admission`,
+        `[ReviewOrchestrator] admitJob: PR #${job.prNumber} (${job.repo}) head ${job.headSha} already reviewed (verdict=${previousVerdict ?? 'unknown'}) — refusing admission`,
       );
       recordEvent({
         event_type: 'review_job_coalesced',
@@ -403,6 +411,7 @@ export class ReviewOrchestrator {
           repo: job.repo,
           reason: 'head_already_reviewed',
           head_sha: job.headSha,
+          previous_verdict: previousVerdict ?? null,
         },
       });
       return false;
