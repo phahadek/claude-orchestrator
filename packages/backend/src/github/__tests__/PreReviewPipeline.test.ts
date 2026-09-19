@@ -1685,7 +1685,11 @@ describe('PreReviewPipeline — cross-kind verify/tests reuse', () => {
       verify: ['uv run pyright', 'uv run task test-static', 'uv run task test'],
       autofix: [],
       analyze: [],
-      test: ['uv run task test-static', 'uv run task test', 'uv run extra-check'],
+      test: [
+        'uv run task test-static',
+        'uv run task test',
+        'uv run extra-check',
+      ],
       test_timeout_sec: 300,
       test_max_rss_mb: 0,
       test_fail_fast: true,
