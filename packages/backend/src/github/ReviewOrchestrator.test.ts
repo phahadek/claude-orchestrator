@@ -5847,3 +5847,60 @@ describe('ReviewOrchestrator — PR-not-open admission gate', () => {
     expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
   });
 });
+
+describe('ReviewOrchestrator — head-already-reviewed admission gate', () => {
+  const approvedResult = JSON.stringify({ verdict: 'approved' });
+
+  it('refuses a job whose headSha matches last_reviewed_sha with a recorded verdict', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      state: 'open',
+      head_sha: 'sha-abc',
+      last_reviewed_sha: 'sha-abc',
+      review_result: approvedResult,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+
+    const queued = orch.enqueueReview({ ...baseJob, headSha: 'sha-abc' });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(queued).toBe(false);
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+    const coalesced = vi
+      .mocked(recordEvent)
+      .mock.calls.filter(
+        ([evt]) =>
+          evt.event_type === 'review_job_coalesced' &&
+          (evt.payload as any).reason === 'head_already_reviewed',
+      );
+    expect(coalesced).toHaveLength(1);
+    expect(coalesced[0][0].payload).toMatchObject({
+      pr_number: baseJob.prNumber,
+      repo: baseJob.repo,
+      head_sha: 'sha-abc',
+    });
+  });
+
+  it('admits a job whose headSha differs from last_reviewed_sha (a real push)', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      state: 'open',
+      head_sha: 'sha-new',
+      last_reviewed_sha: 'sha-abc',
+      review_result: approvedResult,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+
+    const queued = orch.enqueueReview({ ...baseJob, headSha: 'sha-new' });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(queued).toBe(true);
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
+  });
+});
