@@ -88,7 +88,10 @@ describe('runAutofix()', () => {
   it('restores an out-of-scope tracked file the formatter touched, while committing the in-scope one', async () => {
     const { worktreeDir, cleanup } = await setupTestRepo();
     try {
-      const beforeSha = await git(['rev-parse', 'HEAD:out_of_scope.txt'], worktreeDir);
+      const beforeSha = await git(
+        ['rev-parse', 'HEAD:out_of_scope.txt'],
+        worktreeDir,
+      );
       const autofixCmd =
         `node -e "require('fs').writeFileSync('autofix_output.txt', 'reformatted'); ` +
         `require('fs').writeFileSync('out_of_scope.txt', 'reformatted-out-of-scope')"`;
@@ -112,7 +115,10 @@ describe('runAutofix()', () => {
         'utf-8',
       );
       expect(outOfScopeContent).toBe('pre-existing\n');
-      const afterSha = await git(['rev-parse', 'HEAD:out_of_scope.txt'], worktreeDir);
+      const afterSha = await git(
+        ['rev-parse', 'HEAD:out_of_scope.txt'],
+        worktreeDir,
+      );
       expect(afterSha).toBe(beforeSha);
 
       expect(result.restoredPaths).toContain('out_of_scope.txt');
