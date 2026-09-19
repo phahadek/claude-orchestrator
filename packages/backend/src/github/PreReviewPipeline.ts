@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { logger } from '../logger';
 import {
   getPRByNumber,
@@ -17,6 +18,7 @@ import {
   addAutofixSha,
   getTestRequestRunById,
   updateTestRequestRunState,
+  mirrorTestRequestRunAsKind,
 } from '../db/queries';
 import {
   filterBaseAttributableFailuresForF2Gate,
@@ -58,6 +60,20 @@ import type { ReviewJob, FlakeRecoveryOutcome } from './types';
 import type { ProjectConfig } from '../config';
 import type { PauseReason, StructuredTestResult } from '../db/types';
 import { parsePauseReason } from '../db/pauseReason';
+
+/**
+ * True when every command in `subset` (trimmed) also appears (trimmed) in
+ * `superset` — the cross-kind reuse guard buildTestsStage/buildVerifyStage
+ * both apply: a passed verify run only satisfies the tests stage, and a
+ * passed full run only lets verify skip commands, when config.test's
+ * command set is provably contained in config.verify's. config.test can
+ * declare a command absent from config.verify, in which case reuse must not
+ * apply.
+ */
+function commandsAreSubset(subset: string[], superset: string[]): boolean {
+  const supersetTrimmed = new Set(superset.map((c) => c.trim()));
+  return subset.every((c) => supersetTrimmed.has(c.trim()));
+}
 
 interface GateFailureDetail {
   failedCommand?: string;
@@ -360,11 +376,50 @@ export class PreReviewPipeline {
           contentHash = await computeWholeTreeContentHash(ctx.worktreePath);
           if (!contentHash) break;
 
+          // Cross-kind reuse: a passed full run at this exact hash already
+          // proves every command config.test declares. When config.test's
+          // command set is entirely contained in config.verify's, that run
+          // covers everything verify would otherwise re-run — admit only
+          // the remaining verify commands (typically just pyright) instead
+          // of re-running the whole suite. Never applies once a settled
+          // verify row already exists for this hash — the lane's own
+          // settled-run guard (admitTestRequest) replays that row before
+          // any of this even runs, so this only ever fires on the first
+          // verify request for a fresh hash.
+          let verifyCommands = config.verify;
+          let coveredByPassedFullRun = false;
+          if (commandsAreSubset(config.test, config.verify)) {
+            const fullRun = getLatestTestRequestRun(
+              ctx.project.id,
+              contentHash,
+              'full',
+            );
+            if (fullRun && fullRun.state === 'passed') {
+              coveredByPassedFullRun = true;
+              const testSet = new Set(config.test.map((c) => c.trim()));
+              verifyCommands = config.verify.filter(
+                (c) => !testSet.has(c.trim()),
+              );
+            }
+          }
+
+          if (coveredByPassedFullRun && verifyCommands.length === 0) {
+            logger.info(
+              `[PreReviewPipeline] verify content-cache hit PR #${ctx.prNumber} via=full — skipping`,
+            );
+            outcome = {
+              passed: true,
+              truncatedOutput: '',
+              structuredResult: null,
+            };
+            break;
+          }
+
           const laneResult = await this.runThroughTestLane(ctx, {
             projectId: ctx.project.id,
             contentHash,
             worktreePath: ctx.worktreePath,
-            commands: config.verify,
+            commands: verifyCommands,
             timeoutSec: config.test_timeout_sec,
             maxRssMb: config.test_max_rss_mb,
             sessionId: null,
@@ -697,14 +752,35 @@ export class PreReviewPipeline {
         let result: Awaited<ReturnType<typeof runTestCommands>> | undefined;
         for (let attempt = 0; attempt < 2; attempt++) {
           contentHash = await computeWholeTreeContentHash(ctx.worktreePath);
-          if (
-            contentHash &&
-            getLatestTestRequestRun(ctx.project.id, contentHash, 'full')
-          ) {
-            logger.info(
-              `[PreReviewPipeline] tests content-cache hit PR #${ctx.prNumber} SHA ${ctx.headSha.slice(0, 7)} — skipping`,
-            );
-            return;
+          if (contentHash) {
+            if (getLatestTestRequestRun(ctx.project.id, contentHash, 'full')) {
+              logger.info(
+                `[PreReviewPipeline] tests content-cache hit PR #${ctx.prNumber} SHA ${ctx.headSha.slice(0, 7)} — skipping`,
+              );
+              return;
+            }
+            // Cross-kind reuse: verify (pyright + test-static + test) is a
+            // strict superset of test (test-static + test) for a project
+            // that declares config.test ⊆ config.verify — a passed verify
+            // run at this exact hash already proved everything the tests
+            // stage exists to check. Mirror it under run_kind 'full' so
+            // every existing 'full'-only reader (PRMergeWatcher's F2 merge
+            // gate among them) sees a qualifying run without being widened
+            // to also accept 'verify'.
+            if (commandsAreSubset(config.test, config.verify)) {
+              const verifyRun = getLatestTestRequestRun(
+                ctx.project.id,
+                contentHash,
+                'verify',
+              );
+              if (verifyRun && verifyRun.state === 'passed') {
+                logger.info(
+                  `[PreReviewPipeline] tests content-cache hit PR #${ctx.prNumber} SHA ${ctx.headSha.slice(0, 7)} via=verify — skipping`,
+                );
+                mirrorTestRequestRunAsKind(verifyRun, randomUUID(), 'full');
+                return;
+              }
+            }
           }
 
           result = contentHash
