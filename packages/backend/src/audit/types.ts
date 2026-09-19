@@ -194,7 +194,9 @@ type EventType =
   | 'groom_candidate_suppressed'
   | 'groom_readiness_retry_capped'
   | 'pr_f2_verdict_pending'
-  | 'test_run_withdrawn';
+  | 'test_run_withdrawn'
+  | 'feedback_delivery_deferred'
+  | 'feedback_duplicate_dropped';
 
 type ActorType = 'ai' | 'human' | 'system';
 

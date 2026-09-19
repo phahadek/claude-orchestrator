@@ -1588,6 +1588,7 @@ export class ReviewOrchestrator {
             conflicted: prRow?.merge_state === 'dirty',
             baseBranch: prRow?.base_branch ?? undefined,
           }),
+          { headSha: prRow.head_sha ?? undefined },
         );
       } else {
         this.recordVerdictRoutingFailure(job, project.id, prRow?.task_id, {
@@ -1625,6 +1626,7 @@ export class ReviewOrchestrator {
             conflicted: prRow?.merge_state === 'dirty',
             baseBranch: prRow?.base_branch ?? undefined,
           }),
+          { headSha: freshPrRow?.head_sha ?? undefined },
         );
       } else {
         this.recordVerdictRoutingFailure(job, project.id, prRow?.task_id, {

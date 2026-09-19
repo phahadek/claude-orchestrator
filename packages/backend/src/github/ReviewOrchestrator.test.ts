@@ -1996,6 +1996,7 @@ describe('ReviewOrchestrator — incomplete verdict', () => {
       'coding-session-id',
       'ai-reviewer',
       expect.stringContaining('Incomplete'),
+      { headSha: 'sha-abc' },
     );
   });
 
@@ -2138,6 +2139,7 @@ describe('ReviewOrchestrator — error handling', () => {
       basePRRow.session_id,
       'ai-reviewer',
       expect.stringContaining('Review Feedback'),
+      { headSha: basePRRow.head_sha },
     );
     const reviewComplete = messages.find(
       (m: any) => m.type === 'pr_review_complete',

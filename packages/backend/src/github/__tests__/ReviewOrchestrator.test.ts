@@ -203,6 +203,7 @@ describe('ReviewOrchestrator — needs_changes verdict routing', () => {
       CODER_SESSION_ID,
       'ai-reviewer',
       expect.any(String),
+      { headSha: undefined },
     );
   });
 

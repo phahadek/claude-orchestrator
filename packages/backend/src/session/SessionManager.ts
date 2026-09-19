@@ -112,6 +112,9 @@ import {
   markInboxItemsDelivered,
   markInboxItemsDropped,
   enqueueFeedbackItem,
+  enqueueFeedbackItemDropped,
+  getLastAiReviewerInboxItem,
+  getLatestTestRequestRunForSession,
   addGrantedCapability,
   removeGrantedCapability,
   getGrantedCapabilities,
@@ -222,6 +225,34 @@ const MCP_UNREACHABLE_GRACE_MS = 3 * 60_000;
  * never respawned again by this path.
  */
 const MAX_MCP_UNREACHABLE_RESPAWNS = 2;
+
+/**
+ * Ceiling on how long enqueueFeedback will hold a non-actionable item for a
+ * session with a queued/running test-lane run before falling through to the
+ * normal immediate-delivery path regardless of lane state — mirrors
+ * OrphanedTaskSweeper's AWAITING_LANE_RESULT_CEILING_MS. Bounded so a wedged
+ * lane run can never silence a session indefinitely; measured against the
+ * oldest currently-undelivered item, not the lane run itself, since it is
+ * the session's silence — not the run's — that this bounds.
+ */
+const FEEDBACK_HOLD_CEILING_MS = 3 * 60 * 60 * 1000;
+
+/**
+ * Extracts the `**Verdict:** ...` line formatReviewFeedback always emits
+ * (reviewUtils.ts) and pairs it with the PR head_sha the caller observed at
+ * the verdict call site (ReviewOrchestrator.ts) — never re-derived from the
+ * payload, since the payload carries no SHA of its own. Returns null when
+ * the payload doesn't contain the expected verdict line (defensive; every
+ * ai-reviewer enqueue today goes through formatReviewFeedback).
+ */
+function buildAiReviewerDedupeKey(
+  payload: string,
+  headSha: string,
+): string | null {
+  const match = /\*\*Verdict:\*\*\s*(.+)/.exec(payload);
+  if (!match) return null;
+  return `${match[1].trim()}@${headSha}`;
+}
 
 /** Reason respawnForMcpUnreachable declined to respawn — see its doc comment. */
 type McpRespawnDeclineReason =
@@ -5137,13 +5168,64 @@ export class SessionManager extends EventEmitter {
     sessionId: string,
     source: string,
     payload: string,
-    opts: { attemptTerminalResume?: boolean } = {},
+    opts: { attemptTerminalResume?: boolean; headSha?: string } = {},
   ): Promise<void> {
-    enqueueFeedbackItem(sessionId, source, payload);
+    if (source === 'ai-reviewer' && opts.headSha) {
+      const dedupeKey = buildAiReviewerDedupeKey(payload, opts.headSha);
+      const last = getLastAiReviewerInboxItem(sessionId);
+      if (dedupeKey && last?.dedupe_key === dedupeKey) {
+        enqueueFeedbackItemDropped(sessionId, source, payload, dedupeKey);
+        const session = getSession(sessionId);
+        recordEvent({
+          event_type: 'feedback_duplicate_dropped',
+          actor_type: 'system',
+          actor_id: sessionId,
+          project_id: session?.project_id ?? null,
+          task_id: session?.task_id ?? null,
+          payload: { session_id: sessionId, source, dedupe_key: dedupeKey },
+        });
+        return;
+      }
+      enqueueFeedbackItem(sessionId, source, payload, dedupeKey);
+    } else {
+      enqueueFeedbackItem(sessionId, source, payload);
+    }
 
     // Live, mid-turn session — the next turn boundary (deliverInboxItems) will deliver it.
     const liveSession = this.sessions.get(sessionId);
     if (liveSession && liveSession.hasActiveTurn()) return;
+
+    // Hold a non-actionable item while the session is legitimately waiting
+    // on its own test-lane result — resuming it to re-deliver the same
+    // "still queued" status it already knows produces nothing but a
+    // context-burning no-op turn. test_request settlements (any outcome,
+    // including withdrawn/superseded) always release the hold, since that's
+    // the exact event the session is waiting on; human:* items are never
+    // held. Bounded by FEEDBACK_HOLD_CEILING_MS so a wedged lane can't
+    // silence a session indefinitely.
+    if (source !== 'test_request' && !source.startsWith('human:')) {
+      const session = getSession(sessionId);
+      const run = session?.project_id
+        ? getLatestTestRequestRunForSession(session.project_id, sessionId)
+        : undefined;
+      if (run && (run.state === 'queued' || run.state === 'running')) {
+        const undelivered = listUndeliveredInboxItems(sessionId);
+        const oldestEnqueuedAt = undelivered.length
+          ? Math.min(...undelivered.map((i) => i.enqueued_at))
+          : Date.now();
+        if (Date.now() - oldestEnqueuedAt < FEEDBACK_HOLD_CEILING_MS) {
+          recordEvent({
+            event_type: 'feedback_delivery_deferred',
+            actor_type: 'system',
+            actor_id: sessionId,
+            project_id: session?.project_id ?? null,
+            task_id: session?.task_id ?? null,
+            payload: { session_id: sessionId, source, run_id: run.id },
+          });
+          return;
+        }
+      }
+    }
 
     await this.deliverUndeliveredInboxItems(sessionId, 'enqueueFeedback', {
       attemptTerminalResume: opts.attemptTerminalResume ?? true,
