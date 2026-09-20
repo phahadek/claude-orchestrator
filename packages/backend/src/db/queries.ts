@@ -10407,10 +10407,7 @@ export function ingestTestRunResultsTx(
   incomplete: boolean,
   foreignConcurrentRunCount?: number | null,
   contentHash?: string | null,
-  onDigestSample?: (
-    testId: string,
-    sample: TestPerfDigestSampleResult,
-  ) => void,
+  onDigestSample?: (testId: string, sample: TestPerfDigestSampleResult) => void,
 ): TestOutcomeCounts {
   const counts: TestOutcomeCounts = {
     passed: 0,

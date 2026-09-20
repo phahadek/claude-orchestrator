@@ -3637,10 +3637,7 @@ describe('computeTestPerfBaseline', () => {
     // callback would hand it (reversed digest ring) — no DB row for this
     // test_id exists at all.
     const testId = 'baseline-from-memory-only';
-    const durations = [
-      500, 500, 500,
-      ...Array<number>(20).fill(100),
-    ];
+    const durations = [500, 500, 500, ...Array<number>(20).fill(100)];
 
     computeTestPerfBaseline(testId, durations);
 
@@ -3738,7 +3735,8 @@ describe('ingestTestRunResultsTx — skips baseline/flip-rate recompute for non-
       false,
       0,
       'seed-hash',
-      (id, sample) => computeTestPerfBaseline(id, [...sample.durations].reverse()),
+      (id, sample) =>
+        computeTestPerfBaseline(id, [...sample.durations].reverse()),
     );
   }
 
@@ -3774,7 +3772,14 @@ describe('ingestTestRunResultsTx — skips baseline/flip-rate recompute for non-
       ingestTestRunResultsTx(
         'non-solo-run',
         'proj-1',
-        [{ test_id: testId, name: testId, outcome: 'passed', duration_ms: 999 }],
+        [
+          {
+            test_id: testId,
+            name: testId,
+            outcome: 'passed',
+            duration_ms: 999,
+          },
+        ],
         opts.concurrentRunCount,
         opts.oomKilled,
         false,
@@ -3794,7 +3799,13 @@ describe('ingestTestRunResultsTx — skips baseline/flip-rate recompute for non-
 describe('ingestTestRunResultsTx — batches per-test baseline writes into the digest transaction', () => {
   it('rolls back the baseline write along with the digest write if the onDigestSample callback throws — proving they share one transaction, not two separate commits', () => {
     const testId = 'solo-atomic-rollback';
-    insertTestRequestRun('solo-run-2', 'proj-1', 'solo-hash-2', null, Date.now());
+    insertTestRequestRun(
+      'solo-run-2',
+      'proj-1',
+      'solo-hash-2',
+      null,
+      Date.now(),
+    );
 
     expect(() =>
       ingestTestRunResultsTx(
