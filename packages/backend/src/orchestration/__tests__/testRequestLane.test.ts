@@ -3568,7 +3568,7 @@ describe('computeTestPerfBaseline', () => {
     insertSample(testId, 9999, { concurrentRunCount: 2 });
     insertSample(testId, 1, { concurrentRunCount: 0, oomKilled: true });
 
-    computeTestPerfBaseline(testId);
+    computeTestPerfBaseline(testId, listRecentValidTestDurations(testId, 23));
 
     const baseline = getTestPerfBaseline(testId)!;
     expect(baseline.median_duration_ms).toBe(100);
@@ -3584,7 +3584,7 @@ describe('computeTestPerfBaseline', () => {
     insertSample(testId, 100, { concurrentRunCount: 0 });
     insertSample(testId, 1000, { concurrentRunCount: 0 }); // one noisy outlier as the most recent sample
 
-    computeTestPerfBaseline(testId);
+    computeTestPerfBaseline(testId, listRecentValidTestDurations(testId, 23));
 
     const baseline = getTestPerfBaseline(testId)!;
     expect(baseline.is_regressed).toBe(0);
@@ -3599,7 +3599,7 @@ describe('computeTestPerfBaseline', () => {
     insertSample(testId, 500, { concurrentRunCount: 0 });
     insertSample(testId, 500, { concurrentRunCount: 0 });
 
-    computeTestPerfBaseline(testId);
+    computeTestPerfBaseline(testId, listRecentValidTestDurations(testId, 23));
 
     const baseline = getTestPerfBaseline(testId)!;
     expect(baseline.is_regressed).toBe(1);
@@ -3611,12 +3611,12 @@ describe('computeTestPerfBaseline', () => {
     for (let i = 0; i < 10; i++)
       insertSample(testId, 50, { concurrentRunCount: 0 });
 
-    computeTestPerfBaseline(testId);
+    computeTestPerfBaseline(testId, listRecentValidTestDurations(testId, 23));
     const first = getTestPerfBaseline(testId)!;
     expect(first.sample_count).toBeGreaterThan(0);
 
     insertSample(testId, 60, { concurrentRunCount: 0 });
-    computeTestPerfBaseline(testId);
+    computeTestPerfBaseline(testId, listRecentValidTestDurations(testId, 23));
 
     const rows = db
       .prepare('SELECT * FROM test_perf_baselines WHERE test_id = ?')
@@ -3627,8 +3627,24 @@ describe('computeTestPerfBaseline', () => {
   });
 
   it('is a no-op when there are no valid samples for the test', () => {
-    computeTestPerfBaseline('never-seen-test');
+    computeTestPerfBaseline('never-seen-test', []);
     expect(getTestPerfBaseline('never-seen-test')).toBeUndefined();
+  });
+
+  it('computes from a purely in-memory durations array — never reads test_perf_baselines itself', () => {
+    // 20 baseline samples at 100ms plus a 3-sample recent shift to 500ms,
+    // newest-first, exactly as ingestTestRunResultsTx's onDigestSample
+    // callback would hand it (reversed digest ring) — no DB row for this
+    // test_id exists at all.
+    const testId = 'baseline-from-memory-only';
+    const durations = [500, 500, 500, ...Array<number>(20).fill(100)];
+
+    computeTestPerfBaseline(testId, durations);
+
+    const baseline = getTestPerfBaseline(testId)!;
+    expect(baseline.is_regressed).toBe(1);
+    expect(baseline.median_duration_ms).toBe(100);
+    expect(baseline.sample_count).toBe(20);
   });
 });
 
@@ -3665,6 +3681,186 @@ describe('ingestTestRunResults — inline baseline recomputation', () => {
     const baseline = getTestPerfBaseline('inline-t1');
     expect(baseline).toBeDefined();
     expect(baseline!.last_duration_ms).toBe(42);
+  });
+});
+
+/**
+ * Spies on every statement execution against test_perf_baselines. Patches
+ * Statement.prototype (shared by every cached prepared statement in
+ * queries.ts, so this catches a call regardless of whether that statement
+ * was already lazily prepared by an earlier test) rather than db.prepare,
+ * which would miss any statement queries.ts had already cached.
+ */
+function spyOnTestPerfBaselineStatements(): {
+  calls: Array<{ method: 'run' | 'get' | 'all' }>;
+  restore: () => void;
+} {
+  const proto = Object.getPrototypeOf(db.prepare('SELECT 1')) as Record<
+    'run' | 'get' | 'all',
+    (this: { source: string }, ...args: unknown[]) => unknown
+  >;
+  const calls: Array<{ method: 'run' | 'get' | 'all' }> = [];
+  const original = { run: proto.run, get: proto.get, all: proto.all };
+  (['run', 'get', 'all'] as const).forEach((method) => {
+    proto[method] = function (this: { source: string }, ...args: unknown[]) {
+      if (this.source.includes('test_perf_baselines')) calls.push({ method });
+      return original[method].apply(this, args);
+    };
+  });
+  return {
+    calls,
+    restore: () => {
+      proto.run = original.run;
+      proto.get = original.get;
+      proto.all = original.all;
+    },
+  };
+}
+
+describe('ingestTestRunResultsTx — skips baseline/flip-rate recompute for non-solo runs', () => {
+  function seedBaselineRow(testId: string): void {
+    insertTestRequestRun(
+      `seed-${testId}`,
+      'proj-1',
+      `seed-hash-${testId}`,
+      null,
+      Date.now(),
+    );
+    ingestTestRunResultsTx(
+      `seed-${testId}`,
+      'proj-1',
+      [{ test_id: testId, name: testId, outcome: 'passed', duration_ms: 42 }],
+      0,
+      false,
+      false,
+      0,
+      'seed-hash',
+      (id, sample) =>
+        computeTestPerfBaseline(id, [...sample.durations].reverse()),
+    );
+  }
+
+  it.each([
+    [
+      'a concurrent peer',
+      { concurrentRunCount: 1, oomKilled: false, foreignConcurrentRunCount: 0 },
+    ],
+    [
+      'an OOM kill',
+      { concurrentRunCount: 0, oomKilled: true, foreignConcurrentRunCount: 0 },
+    ],
+    [
+      'a foreign concurrent run',
+      { concurrentRunCount: 0, oomKilled: false, foreignConcurrentRunCount: 1 },
+    ],
+  ])(
+    'issues zero test_perf_baselines statements and leaves the existing row byte-identical for %s',
+    (_label, opts) => {
+      const testId = 'skip-wasted-work';
+      seedBaselineRow(testId);
+      const before = getTestPerfBaseline(testId)!;
+
+      insertTestRequestRun(
+        'non-solo-run',
+        'proj-1',
+        'non-solo-hash',
+        null,
+        Date.now(),
+      );
+      const spy = spyOnTestPerfBaselineStatements();
+      const onDigestSample = vi.fn();
+      ingestTestRunResultsTx(
+        'non-solo-run',
+        'proj-1',
+        [
+          {
+            test_id: testId,
+            name: testId,
+            outcome: 'passed',
+            duration_ms: 999,
+          },
+        ],
+        opts.concurrentRunCount,
+        opts.oomKilled,
+        false,
+        opts.foreignConcurrentRunCount,
+        'non-solo-hash',
+        onDigestSample,
+      );
+      spy.restore();
+
+      expect(spy.calls).toEqual([]);
+      expect(onDigestSample).not.toHaveBeenCalled();
+      expect(getTestPerfBaseline(testId)).toEqual(before);
+    },
+  );
+});
+
+describe('ingestTestRunResultsTx — batches per-test baseline writes into the digest transaction', () => {
+  it('rolls back the baseline write along with the digest write if the onDigestSample callback throws — proving they share one transaction, not two separate commits', () => {
+    const testId = 'solo-atomic-rollback';
+    insertTestRequestRun(
+      'solo-run-2',
+      'proj-1',
+      'solo-hash-2',
+      null,
+      Date.now(),
+    );
+
+    expect(() =>
+      ingestTestRunResultsTx(
+        'solo-run-2',
+        'proj-1',
+        [{ test_id: testId, name: testId, outcome: 'passed', duration_ms: 55 }],
+        0,
+        false,
+        false,
+        0,
+        'solo-hash-2',
+        () => {
+          throw new Error('boom');
+        },
+      ),
+    ).toThrow('boom');
+
+    // If the digest write and the baseline write were two separate
+    // (autocommit) writes, the digest write would have already committed
+    // before the callback ran and would survive this throw.
+    expect(getTestPerfBaseline(testId)).toBeUndefined();
+    expect(getTestRunSummary('solo-run-2')).toBeUndefined();
+  });
+});
+
+describe('ingestTestRunResults — flip-rate recompute reads test_perf_baselines only once per touched test', () => {
+  it('a solo run issues exactly one read against test_perf_baselines per test — neither computeTestPerfBaseline nor the flip-rate recompute re-reads it', () => {
+    const structured = JSON.stringify({
+      suites: [
+        {
+          tests: [
+            { id: 'flip-inline', name: 'n', outcome: 'passed', durationMs: 10 },
+          ],
+        },
+      ],
+    });
+    insertTestRequestRun(
+      'run-flip-inline',
+      'proj-1',
+      'hash-flip-inline',
+      null,
+      Date.now(),
+      0,
+    );
+    completeTestRequestRun('run-flip-inline', 'passed', 'ok', null, structured);
+    const run = getLatestTestRequestRun('proj-1', 'hash-flip-inline')!;
+
+    const spy = spyOnTestPerfBaselineStatements();
+    ingestTestRunResults(run);
+    spy.restore();
+
+    const reads = spy.calls.filter((c) => c.method === 'get');
+    // recordTestPerfDigestSample's own digest fetch — the only read against
+    // test_perf_baselines this whole ingestion performs.
+    expect(reads).toHaveLength(1);
   });
 });
 
@@ -3799,7 +3995,7 @@ describe('test_perf_baselines digest', () => {
       insertSample(testId, 100, { concurrentRunCount: 0 });
     }
 
-    computeTestPerfBaseline(testId);
+    computeTestPerfBaseline(testId, listRecentValidTestDurations(testId, 23));
 
     const baseline = getTestPerfBaseline(testId)!;
     // The 1000ms samples must have aged fully out of the window — the
