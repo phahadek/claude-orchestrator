@@ -29,6 +29,7 @@
         "src/db/walTruncateCheckpointWorker.ts",
         "src/db/flakyTestRollupWorker.ts",
         "src/db/sessionEventsQueryWorker.ts",
+        "src/db/testRunIngestionWorker.ts",
         "test/helpers/**/*.ts",
         "**/*.test.ts",
         "scripts/*.mjs"
