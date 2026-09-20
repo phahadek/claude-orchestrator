@@ -4158,9 +4158,7 @@ describe('ingestTestRunResults — per-project single-flight dispatch ordering',
     const run1 = getLatestTestRequestRun('proj-1', 'hash-serial-fail-1')!;
     const run2 = getLatestTestRequestRun('proj-1', 'hash-serial-fail-2')!;
 
-    await expect(ingestTestRunResults(run1)).rejects.toThrow(
-      'worker crashed',
-    );
+    await expect(ingestTestRunResults(run1)).rejects.toThrow('worker crashed');
     await ingestTestRunResults(run2);
 
     expect(second).toHaveBeenCalledTimes(1);
@@ -4190,7 +4188,13 @@ describe('sweepTestRunResultsExtraction — recovers a run whose dispatch failed
         },
       ],
     });
-    completeTestRequestRun('run-crash-recover', 'passed', 'ok', null, structured);
+    completeTestRequestRun(
+      'run-crash-recover',
+      'passed',
+      'ok',
+      null,
+      structured,
+    );
 
     mockIngestOffMainThread.mockImplementationOnce(() =>
       Promise.reject(new Error('worker exited before posting a result')),

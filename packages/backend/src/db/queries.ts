@@ -10562,9 +10562,7 @@ export function ingestTestRunResultsOffMainThread(
         if (msg.ok) {
           resolve(msg.result);
         } else {
-          reject(
-            new Error(`[test_run_ingestion] worker failed: ${msg.error}`),
-          );
+          reject(new Error(`[test_run_ingestion] worker failed: ${msg.error}`));
         }
         void worker.terminate();
       },

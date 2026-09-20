@@ -105,12 +105,16 @@ describe('ingestTestRunResultsOffMainThread', () => {
       });
 
       const failingRows = db
-        .prepare(`SELECT test_id FROM test_run_results WHERE test_request_run_id = ?`)
+        .prepare(
+          `SELECT test_id FROM test_run_results WHERE test_request_run_id = ?`,
+        )
         .all(runId) as { test_id: string }[];
       expect(failingRows.map((r) => r.test_id)).toEqual(['t2']);
 
       const baselineRows = db
-        .prepare(`SELECT test_id FROM test_perf_baselines WHERE project_id = ? ORDER BY test_id`)
+        .prepare(
+          `SELECT test_id FROM test_perf_baselines WHERE project_id = ? ORDER BY test_id`,
+        )
         .all('proj-1') as { test_id: string }[];
       expect(baselineRows.map((r) => r.test_id)).toEqual(['t1', 't2']);
     } finally {
@@ -138,10 +142,18 @@ describe('ingestTestRunResultsOffMainThread', () => {
         flipRateThresholdK: 2,
       };
 
-      const first = await ingestTestRunResultsOffMainThread(file, args, vi.fn());
+      const first = await ingestTestRunResultsOffMainThread(
+        file,
+        args,
+        vi.fn(),
+      );
       expect(first.alreadyExtracted).toBe(false);
 
-      const second = await ingestTestRunResultsOffMainThread(file, args, vi.fn());
+      const second = await ingestTestRunResultsOffMainThread(
+        file,
+        args,
+        vi.fn(),
+      );
       expect(second.alreadyExtracted).toBe(true);
 
       const summaryCount = (
@@ -196,7 +208,9 @@ describe('ingestTestRunResultsOffMainThread', () => {
 
       const baselineCount = (
         db
-          .prepare(`SELECT COUNT(*) as c FROM test_perf_baselines WHERE project_id = ?`)
+          .prepare(
+            `SELECT COUNT(*) as c FROM test_perf_baselines WHERE project_id = ?`,
+          )
           .get('proj-1') as { c: number }
       ).c;
       expect(baselineCount).toBe(totalTests);

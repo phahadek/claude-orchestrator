@@ -382,9 +382,7 @@ function run(): TestRunIngestionWorkerResult {
   database.pragma('busy_timeout = 5000');
   try {
     const alreadyExtracted = database
-      .prepare(
-        `SELECT 1 FROM test_run_summaries WHERE test_request_run_id = ?`,
-      )
+      .prepare(`SELECT 1 FROM test_run_summaries WHERE test_request_run_id = ?`)
       .get(data.testRequestRunId);
     if (alreadyExtracted) {
       return { alreadyExtracted: true, processed: 0, commitCount: 0 };
