@@ -10473,6 +10473,118 @@ export function ingestTestRunResultsTx(
   return counts;
 }
 
+/** Batch bound for testRunIngestionWorker.ts's per-transaction extraction commits. */
+export const TEST_RUN_INGESTION_WORKER_BATCH_SIZE = 500;
+
+export interface TestRunIngestionWorkerResult {
+  alreadyExtracted: boolean;
+  processed: number;
+  /** Number of write transactions committed against this run's tables — 0 when alreadyExtracted or via the sync fallback. */
+  commitCount: number;
+}
+
+/**
+ * Dispatches one completed run's full extraction + digest + baseline
+ * recompute (ingestTestRunResultsTx's write-side plus
+ * orchestration/testRequestLane.ts's computeTestPerfBaseline, folded
+ * together) to testRunIngestionWorker.ts on a worker thread, mirroring
+ * replaceFlaggedFlakyTestsRollupOffMainThread's precedent — see that
+ * function and flakyTestRollupWorker.ts's doc comment for why this can't
+ * import db.ts/queries.ts and instead opens its own connection against the
+ * same on-disk file.
+ *
+ * Falls back to the caller-supplied `syncFallback` for `:memory:`/no
+ * `targetPath` (test-mode databases have no on-disk file a worker thread
+ * could open), keeping the existing unit-test suite runnable without a real
+ * worker thread.
+ *
+ * Callers MUST single-flight dispatch per project — see
+ * testRequestLane.ts's per-project ingestion queue; two connections against
+ * the same file racing recordTestPerfDigestSample's read-modify-write would
+ * last-writer-wins and silently drop samples.
+ */
+export function ingestTestRunResultsOffMainThread(
+  targetPath: string | undefined,
+  args: {
+    testRequestRunId: string;
+    projectId: string;
+    tests: NewTestRunResultRow[];
+    concurrentRunCount: number | null;
+    oomKilled: boolean;
+    incomplete: boolean;
+    foreignConcurrentRunCount: number | null;
+    contentHash: string | null;
+    flipRateWindowN: number;
+    flipRateThresholdK: number;
+  },
+  syncFallback: () => void,
+): Promise<TestRunIngestionWorkerResult> {
+  if (!targetPath || targetPath === ':memory:') {
+    syncFallback();
+    return Promise.resolve({
+      alreadyExtracted: false,
+      processed: args.tests.length,
+      commitCount: 0,
+    });
+  }
+  return new Promise((resolve, reject) => {
+    const isTsNode = __filename.endsWith('.ts');
+    const workerPath = path.join(
+      __dirname,
+      isTsNode ? 'testRunIngestionWorker.ts' : 'testRunIngestionWorker.js',
+    );
+    const worker = new Worker(workerPath, {
+      workerData: {
+        dbPath: targetPath,
+        testRequestRunId: args.testRequestRunId,
+        projectId: args.projectId,
+        tests: args.tests,
+        concurrentRunCount: args.concurrentRunCount,
+        oomKilled: args.oomKilled,
+        incomplete: args.incomplete,
+        foreignConcurrentRunCount: args.foreignConcurrentRunCount,
+        contentHash: args.contentHash,
+        batchSize: TEST_RUN_INGESTION_WORKER_BATCH_SIZE,
+        flipRateWindowN: args.flipRateWindowN,
+        flipRateThresholdK: args.flipRateThresholdK,
+      },
+      execArgv: isTsNode ? ['-r', 'ts-node/register/transpile-only'] : [],
+    });
+    let settled = false;
+    worker.once(
+      'message',
+      (
+        msg:
+          | { ok: true; result: TestRunIngestionWorkerResult }
+          | { ok: false; error: string },
+      ) => {
+        settled = true;
+        if (msg.ok) {
+          resolve(msg.result);
+        } else {
+          reject(
+            new Error(`[test_run_ingestion] worker failed: ${msg.error}`),
+          );
+        }
+        void worker.terminate();
+      },
+    );
+    worker.once('error', (err) => {
+      settled = true;
+      reject(err);
+    });
+    worker.once('exit', (code) => {
+      if (!settled) {
+        reject(
+          new Error(
+            `[test_run_ingestion] worker exited with code ${code} before reporting a result`,
+          ),
+        );
+      }
+    });
+  });
+}
+
 /**
  * Per-run cap for listTestRunResultsForRun. Since ingestTestRunResultsTx
  * only writes a test_run_results row for non-passing outcomes, this now

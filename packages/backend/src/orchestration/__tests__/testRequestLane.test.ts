@@ -18,12 +18,22 @@ const {
   mockClearReportFiles,
   mockHasAdmission,
   mockLoadOrchestratorConfig,
+  mockIngestOffMainThread,
 } = vi.hoisted(() => ({
   mockRunTestCommands: vi.fn(),
   mockCollectStructuredTestResult: vi.fn(() => null),
   mockClearReportFiles: vi.fn(),
   mockHasAdmission: vi.fn(() => true),
   mockLoadOrchestratorConfig: vi.fn(() => ({ test_report_glob: '' })),
+  // Default implementation is set inside the vi.mock('../../db/queries', ...)
+  // factory below, once the real module is available — it delegates to the
+  // actual ingestTestRunResultsOffMainThread, so every test not explicitly
+  // exercising dispatch ordering/failure behaves exactly as before this
+  // worker existed (this whole suite runs against a `:memory:` db, so that
+  // real implementation always takes its synchronous in-process fallback
+  // branch). Individual tests layer a `mockImplementationOnce` on top to
+  // observe or control one specific dispatch.
+  mockIngestOffMainThread: vi.fn(),
 }));
 
 vi.mock('../../session/test-runner', () => ({
@@ -43,6 +53,20 @@ vi.mock('../../session/orchestrator-config', () => ({
 vi.mock('../memoryAdmission', () => ({
   hasTestRequestAdmission: mockHasAdmission,
 }));
+
+// See mockIngestOffMainThread's own doc comment above for why only this one
+// export is overridden — everything else in db/queries.ts runs for real
+// against the in-memory test db this suite mocks db/db.ts with.
+vi.mock('../../db/queries', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../db/queries')>();
+  mockIngestOffMainThread.mockImplementation(
+    actual.ingestTestRunResultsOffMainThread,
+  );
+  return {
+    ...actual,
+    ingestTestRunResultsOffMainThread: mockIngestOffMainThread,
+  };
+});
 
 import { db } from '../../db/db';
 import { logger } from '../../logger';
@@ -1083,7 +1107,7 @@ describe('runProjectTestRequest — the lane never fails fast', () => {
 
     const run = getLatestTestRequestRun('proj-1', 'hash-base-probe')!;
     expect(run.session_id).toBeNull();
-    ingestTestRunResults(run);
+    await ingestTestRunResults(run);
 
     const testIds = listTestRunResultsForRun(run.id).map((r) => r.test_id);
     expect(testIds).toContain('frontend-test');
@@ -1653,7 +1677,7 @@ describe('concurrent_run_count validity signal — end-to-end through the produc
     await runProjectTestRequest(baseSpec({ contentHash: 'hash-e2e-perf' }));
     const run = getLatestTestRequestRun('proj-1', 'hash-e2e-perf')!;
     expect(run.concurrent_run_count).toBe(0);
-    ingestTestRunResults(run);
+    await ingestTestRunResults(run);
 
     expect(listRecentValidTestDurations(testId, 10)).toEqual([123]);
 
@@ -1709,7 +1733,7 @@ describe('concurrent_run_count validity signal — end-to-end through the produc
       await runProjectTestRequest(baseSpec({ contentHash }));
       const run = getLatestTestRequestRun('proj-1', contentHash)!;
       expect(run.concurrent_run_count).toBe(0);
-      ingestTestRunResults(run);
+      await ingestTestRunResults(run);
     }
 
     const flag = computeTestFlipRateFlag(testId, 10, 2);
@@ -1732,7 +1756,7 @@ describe('concurrent_run_count validity signal — end-to-end through the produc
       const contentHash = `hash-e2e-breadth-${i}`;
       await runProjectTestRequest(baseSpec({ contentHash }));
       const run = getLatestTestRequestRun('proj-1', contentHash)!;
-      ingestTestRunResults(run);
+      await ingestTestRunResults(run);
     }
 
     const flipFlag = computeTestFlipRateFlag(testId, 10, 2);
@@ -2925,7 +2949,9 @@ describe('structured_result acquisition', () => {
       .get(first.runId) as { structured_result: string | null };
     expect(firstRowBefore.structured_result).not.toBeNull();
 
-    ingestTestRunResults(getLatestTestRequestRun('proj-1', 'hash-supersede')!);
+    await ingestTestRunResults(
+      getLatestTestRequestRun('proj-1', 'hash-supersede')!,
+    );
     const firstRunResultsBefore = listTestRunResultsForRun(first.runId);
     expect(firstRunResultsBefore).toHaveLength(1);
 
@@ -2979,7 +3005,7 @@ describe('structured_result acquisition', () => {
 // ── ingestTestRunResults — per-test extraction from structured_result ──────
 
 describe('ingestTestRunResults', () => {
-  it('writes zero test_run_results rows for a run whose results are all passed', () => {
+  it('writes zero test_run_results rows for a run whose results are all passed', async () => {
     const structured = JSON.stringify({
       suites: [
         {
@@ -3006,12 +3032,12 @@ describe('ingestTestRunResults', () => {
     );
 
     const run = getLatestTestRequestRun('proj-1', 'hash-extract-allpass')!;
-    ingestTestRunResults(run);
+    await ingestTestRunResults(run);
 
     expect(listTestRunResultsForRun('run-extract-allpass')).toHaveLength(0);
   });
 
-  it('writes exactly one row per non-passing result for a mixed run, carrying the run validity signals, and folds the passing result into the digest without a raw row', () => {
+  it('writes exactly one row per non-passing result for a mixed run, carrying the run validity signals, and folds the passing result into the digest without a raw row', async () => {
     const structured = JSON.stringify({
       suites: [
         {
@@ -3040,7 +3066,7 @@ describe('ingestTestRunResults', () => {
     );
 
     const run = getLatestTestRequestRun('proj-1', 'hash-extract-1')!;
-    ingestTestRunResults(run);
+    await ingestTestRunResults(run);
 
     const rows = listTestRunResultsForRun('run-extract-1');
     expect(rows).toHaveLength(1);
@@ -3057,7 +3083,7 @@ describe('ingestTestRunResults', () => {
     expect(listRecentValidTestDurations('t1', 10)).toEqual([]); // invalid — concurrent_run_count=2
   });
 
-  it('persists failureMessage/failureTraceExcerpt from structured_result onto the extracted row and getFailingTestIdsForRun', () => {
+  it('persists failureMessage/failureTraceExcerpt from structured_result onto the extracted row and getFailingTestIdsForRun', async () => {
     const structured = JSON.stringify({
       suites: [
         {
@@ -3096,7 +3122,7 @@ describe('ingestTestRunResults', () => {
       'proj-1',
       'hash-extract-failure-content',
     )!;
-    ingestTestRunResults(run);
+    await ingestTestRunResults(run);
 
     const rows = listTestRunResultsForRun('run-extract-failure-content');
     expect(rows).toHaveLength(1);
@@ -3115,7 +3141,7 @@ describe('ingestTestRunResults', () => {
     });
   });
 
-  it('the per-run summary record reports outcome counts equal to the ingested results for a mixed pass/fail/skip run', () => {
+  it('the per-run summary record reports outcome counts equal to the ingested results for a mixed pass/fail/skip run', async () => {
     const structured = JSON.stringify({
       suites: [
         {
@@ -3145,7 +3171,7 @@ describe('ingestTestRunResults', () => {
     );
 
     const run = getLatestTestRequestRun('proj-1', 'hash-extract-summary')!;
-    ingestTestRunResults(run);
+    await ingestTestRunResults(run);
 
     const summary = getTestRunSummary('run-extract-summary')!;
     expect(summary.passed_count).toBe(2);
@@ -3156,7 +3182,7 @@ describe('ingestTestRunResults', () => {
     expect(summary.total_duration_ms).toBe(60);
   });
 
-  it('is idempotent — calling it twice does not duplicate the raw failure row, the summary, or the digest', () => {
+  it('is idempotent — calling it twice does not duplicate the raw failure row, the summary, or the digest', async () => {
     const structured = JSON.stringify({
       suites: [
         {
@@ -3178,14 +3204,14 @@ describe('ingestTestRunResults', () => {
     completeTestRequestRun('run-extract-2', 'passed', 'ok', null, structured);
 
     const run = getLatestTestRequestRun('proj-1', 'hash-extract-2')!;
-    ingestTestRunResults(run);
-    ingestTestRunResults(run);
+    await ingestTestRunResults(run);
+    await ingestTestRunResults(run);
 
     expect(listTestRunResultsForRun('run-extract-2')).toHaveLength(1);
     expect(listRecentValidTestDurations('t1', 10)).toEqual([1]);
   });
 
-  it('is a no-op when structured_result is null', () => {
+  it('is a no-op when structured_result is null', async () => {
     insertTestRequestRun(
       'run-extract-3',
       'proj-1',
@@ -3196,13 +3222,13 @@ describe('ingestTestRunResults', () => {
     completeTestRequestRun('run-extract-3', 'passed', 'ok');
 
     const run = getLatestTestRequestRun('proj-1', 'hash-extract-3')!;
-    ingestTestRunResults(run);
+    await ingestTestRunResults(run);
 
     expect(listTestRunResultsForRun('run-extract-3')).toHaveLength(0);
     expect(runHasExtractedReport('run-extract-3')).toBe(false);
   });
 
-  it("never clears the run's own structured_result — the lone-key own-row clear must not be inlined into the synchronous completion path, so a race with stagedIntents.ts's session-feedback digest read (which happens right after ingestTestRunResults returns) is impossible", () => {
+  it("never clears the run's own structured_result — the lone-key own-row clear must not be inlined into the synchronous completion path, so a race with stagedIntents.ts's session-feedback digest read (which happens right after ingestTestRunResults returns) is impossible", async () => {
     const structured = JSON.stringify({
       suites: [
         {
@@ -3226,7 +3252,7 @@ describe('ingestTestRunResults', () => {
     );
 
     const run = getLatestTestRequestRun('proj-1', 'hash-extract-lonekey')!;
-    ingestTestRunResults(run);
+    await ingestTestRunResults(run);
 
     // Extraction succeeded (this is the only run for its key, so there is no
     // "other" row for clearSupersededStructuredResults to have cleared
@@ -3265,7 +3291,7 @@ describe('sweepTestRunResultsExtraction', () => {
     expect(listTestRunResultsForRun('run-sweep-1')).toHaveLength(1);
   });
 
-  it('clearExtractedStructuredResultsBatch clears an already-summarized row directly, and reports 0 once nothing matches', () => {
+  it('clearExtractedStructuredResultsBatch clears an already-summarized row directly, and reports 0 once nothing matches', async () => {
     const structured = JSON.stringify({
       suites: [
         { tests: [{ id: 't1', name: 'n', outcome: 'failed', durationMs: 5 }] },
@@ -3279,7 +3305,7 @@ describe('sweepTestRunResultsExtraction', () => {
       Date.now(),
     );
     completeTestRequestRun('run-batch-clear', 'passed', 'ok', null, structured);
-    ingestTestRunResults(
+    await ingestTestRunResults(
       getLatestTestRequestRun('proj-1', 'hash-batch-clear')!,
     );
 
@@ -3649,7 +3675,7 @@ describe('computeTestPerfBaseline', () => {
 });
 
 describe('ingestTestRunResults — inline baseline recomputation', () => {
-  it('recomputes the per-test baseline for every test_id touched by the extracted run', () => {
+  it('recomputes the per-test baseline for every test_id touched by the extracted run', async () => {
     const structured = JSON.stringify({
       suites: [
         {
@@ -3676,7 +3702,7 @@ describe('ingestTestRunResults — inline baseline recomputation', () => {
     );
 
     const run = getLatestTestRequestRun('proj-1', 'hash-inline-baseline')!;
-    ingestTestRunResults(run);
+    await ingestTestRunResults(run);
 
     const baseline = getTestPerfBaseline('inline-t1');
     expect(baseline).toBeDefined();
@@ -3832,7 +3858,7 @@ describe('ingestTestRunResultsTx — batches per-test baseline writes into the d
 });
 
 describe('ingestTestRunResults — flip-rate recompute reads test_perf_baselines only once per touched test', () => {
-  it('a solo run issues exactly one read against test_perf_baselines per test — neither computeTestPerfBaseline nor the flip-rate recompute re-reads it', () => {
+  it('a solo run issues exactly one read against test_perf_baselines per test — neither computeTestPerfBaseline nor the flip-rate recompute re-reads it', async () => {
     const structured = JSON.stringify({
       suites: [
         {
@@ -3854,7 +3880,7 @@ describe('ingestTestRunResults — flip-rate recompute reads test_perf_baselines
     const run = getLatestTestRequestRun('proj-1', 'hash-flip-inline')!;
 
     const spy = spyOnTestPerfBaselineStatements();
-    ingestTestRunResults(run);
+    await ingestTestRunResults(run);
     spy.restore();
 
     const reads = spy.calls.filter((c) => c.method === 'get');
@@ -4003,5 +4029,191 @@ describe('test_perf_baselines digest', () => {
     expect(baseline.median_duration_ms).toBe(100);
     expect(baseline.mad_duration_ms).toBe(0);
     expect(baseline.sample_count).toBe(20);
+  });
+});
+
+describe('ingestTestRunResults — per-project single-flight dispatch ordering', () => {
+  function structuredFor(testId: string, durationMs: number): string {
+    return JSON.stringify({
+      suites: [
+        {
+          tests: [
+            {
+              id: testId,
+              name: testId,
+              outcome: 'passed',
+              durationMs,
+            },
+          ],
+        },
+      ],
+    });
+  }
+
+  it('serializes two same-project dispatches — the second is not invoked until the first settles', async () => {
+    insertTestRequestRun(
+      'run-serial-1',
+      'proj-1',
+      'hash-serial-1',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun(
+      'run-serial-1',
+      'passed',
+      'ok',
+      null,
+      structuredFor('t-serial-1', 5),
+    );
+    insertTestRequestRun(
+      'run-serial-2',
+      'proj-1',
+      'hash-serial-2',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun(
+      'run-serial-2',
+      'passed',
+      'ok',
+      null,
+      structuredFor('t-serial-2', 5),
+    );
+
+    const order: string[] = [];
+    let releaseFirst: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    mockIngestOffMainThread.mockImplementationOnce(async () => {
+      order.push('first-start');
+      await firstGate;
+      order.push('first-end');
+      return { alreadyExtracted: false, processed: 1, commitCount: 1 };
+    });
+    mockIngestOffMainThread.mockImplementationOnce(async () => {
+      order.push('second-start');
+      return { alreadyExtracted: false, processed: 1, commitCount: 1 };
+    });
+
+    const run1 = getLatestTestRequestRun('proj-1', 'hash-serial-1')!;
+    const run2 = getLatestTestRequestRun('proj-1', 'hash-serial-2')!;
+    const p1 = ingestTestRunResults(run1);
+    const p2 = ingestTestRunResults(run2);
+
+    // Yield a full macrotask turn — enough for every pending microtask
+    // (including the queue's own .then/await chaining) to flush, while
+    // firstGate stays unresolved so the first dispatch stays suspended and
+    // the second must still not have started.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(order).toEqual(['first-start']);
+
+    releaseFirst!();
+    await p1;
+    await p2;
+
+    expect(order).toEqual(['first-start', 'first-end', 'second-start']);
+  });
+
+  it('does not let a same-project dispatch failure wedge later dispatches for that project', async () => {
+    insertTestRequestRun(
+      'run-serial-fail-1',
+      'proj-1',
+      'hash-serial-fail-1',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun(
+      'run-serial-fail-1',
+      'passed',
+      'ok',
+      null,
+      structuredFor('t-serial-fail-1', 5),
+    );
+    insertTestRequestRun(
+      'run-serial-fail-2',
+      'proj-1',
+      'hash-serial-fail-2',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun(
+      'run-serial-fail-2',
+      'passed',
+      'ok',
+      null,
+      structuredFor('t-serial-fail-2', 5),
+    );
+
+    mockIngestOffMainThread.mockImplementationOnce(() =>
+      Promise.reject(new Error('worker crashed')),
+    );
+    const second = vi.fn(async () => ({
+      alreadyExtracted: false,
+      processed: 1,
+      commitCount: 1,
+    }));
+    mockIngestOffMainThread.mockImplementationOnce(second);
+
+    const run1 = getLatestTestRequestRun('proj-1', 'hash-serial-fail-1')!;
+    const run2 = getLatestTestRequestRun('proj-1', 'hash-serial-fail-2')!;
+
+    await expect(ingestTestRunResults(run1)).rejects.toThrow(
+      'worker crashed',
+    );
+    await ingestTestRunResults(run2);
+
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('sweepTestRunResultsExtraction — recovers a run whose dispatch failed before writing anything', () => {
+  it('leaves structured_result intact after a failed dispatch, then completes extraction on the next sweep', async () => {
+    insertTestRequestRun(
+      'run-crash-recover',
+      'proj-1',
+      'hash-crash-recover',
+      null,
+      Date.now(),
+    );
+    const structured = JSON.stringify({
+      suites: [
+        {
+          tests: [
+            {
+              id: 't-crash-recover',
+              name: 't-crash-recover',
+              outcome: 'passed',
+              durationMs: 5,
+            },
+          ],
+        },
+      ],
+    });
+    completeTestRequestRun('run-crash-recover', 'passed', 'ok', null, structured);
+
+    mockIngestOffMainThread.mockImplementationOnce(() =>
+      Promise.reject(new Error('worker exited before posting a result')),
+    );
+
+    const run = getLatestTestRequestRun('proj-1', 'hash-crash-recover')!;
+    await expect(ingestTestRunResults(run)).rejects.toThrow(
+      'worker exited before posting a result',
+    );
+
+    // Nothing was written — the run still needs extraction, and its
+    // structured_result survives (nothing durable to clear it yet).
+    expect(runHasExtractedReport('run-crash-recover')).toBe(false);
+    expect(getTestRequestRunById('run-crash-recover')?.structured_result).toBe(
+      structured,
+    );
+
+    // The next sweep (the mock has reverted to its default — delegate to
+    // the real, `:memory:`-fallback implementation) re-dispatches and
+    // completes extraction.
+    await sweepTestRunResultsExtraction();
+
+    expect(runHasExtractedReport('run-crash-recover')).toBe(true);
+    expect(getTestRunSummary('run-crash-recover')?.total_count).toBe(1);
   });
 });
