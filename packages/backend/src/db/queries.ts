@@ -10199,11 +10199,25 @@ export const TEST_DURATION_DIGEST_CAPACITY = 32;
 /** >= flip_rate_window_n's max bound (config/settings.ts) — every production caller of computeTestFlipRateFlag passes that setting as windowN. */
 export const TEST_OUTCOME_DIGEST_CAPACITY = 200;
 
-interface DigestOutcomeSample {
+export interface DigestOutcomeSample {
   o: 'P' | 'F';
   t: number;
   /** Tree identity (test_request_runs.content_hash) the sample was produced on — absent on legacy samples predating this field. */
   h?: string;
+}
+
+/**
+ * recordTestPerfDigestSample's post-push digest state for one test — the
+ * same recent_outcomes/recent_durations arrays it just wrote, handed back so
+ * a caller inside the same ingestion (ingestTestRunResultsTx) can drive
+ * computeTestPerfBaseline/recomputeFlipRateFlags from memory instead of
+ * re-reading the row it was just written from.
+ */
+export interface TestPerfDigestSampleResult {
+  /** Oldest-first, capped at TEST_DURATION_DIGEST_CAPACITY — same order as the stored ring. */
+  durations: number[];
+  /** Oldest-first, capped at TEST_OUTCOME_DIGEST_CAPACITY — same order as the stored ring. */
+  outcomes: DigestOutcomeSample[];
 }
 
 function parseDigestOutcomes(json: string): DigestOutcomeSample[] {
@@ -10291,13 +10305,13 @@ export function recordTestPerfDigestSample(
   markers?: string[],
   foreignConcurrentRunCount?: number | null,
   contentHash?: string | null,
-): void {
+): TestPerfDigestSampleResult | null {
   if (
     concurrentRunCount !== 0 ||
     oomKilled ||
     (foreignConcurrentRunCount ?? 0) !== 0
   )
-    return;
+    return null;
 
   _stmtGetTestPerfDigest ??= db.prepare<{ test_id: string }>(
     `SELECT recent_outcomes, recent_durations FROM test_perf_baselines WHERE test_id = @test_id`,
@@ -10361,6 +10375,8 @@ export function recordTestPerfDigestSample(
     markers: markers && markers.length > 0 ? JSON.stringify(markers) : null,
     updated_at: sequencedAt,
   });
+
+  return { durations, outcomes };
 }
 
 /**
@@ -10372,6 +10388,15 @@ export function recordTestPerfDigestSample(
  * without its digest updates or vice versa. Returns the computed counts so
  * the caller (ingestTestRunResults in testRequestLane.ts) can log/inspect
  * them without a second read.
+ *
+ * `onDigestSample`, when supplied, is invoked once per distinct test_id that
+ * got a recorded digest sample (last-write-wins if a test_id repeats within
+ * `tests`), synchronously inside this same transaction — never for a test
+ * whose sample recordTestPerfDigestSample skipped (a non-solo run: a peer,
+ * an OOM kill, or a foreign concurrent run). This is what lets the caller do
+ * its own baseline/flip-rate writes as part of the one commit instead of an
+ * autocommit statement per test, and read the post-record digest state from
+ * memory instead of re-querying it.
  */
 export function ingestTestRunResultsTx(
   testRequestRunId: string,
@@ -10382,6 +10407,10 @@ export function ingestTestRunResultsTx(
   incomplete: boolean,
   foreignConcurrentRunCount?: number | null,
   contentHash?: string | null,
+  onDigestSample?: (
+    testId: string,
+    sample: TestPerfDigestSampleResult,
+  ) => void,
 ): TestOutcomeCounts {
   const counts: TestOutcomeCounts = {
     passed: 0,
@@ -10420,8 +10449,9 @@ export function ingestTestRunResultsTx(
       oomKilled,
       incomplete,
     );
+    const digestResults = new Map<string, TestPerfDigestSampleResult>();
     tests.forEach((t, index) => {
-      recordTestPerfDigestSample(
+      const result = recordTestPerfDigestSample(
         t.test_id,
         projectId,
         t.name,
@@ -10434,7 +10464,13 @@ export function ingestTestRunResultsTx(
         foreignConcurrentRunCount,
         contentHash,
       );
+      if (result) digestResults.set(t.test_id, result);
     });
+    if (onDigestSample) {
+      for (const [testId, result] of digestResults) {
+        onDigestSample(testId, result);
+      }
+    }
   });
   tx();
   return counts;
@@ -10599,10 +10635,32 @@ export function computeTestFlipRateFlag(
     | { recent_outcomes: string }
     | undefined;
   const all = row ? parseDigestOutcomes(row.recent_outcomes) : [];
+  return computeTestFlipRateFlagFromOutcomes(
+    testId,
+    all,
+    windowN,
+    thresholdK,
+    beforeMs,
+  );
+}
+
+/**
+ * computeTestFlipRateFlag's transition-counting core, factored out so a
+ * caller that already has a test's post-write outcome ring in memory (e.g.
+ * ingestTestRunResultsTx's onDigestSample callback) can recompute the flag
+ * without a recent_outcomes re-read.
+ */
+export function computeTestFlipRateFlagFromOutcomes(
+  testId: string,
+  outcomes: DigestOutcomeSample[],
+  windowN: number,
+  thresholdK: number,
+  beforeMs: number = Number.MAX_SAFE_INTEGER,
+): TestFlipRateFlag {
   const filtered =
     beforeMs === Number.MAX_SAFE_INTEGER
-      ? all
-      : all.filter((s) => toDigestMicros(s.t) < toDigestMicros(beforeMs));
+      ? outcomes
+      : outcomes.filter((s) => toDigestMicros(s.t) < toDigestMicros(beforeMs));
   const windowed = filtered.slice(-windowN);
 
   let transitionCount = 0;

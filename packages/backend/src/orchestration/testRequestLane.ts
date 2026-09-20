@@ -65,9 +65,9 @@ import {
   runHasExtractedReport,
   getTestRunSummary,
   ingestTestRunResultsTx,
-  listRecentValidTestDurations,
   upsertTestPerfBaseline,
   computeTestFlipRateFlag,
+  computeTestFlipRateFlagFromOutcomes,
   computeTestFailureBreadthFlag,
   getFailingTestIdsForRun,
   getProjectRowById,
@@ -84,6 +84,7 @@ import type {
   TestRunProducer,
   TestRunKind,
 } from '../db/types';
+import type { TestPerfDigestSampleResult } from '../db/queries';
 import { logger } from '../logger';
 import type { ServerMessage, TestRequestRunStatusPayload } from '../ws/types';
 
@@ -1163,6 +1164,14 @@ export function ingestTestRunResults(run: TestRequestRunRow): void {
   // breakdown. See this module's own classifyFailedRun, below.
   if (tests.length === 0 && !parsed.incomplete) return;
 
+  // ingestTestRunResultsTx's onDigestSample callback only fires for a test
+  // whose sample recordTestPerfDigestSample actually recorded — a non-solo
+  // run (a concurrent peer, an OOM kill, or a foreign concurrent run) never
+  // updates its digests, so recomputing baselines/flip-rate flags from those
+  // unchanged digests would just be wasted work reading/writing what's
+  // already on disk. Skipping this loop entirely for those runs is the fix:
+  // 284 of 297 runs ingested since deploy were non-solo.
+  const sampledTests = new Map<string, TestPerfDigestSampleResult>();
   ingestTestRunResultsTx(
     run.id,
     run.project_id,
@@ -1172,13 +1181,12 @@ export function ingestTestRunResults(run: TestRequestRunRow): void {
     !!parsed.incomplete,
     run.foreign_concurrent_run_count ?? null,
     run.content_hash,
+    (testId, sample) => {
+      sampledTests.set(testId, sample);
+      computeTestPerfBaseline(testId, [...sample.durations].reverse());
+    },
   );
-
-  const touchedTestIds = tests.map((t) => t.test_id);
-  for (const testId of new Set(touchedTestIds)) {
-    computeTestPerfBaseline(testId);
-  }
-  recomputeFlipRateFlags(touchedTestIds);
+  recomputeFlipRateFlags(sampledTests);
 }
 
 /**
@@ -1409,15 +1417,21 @@ function medianAbsoluteDeviation(values: number[], center: number): number {
 }
 
 /**
- * Recomputes and persists the rolling baseline for a single test_id from its
- * most recent valid samples. Safe to call for any test_id with at least one
- * valid sample; a no-op (no write) if there are none. Called inline for
- * every test_id touched by a just-extracted run, per the locked design's
- * "updated per ingestion" language.
+ * Recomputes and persists the rolling baseline for a single test_id from a
+ * caller-supplied newest-first window of its most recent valid durations
+ * (see listRecentValidTestDurations's contract, which this used to read
+ * directly — the ingestion path now passes the post-record digest state it
+ * already has in memory instead, so this never touches the database itself
+ * beyond the upsert). A no-op (no write) if `durations` is empty. Called
+ * inline for every test_id a just-extracted run recorded a digest sample
+ * for, per the locked design's "updated per ingestion" language.
  */
-export function computeTestPerfBaseline(testId: string): void {
-  const samples = listRecentValidTestDurations(
-    testId,
+export function computeTestPerfBaseline(
+  testId: string,
+  durations: number[],
+): void {
+  const samples = durations.slice(
+    0,
     BASELINE_WINDOW_SAMPLES + MIN_CONSECUTIVE_REGRESSED_SAMPLES,
   );
   if (samples.length === 0) return;
@@ -1460,20 +1474,27 @@ export function computeTestPerfBaseline(testId: string): void {
 }
 
 /**
- * Re-evaluates the flip-rate flag for every test id touched by this
- * ingestion. The flag is never persisted (see computeTestFlipRateFlag) — this
- * just surfaces the freshly recomputed state to the log, since a fresh
- * ingestion is exactly the moment a test's window (and therefore its flag)
- * can change.
+ * Re-evaluates the flip-rate flag for every test id that got a recorded
+ * digest sample from this ingestion, from the post-push outcome ring
+ * ingestTestRunResultsTx's onDigestSample callback already captured — never
+ * a fresh recent_outcomes read, since the in-memory state is byte-identical
+ * to what a re-read would return. The flag is never persisted (see
+ * computeTestFlipRateFlag) — this just surfaces the freshly recomputed state
+ * to the log, since a fresh ingestion is exactly the moment a test's window
+ * (and therefore its flag) can change.
  */
-function recomputeFlipRateFlags(testIds: string[]): void {
+function recomputeFlipRateFlags(
+  sampledTests: Map<string, TestPerfDigestSampleResult>,
+): void {
   const windowN = typedGetSetting('flip_rate_window_n');
   const thresholdK = typedGetSetting('flip_rate_threshold_k');
-  const seen = new Set<string>();
-  for (const testId of testIds) {
-    if (seen.has(testId)) continue;
-    seen.add(testId);
-    const flag = computeTestFlipRateFlag(testId, windowN, thresholdK);
+  for (const [testId, sample] of sampledTests) {
+    const flag = computeTestFlipRateFlagFromOutcomes(
+      testId,
+      sample.outcomes,
+      windowN,
+      thresholdK,
+    );
     if (flag.flagged) {
       logger.info(
         `[testRequestLane] test ${testId} flagged flaky: ${flag.transitionCount} transitions in last ${flag.sampleCount} valid samples`,
