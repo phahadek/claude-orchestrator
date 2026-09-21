@@ -23,31 +23,22 @@ import type Database from 'better-sqlite3';
 let tmpDir: string | undefined;
 
 // Mirrors testRequestLane.test.ts's own `vi.mock('../../db/db', async () =>
-// ...)` pattern (constructing the db inside the factory, not referencing an
-// outer variable) — vi.mock factories run during the hoisted import phase,
-// before any of this file's own top-level statements have executed, so a
-// factory that closed over an outer `const` declared below it would see it
-// uninitialized. Unlike that file's setupTestDb() (`:memory:`), this opens a
-// real on-disk file so ingestTestRunResultsOffMainThread's `db.name` check
-// takes the worker-thread branch instead of the sync fallback.
+// { const { setupTestDb } = await import(...); return { db: setupTestDb() };
+// })` pattern exactly — a single dynamic import of a statically-typed helper
+// module, not raw dynamic imports of 'fs'/'better-sqlite3' inline (CJS/ESM
+// interop for a dynamically-imported CJS package like better-sqlite3 is not
+// guaranteed to shape its `default` export the same way Vitest's transform
+// handles a static `import Database from 'better-sqlite3'`, unlike the
+// statically-imported setupFileBackedTestDb helper below). Unlike
+// setupTestDb() (`:memory:`), this opens a real on-disk file so
+// ingestTestRunResultsOffMainThread's `db.name` check takes the
+// worker-thread branch instead of the sync fallback.
 vi.mock('../../db/db', async () => {
-  const fsMod = await import('fs');
-  const osMod = await import('os');
-  const pathMod = await import('path');
-  const { default: DatabaseCtor } = await import('better-sqlite3');
-  const { runMigrations } = await import('../../db/schema.js');
-  const dir = fsMod.mkdtempSync(
-    pathMod.join(osMod.tmpdir(), 'test-request-lane-off-thread-test-'),
+  const { setupFileBackedTestDb } = await import(
+    '../../../test/helpers/setupFileBackedTestDb.js'
   );
+  const { db: database, dir } = setupFileBackedTestDb();
   tmpDir = dir;
-  const file = pathMod.join(dir, 'test.db');
-  const database = new DatabaseCtor(file);
-  // Mirrors db.ts's real startup pragmas — see
-  // flakyTestRollupOffMainThread.test.ts's matching comment for why this
-  // matters for a short-lived file-backed test database specifically.
-  database.pragma('journal_mode = WAL');
-  database.pragma('busy_timeout = 5000');
-  runMigrations(database);
   return { db: database };
 });
 
