@@ -35,7 +35,7 @@ import { Semaphore, LaneRunWithdrawnError } from '../tasks/deferralClassifier';
 import { recordEvent } from '../audit/AuditLog';
 import {
   runTestCommands,
-  collectStructuredTestResult,
+  collectStructuredTestResultOffMainThread,
   clearReportFiles,
   isTestIdTouchedByChangedFiles,
   type TestCommandResult,
@@ -950,7 +950,15 @@ async function executeTestRequestRun(
     let structuredResult: StructuredTestResult | null = null;
     if (testReportGlob) {
       try {
-        structuredResult = collectStructuredTestResult(
+        // Off the main thread — for a large suite, collectStructuredTestResult's
+        // readFileSync + JUnit-XML regex parse is real synchronous I/O+CPU
+        // work, and this handler is shared with every other request the
+        // backend serves. Awaited (not fire-and-forget): structured_result
+        // must be computed as one atomic step before completeTestRequestRun
+        // writes it and the run is broadcast as settled, exactly as before
+        // this moved off-thread — only the I/O itself no longer blocks the
+        // event loop while in flight.
+        structuredResult = await collectStructuredTestResultOffMainThread(
           spec.worktreePath,
           testReportGlob,
           spec.commands.length,

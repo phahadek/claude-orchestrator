@@ -38,7 +38,11 @@ const {
 
 vi.mock('../../session/test-runner', () => ({
   runTestCommands: mockRunTestCommands,
-  collectStructuredTestResult: mockCollectStructuredTestResult,
+  // testRequestLane.ts calls the off-main-thread wrapper, not
+  // collectStructuredTestResult directly — mockCollectStructuredTestResult's
+  // plain (non-Promise) return values still work under `await`, so every
+  // existing `mockReturnValue`/`mockReturnValueOnce` call site is unchanged.
+  collectStructuredTestResultOffMainThread: mockCollectStructuredTestResult,
   clearReportFiles: mockClearReportFiles,
 }));
 

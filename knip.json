@@ -30,6 +30,7 @@
         "src/db/flakyTestRollupWorker.ts",
         "src/db/sessionEventsQueryWorker.ts",
         "src/db/testRunIngestionWorker.ts",
+        "src/session/testReportCollectorWorker.ts",
         "test/helpers/**/*.ts",
         "**/*.test.ts",
         "scripts/*.mjs"
