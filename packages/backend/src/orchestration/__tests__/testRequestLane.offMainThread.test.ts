@@ -123,6 +123,11 @@ describe('ingestTestRunResults — off-main-thread dispatch against a real file-
       'hash-real-worker-5000',
       null,
       Date.now(),
+      // concurrentRunCount: 0 — a solo run, the only kind
+      // recordTestPerfDigestSample's validity predicate accepts; omitting
+      // this leaves it NULL, which fails that predicate and silently
+      // records zero baseline rows.
+      0,
     );
     const totalTests = 5000;
     const structured = structuredResultFor(
@@ -180,6 +185,7 @@ describe('ingestTestRunResults — off-main-thread dispatch against a real file-
       'hash-real-serial-1',
       null,
       Date.now(),
+      0,
     );
     completeTestRequestRun(
       'run-real-serial-1',
@@ -196,6 +202,7 @@ describe('ingestTestRunResults — off-main-thread dispatch against a real file-
       'hash-real-serial-2',
       null,
       Date.now(),
+      0,
     );
     completeTestRequestRun(
       'run-real-serial-2',
