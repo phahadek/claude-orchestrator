@@ -1821,15 +1821,17 @@ describe('PreReviewPipeline — cross-kind verify/tests reuse', () => {
             }
           : undefined,
     );
-    mockAdmitTestRequest.mockImplementation((_spec: { commands: string[] }) => ({
-      runId: 'run-enqueued',
-      status: 'running',
-      position: 0,
-      queueDepth: 0,
-      reused: false,
-      unchangedReplay: false,
-      result: Promise.resolve({ passed: true, output: '' }),
-    }));
+    mockAdmitTestRequest.mockImplementation(
+      (_spec: { commands: string[] }) => ({
+        runId: 'run-enqueued',
+        status: 'running',
+        position: 0,
+        queueDepth: 0,
+        reused: false,
+        unchangedReplay: false,
+        result: Promise.resolve({ passed: true, output: '' }),
+      }),
+    );
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 
@@ -1893,15 +1895,17 @@ describe('PreReviewPipeline — cross-kind verify/tests reuse', () => {
       (_projectId: string, _contentHash: string, runKind?: string) =>
         runKind === 'full' ? fullRun : undefined,
     );
-    mockAdmitTestRequest.mockImplementation((_spec: { commands: string[] }) => ({
-      runId: 'run-enqueued',
-      status: 'running',
-      position: 0,
-      queueDepth: 0,
-      reused: false,
-      unchangedReplay: false,
-      result: Promise.resolve({ passed: true, output: '' }),
-    }));
+    mockAdmitTestRequest.mockImplementation(
+      (_spec: { commands: string[] }) => ({
+        runId: 'run-enqueued',
+        status: 'running',
+        position: 0,
+        queueDepth: 0,
+        reused: false,
+        unchangedReplay: false,
+        result: Promise.resolve({ passed: true, output: '' }),
+      }),
+    );
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 

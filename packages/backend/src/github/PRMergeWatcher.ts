@@ -2017,11 +2017,7 @@ export class PRMergeWatcher extends EventEmitter {
         // mistake for a retry of the tree that already failed — clear the
         // stale pre_review_stage (and any terminal pause) before enqueueing
         // so the gate actually re-runs against the new head.
-        clearTerminalPRFlags(
-          prRow.pr_number,
-          prRow.repo,
-          'head_sha_advance',
-        );
+        clearTerminalPRFlags(prRow.pr_number, prRow.repo, 'head_sha_advance');
         this.reviewOrchestrator.enqueueReview({
           prNumber: prRow.pr_number,
           repo: prRow.repo,
