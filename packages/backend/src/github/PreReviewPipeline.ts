@@ -30,7 +30,9 @@ import {
   loadAutofixCommands,
   runAutofix,
   getChangedFiles,
+  getHeadSha,
 } from '../session/autofix-runner';
+import { parseGateFailureDetail } from '../orchestration/gateFailureDetail';
 import {
   normalizeAnalyzeCommand,
   isAnalyzeCommandTriggered,
@@ -1134,6 +1136,7 @@ export class PreReviewPipeline {
     stage: GateStageDescriptor,
     job: ReviewJob,
     detail: GateFailureDetail,
+    worktreePath: string,
   ): Promise<void> {
     const prRow = getPRByNumber(job.prNumber, job.repo);
 
@@ -1145,6 +1148,21 @@ export class PreReviewPipeline {
           ? 'gate_timeout_infra_failure'
           : stage.verdict;
 
+    // The worktree's HEAD at the moment this gate failed — not
+    // pull_requests.head_sha, which can already be behind by the time this
+    // runs. Read fresh so the no-diff-autofix guard below can tell a true
+    // retry of this exact tree apart from a push that landed in between.
+    let failedHeadSha: string | undefined;
+    if (worktreePath) {
+      try {
+        failedHeadSha = await getHeadSha(worktreePath);
+      } catch (e) {
+        logger.warn(
+          `[PreReviewPipeline] handleGateFailure: failed to read worktree HEAD for PR #${job.prNumber}: ${e}`,
+        );
+      }
+    }
+
     setPRReviewResult(
       job.prNumber,
       job.repo,
@@ -1154,6 +1172,7 @@ export class PreReviewPipeline {
         dimensions: [],
         failedCommand: detail.failedCommand,
         truncatedOutput: detail.truncatedOutput,
+        failedHeadSha,
       }),
     );
 
@@ -1240,8 +1259,26 @@ export class PreReviewPipeline {
     // Captured before this run touches anything: if this run was dispatched
     // as a retry of an already-failed gate (verify/analyze), and autofix
     // below turns out to have produced no diff, the tree that gate would
-    // re-run against is byte-identical to the one that already failed it.
+    // re-run against is byte-identical to the one that already failed it —
+    // but only when the worktree's HEAD right now still equals the HEAD
+    // handleGateFailure recorded when that gate failed. A push landing in
+    // between advances the worktree HEAD without necessarily changing
+    // pre_review_stage, so that comparison (not just the stale stage) is
+    // what tells a true retry apart from a suppressed push.
     const priorPreReviewStage = prRow?.pre_review_stage ?? null;
+    const { failedHeadSha: priorFailedHeadSha } = parseGateFailureDetail(
+      prRow?.review_result ?? null,
+    );
+    let worktreeHeadAtRunStart: string | undefined;
+    if (worktreePath) {
+      try {
+        worktreeHeadAtRunStart = await getHeadSha(worktreePath);
+      } catch (e) {
+        logger.warn(
+          `[PreReviewPipeline] run: failed to read worktree HEAD for PR #${job.prNumber}: ${e}`,
+        );
+      }
+    }
     const retryableBlockedStages = new Set(
       this.stages
         .filter(
@@ -1309,7 +1346,7 @@ export class PreReviewPipeline {
               failedCommand: failure.failedCommand,
             },
           );
-          await this.handleGateFailure(stage, job, failure);
+          await this.handleGateFailure(stage, job, failure, ctx.worktreePath);
           return { passed: false };
         }
         logger.info(
@@ -1332,7 +1369,10 @@ export class PreReviewPipeline {
           stage.id === 'autofix' &&
           ctx.autofixNoDiff &&
           priorPreReviewStage &&
-          retryableBlockedStages.has(priorPreReviewStage)
+          retryableBlockedStages.has(priorPreReviewStage) &&
+          worktreeHeadAtRunStart &&
+          priorFailedHeadSha &&
+          worktreeHeadAtRunStart === priorFailedHeadSha
         ) {
           const blockedStage = this.stages.find(
             (s): s is GateStageDescriptor =>
@@ -1353,6 +1393,8 @@ export class PreReviewPipeline {
               stage: blockedStage?.id ?? priorPreReviewStage,
               reason:
                 'autofix produced no diff; tree is unchanged from the prior failure so the gate was not re-run',
+              head_sha: worktreeHeadAtRunStart,
+              failed_head_sha: priorFailedHeadSha,
             },
           });
           return { passed: false };

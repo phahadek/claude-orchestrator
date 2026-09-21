@@ -2012,6 +2012,12 @@ export class PRMergeWatcher extends EventEmitter {
         const session = prRow.session_id
           ? getSession(prRow.session_id)
           : undefined;
+        // Mirrors StalledPRReconciler.reDriveIfPushDetected: a push after a
+        // gate failure lands on a tree the no-diff-autofix guard must not
+        // mistake for a retry of the tree that already failed — clear the
+        // stale pre_review_stage (and any terminal pause) before enqueueing
+        // so the gate actually re-runs against the new head.
+        clearTerminalPRFlags(prRow.pr_number, prRow.repo, 'head_sha_advance');
         this.reviewOrchestrator.enqueueReview({
           prNumber: prRow.pr_number,
           repo: prRow.repo,

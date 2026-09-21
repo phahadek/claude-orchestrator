@@ -347,3 +347,54 @@ describe('PRMergeWatcher push re-review — re-triggers a fresh depth-review pas
     ).not.toHaveBeenCalled();
   });
 });
+
+describe('PRMergeWatcher push re-review — post-gate-failure push clears stale pre_review_stage', () => {
+  let github: GitHubClient;
+  let sessions: SessionManager;
+  let reviewOrchestrator: ReviewOrchestrator;
+  let watcher: PRMergeWatcher;
+  let broadcast: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    github = makeGithubClient();
+    sessions = makeSessionManager();
+    reviewOrchestrator = makeReviewOrchestrator();
+    broadcast = vi.fn();
+
+    watcher = new PRMergeWatcher(github, sessions, undefined, broadcast);
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    vi.mocked(getProjectByGithubRepo).mockReturnValue(makeProject());
+  });
+
+  it('clears terminal PR flags via head_sha_advance before enqueueing the review', async () => {
+    const { clearTerminalPRFlags } = await import('../../db/queries');
+
+    await watcher.handlePushDetected(
+      makePRRow({
+        review_session_id: null,
+        pre_review_stage: 'blocked_verify',
+        review_result: JSON.stringify({
+          verdict: 'verify_failed',
+          summary: 'verify failed',
+          dimensions: [],
+        }),
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(clearTerminalPRFlags).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'head_sha_advance',
+    );
+    expect(reviewOrchestrator.enqueueReview).toHaveBeenCalledTimes(1);
+
+    const clearOrder =
+      vi.mocked(clearTerminalPRFlags).mock.invocationCallOrder[0];
+    const enqueueOrder = vi.mocked(reviewOrchestrator.enqueueReview).mock
+      .invocationCallOrder[0];
+    expect(clearOrder).toBeLessThan(enqueueOrder);
+  });
+});

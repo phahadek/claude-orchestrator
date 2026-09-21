@@ -155,10 +155,12 @@ const mockRunAutofix = vi
   .fn()
   .mockResolvedValue({ success: true, summary: 'ok', commitSha: null });
 const mockGetChangedFiles = vi.fn().mockResolvedValue([]);
+const mockGetHeadSha = vi.fn().mockResolvedValue('abc123def456');
 vi.mock('../../session/autofix-runner', () => ({
   loadAutofixCommands: (...args: unknown[]) => mockLoadAutofixCommands(...args),
   runAutofix: (...args: unknown[]) => mockRunAutofix(...args),
   getChangedFiles: (...args: unknown[]) => mockGetChangedFiles(...args),
+  getHeadSha: (...args: unknown[]) => mockGetHeadSha(...args),
 }));
 
 const mockRunTestCommands = vi
@@ -207,6 +209,7 @@ vi.mock('../../audit/AuditLog', () => ({
 
 import { PreReviewPipeline } from '../PreReviewPipeline';
 import type { ReviewJob } from '../types';
+import { parseGateFailureDetail } from '../../orchestration/gateFailureDetail';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -275,6 +278,7 @@ beforeEach(() => {
     summary: 'ok',
     commitSha: null,
   });
+  mockGetHeadSha.mockResolvedValue(HEAD_SHA);
   mockValidateAndRepairGitConfig.mockResolvedValue({
     healthy: true,
     repaired: false,
@@ -539,11 +543,16 @@ describe('PreReviewPipeline — autofix gate', () => {
 });
 
 describe('PreReviewPipeline — autofix no-diff retry short-circuit', () => {
-  it('does not re-enter the failed gate when autofix produces no diff on retry', async () => {
+  it('does not re-enter the failed gate when autofix produces no diff on retry against the exact tree that failed', async () => {
     mockGetPRByNumber.mockReturnValue(
       makePRRow({
         pre_review_stage: 'blocked_verify',
         pause_reason: 'ci_failing',
+        review_result: JSON.stringify({
+          verdict: 'verify_failed',
+          summary: 'verify failed',
+          failedHeadSha: HEAD_SHA,
+        }),
       }),
     );
     mockLoadAutofixCommands.mockReturnValue(['npm run fix']);
@@ -552,6 +561,9 @@ describe('PreReviewPipeline — autofix no-diff retry short-circuit', () => {
       summary: 'autofix commands produced no diff',
       commitSha: null,
     });
+    // The worktree HEAD at this run's start is byte-identical to the one
+    // that failed — a true retry, not a push.
+    mockGetHeadSha.mockResolvedValue(HEAD_SHA);
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 
@@ -584,11 +596,85 @@ describe('PreReviewPipeline — autofix no-diff retry short-circuit', () => {
           prNumber: PR_NUMBER,
           repo: REPO,
           stage: 'verify',
+          head_sha: HEAD_SHA,
+          failed_head_sha: HEAD_SHA,
         }),
       }),
     );
     // Existing pause reason is left alone — untouched by this run.
     expect(mockSetPauseReason).not.toHaveBeenCalled();
+  });
+
+  it('re-runs verify when the worktree HEAD has advanced past the SHA that failed (a push landed, not a retry)', async () => {
+    mockGetPRByNumber.mockReturnValue(
+      makePRRow({
+        pre_review_stage: 'blocked_verify',
+        pause_reason: 'ci_failing',
+        review_result: JSON.stringify({
+          verdict: 'verify_failed',
+          summary: 'verify failed',
+          failedHeadSha: 'sha-that-failed',
+        }),
+      }),
+    );
+    mockLoadAutofixCommands.mockReturnValue(['npm run fix']);
+    mockRunAutofix.mockResolvedValue({
+      success: true,
+      summary: 'autofix commands produced no diff',
+      commitSha: null,
+    });
+    // A fix was pushed after the failure — the worktree HEAD has moved on.
+    mockGetHeadSha.mockResolvedValue('sha-after-push');
+    mockLaneResult({ passed: true, output: '' });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(true);
+    expect(mockAdmitTestRequest).toHaveBeenCalledOnce();
+    expect(sm.emit).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        type: 'pipeline_stage_entered',
+        stage: 'verify',
+      }),
+    );
+    expect(mockRecordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'autofix_noop_retry_skipped' }),
+    );
+  });
+
+  it('re-runs verify when the prior gate failure predates failedHeadSha being recorded', async () => {
+    mockGetPRByNumber.mockReturnValue(
+      makePRRow({
+        pre_review_stage: 'blocked_verify',
+        pause_reason: 'ci_failing',
+        review_result: JSON.stringify({
+          verdict: 'verify_failed',
+          summary: 'verify failed',
+          // No failedHeadSha — a pre-fix row.
+        }),
+      }),
+    );
+    mockLoadAutofixCommands.mockReturnValue(['npm run fix']);
+    mockRunAutofix.mockResolvedValue({
+      success: true,
+      summary: 'autofix commands produced no diff',
+      commitSha: null,
+    });
+    mockGetHeadSha.mockResolvedValue(HEAD_SHA);
+    mockLaneResult({ passed: true, output: '' });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(true);
+    expect(mockAdmitTestRequest).toHaveBeenCalledOnce();
+    expect(mockRecordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'autofix_noop_retry_skipped' }),
+    );
   });
 
   it('still re-enters the failed stage and can pass on retry when autofix commits a diff', async () => {
@@ -935,6 +1021,25 @@ describe('PreReviewPipeline — verify gate', () => {
       'ci_failing',
       'type error',
     );
+  });
+
+  it('stamps the worktree HEAD it failed on into review_result as failedHeadSha, round-trippable via parseGateFailureDetail', async () => {
+    mockGetHeadSha.mockResolvedValue('worktree-head-at-failure');
+    mockLaneResult({
+      passed: false,
+      output: 'type error',
+      failedCommand: 'tsc',
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    await pipeline.run(makeJob(), makeProject());
+
+    const [, , reviewResultJson] = vi.mocked(mockSetPRReviewResult).mock
+      .calls[0];
+    expect(parseGateFailureDetail(reviewResultJson as string)).toMatchObject({
+      failedHeadSha: 'worktree-head-at-failure',
+    });
   });
 
   it('passes when verify succeeds', async () => {
@@ -1716,15 +1821,17 @@ describe('PreReviewPipeline — cross-kind verify/tests reuse', () => {
             }
           : undefined,
     );
-    mockAdmitTestRequest.mockImplementation((_spec: { commands: string[] }) => ({
-      runId: 'run-enqueued',
-      status: 'running',
-      position: 0,
-      queueDepth: 0,
-      reused: false,
-      unchangedReplay: false,
-      result: Promise.resolve({ passed: true, output: '' }),
-    }));
+    mockAdmitTestRequest.mockImplementation(
+      (_spec: { commands: string[] }) => ({
+        runId: 'run-enqueued',
+        status: 'running',
+        position: 0,
+        queueDepth: 0,
+        reused: false,
+        unchangedReplay: false,
+        result: Promise.resolve({ passed: true, output: '' }),
+      }),
+    );
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 
@@ -1788,15 +1895,17 @@ describe('PreReviewPipeline — cross-kind verify/tests reuse', () => {
       (_projectId: string, _contentHash: string, runKind?: string) =>
         runKind === 'full' ? fullRun : undefined,
     );
-    mockAdmitTestRequest.mockImplementation((_spec: { commands: string[] }) => ({
-      runId: 'run-enqueued',
-      status: 'running',
-      position: 0,
-      queueDepth: 0,
-      reused: false,
-      unchangedReplay: false,
-      result: Promise.resolve({ passed: true, output: '' }),
-    }));
+    mockAdmitTestRequest.mockImplementation(
+      (_spec: { commands: string[] }) => ({
+        runId: 'run-enqueued',
+        status: 'running',
+        position: 0,
+        queueDepth: 0,
+        reused: false,
+        unchangedReplay: false,
+        result: Promise.resolve({ passed: true, output: '' }),
+      }),
+    );
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 

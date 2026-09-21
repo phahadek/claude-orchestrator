@@ -235,7 +235,7 @@ async function restoreOutOfScopeChanges(
   return restored;
 }
 
-async function getHeadSha(cwd: string): Promise<string> {
+export async function getHeadSha(cwd: string): Promise<string> {
   const { stdout } = await spawnCmd('git', ['rev-parse', 'HEAD'], { cwd });
   return stdout.trim();
 }
