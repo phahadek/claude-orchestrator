@@ -16,7 +16,7 @@
  * actually takes the worker-thread branch instead of the `:memory:` sync
  * fallback.
  */
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterAll, vi } from 'vitest';
 import fs from 'fs';
 import type Database from 'better-sqlite3';
 
@@ -61,7 +61,12 @@ import {
 } from '../../db/queries';
 import { ingestTestRunResults } from '../testRequestLane';
 
-afterEach(() => {
+// afterAll, not afterEach: vi.mock('../../db/db', ...) factory below runs
+// once per test file (module-level caching), not once per test — both `it`
+// blocks in this file share the one database/file it constructs. Deleting
+// the file between tests would leave the second test's worker thread
+// opening a fresh, schema-less file at the same (now-recreated) path.
+afterAll(() => {
   if (tmpDir) {
     fs.rmSync(tmpDir, { recursive: true, force: true });
     tmpDir = undefined;
