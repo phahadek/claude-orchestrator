@@ -34,9 +34,8 @@ let tmpDir: string | undefined;
 // ingestTestRunResultsOffMainThread's `db.name` check takes the
 // worker-thread branch instead of the sync fallback.
 vi.mock('../../db/db', async () => {
-  const { setupFileBackedTestDb } = await import(
-    '../../../test/helpers/setupFileBackedTestDb.js'
-  );
+  const { setupFileBackedTestDb } =
+    await import('../../../test/helpers/setupFileBackedTestDb.js');
   const { db: database, dir } = setupFileBackedTestDb();
   tmpDir = dir;
   return { db: database };
