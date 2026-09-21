@@ -48,6 +48,7 @@ import {
   formatMergeConflictFeedback,
 } from '../github/reviewUtils';
 import { supersedeReviewSession } from '../github/reviewSessionSupersede';
+import { parseGateFailureDetail } from './gateFailureDetail';
 
 /**
  * Replacement for the retired whole-tree base-attributability check: true
@@ -1133,31 +1134,3 @@ export class StalledPRReconciler {
   }
 }
 
-/** Extract the gate-failure summary persisted by PreReviewPipeline, if any. */
-/**
- * Extracts the real failed command and its truncated output from a gate
- * failure's persisted review_result — never the prose `summary` field, which
- * for a verify failure reads `verify failed: <command>` and would render as
- * a doubled, nonsensical "Failed command" line if echoed back into the
- * failedCommand slot (see PreReviewPipeline.buildVerifyStage, which writes
- * both fields alongside summary for exactly this reason).
- */
-function parseGateFailureDetail(reviewResult: string | null): {
-  failedCommand: string | undefined;
-  truncatedOutput: string | undefined;
-} {
-  if (!reviewResult)
-    return { failedCommand: undefined, truncatedOutput: undefined };
-  try {
-    const parsed = JSON.parse(reviewResult) as {
-      failedCommand?: string;
-      truncatedOutput?: string;
-    };
-    return {
-      failedCommand: parsed.failedCommand,
-      truncatedOutput: parsed.truncatedOutput,
-    };
-  } catch {
-    return { failedCommand: undefined, truncatedOutput: undefined };
-  }
-}
