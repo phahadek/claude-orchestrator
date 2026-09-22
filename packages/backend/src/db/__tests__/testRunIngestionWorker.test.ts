@@ -169,7 +169,7 @@ describe('ingestTestRunResultsOffMainThread', () => {
     }
   }, 60000);
 
-  it('commits a large fixture in multiple bounded transactions instead of one — a 5,000-test fixture commits in at least 10 transactions at the 500-row batch bound', async () => {
+  it('commits a large fixture in multiple bounded transactions instead of one — a 5,000-test fixture commits in at least 10 transactions at the 500-row batch bound, with zero test_perf_baselines/test_run_results/test_run_summaries statements against the main-thread connection', async () => {
     const { db, file } = openFileBackedDb();
     try {
       const runId = insertRun(db, 'proj-1');
@@ -184,6 +184,19 @@ describe('ingestTestRunResultsOffMainThread', () => {
           duration_ms: 10,
         }),
       );
+
+      // Records every SQL string this test's own main-thread `db` handle
+      // prepares while the worker dispatch below is in flight — proves the
+      // extraction/baseline write path never touches those three tables on
+      // this connection, only the worker's own separate one does.
+      const mainThreadStatements: string[] = [];
+      const originalPrepare = db.prepare.bind(db);
+      const prepareSpy = vi
+        .spyOn(db, 'prepare')
+        .mockImplementation((sql: string) => {
+          mainThreadStatements.push(sql);
+          return originalPrepare(sql);
+        });
 
       const result = await ingestTestRunResultsOffMainThread(
         file,
@@ -201,6 +214,18 @@ describe('ingestTestRunResultsOffMainThread', () => {
         },
         vi.fn(),
       );
+      prepareSpy.mockRestore();
+
+      const forbiddenTables = [
+        'test_perf_baselines',
+        'test_run_results',
+        'test_run_summaries',
+      ];
+      expect(
+        mainThreadStatements.filter((sql) =>
+          forbiddenTables.some((table) => sql.includes(table)),
+        ),
+      ).toEqual([]);
 
       expect(result.processed).toBe(totalTests);
       // 1 summary-row transaction + 10 extraction batches of 500.
@@ -214,6 +239,80 @@ describe('ingestTestRunResultsOffMainThread', () => {
           .get('proj-1') as { c: number }
       ).c;
       expect(baselineCount).toBe(totalTests);
+    } finally {
+      db.close();
+    }
+  }, 60000);
+
+  it('records strictly increasing digest sample timestamps across two sequential worker dispatches for the same test_id — the single-flight-per-project queue in testRequestLane.ts serializes real runs the same way', async () => {
+    const { db, file } = openFileBackedDb();
+    try {
+      const runId1 = insertRun(db, 'proj-serial');
+      const result1 = await ingestTestRunResultsOffMainThread(
+        file,
+        {
+          testRequestRunId: runId1,
+          projectId: 'proj-serial',
+          tests: [
+            {
+              test_id: 'shared-test',
+              name: 'shared test',
+              outcome: 'passed',
+              duration_ms: 5,
+            },
+          ],
+          concurrentRunCount: 0,
+          oomKilled: false,
+          incomplete: false,
+          foreignConcurrentRunCount: 0,
+          contentHash: 'hash-serial-1',
+          flipRateWindowN: 20,
+          flipRateThresholdK: 2,
+        },
+        vi.fn(),
+      );
+      expect(result1.alreadyExtracted).toBe(false);
+
+      const runId2 = insertRun(db, 'proj-serial');
+      const result2 = await ingestTestRunResultsOffMainThread(
+        file,
+        {
+          testRequestRunId: runId2,
+          projectId: 'proj-serial',
+          tests: [
+            {
+              test_id: 'shared-test',
+              name: 'shared test',
+              outcome: 'failed',
+              duration_ms: 6,
+            },
+          ],
+          concurrentRunCount: 0,
+          oomKilled: false,
+          incomplete: false,
+          foreignConcurrentRunCount: 0,
+          contentHash: 'hash-serial-2',
+          flipRateWindowN: 20,
+          flipRateThresholdK: 2,
+        },
+        vi.fn(),
+      );
+      expect(result2.alreadyExtracted).toBe(false);
+
+      const row = db
+        .prepare(
+          `SELECT recent_outcomes FROM test_perf_baselines WHERE test_id = ?`,
+        )
+        .get('shared-test') as { recent_outcomes: string };
+      const outcomes = JSON.parse(row.recent_outcomes) as {
+        o: 'P' | 'F';
+        t: number;
+      }[];
+
+      expect(outcomes).toHaveLength(2);
+      expect(outcomes[0].o).toBe('P');
+      expect(outcomes[1].o).toBe('F');
+      expect(outcomes[1].t).toBeGreaterThan(outcomes[0].t);
     } finally {
       db.close();
     }
