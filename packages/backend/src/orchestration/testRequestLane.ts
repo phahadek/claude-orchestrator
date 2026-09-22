@@ -35,7 +35,7 @@ import { Semaphore, LaneRunWithdrawnError } from '../tasks/deferralClassifier';
 import { recordEvent } from '../audit/AuditLog';
 import {
   runTestCommands,
-  collectStructuredTestResult,
+  collectStructuredTestResultOffMainThread,
   clearReportFiles,
   isTestIdTouchedByChangedFiles,
   type TestCommandResult,
@@ -74,7 +74,9 @@ import {
   getLatestTestRequestRun,
   listQueuedTestRequestRunsForWorktree,
   withdrawTestRequestRun,
+  ingestTestRunResultsOffMainThread,
 } from '../db/queries';
+import { db } from '../db/db';
 import type {
   TestRequestFailureReason,
   TestRequestRunRow,
@@ -948,7 +950,15 @@ async function executeTestRequestRun(
     let structuredResult: StructuredTestResult | null = null;
     if (testReportGlob) {
       try {
-        structuredResult = collectStructuredTestResult(
+        // Off the main thread — for a large suite, collectStructuredTestResult's
+        // readFileSync + JUnit-XML regex parse is real synchronous I/O+CPU
+        // work, and this handler is shared with every other request the
+        // backend serves. Awaited (not fire-and-forget): structured_result
+        // must be computed as one atomic step before completeTestRequestRun
+        // writes it and the run is broadcast as settled, exactly as before
+        // this moved off-thread — only the I/O itself no longer blocks the
+        // event loop while in flight.
+        structuredResult = await collectStructuredTestResultOffMainThread(
           spec.worktreePath,
           testReportGlob,
           spec.commands.length,
@@ -992,7 +1002,13 @@ async function executeTestRequestRun(
       runKind: spec.runKind ?? 'full',
       state: result.passed ? 'passed' : 'failed',
     });
-    ingestTestRunResults({
+    // Fire-and-forget: dispatch is off the main thread (worker thread for a
+    // file-backed db) and single-flighted per project — never awaited here,
+    // so a large suite's extraction/baseline recompute never delays this
+    // completion handler's return. Errors are logged, not thrown — an
+    // ingestion failure never fails the run itself, and sweepTestRunResultsExtraction
+    // picks up anything left unextracted.
+    void ingestTestRunResults({
       id: runId,
       project_id: spec.projectId,
       content_hash: spec.contentHash,
@@ -1015,6 +1031,11 @@ async function executeTestRequestRun(
       worktree_path: spec.worktreePath,
       superseded_by: null,
       failed_command: result.passed ? null : (result.failedCommand ?? null),
+    }).catch((err) => {
+      logger.error(
+        `[testRequestLane] ingestion dispatch failed for run ${runId}:`,
+        err,
+      );
     });
     return { ...result, runId };
   } catch (err) {
@@ -1118,6 +1139,34 @@ export function recoverInterruptedTestRequestRuns(): void {
 }
 
 /**
+ * Per-project FIFO queue for ingestTestRunResults dispatches — two runs of
+ * the same project settling within the same tick must not race two
+ * worker-thread connections against the same on-disk file:
+ * recordTestPerfDigestSample's read-modify-write of a test's digest would
+ * last-writer-wins across connections otherwise (see
+ * db/testRunIngestionWorker.ts's own doc comment). Unrelated projects
+ * ingest independently — this is per-project, not global. A rejected task
+ * is swallowed on the queue itself (so a failed dispatch never wedges every
+ * later dispatch for the same project) but still surfaces to its own
+ * caller, since `next` (the value returned to the caller) is the
+ * unswallowed promise.
+ */
+const projectIngestionQueues = new Map<string, Promise<void>>();
+
+function enqueueProjectIngestion(
+  projectId: string,
+  task: () => Promise<void>,
+): Promise<void> {
+  const prior = projectIngestionQueues.get(projectId) ?? Promise.resolve();
+  const next = prior.then(task, task);
+  projectIngestionQueues.set(
+    projectId,
+    next.catch(() => undefined),
+  );
+  return next;
+}
+
+/**
  * Extracts a completed run's structured_result into a test_run_summaries row
  * (outcome counts), a test_run_results row per *non-passing* test, and a
  * test_perf_baselines digest sample per test (passing included) —
@@ -1130,10 +1179,20 @@ export function recoverInterruptedTestRequestRuns(): void {
  * hasTestRunResults) is the idempotency check — an all-passing run writes
  * zero test_run_results rows, so that table alone can no longer answer
  * "already extracted".
+ *
+ * The actual extraction/digest/baseline writes are dispatched off the main
+ * thread via ingestTestRunResultsOffMainThread (db/queries.ts) — a large
+ * suite's baseline recompute was measured blocking the main thread's event
+ * loop for tens of seconds; see db/testRunIngestionWorker.ts. Dispatch is
+ * serialized per project through enqueueProjectIngestion above. Falls back
+ * to the synchronous in-process path (unchanged from before this worker
+ * existed) for a `:memory:`/test-mode database, which has no on-disk file a
+ * worker thread could open.
  */
-export function ingestTestRunResults(run: TestRequestRunRow): void {
+export async function ingestTestRunResults(
+  run: TestRequestRunRow,
+): Promise<void> {
   if (!run.structured_result) return;
-  if (runHasExtractedReport(run.id)) return;
 
   let parsed: StructuredTestResult;
   try {
@@ -1162,31 +1221,63 @@ export function ingestTestRunResults(run: TestRequestRunRow): void {
   // incomplete signal is lost the moment structured_result is nulled, with
   // nothing durable left to distinguish it from a genuine per-test
   // breakdown. See this module's own classifyFailedRun, below.
-  if (tests.length === 0 && !parsed.incomplete) return;
+  const incomplete = !!parsed.incomplete;
+  if (tests.length === 0 && !incomplete) return;
 
-  // ingestTestRunResultsTx's onDigestSample callback only fires for a test
-  // whose sample recordTestPerfDigestSample actually recorded — a non-solo
-  // run (a concurrent peer, an OOM kill, or a foreign concurrent run) never
-  // updates its digests, so recomputing baselines/flip-rate flags from those
-  // unchanged digests would just be wasted work reading/writing what's
-  // already on disk. Skipping this loop entirely for those runs is the fix:
-  // 284 of 297 runs ingested since deploy were non-solo.
-  const sampledTests = new Map<string, TestPerfDigestSampleResult>();
-  ingestTestRunResultsTx(
-    run.id,
-    run.project_id,
-    tests,
-    run.concurrent_run_count ?? null,
-    !!run.oom_killed,
-    !!parsed.incomplete,
-    run.foreign_concurrent_run_count ?? null,
-    run.content_hash,
-    (testId, sample) => {
-      sampledTests.set(testId, sample);
-      computeTestPerfBaseline(testId, [...sample.durations].reverse());
+  await enqueueProjectIngestion(run.project_id, () =>
+    dispatchIngestion(run, tests, incomplete),
+  );
+}
+
+async function dispatchIngestion(
+  run: TestRequestRunRow,
+  tests: NewTestRunResultRow[],
+  incomplete: boolean,
+): Promise<void> {
+  const windowN = typedGetSetting('flip_rate_window_n');
+  const thresholdK = typedGetSetting('flip_rate_threshold_k');
+  await ingestTestRunResultsOffMainThread(
+    db.name,
+    {
+      testRequestRunId: run.id,
+      projectId: run.project_id,
+      tests,
+      concurrentRunCount: run.concurrent_run_count ?? null,
+      oomKilled: !!run.oom_killed,
+      incomplete,
+      foreignConcurrentRunCount: run.foreign_concurrent_run_count ?? null,
+      contentHash: run.content_hash,
+      flipRateWindowN: windowN,
+      flipRateThresholdK: thresholdK,
+    },
+    // Synchronous in-process fallback for a `:memory:`/test-mode database —
+    // ingestTestRunResultsTx's onDigestSample callback only fires for a
+    // test whose sample recordTestPerfDigestSample actually recorded — a
+    // non-solo run (a concurrent peer, an OOM kill, or a foreign concurrent
+    // run) never updates its digests, so recomputing baselines/flip-rate
+    // flags from those unchanged digests would just be wasted work reading/
+    // writing what's already on disk. Skipping this loop entirely for those
+    // runs is the fix: 284 of 297 runs ingested since deploy were non-solo.
+    () => {
+      if (runHasExtractedReport(run.id)) return;
+      const sampledTests = new Map<string, TestPerfDigestSampleResult>();
+      ingestTestRunResultsTx(
+        run.id,
+        run.project_id,
+        tests,
+        run.concurrent_run_count ?? null,
+        !!run.oom_killed,
+        incomplete,
+        run.foreign_concurrent_run_count ?? null,
+        run.content_hash,
+        (testId, sample) => {
+          sampledTests.set(testId, sample);
+          computeTestPerfBaseline(testId, [...sample.durations].reverse());
+        },
+      );
+      recomputeFlipRateFlags(sampledTests);
     },
   );
-  recomputeFlipRateFlags(sampledTests);
 }
 
 /**
@@ -1551,7 +1642,7 @@ export async function sweepTestRunResultsExtraction(
     logger.info(
       `[testRequestLane] extracting test_run_results for run ${run.id} (project ${run.project_id})`,
     );
-    ingestTestRunResults(run);
+    await ingestTestRunResults(run);
     processed++;
     opts.onProgress?.(pending.length - processed);
     // Yield between units — this is a boot/scheduler-tick step, not a route
