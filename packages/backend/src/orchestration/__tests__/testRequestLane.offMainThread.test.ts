@@ -63,21 +63,32 @@ afterAll(() => {
   }
 });
 
-/** Records every SQL string passed to db.prepare, without altering behavior. */
+/**
+ * Records every SQL string passed to db.prepare, without altering behavior.
+ * Uses vi.spyOn (not a plain `database.prepare = fn` reassignment) — see
+ * db.performance.test.ts's identical pattern; better-sqlite3's native
+ * binding does not guarantee `prepare` is a plain writable own/prototype
+ * property, so a direct reassignment can silently fail or throw under
+ * strict mode where spyOn's Object.defineProperty-based override does not.
+ * `original` is captured via .bind() before spying, so it keeps calling the
+ * real implementation regardless of how spyOn overrides the property.
+ */
 function spyOnPrepare(database: Database.Database): {
   statements: string[];
   restore: () => void;
 } {
   const statements: string[] = [];
   const original = database.prepare.bind(database);
-  database.prepare = ((sql: string) => {
-    statements.push(sql);
-    return original(sql);
-  }) as typeof database.prepare;
+  const spy = vi
+    .spyOn(database, 'prepare')
+    .mockImplementation((sql: string) => {
+      statements.push(sql);
+      return original(sql);
+    });
   return {
     statements,
     restore: () => {
-      database.prepare = original;
+      spy.mockRestore();
     },
   };
 }
