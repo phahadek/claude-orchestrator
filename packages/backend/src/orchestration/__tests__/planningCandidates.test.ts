@@ -478,6 +478,25 @@ describe('isGroomCandidate', () => {
     ).toBe(false);
   });
 
+  it('skips a task whose only groom session is machine_park-archived and idle, wired through the real DB-backed predicate — a runner_killed_unexpected park still owns the task', () => {
+    db.prepare('DELETE FROM sessions').run();
+    db.prepare(
+      `INSERT INTO sessions (session_id, task_id, task_url, project_context_url,
+         status, started_at, session_type, archived, archive_kind)
+       VALUES ('sess-machine-park', 'task-1', 'https://notion.so/task', 'https://notion.so/ctx',
+         'idle', ?, 'groom', 1, 'machine_park')`,
+    ).run(Date.now() - 10 * 60 * 1000);
+
+    const t = task();
+    expect(
+      isGroomCandidate(t, {
+        ...baseDeps,
+        hasActiveGroomSession: (taskId) =>
+          hasActivePlanningSessionForTask(taskId, 'groom'),
+      }),
+    ).toBe(false);
+  });
+
   it('skips a task whose most recent planning.noOp still suppresses it', () => {
     const t = task();
     expect(
@@ -1025,6 +1044,25 @@ describe('isDesignCandidate', () => {
     const t = task({ status: '🗂️ Ready', type: '📐 Design' });
     expect(
       isDesignCandidate(t, { ...baseDeps, inCrashCooldown: () => true }),
+    ).toBe(false);
+  });
+
+  it('skips a task whose only design session is machine_park-archived and idle, wired through the real DB-backed predicate — an overnight design relaunch must not race the parked owner', () => {
+    db.prepare('DELETE FROM sessions').run();
+    db.prepare(
+      `INSERT INTO sessions (session_id, task_id, task_url, project_context_url,
+         status, started_at, session_type, archived, archive_kind)
+       VALUES ('sess-design-machine-park', 'task-1', 'https://notion.so/task', 'https://notion.so/ctx',
+         'idle', ?, 'design', 1, 'machine_park')`,
+    ).run(Date.now() - 10 * 60 * 1000);
+
+    const t = task({ status: '🗂️ Ready', type: '📐 Design' });
+    expect(
+      isDesignCandidate(t, {
+        ...baseDeps,
+        hasActiveDesignSession: (taskId) =>
+          hasActivePlanningSessionForTask(taskId, 'design'),
+      }),
     ).toBe(false);
   });
 

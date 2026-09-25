@@ -1639,7 +1639,14 @@ export function hasActivePlanningSessionForTask(
  * The row-returning counterpart to hasActivePlanningSessionForTask — used by
  * the abort route (routes/taskAbort.ts) to resolve the specific session id
  * to kill, rather than just a boolean. Same non-terminal (running OR parked
- * idle), flow-scoped, archived=0 filter.
+ * idle), flow-scoped filter — an unarchived row, OR a machine_park-archived
+ * row (isMachineParkedIdle in sessionPredicates.ts: archived=1 AND
+ * archive_kind='machine_park'), still counts as active. A machine_park
+ * archival (StuckSessionMonitor.escalateHardStop, on a runner_killed_unexpected
+ * pause) leaves the session as the still-standing owner of the task — it can
+ * be resumed at any moment, so it must keep blocking re-dispatch the same as
+ * an unarchived one. An operator-archived row (any other archive_kind) stays
+ * excluded — that is the deliberate "this session is done" signal.
  *
  * Matches against sessions.task_id_norm — the same STORED generated column
  * hasActiveSessionForTask (above) matches against — instead of a JS
@@ -1660,7 +1667,7 @@ export function getActivePlanningSessionForTask(
     WHERE task_id_norm = @task_id_norm
       AND status NOT IN (${TERMINAL_STATUS_SQL_LIST})
       AND session_type = @flow
-      AND archived = 0
+      AND (archived = 0 OR archive_kind = 'machine_park')
     LIMIT 1
   `,
     )
