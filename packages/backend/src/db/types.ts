@@ -201,7 +201,7 @@ export interface ProjectRow {
   base_branch: string;
   /** 0 = read the project's Notion architecture pages; 1 = read the arch_unit store. */
   arch_store_adopted: number; // 0 | 1 (SQLite boolean)
-  /** Per-project test-lane concurrency cap. NULL = fall back to the global test_request_max_concurrent_per_project setting. */
+  /** Historical per-project test-lane concurrency cap column — no longer read; the lane enforces one host-wide cap for every project. */
   test_request_max_concurrent: number | null;
   created_at: number;
   updated_at: number;

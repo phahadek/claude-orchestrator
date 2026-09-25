@@ -8,10 +8,11 @@
  *  - Coalescing: two concurrent requests for the same (project, content-hash)
  *    pair share one execution — the second waits on the first's promise
  *    rather than starting a duplicate run.
- *  - Bounded concurrency: a per-project Semaphore (the same class
+ *  - Bounded concurrency: a single host-wide Semaphore (the same class
  *    tasks/deferralClassifier.ts uses to bound classify subprocesses) caps
- *    how many test runs a single project can have in flight, and admission
- *    additionally folds in the host memory-headroom check
+ *    how many test runs can be in flight at once, across every project —
+ *    there is no per-project cap, only one shared FIFO budget — and
+ *    admission additionally folds in the host memory-headroom check
  *    (orchestration/memoryAdmission.ts) so a burst of test.request intents
  *    can't starve the host the way an unbounded session launch could.
  *
@@ -226,7 +227,7 @@ export interface TestRequestRunResult extends TestCommandResult {
   supersededBy?: string;
 }
 
-/** A caller's live standing in the per-project lane: running now, or queued behind others. */
+/** A caller's live standing in the lane: running now, or queued behind others. */
 export type TestRequestAdmissionStatus = 'running' | 'queued';
 
 /**
@@ -273,72 +274,69 @@ function failureReasonFor(result: TestCommandResult): TestRequestFailureReason {
 }
 
 /**
- * The project's configured concurrency cap: its own
- * projects.test_request_max_concurrent when set, else the global
- * test_request_max_concurrent_per_project setting. A project with no
- * explicit override always resolves to the global — same behaviour as
- * before this per-project cap existed.
+ * The host-wide concurrency cap: runtimeSettings.test_request_max_concurrent.
+ * Every project shares this single budget — there is no per-project override.
  */
-function getEffectiveProjectLimit(projectId: string): number {
-  return (
-    getProjectRowById(projectId)?.test_request_max_concurrent ??
-    typedGetSetting('test_request_max_concurrent_per_project')
-  );
+function getGlobalTestRunLimit(): number {
+  return typedGetSetting('test_request_max_concurrent');
 }
 
-const projectSemaphores = new Map<string, Semaphore>();
+let globalTestRunSemaphore: Semaphore | null = null;
 
 /**
- * Returns the per-project semaphore, resizing it in place whenever the
- * project's configured limit (getEffectiveProjectLimit) has changed since it
- * was cached — so editing a project's limit (or the global default it falls
- * back to) takes effect on the very next acquire, no backend restart needed.
+ * Returns the single module-level semaphore shared by every project,
+ * resizing it in place whenever the configured global limit
+ * (getGlobalTestRunLimit) has changed since it was created — so editing the
+ * setting takes effect on the very next acquire, no backend restart needed.
+ * FIFO ordering of this one semaphore's wait queue is what gives every
+ * project a single, shared queue position rather than a per-project one.
  */
-function getProjectSemaphore(projectId: string): Semaphore {
-  const limit = getEffectiveProjectLimit(projectId);
-  let sem = projectSemaphores.get(projectId);
-  if (!sem) {
-    sem = new Semaphore(limit);
-    projectSemaphores.set(projectId, sem);
-  } else if (sem.capacity() !== limit) {
-    sem.resize(limit);
+function getGlobalTestRunSemaphore(): Semaphore {
+  const limit = getGlobalTestRunLimit();
+  if (!globalTestRunSemaphore) {
+    globalTestRunSemaphore = new Semaphore(limit);
+  } else if (globalTestRunSemaphore.capacity() !== limit) {
+    globalTestRunSemaphore.resize(limit);
   }
-  return sem;
+  return globalTestRunSemaphore;
 }
 
 /**
- * Sum of every OTHER project's semaphore inUse() — the host-wide peer count
- * that projectSemaphores' per-project keying otherwise hides entirely (see
- * this module's doc comment). Unlike concurrentRunCount, no "- 1" here: this
- * run's own occupancy lives on its own project's semaphore, never on another
- * project's, so every entry counted here is a genuine foreign peer.
+ * Count of in-flight (running) runs belonging to a project other than
+ * `projectId`, computed from the lane's own inFlightRuns map rather than
+ * from any per-project semaphore (there is only the one global semaphore
+ * now). "In-flight" here means admitted and past the permit wait — a queued
+ * run isn't occupying a slot yet, so isn't a foreign peer.
  */
 function getForeignConcurrentRunCount(projectId: string): number {
   let total = 0;
-  for (const [otherProjectId, sem] of projectSemaphores) {
-    if (otherProjectId === projectId) continue;
-    total += sem.inUse();
+  for (const entry of inFlightRuns.values()) {
+    if (entry.projectId === projectId) continue;
+    if (entry.admission().status === 'running') total++;
   }
   return total;
 }
 
 /**
- * Test-only: clears every cached per-project semaphore. projectSemaphores is
- * deliberately process-lifetime state in production (a project's occupancy
- * must persist across runs), but that means a single test elsewhere in the
- * suite that intentionally never resolves its mocked run (to exercise queued
- * state) leaves a permanently nonzero inUse() on that project's semaphore —
- * invisible to concurrent_run_count (which only ever reads its own project's
- * semaphore) but silently poisoning every later test's
- * getForeignConcurrentRunCount, which sums across all of them. Call from a
- * suite's beforeEach to isolate tests from each other.
+ * Test-only: clears the cached global semaphore and the lane's in-flight
+ * bookkeeping (inFlightRuns/pendingBySession). All three are deliberately
+ * process-lifetime state in production (host-wide occupancy must persist
+ * across runs), but that means a single test elsewhere in the suite that
+ * intentionally never resolves its mocked run (to exercise queued/running
+ * state) leaves a permanently nonzero inUse() and a dangling inFlightRuns
+ * entry — the latter would otherwise silently poison every later test's
+ * getForeignConcurrentRunCount, which sums across every entry regardless of
+ * which test created it. Call from a suite's beforeEach to isolate tests
+ * from each other.
  */
 export function __resetProjectSemaphoresForTest(): void {
-  projectSemaphores.clear();
+  globalTestRunSemaphore = null;
+  inFlightRuns.clear();
+  pendingBySession.clear();
 }
 
 /**
- * Withdraws one still-queued row: removes it from its per-project
+ * Withdraws one still-queued row: removes it from the global
  * Semaphore's wait queue (rejecting its parked executeTestRequestRun's
  * permitPromise with LaneRunWithdrawnError — caught there and resolved as a
  * `superseded: true` result, never a hard failure/reject the caller has to
@@ -354,7 +352,7 @@ function withdrawQueuedRun(
   supersededBy: string,
   prContext?: { prNumber: number; repo: string },
 ): boolean {
-  const semaphore = getProjectSemaphore(run.project_id);
+  const semaphore = getGlobalTestRunSemaphore();
   if (!semaphore.withdraw(run.id, supersededBy)) return false;
   withdrawTestRequestRun(run.id, supersededBy);
   broadcastRunStatus({
@@ -432,6 +430,7 @@ export function withdrawQueuedRunsForWorktree(
 
 interface InFlightEntry {
   runId: string;
+  projectId: string;
   contentHash: string;
   runKind: TestRunKind;
   baseSha: string | null;
@@ -471,16 +470,17 @@ const ADMISSION_MAX_WAIT_MS = 5 * 60_000;
 
 async function waitForMemoryAdmission(
   projectId: string,
-  perProjectLimit: number,
+  globalLimit: number,
 ): Promise<void> {
   const deadline = Date.now() + ADMISSION_MAX_WAIT_MS;
-  const semaphore = getProjectSemaphore(projectId);
+  const semaphore = getGlobalTestRunSemaphore();
   while (Date.now() < deadline) {
     // inUse() includes the permit this call itself already holds — subtract
-    // it so the check reflects peer occupancy, matching hasTestRequestAdmission's
-    // documented "before admitting the caller's own request" contract (and how
+    // it so the check reflects peer occupancy (host-wide, across every
+    // project), matching hasTestRequestAdmission's documented "before
+    // admitting the caller's own request" contract (and how
     // concurrentRunCount is computed a few lines below in the caller).
-    if (hasTestRequestAdmission(semaphore.inUse() - 1, perProjectLimit)) return;
+    if (hasTestRequestAdmission(semaphore.inUse() - 1, globalLimit)) return;
     await new Promise((resolve) => setTimeout(resolve, ADMISSION_POLL_MS));
   }
   logger.warn(
@@ -681,7 +681,7 @@ export function admitTestRequest(
     spec.contentHash,
     runId,
   );
-  const semaphore = getProjectSemaphore(spec.projectId);
+  const semaphore = getGlobalTestRunSemaphore();
   const permitPromise = semaphore.acquire(runId);
   const admission = () => {
     const queuedPosition = semaphore.positionOf(runId);
@@ -712,6 +712,7 @@ export function admitTestRequest(
 
   const entry: InFlightEntry = {
     runId,
+    projectId: spec.projectId,
     contentHash: spec.contentHash,
     runKind,
     baseSha,
@@ -815,22 +816,20 @@ async function executeTestRequestRun(
     }
     throw err;
   }
-  await waitForMemoryAdmission(
-    spec.projectId,
-    getEffectiveProjectLimit(spec.projectId),
-  );
+  await waitForMemoryAdmission(spec.projectId, getGlobalTestRunLimit());
 
-  const semaphore = getProjectSemaphore(spec.projectId);
+  const semaphore = getGlobalTestRunSemaphore();
   const startedAt = Date.now();
-  // Peer occupancy right after acquiring, excluding this run itself, so 0
-  // genuinely means "ran alone" — matching the concurrent_run_count = 0
-  // validity predicate consumers filter on (listRecentValidTestDurations,
-  // computeTestFlipRateFlag).
+  // Host-wide peer occupancy right after acquiring, excluding this run
+  // itself, so 0 genuinely means "ran alone" — matching the
+  // concurrent_run_count = 0 validity predicate consumers filter on
+  // (listRecentValidTestDurations, computeTestFlipRateFlag). Now that the
+  // semaphore is global, this already reflects every project's occupancy,
+  // not just this run's own project.
   const concurrentRunCount = semaphore.inUse() - 1;
-  // Host-wide peer occupancy: every OTHER project's semaphore, at the same
-  // instant — a same-project count of 0 can still mean the host was busy
-  // running a different project's suite, which is exactly the contention
-  // concurrent_run_count cannot see (projectSemaphores is keyed per project).
+  // The other-project subset of that same host-wide occupancy — derived
+  // from the lane's in-flight runs (there's only the one global semaphore
+  // now, so it can't itself distinguish same- vs other-project peers).
   const foreignConcurrentRunCount = getForeignConcurrentRunCount(
     spec.projectId,
   );

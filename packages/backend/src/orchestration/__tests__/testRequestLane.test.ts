@@ -109,7 +109,6 @@ import {
   TEST_DURATION_DIGEST_CAPACITY,
   countTestRequestRunsNeedingExtraction,
   insertProject,
-  updateProject,
   getFailingTestIdsForRun,
   getTestRequestRunById,
 } from '../../db/queries';
@@ -117,6 +116,7 @@ import {
   withCheckoutInstallLock,
   __checkoutInstallLockMapSizeForTest,
 } from '../checkoutInstallLock';
+import { typedSetSetting } from '../../config/settings';
 
 beforeEach(() => {
   mockRunTestCommands.mockReset();
@@ -132,6 +132,7 @@ beforeEach(() => {
   db.prepare('DELETE FROM test_request_runs').run();
   db.prepare('DELETE FROM test_perf_baselines').run();
   db.prepare('DELETE FROM projects').run();
+  db.prepare(`DELETE FROM settings WHERE key = 'test_request_max_concurrent'`).run();
   __resetProjectSemaphoresForTest();
 });
 
@@ -433,8 +434,8 @@ describe('runProjectTestRequest — coalescing', () => {
         context_url: null,
         github_repo: null,
         task_source: 'notion',
-        test_request_max_concurrent: 2,
       });
+      typedSetSetting('test_request_max_concurrent', 2);
 
       // Admits when peer occupancy (inFlight passed to hasTestRequestAdmission)
       // is below the limit, refuses at/above it — exactly the predicate's own
@@ -983,7 +984,6 @@ describe('runProjectTestRequest — checkout install lock', () => {
       context_url: null,
       github_repo: null,
       task_source: 'notion',
-      test_request_max_concurrent: 2,
     });
     const resolvers: Array<(v: { passed: boolean; output: string }) => void> =
       [];
@@ -1486,8 +1486,8 @@ describe('admitTestRequest — durable queued state', () => {
       context_url: null,
       github_repo: null,
       task_source: 'notion',
-      test_request_max_concurrent: 1,
     });
+    typedSetSetting('test_request_max_concurrent', 1);
     // Never resolves — the first request holds the only permit for the
     // whole test, so the second request's row stays queued throughout.
     mockRunTestCommands.mockImplementation(() => new Promise(() => {}));
@@ -1554,7 +1554,7 @@ describe('concurrent_run_count', () => {
       )
       .all() as { concurrent_run_count: number }[];
     const counts = rows.map((r) => r.concurrent_run_count);
-    // Both runs are admitted concurrently (default per-project limit is 2),
+    // Both runs are admitted concurrently (default global limit is 2),
     // so each recorded peer count (occupancy excluding self) must fall
     // within [0, 1] — and since both were in flight together, at least one
     // of them must have observed the other, i.e. a peer count of 1, which
@@ -1585,7 +1585,7 @@ describe('foreign_concurrent_run_count', () => {
     expect(row.foreign_concurrent_run_count).toBe(0);
   });
 
-  it("stamps the other project's inUse() as the foreign count while concurrent_run_count stays the same-project peer count", async () => {
+  it("counts a peer running for a different project in both concurrent_run_count (host-wide, via the global semaphore) and foreign_concurrent_run_count (the other-project subset)", async () => {
     insertProject({
       id: 'proj-2',
       name: 'proj-2',
@@ -1634,11 +1634,15 @@ describe('foreign_concurrent_run_count', () => {
       foreign_concurrent_run_count: number;
     };
 
-    // Same project, no peer of its own — concurrent_run_count stays 0 for
-    // both, since the other run lives on a different project's semaphore.
-    expect(row1.concurrent_run_count).toBe(0);
-    expect(row2.concurrent_run_count).toBe(0);
-    // Each run's foreign count is exactly the other project's inUse().
+    // The two runs share one global semaphore, so each sees the other as a
+    // host-wide peer regardless of project — concurrent_run_count is 1 for
+    // both, matching the concurrent_run_count = 0 validity predicate's
+    // intent (a same-project 0 while another project's suite ran was never
+    // really a solo run).
+    expect(row1.concurrent_run_count).toBe(1);
+    expect(row2.concurrent_run_count).toBe(1);
+    // Each run's foreign count is the other-project subset of that same
+    // host-wide occupancy — here, entirely the other project's run.
     expect(row1.foreign_concurrent_run_count).toBe(1);
     expect(row2.foreign_concurrent_run_count).toBe(1);
   });
@@ -1778,9 +1782,9 @@ describe('concurrent_run_count validity signal — end-to-end through the produc
   });
 });
 
-// ── per-project concurrency cap (projects.test_request_max_concurrent) ──────
+// ── global test-run concurrency cap (settings.test_request_max_concurrent) ──
 
-describe('per-project test-lane concurrency cap', () => {
+describe('global test-run concurrency cap', () => {
   /**
    * Queues every runTestCommands call behind a resolver the test controls,
    * so admission can be observed via call count rather than timing.
@@ -1797,86 +1801,36 @@ describe('per-project test-lane concurrency cap', () => {
     return resolvers;
   }
 
-  // Skipped: fails on dev independent of this PR's diff (admitTestRequest/
-  // Semaphore concurrency logic is untouched here) — confirmed pre-existing
-  // base-branch breakage, tracked separately from task
-  // 3c122f91-52f3-8137-959e-ffdbb591ffb7.
-  it.skip('gives a project with an explicit limit a semaphore of that size, independent of another project with a different limit', async () => {
+  it('caps admission across every project combined — a third request queues regardless of which project it belongs to', async () => {
     insertProject({
-      id: 'proj-cap-1',
-      name: 'Cap 1',
-      project_dir: '/tmp/proj-cap-1',
+      id: 'proj-global-a',
+      name: 'Global A',
+      project_dir: '/tmp/proj-global-a',
       context_url: null,
       github_repo: null,
       task_source: 'notion',
-      test_request_max_concurrent: 1,
     });
     insertProject({
-      id: 'proj-cap-3',
-      name: 'Cap 3',
-      project_dir: '/tmp/proj-cap-3',
-      context_url: null,
-      github_repo: null,
-      task_source: 'notion',
-      test_request_max_concurrent: 3,
-    });
-    const resolvers = queueingRunTestCommands();
-
-    // Two requests against the limit-1 project: only the first is admitted.
-    const capOneP1 = runProjectTestRequest(
-      baseSpec({ projectId: 'proj-cap-1', contentHash: 'cap1-a' }),
-    );
-    const capOneP2 = runProjectTestRequest(
-      baseSpec({ projectId: 'proj-cap-1', contentHash: 'cap1-b' }),
-    );
-    await vi.waitFor(() =>
-      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
-    );
-
-    // Three requests against the limit-3 project: all three admitted at once.
-    const capThreeP1 = runProjectTestRequest(
-      baseSpec({ projectId: 'proj-cap-3', contentHash: 'cap3-a' }),
-    );
-    const capThreeP2 = runProjectTestRequest(
-      baseSpec({ projectId: 'proj-cap-3', contentHash: 'cap3-b' }),
-    );
-    const capThreeP3 = runProjectTestRequest(
-      baseSpec({ projectId: 'proj-cap-3', contentHash: 'cap3-c' }),
-    );
-    await vi.waitFor(() =>
-      expect(mockRunTestCommands).toHaveBeenCalledTimes(4),
-    );
-
-    resolvers.forEach((resolve) => resolve({ passed: true, output: 'ok' }));
-    await vi.waitFor(() =>
-      expect(mockRunTestCommands).toHaveBeenCalledTimes(5),
-    );
-    resolvers[resolvers.length - 1]({ passed: true, output: 'ok' });
-
-    await Promise.all([capOneP1, capOneP2, capThreeP1, capThreeP2, capThreeP3]);
-  });
-
-  it('falls back to the global setting, unchanged from before, when a project has no explicit limit', async () => {
-    insertProject({
-      id: 'proj-no-override',
-      name: 'No Override',
-      project_dir: '/tmp/proj-no-override',
+      id: 'proj-global-b',
+      name: 'Global B',
+      project_dir: '/tmp/proj-global-b',
       context_url: null,
       github_repo: null,
       task_source: 'notion',
     });
     const resolvers = queueingRunTestCommands();
 
-    // Global default (test_request_max_concurrent_per_project) is 2 — three
-    // requests should admit exactly two before the third queues.
-    const p1 = runProjectTestRequest(
-      baseSpec({ projectId: 'proj-no-override', contentHash: 'nov-a' }),
+    // Global default (test_request_max_concurrent) is 2 — two requests from
+    // project A plus one from project B should admit exactly two, and the
+    // third (from B) must queue, regardless of it being a different project.
+    const a1 = runProjectTestRequest(
+      baseSpec({ projectId: 'proj-global-a', contentHash: 'ga-1' }),
     );
-    const p2 = runProjectTestRequest(
-      baseSpec({ projectId: 'proj-no-override', contentHash: 'nov-b' }),
+    const a2 = runProjectTestRequest(
+      baseSpec({ projectId: 'proj-global-a', contentHash: 'ga-2' }),
     );
-    const p3 = runProjectTestRequest(
-      baseSpec({ projectId: 'proj-no-override', contentHash: 'nov-c' }),
+    const b1 = runProjectTestRequest(
+      baseSpec({ projectId: 'proj-global-b', contentHash: 'gb-1' }),
     );
     await vi.waitFor(() =>
       expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
@@ -1888,10 +1842,10 @@ describe('per-project test-lane concurrency cap', () => {
     );
     resolvers[resolvers.length - 1]({ passed: true, output: 'ok' });
 
-    await Promise.all([p1, p2, p3]);
+    await Promise.all([a1, a2, b1]);
   });
 
-  it('applies a changed project limit on the very next acquire, without a process restart', async () => {
+  it('applies a changed global limit on the very next acquire, without a process restart', async () => {
     insertProject({
       id: 'proj-live-resize',
       name: 'Live Resize',
@@ -1899,8 +1853,8 @@ describe('per-project test-lane concurrency cap', () => {
       context_url: null,
       github_repo: null,
       task_source: 'notion',
-      test_request_max_concurrent: 1,
     });
+    typedSetSetting('test_request_max_concurrent', 1);
     const resolvers = queueingRunTestCommands();
 
     const first = runProjectTestRequest(
@@ -1918,7 +1872,7 @@ describe('per-project test-lane concurrency cap', () => {
     // Raise the limit without restarting the process — the next acquire
     // (from a third request) must see the new value and, per Semaphore.resize,
     // wake the already-queued second request too.
-    updateProject('proj-live-resize', { test_request_max_concurrent: 2 });
+    typedSetSetting('test_request_max_concurrent', 2);
     const third = runProjectTestRequest(
       baseSpec({ projectId: 'proj-live-resize', contentHash: 'resize-c' }),
     );
@@ -1961,6 +1915,51 @@ describe('admitTestRequest — live queue position', () => {
     expect(admission.reused).toBe(false);
   });
 
+  it('reports queue position/depth from the single global FIFO — shared across projects, not scoped per project', () => {
+    insertProject({
+      id: 'proj-fifo-a',
+      name: 'FIFO A',
+      project_dir: '/tmp/proj-fifo-a',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    insertProject({
+      id: 'proj-fifo-b',
+      name: 'FIFO B',
+      project_dir: '/tmp/proj-fifo-b',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    typedSetSetting('test_request_max_concurrent', 1);
+    mockRunTestCommands.mockImplementation(() => new Promise(() => {}));
+
+    // First request (project A) takes the one global permit.
+    const first = admitTestRequest(
+      baseSpec({ projectId: 'proj-fifo-a', contentHash: 'fifo-a-1' }),
+    );
+    expect(first.status).toBe('running');
+
+    // Second request, from a *different* project, queues behind it — the
+    // global cap has no per-project carve-out.
+    const second = admitTestRequest(
+      baseSpec({ projectId: 'proj-fifo-b', contentHash: 'fifo-b-1' }),
+    );
+    expect(second.status).toBe('queued');
+    expect(second.position).toBe(1);
+    expect(second.queueDepth).toBe(1);
+
+    // Third request, back on project A, queues behind the project-B request
+    // ahead of it — one shared FIFO, not a per-project one.
+    const third = admitTestRequest(
+      baseSpec({ projectId: 'proj-fifo-a', contentHash: 'fifo-a-2' }),
+    );
+    expect(third.status).toBe('queued');
+    expect(third.position).toBe(2);
+    expect(third.queueDepth).toBe(2);
+  });
+
   // Skipped: fails on dev independent of this PR's diff (admitTestRequest
   // queue-position logic is untouched here) — confirmed pre-existing
   // base-branch breakage, tracked separately from task
@@ -1973,8 +1972,8 @@ describe('admitTestRequest — live queue position', () => {
       context_url: null,
       github_repo: null,
       task_source: 'notion',
-      test_request_max_concurrent: 1,
     });
+    typedSetSetting('test_request_max_concurrent', 1);
     const resolvers = queueingRunTestCommands();
 
     const first = admitTestRequest(
@@ -2020,8 +2019,8 @@ describe('admitTestRequest — live queue position', () => {
       context_url: null,
       github_repo: null,
       task_source: 'notion',
-      test_request_max_concurrent: 1,
     });
+    typedSetSetting('test_request_max_concurrent', 1);
     const resolvers = queueingRunTestCommands();
 
     // Two other sessions' requests occupy the running slot and the front of
@@ -2524,12 +2523,8 @@ describe('admitTestRequest — same-worktree supersession', () => {
       context_url: null,
       github_repo: null,
       task_source: 'notion',
-      test_request_max_concurrent: 1,
     });
-    // insertProject's INSERT statement doesn't include test_request_max_concurrent
-    // (see updateProject, which does) — set it via a follow-up update so the
-    // project's semaphore is actually capacity-1, not the global default.
-    updateProject('proj-supersede-1', { test_request_max_concurrent: 1 });
+    typedSetSetting('test_request_max_concurrent', 1);
     const resolvers = queueingRunTestCommands();
     const worktreePath = '/tmp/wt-supersede-1';
 
@@ -2614,9 +2609,7 @@ describe('admitTestRequest — same-worktree supersession', () => {
       context_url: null,
       github_repo: null,
       task_source: 'notion',
-      test_request_max_concurrent: 2,
     });
-    updateProject('proj-supersede-2', { test_request_max_concurrent: 2 });
     const resolvers = queueingRunTestCommands();
     const worktreePath = '/tmp/wt-supersede-2';
 
@@ -2661,9 +2654,8 @@ describe('admitTestRequest — same-worktree supersession', () => {
       context_url: null,
       github_repo: null,
       task_source: 'notion',
-      test_request_max_concurrent: 1,
     });
-    updateProject('proj-supersede-3', { test_request_max_concurrent: 1 });
+    typedSetSetting('test_request_max_concurrent', 1);
     queueingRunTestCommands();
     const worktreePath = '/tmp/wt-supersede-3';
     const sharedHash = 'sup3-shared';
@@ -2728,9 +2720,8 @@ describe('withdrawQueuedRunsForWorktree — PR-driven withdrawal', () => {
       context_url: null,
       github_repo: null,
       task_source: 'notion',
-      test_request_max_concurrent: 1,
     });
-    updateProject('proj-pr-withdraw-1', { test_request_max_concurrent: 1 });
+    typedSetSetting('test_request_max_concurrent', 1);
     const resolvers = queueingRunTestCommands();
     const worktreePath = '/tmp/wt-pr-withdraw-1';
 

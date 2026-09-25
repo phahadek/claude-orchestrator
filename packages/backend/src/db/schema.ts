@@ -3131,10 +3131,11 @@ export function runMigrations(target: Database.Database): void {
       ON test_request_runs(project_id, finished_at DESC);
   `);
 
-  // projects.test_request_max_concurrent: per-project override for the test
-  // lane's concurrency cap. NULL (the default for every existing row) means
-  // "fall back to the global test_request_max_concurrent_per_project
-  // setting" — see getProjectSemaphore in orchestration/testRequestLane.ts.
+  // projects.test_request_max_concurrent: historical per-project override for
+  // the test lane's concurrency cap, no longer read — the lane now enforces
+  // one host-wide cap (settings.test_request_max_concurrent) shared by every
+  // project, with no per-project override. Column left in place rather than
+  // migrated away; see orchestration/testRequestLane.ts.
   try {
     target.exec(
       `ALTER TABLE projects ADD COLUMN test_request_max_concurrent INTEGER`,
