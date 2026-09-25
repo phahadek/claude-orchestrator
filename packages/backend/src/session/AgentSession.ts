@@ -1415,17 +1415,20 @@ The full task spec and all rules are in your system prompt. Begin implementing d
    * inference."
    */
   private getLastResultErrorDetail(): string | undefined {
-    const events = getEventsBySession(this.sessionId);
-    if (events.length === 0) return undefined;
-    const lastEvent = events[events.length - 1];
-    if (eventKind(lastEvent) !== 'result') return undefined;
     try {
+      const events = getEventsBySession(this.sessionId);
+      if (events.length === 0) return undefined;
+      const lastEvent = events[events.length - 1];
+      if (eventKind(lastEvent) !== 'result') return undefined;
       const payload = JSON.parse(lastEvent.payload) as Record<string, unknown>;
       if (payload.is_error !== true) return undefined;
       return typeof payload.result === 'string'
         ? payload.result
         : JSON.stringify(payload);
     } catch {
+      // A DB read failure here must not block the clean-exit/error path —
+      // treat it the same as "no CLI-authored verdict on record" and fall
+      // through to exit-code inference (mirrors isUsageLimitTermination).
       return undefined;
     }
   }
