@@ -9730,6 +9730,98 @@ export function listTestRequestRunsForSession(
     }) as TestRequestRunRow[];
 }
 
+/**
+ * The PR pipeline (PreReviewPipeline) runs the merge-time full suite in the
+ * coding session's own worktree but records it with session_id NULL and
+ * run_origin='pr_pipeline' (see testRequestLane.ts) — so it is invisible to
+ * every session_id-keyed lookup above. This is the authoritative selection
+ * for PR review evidence: a finished run_kind='full' row for the PR's
+ * worktree (whether it is the session's own or the pipeline's NULL-session
+ * row) always outranks the session's own scoped/partial run, per the locked
+ * precedence in the "Design diff-scoped test execution" task's Open
+ * Question 6. Falls back to getLatestFinishedTestRequestRunForSession's
+ * result when no such full run exists — today's unchanged behavior.
+ *
+ * `worktreePath` must be the session's own sessions.worktree_path (resolved
+ * by the caller), not any content-hash-derived value — the PR pipeline
+ * executes in that same worktree, verified directly for Polimarket PR #1671.
+ * A NULL worktreePath (or a run with a NULL worktree_path) never matches —
+ * otherwise a worktree-less run would satisfy every session's lookup.
+ */
+export function getAuthoritativeTestRunForPr(
+  projectId: string,
+  sessionId: string,
+  worktreePath: string | null,
+): TestRequestRunRow | undefined {
+  const fullRun = db
+    .prepare<{
+      project_id: string;
+      session_id: string;
+      worktree_path: string | null;
+    }>(
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
+       FROM test_request_runs
+       WHERE project_id = @project_id
+         AND run_kind = 'full'
+         AND state NOT IN ('running', 'queued')
+         AND (failure_reason IS NULL OR failure_reason != 'superseded')
+         AND worktree_path IS NOT NULL
+         AND @worktree_path IS NOT NULL
+         AND worktree_path = @worktree_path
+         AND (session_id = @session_id OR session_id IS NULL)
+       ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
+    )
+    .get({
+      project_id: projectId,
+      session_id: sessionId,
+      worktree_path: worktreePath,
+    }) as TestRequestRunRow | undefined;
+  if (fullRun) return fullRun;
+  return getLatestFinishedTestRequestRunForSession(projectId, sessionId);
+}
+
+/**
+ * listTestRequestRunsForSession's PR-review counterpart for the Tests tab:
+ * also surfaces the PR pipeline's NULL-session rows for the same worktree,
+ * so an operator viewing a task's Tests tab can see the full-suite gate the
+ * PR pipeline ran even though it never carried that session's session_id.
+ * See getAuthoritativeTestRunForPr for the join-key rationale.
+ */
+export function listTestRequestRunsForPrSession(
+  projectId: string,
+  sessionId: string,
+  worktreePath: string | null,
+  limit = 50,
+): TestRequestRunRow[] {
+  return db
+    .prepare<{
+      project_id: string;
+      session_id: string;
+      worktree_path: string | null;
+      limit: number;
+    }>(
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
+       FROM test_request_runs
+       WHERE project_id = @project_id
+         AND (
+           session_id = @session_id
+           OR (
+             session_id IS NULL
+             AND worktree_path IS NOT NULL
+             AND @worktree_path IS NOT NULL
+             AND worktree_path = @worktree_path
+           )
+         )
+       ORDER BY started_at DESC, rowid DESC LIMIT @limit`,
+    )
+    .all({
+      project_id: projectId,
+      session_id: sessionId,
+      worktree_path: worktreePath,
+      limit,
+    }) as TestRequestRunRow[];
+}
+
 /** One test_request_runs row plus its test_run_summaries outcome breakdown, when extracted. */
 export interface ProjectTestRunHistoryRow {
   run: TestRequestRunRow;

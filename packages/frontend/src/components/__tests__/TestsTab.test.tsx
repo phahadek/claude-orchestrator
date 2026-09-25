@@ -76,4 +76,53 @@ describe('TestsTab', () => {
     render(<TestsTab projectId="proj-1" sessionId={null} />);
     expect(apiRequest).not.toHaveBeenCalled();
   });
+
+  it('labels a pr_pipeline run distinctly from a session-requested run', async () => {
+    vi.mocked(apiRequest).mockResolvedValue({
+      cycleCount: 1,
+      cycleLimit: 5,
+      runs: [
+        {
+          id: 'run-pipeline',
+          sessionId: null,
+          runKind: 'full',
+          isPrPipelineRun: true,
+          contentHash: 'hash-1',
+          startedAt: 2000,
+          finishedAt: 3000,
+          durationMs: 1000,
+          concurrentRunCount: 0,
+          outcome: 'passed',
+          nextAction: 'No action needed — all tests passed.',
+          testResults: [],
+        },
+        {
+          id: 'run-own',
+          sessionId: 'sess-1',
+          runKind: 'scoped',
+          isPrPipelineRun: false,
+          contentHash: 'hash-2',
+          startedAt: 1000,
+          finishedAt: 1500,
+          durationMs: 500,
+          concurrentRunCount: 0,
+          outcome: 'failed-with-named-tests',
+          nextAction: 'Fix the failing tests.',
+          testResults: [],
+        },
+      ],
+    });
+
+    render(<TestsTab projectId="proj-1" sessionId="sess-1" />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('test-run-run-pipeline')).toBeTruthy(),
+    );
+    expect(screen.getByTestId('test-run-source-run-pipeline').textContent).toBe(
+      'PR pipeline (full)',
+    );
+    expect(
+      screen.queryByTestId('test-run-source-run-own'),
+    ).not.toBeTruthy();
+  });
 });

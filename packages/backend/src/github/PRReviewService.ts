@@ -15,8 +15,7 @@ import {
   setPauseReason,
   getMergedPRForTask,
   getMergedLocalBranchForTaskId,
-  getLatestTestRequestRunForSession,
-  getLatestFinishedTestRequestRunForSession,
+  getAuthoritativeTestRunForPr,
   getTestRunSummary,
 } from '../db/queries';
 import { supersedeReviewSession } from './reviewSessionSupersede';
@@ -566,9 +565,14 @@ function buildTestRunEvidenceSection(
       : '';
     commandLines = `(raw structured result was cleared by storage dedup after extraction; totals below are from the extracted summary)\n${totalsLine}${incompleteLine}`;
   }
+  const sourceLine =
+    run.session_id === null
+      ? 'Source: the PR pipeline\'s own full-suite run (run_kind: full)'
+      : `Source: the coding session's own run (run_kind: ${run.run_kind})`;
   return `\n## Orchestrator-Verified Test Run
 This is a real record from the orchestrator's own F2 test gate for this PR's coding
 session — not a claim made by the PR author. It ran out-of-band via mcp__orchestrator__test_request.
+${sourceLine}
 Run outcome: ${run.state}
 Finished at: ${finishedAt}
 ${commandLines}
@@ -892,24 +896,18 @@ export class PRReviewService {
       const prIntent = prIntentRow
         ? (JSON.parse(prIntentRow.payload) as OpsPrIntentPayload)
         : null;
-      // The latest run may still be running/queued (e.g. the session fired a
-      // second test_request while this review builds its prompt). That row
-      // has no evidence to show yet, so fall back to the last *finished* run
-      // rather than silently dropping real, already-executed evidence.
-      let testRun = prRow.session_id
-        ? getLatestTestRequestRunForSession(projectId, prRow.session_id)
-        : undefined;
-      if (
-        testRun &&
-        (testRun.state === 'running' || testRun.state === 'queued') &&
-        prRow.session_id
-      ) {
-        testRun =
-          getLatestFinishedTestRequestRunForSession(
+      // Prefer the authoritative run: the PR pipeline's own finished
+      // run_kind='full' row for this session's worktree (recorded with
+      // session_id NULL) outranks the session's own scoped/partial run — see
+      // getAuthoritativeTestRunForPr. Falls back to the session's own latest
+      // finished run when no such full run exists.
+      const testRun = prRow.session_id
+        ? getAuthoritativeTestRunForPr(
             projectId,
             prRow.session_id,
-          ) ?? testRun;
-      }
+            getSession(prRow.session_id)?.worktree_path ?? null,
+          )
+        : undefined;
       const testRunSummary =
         testRun && !testRun.structured_result
           ? getTestRunSummary(testRun.id)
@@ -1460,18 +1458,13 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       );
     }
 
-    let testRun = pr.session_id
-      ? getLatestTestRequestRunForSession(projectId, pr.session_id)
+    const testRun = pr.session_id
+      ? getAuthoritativeTestRunForPr(
+          projectId,
+          pr.session_id,
+          getSession(pr.session_id)?.worktree_path ?? null,
+        )
       : undefined;
-    if (
-      testRun &&
-      (testRun.state === 'running' || testRun.state === 'queued') &&
-      pr.session_id
-    ) {
-      testRun =
-        getLatestFinishedTestRequestRunForSession(projectId, pr.session_id) ??
-        testRun;
-    }
     const testRunSummary =
       testRun && !testRun.structured_result
         ? getTestRunSummary(testRun.id)

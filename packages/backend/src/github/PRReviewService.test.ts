@@ -22,6 +22,7 @@ vi.mock('../db/queries.js', () => ({
   getMergedLocalBranchForTaskId: vi.fn().mockReturnValue(undefined),
   getLatestTestRequestRunForSession: vi.fn().mockReturnValue(undefined),
   getLatestFinishedTestRequestRunForSession: vi.fn().mockReturnValue(undefined),
+  getAuthoritativeTestRunForPr: vi.fn().mockReturnValue(undefined),
   getTestRunSummary: vi.fn().mockReturnValue(undefined),
   markSessionSuperseded: vi.fn(),
   TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED: new Set([
@@ -67,8 +68,8 @@ import {
   setLastReviewedSha,
   getSession,
   setPauseReason,
-  getLatestTestRequestRunForSession,
-  getLatestFinishedTestRequestRunForSession,
+  getAuthoritativeTestRunForPr,
+  getTestRunSummary,
   markSessionSuperseded,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
@@ -1963,8 +1964,12 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
       review_session_id: 'dead-review-session-id',
     };
     vi.mocked(getPRByNumber).mockReturnValue(prRowWithDeadSession as any);
-    // Session row exists and is idle (not terminal) — qualifies for Case 2
-    vi.mocked(getSession).mockReturnValueOnce({ status: 'idle' } as any);
+    // Session row exists and is idle (not terminal) — qualifies for Case 2.
+    // Not mockReturnValueOnce: the authoritative-test-run lookup also calls
+    // getSession (for the coding session's worktree_path) before the
+    // existingSession resumability check does, so a single queued value
+    // would be consumed by the wrong call.
+    vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
 
     const mockSM = makeMockSessionManager();
     (mockSM.isAlive as ReturnType<typeof vi.fn>).mockReturnValue(false);
@@ -2933,9 +2938,12 @@ describe('PRReviewService.reReviewPR()', () => {
       session_id: 'session-xyz',
     };
     vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
-    vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
+    vi.mocked(getSession).mockReturnValue({
+      status: 'idle',
+      worktree_path: '/srv/worktrees/session-xyz',
+    } as any);
     const finishedAt = Date.parse('2024-01-02T03:04:05Z');
-    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue({
+    vi.mocked(getAuthoritativeTestRunForPr).mockReturnValue({
       id: 'run-1',
       project_id: 'proj-1',
       content_hash: 'abc',
@@ -2999,7 +3007,7 @@ describe('PRReviewService.reReviewPR()', () => {
     };
     vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
     vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
-    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue(undefined);
+    vi.mocked(getAuthoritativeTestRunForPr).mockReturnValue(undefined);
 
     const mockSM = makeMockSessionManager();
     (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
@@ -3039,7 +3047,7 @@ describe('PRReviewService.reReviewPR()', () => {
     vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
     vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
     const finishedAt = Date.parse('2024-01-02T03:04:05Z');
-    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue({
+    vi.mocked(getAuthoritativeTestRunForPr).mockReturnValue({
       id: 'run-superseded',
       project_id: 'proj-1',
       content_hash: 'abc',
@@ -3804,33 +3812,19 @@ describe('PRReviewService.reviewPR() — DiffSource populates prompt', () => {
 });
 
 // ── reviewPR() — falls back to last finished test run when latest is in-flight ──
+// The running/queued -> finished fallback itself is implemented inside
+// getAuthoritativeTestRunForPr (db/queries.ts) and is covered directly by
+// latestFinishedTestRequestRun.queries.test.ts; here we only assert
+// PRReviewService renders whatever finished run that lookup hands back.
 
 describe('PRReviewService.reviewPR() — falls back to finished test run when latest is running/queued', () => {
   it("uses the last finished run's evidence instead of rendering an empty section", async () => {
     vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/srv/worktrees/session-xyz',
+    } as any);
 
     const finishedAt = Date.parse('2024-01-02T03:04:05Z');
-    const runningRun = {
-      id: 'run-running',
-      project_id: 'proj-1',
-      content_hash: 'newer-hash',
-      session_id: 'session-xyz',
-      state: 'running',
-      output: '',
-      requested_at: finishedAt + 1000,
-      started_at: finishedAt + 1000,
-      finished_at: null,
-      structured_result: null,
-      failure_reason: null,
-      concurrent_run_count: 0,
-      oom_killed: 0,
-      test_report_acquisition_attempted: 0,
-      run_origin: null,
-      producer: null,
-      run_kind: 'full',
-      base_sha: null,
-      foreign_concurrent_run_count: 0,
-    } as any;
     const finishedRun = {
       id: 'run-finished',
       project_id: 'proj-1',
@@ -3858,10 +3852,7 @@ describe('PRReviewService.reviewPR() — falls back to finished test run when la
       foreign_concurrent_run_count: 0,
     } as any;
 
-    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue(runningRun);
-    vi.mocked(getLatestFinishedTestRequestRunForSession).mockReturnValue(
-      finishedRun,
-    );
+    vi.mocked(getAuthoritativeTestRunForPr).mockReturnValue(finishedRun);
 
     const approvedPayload = {
       verdict: 'approved',
@@ -3910,10 +3901,196 @@ describe('PRReviewService.reviewPR() — falls back to finished test run when la
     );
 
     expect(result.verdict).toBe('approved');
-    expect(getLatestFinishedTestRequestRunForSession).toHaveBeenCalledWith(
+    expect(getAuthoritativeTestRunForPr).toHaveBeenCalledWith(
       'proj-1',
       'session-xyz',
+      '/srv/worktrees/session-xyz',
     );
+  });
+});
+
+// ── reviewPR() — authoritative PR-pipeline full run wins over a session's own
+// failed/scoped run ──────────────────────────────────────────────────────────
+// Regression test for Polimarket PR #1671: the coding session's scoped run
+// recorded state=failed while the PR pipeline's own full-suite run (recorded
+// with session_id NULL) passed on the identical tree. The evidence section
+// must report the authoritative passing run, not the session's own failure.
+
+describe('PRReviewService.reviewPR() — authoritative pr_pipeline full run', () => {
+  it("reports the passing pr_pipeline full run's totals, not the failed session-scoped run", async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/srv/worktrees/session-xyz',
+    } as any);
+
+    const finishedAt = Date.parse('2024-01-02T03:04:05Z');
+    const authoritativeFullRun = {
+      id: 'run-pr-pipeline-full',
+      project_id: 'proj-1',
+      content_hash: 'shared-hash',
+      session_id: null,
+      state: 'passed',
+      output: '',
+      requested_at: finishedAt - 1000,
+      started_at: finishedAt - 1000,
+      finished_at: finishedAt,
+      structured_result: JSON.stringify({
+        format: 'junit-xml',
+        suites: [{ name: 'npm run test -w packages/backend', tests: [] }],
+        totals: { passed: 10937, failed: 0, skipped: 0, errors: 0 },
+        durationMsTotal: 1234,
+      }),
+      failure_reason: null,
+      concurrent_run_count: 0,
+      oom_killed: 0,
+      test_report_acquisition_attempted: 1,
+      run_origin: 'pr_pipeline',
+      producer: null,
+      run_kind: 'full',
+      base_sha: null,
+      foreign_concurrent_run_count: 0,
+    } as any;
+
+    vi.mocked(getAuthoritativeTestRunForPr).mockReturnValue(
+      authoritativeFullRun,
+    );
+
+    const approvedPayload = {
+      verdict: 'approved',
+      dimensions: [{ name: 'Diff vs Context spec', passed: true, notes: 'ok' }],
+      summary: 'All good.',
+    };
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (
+        _a: string,
+        _b: string,
+        opts: { sessionId: string; customPrompt: string },
+      ) => {
+        expect(opts.customPrompt).toContain(
+          '## Orchestrator-Verified Test Run',
+        );
+        expect(opts.customPrompt).toContain('10937 passed, 0 failed');
+        expect(opts.customPrompt).toContain('run_kind: full');
+        expect(opts.customPrompt).toContain('PR pipeline');
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(
+              opts.sessionId,
+              JSON.stringify(approvedPayload),
+            ),
+          ),
+        );
+        return opts.sessionId;
+      },
+    );
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    expect(result.verdict).toBe('approved');
+  });
+
+  it("falls back to test_run_summaries totals for the authoritative run when structured_result was cleared", async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/srv/worktrees/session-xyz',
+    } as any);
+
+    const finishedAt = Date.parse('2024-01-02T03:04:05Z');
+    const authoritativeFullRun = {
+      id: 'run-pr-pipeline-full-2',
+      project_id: 'proj-1',
+      content_hash: 'shared-hash',
+      session_id: null,
+      state: 'passed',
+      output: '',
+      requested_at: finishedAt - 1000,
+      started_at: finishedAt - 1000,
+      finished_at: finishedAt,
+      structured_result: null,
+      failure_reason: null,
+      concurrent_run_count: 0,
+      oom_killed: 0,
+      test_report_acquisition_attempted: 1,
+      run_origin: 'pr_pipeline',
+      producer: null,
+      run_kind: 'full',
+      base_sha: null,
+      foreign_concurrent_run_count: 0,
+    } as any;
+    vi.mocked(getAuthoritativeTestRunForPr).mockReturnValue(
+      authoritativeFullRun,
+    );
+    vi.mocked(getTestRunSummary).mockReturnValue({
+      test_request_run_id: 'run-pr-pipeline-full-2',
+      project_id: 'proj-1',
+      passed_count: 10937,
+      failed_count: 0,
+      skipped_count: 0,
+      error_count: 0,
+      other_count: 0,
+      total_count: 10937,
+      total_duration_ms: 60000,
+      concurrent_run_count: 0,
+      oom_killed: 0,
+      incomplete: 0,
+      created_at: finishedAt,
+    } as any);
+
+    const approvedPayload = {
+      verdict: 'approved',
+      dimensions: [{ name: 'Diff vs Context spec', passed: true, notes: 'ok' }],
+      summary: 'All good.',
+    };
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (
+        _a: string,
+        _b: string,
+        opts: { sessionId: string; customPrompt: string },
+      ) => {
+        expect(opts.customPrompt).toContain('10937 passed, 0 failed');
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(
+              opts.sessionId,
+              JSON.stringify(approvedPayload),
+            ),
+          ),
+        );
+        return opts.sessionId;
+      },
+    );
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    expect(result.verdict).toBe('approved');
   });
 });
 
