@@ -350,3 +350,88 @@ describe('computeProposedBody surfaces non-composing patches instead of silently
     ).toBe(true);
   });
 });
+
+describe('a same-group replace patch that inserts a missing required section lets the Ready flip pass', () => {
+  function investigationGroomingGate() {
+    return {
+      size_check: { decision: 'n/a' },
+      type_check: { decision: 'n/a' },
+      seam_check: { decision: 'n/a' },
+      type: '🔎 Investigation',
+      triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
+    };
+  }
+
+  it('a same-group Context decision-branch-list patch makes checkInvestigationDecisionBranchStructure pass without a committed Notion write', async () => {
+    mockGetTaskBackend.mockReturnValue(
+      makeBackend(
+        '## Deliverables\n- Investigation report\n\n## Context\nSome background with no enumerated branches.\n',
+      ),
+    );
+
+    stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: 'notion:investigation-context-branches',
+        section: 'Context',
+        operation: 'append',
+        content:
+          '- If the retry storm is caused by X, then file a Code fix.\n' +
+          '- If it is caused by Y, then file an Operational task.',
+      },
+      'proj-1',
+      'group-1',
+    );
+
+    const checked = await stageReadyFlip(
+      'notion:investigation-context-branches',
+      'group-1',
+      investigationGroomingGate(),
+    );
+
+    expect(checked.annotation).toBeNull();
+  });
+
+  function operationalGroomingGate() {
+    return {
+      size_check: { decision: 'n/a' },
+      type_check: { decision: 'n/a' },
+      seam_check: { decision: 'n/a' },
+      type: '🔧 Operational',
+      triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
+    };
+  }
+
+  it('a same-group replace patch that inserts a missing "Manual verification" section makes checkOperationalReconcileCapture pass without a committed Notion write', async () => {
+    mockGetTaskBackend.mockReturnValue(
+      makeBackend(
+        '## Targets / surfaces affected\n- prod worker config\n\n## Context\nBackground.\n',
+      ),
+    );
+
+    // The stored page has no "Manual verification" heading at all — replace
+    // against a missing heading must insert it (rather than no-op) for this
+    // patch's reconcile-and-capture language to reach the readiness scan.
+    stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: 'notion:operational-reconcile-capture',
+        section: 'Manual verification',
+        operation: 'replace',
+        find: 'placeholder',
+        replaceWith:
+          'Reconcile the worker state against the new config and capture confirmation the change landed.',
+      },
+      'proj-1',
+      'group-1',
+    );
+
+    const checked = await stageReadyFlip(
+      'notion:operational-reconcile-capture',
+      'group-1',
+      operationalGroomingGate(),
+    );
+
+    expect(checked.annotation).toBeNull();
+  });
+});

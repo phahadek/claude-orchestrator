@@ -81,7 +81,7 @@ const GROOMING_RESIDUE_PATTERNS: readonly RegExp[] = [
   /\bdecide\b[^\n]{0,80}\bduring grooming\b/i,
 ];
 
-function normalizeHeadingText(text: string): string {
+export function normalizeHeadingText(text: string): string {
   return text
     .replace(/[^\p{L}\s]/gu, '')
     .trim()
