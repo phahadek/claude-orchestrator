@@ -132,7 +132,9 @@ beforeEach(() => {
   db.prepare('DELETE FROM test_request_runs').run();
   db.prepare('DELETE FROM test_perf_baselines').run();
   db.prepare('DELETE FROM projects').run();
-  db.prepare(`DELETE FROM settings WHERE key = 'test_request_max_concurrent'`).run();
+  db.prepare(
+    `DELETE FROM settings WHERE key = 'test_request_max_concurrent'`,
+  ).run();
   __resetProjectSemaphoresForTest();
 });
 
@@ -1585,7 +1587,7 @@ describe('foreign_concurrent_run_count', () => {
     expect(row.foreign_concurrent_run_count).toBe(0);
   });
 
-  it("counts a peer running for a different project in both concurrent_run_count (host-wide, via the global semaphore) and foreign_concurrent_run_count (the other-project subset)", async () => {
+  it('counts a peer running for a different project in both concurrent_run_count (host-wide, via the global semaphore) and foreign_concurrent_run_count (the other-project subset)', async () => {
     insertProject({
       id: 'proj-2',
       name: 'proj-2',
