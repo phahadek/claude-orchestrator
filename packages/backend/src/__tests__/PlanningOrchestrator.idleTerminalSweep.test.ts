@@ -202,6 +202,55 @@ describe('PlanningOrchestrator.sweepIdleTerminalSessions', () => {
     expect(getSession('s-owes-artifact')?.status).toBe('idle');
   });
 
+  it('does not terminalize a design session that has only a committed decision.pickOne intent — OQ answered, closing set never staged', async () => {
+    seedIdleSession('s-pickone-only', { sessionType: 'design' });
+    stageIntent('s-pickone-only', {
+      kind: 'decision.pickOne',
+      state: 'committed',
+    });
+    const sessionManager = makeSessionManager();
+    const orchestrator = new PlanningOrchestrator(sessionManager);
+
+    const processed = await orchestrator.sweepIdleTerminalSessions(() => NOW);
+    expect(processed).toBe(0);
+    expect(getSession('s-pickone-only')?.status).toBe('idle');
+  });
+
+  it('terminalizes a design session only once its closing set (completeness + arch write) is committed', async () => {
+    seedIdleSession('s-closing-set-complete', { sessionType: 'design' });
+    stageIntent('s-closing-set-complete', {
+      kind: 'decision.pickOne',
+      state: 'committed',
+    });
+    stageIntent('s-closing-set-complete', {
+      kind: 'completeness.disposition',
+      state: 'committed',
+      payload: JSON.stringify({
+        taskId: 'task-s-closing-set-complete',
+        rowId: 1,
+        project: null,
+        milestone: null,
+        probed: [],
+        questions: [],
+        runAt: new Date(NOW).toISOString(),
+      }),
+    });
+    stageIntent('s-closing-set-complete', {
+      kind: 'arch.updateUnit',
+      state: 'committed',
+    });
+    stageIntent('s-closing-set-complete', {
+      kind: 'task.create',
+      state: 'committed',
+    });
+    const sessionManager = makeSessionManager();
+    const orchestrator = new PlanningOrchestrator(sessionManager);
+
+    const processed = await orchestrator.sweepIdleTerminalSessions(() => NOW);
+    expect(processed).toBe(1);
+    expect(getSession('s-closing-set-complete')?.status).toBe('done');
+  });
+
   it('never terminalizes a session whose subprocess is still live in-memory, regardless of age', async () => {
     seedIdleSession('s-live', { endedAt: NOW - 1000 * 60 * 60 * 24 * 30 });
     stageIntent('s-live');

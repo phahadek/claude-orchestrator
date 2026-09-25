@@ -1196,6 +1196,15 @@ export class PlanningOrchestrator {
    *    rather than silently terminalizing over it.
    *  - an outstanding session.requestCapability intent — the session is
    *    still (structurally, if not literally) awaiting an answer.
+   *  - a design session that has not yet applied its closing set
+   *    (sessionHasAppliedDesignClosingSet) — the same predicate
+   *    completeDesignTask gates the Notion Done write on. A design session
+   *    that has only answered Open Questions (committed decision.pickOne)
+   *    and never staged completeness.disposition is `stillPending=false`
+   *    and `owesGatedArtifacts=false` (that flag only fires once an
+   *    approval has actually landed), so without this check it would read
+   *    as sweep-complete after a single answered question — the work is
+   *    still owed, only the session is dead.
    */
   private isSessionCompleteForIdleSweep(
     sessionId: string,
@@ -1207,7 +1216,55 @@ export class PlanningOrchestrator {
     const blocked = all.some(
       (i) => i.state === 'needs_revision' || i.state === 'pending_verification',
     );
-    return blocked ? 'blocked' : 'terminal';
+    if (blocked) return 'blocked';
+    const row = getSession(sessionId);
+    if (
+      row?.session_type === 'design' &&
+      !sessionHasAppliedDesignClosingSet(sessionId)
+    ) {
+      return 'not_ready';
+    }
+    return 'terminal';
+  }
+
+  /**
+   * Called by sessionLivenessReconciler for a design session whose OS
+   * process is gone but isSessionCompleteForIdleSweep reads 'not_ready' —
+   * tryTerminalizeIfComplete already declined to terminalize it, and the
+   * reconciler's default fallback for a dead-process 'running' row is to
+   * archiveSession(..., 'machine_park'), which only drops the row from the
+   * live population without ever driving the next mandated step (the next
+   * Open Question, or the gated arch/synthesis write a just-approved
+   * completeness unblocked). Respawn it instead via the ordinary
+   * enqueueFeedback -> sendOrResume path (the same one every other
+   * park/resume in this file goes through), which spawns a fresh
+   * `--resume` process for a session with no live one. Returns true iff a
+   * respawn was attempted, so the reconciler skips its archive fallback for
+   * this row; false (non-design, or a design session whose closing set is
+   * already applied) leaves the row to that fallback untouched.
+   */
+  attemptDesignRespawnIfIncomplete(sessionId: string): boolean {
+    const row = getSession(sessionId);
+    if (!row || row.session_type !== 'design') return false;
+    if (this.isSessionCompleteForIdleSweep(sessionId) !== 'not_ready') {
+      return false;
+    }
+    this.sessionManager
+      .enqueueFeedback(
+        sessionId,
+        'planning-liveness-respawn',
+        'Your process ended before your design closing set was complete — ' +
+          'resuming so your next turn can continue: answer the next Open ' +
+          'Question, or stage the gated architecture/synthesis write your ' +
+          'last completeness approval unblocked.',
+        { attemptTerminalResume: true },
+      )
+      .catch((err) => {
+        logger.error(
+          `[PlanningOrchestrator] resume failed for session ${sessionId.slice(0, 8)} after liveness respawn: ${err}`,
+        );
+      });
+    return true;
   }
 
   /**

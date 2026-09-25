@@ -480,6 +480,64 @@ describe('reconcileSessionLiveness', () => {
     expect(row.archived).toBe(1);
   });
 
+  it('calls attemptDesignResume and does not archive a running design session whose closing set is not ready, once tryMarkPlanningTerminal declines', () => {
+    seedSession({
+      sessionId: 'design-not-ready',
+      status: 'running',
+      sessionType: 'design',
+    });
+    const tryMarkPlanningTerminal = vi.fn().mockReturnValue(false);
+    const attemptDesignResume = vi.fn().mockReturnValue(true);
+
+    const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+      tryMarkPlanningTerminal,
+      attemptDesignResume,
+    });
+
+    expect(tryMarkPlanningTerminal).toHaveBeenCalledWith('design-not-ready');
+    expect(attemptDesignResume).toHaveBeenCalledWith('design-not-ready');
+    expect(result.reconciled).toEqual([]);
+    const row = db
+      .prepare('SELECT status, archived FROM sessions WHERE session_id = ?')
+      .get('design-not-ready') as { status: string; archived: number };
+    expect(row.status).toBe('running');
+    expect(row.archived).toBe(0);
+  });
+
+  it('falls back to archiving a running design session when both tryMarkPlanningTerminal and attemptDesignResume decline', () => {
+    seedSession({
+      sessionId: 'design-closing-set-complete',
+      status: 'running',
+      sessionType: 'design',
+    });
+    const tryMarkPlanningTerminal = vi.fn().mockReturnValue(false);
+    const attemptDesignResume = vi.fn().mockReturnValue(false);
+
+    const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+      tryMarkPlanningTerminal,
+      attemptDesignResume,
+    });
+
+    expect(attemptDesignResume).toHaveBeenCalledWith(
+      'design-closing-set-complete',
+    );
+    expect(result.reconciled).toEqual(['design-closing-set-complete']);
+    const row = db
+      .prepare('SELECT status, archived FROM sessions WHERE session_id = ?')
+      .get('design-closing-set-complete') as {
+      status: string;
+      archived: number;
+    };
+    expect(row.status).toBe('running');
+    expect(row.archived).toBe(1);
+  });
+
   it('never sets terminal_completion_reason for a dead-process row drained via archiving', () => {
     seedSession({ sessionId: 'reason-ghost', status: 'running' });
 

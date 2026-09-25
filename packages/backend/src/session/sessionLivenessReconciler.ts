@@ -114,6 +114,25 @@ export interface SessionLivenessReconcilerDeps {
    * normal 'killed' fallback below.
    */
   tryMarkPlanningTerminal?: (sessionId: string) => boolean;
+  /**
+   * Only consulted by the planning population, and only once
+   * tryMarkPlanningTerminal has declined to terminalize a 'running',
+   * dead-process row: a design session can decline terminal because it
+   * still owes its next Open Question or its closing-set write, not
+   * because anything is actually staged-and-undispositioned (that case
+   * already short-circuits above via hasUndispositionedStagedIntents). The
+   * sweep's normal fallback for such a row is archiveSession(...,
+   * 'machine_park'), which only drops it from the live population and
+   * never drives the next mandated step — SessionManager wires this to
+   * PlanningOrchestrator.attemptDesignRespawnIfIncomplete, which resumes
+   * the session (spawning a fresh process) instead. Returns true if a
+   * respawn was attempted (the sweep then skips archiveSession for this
+   * row, leaving status/archived untouched); false leaves the row to the
+   * normal archive fallback (a non-design session, or a design session
+   * whose closing set is already applied and simply never reached its own
+   * terminal check).
+   */
+  attemptDesignResume?: (sessionId: string) => boolean;
 }
 
 export interface SessionLivenessReconcileResult {
@@ -301,6 +320,20 @@ function runLivenessSweep(
         `[sessionLivenessReconciler] session ${row.session_id.slice(0, 8)} (status=${row.status}) has no live OS process — idle steady state, idle_elapsed_ms=${now - lastActivity}`,
       );
       idleProcessAbsentIds.push(row.session_id);
+      continue;
+    }
+
+    if (
+      population === 'planning' &&
+      deps.attemptDesignResume?.(row.session_id)
+    ) {
+      // Deliberately does not evict the map entry or revoke stage/route
+      // credentials — unlike the terminal and archive branches, this row
+      // is meant to keep living: the respawn just kicked off relies on
+      // those exact credentials to let the fresh process pick back up.
+      logger.info(
+        `[sessionLivenessReconciler] session ${row.session_id.slice(0, 8)} had no live OS process but its design closing set is incomplete — respawned instead of archived`,
+      );
       continue;
     }
 
