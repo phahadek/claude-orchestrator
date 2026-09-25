@@ -1144,6 +1144,38 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         return;
       }
 
+      // The CLI's own result event, when it carries is_error: true, is a
+      // definitive CLI-authored failure verdict — it must win over exit-code
+      // inference entirely, including a null exit code from a post-result
+      // grace kill/watchdog. This is checked ahead of the exitCode===null
+      // branch below (which is reserved for "no verdict at all") so an
+      // is_error result is never mistaken for an unexplained death and
+      // machine_park'd via surfaceUnresolvedToOperator.
+      const cliErrorDetail = this.getLastResultErrorDetail();
+      if (cliErrorDetail !== undefined) {
+        this.retryCount = 0;
+        const status = 'error';
+        const reason = 'cli_result_error';
+        if (!this.hasEnded) {
+          this.sessionManager?.markSessionErrored?.(
+            this.sessionId,
+            status,
+            reason,
+            cliErrorDetail,
+          );
+          if (!this.hasEnded) {
+            updateSessionStatus(this.sessionId, status, Date.now());
+            this.broadcast({
+              type: 'session_ended',
+              sessionId: this.sessionId,
+              status,
+              ...(this.taskId && { taskId: this.taskId }),
+            });
+          }
+        }
+        return;
+      }
+
       // exitCode === null is only ever reached via a kill() call — this
       // runner's own post-result grace-timeout kill, the first-event
       // escalation watchdog, or StuckSessionMonitor's hard-stop. Gating the
@@ -1371,6 +1403,30 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       return payload.is_error !== true;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Returns the result text when the session's last DB event is a 'result'
+   * event carrying is_error: true — the CLI's own definitive failure
+   * verdict for its final turn. Returns undefined for every other case
+   * (no events, last event isn't a result, or is_error !== true), which
+   * callers treat as "no CLI-authored verdict, fall through to exit-code
+   * inference."
+   */
+  private getLastResultErrorDetail(): string | undefined {
+    const events = getEventsBySession(this.sessionId);
+    if (events.length === 0) return undefined;
+    const lastEvent = events[events.length - 1];
+    if (eventKind(lastEvent) !== 'result') return undefined;
+    try {
+      const payload = JSON.parse(lastEvent.payload) as Record<string, unknown>;
+      if (payload.is_error !== true) return undefined;
+      return typeof payload.result === 'string'
+        ? payload.result
+        : JSON.stringify(payload);
+    } catch {
+      return undefined;
     }
   }
 
