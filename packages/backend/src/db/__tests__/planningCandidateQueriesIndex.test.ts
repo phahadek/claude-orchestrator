@@ -35,14 +35,23 @@ function insertSession(
   sessionType: string,
   status: string,
   startedAt: number,
+  opts: { archived?: number; archiveKind?: string | null } = {},
 ): string {
   sessionCounter += 1;
   const sessionId = `sess-${sessionCounter}`;
   db.prepare(
     `INSERT INTO sessions (session_id, task_id, task_url, project_context_url,
-       status, started_at, session_type, archived)
-     VALUES (?, ?, 'https://notion.so/task', 'https://notion.so/ctx', ?, ?, ?, 0)`,
-  ).run(sessionId, taskId, status, startedAt, sessionType);
+       status, started_at, session_type, archived, archive_kind)
+     VALUES (?, ?, 'https://notion.so/task', 'https://notion.so/ctx', ?, ?, ?, ?, ?)`,
+  ).run(
+    sessionId,
+    taskId,
+    status,
+    startedAt,
+    sessionType,
+    opts.archived ?? 0,
+    opts.archiveKind ?? null,
+  );
   return sessionId;
 }
 
@@ -64,6 +73,46 @@ describe('planning-candidate predicate chain — indexable task_id_norm matches'
       ).toBeDefined();
       expect(
         getActivePlanningSessionForTask('zz-zz-9999', 'groom'),
+      ).toBeUndefined();
+    });
+
+    it('returns a machine_park-archived idle groom row — a runner_killed_unexpected park still owns the task', () => {
+      insertSession('ab-cd-1234', 'groom', 'idle', 1000, {
+        archived: 1,
+        archiveKind: 'machine_park',
+      });
+      expect(
+        getActivePlanningSessionForTask('ab-cd-1234', 'groom'),
+      ).toBeDefined();
+    });
+
+    it('returns a machine_park-archived idle design row via the same helper', () => {
+      insertSession('ab-cd-1234', 'design', 'idle', 1000, {
+        archived: 1,
+        archiveKind: 'machine_park',
+      });
+      expect(
+        getActivePlanningSessionForTask('ab-cd-1234', 'design'),
+      ).toBeDefined();
+    });
+
+    it('still excludes an operator-archived idle row', () => {
+      insertSession('ab-cd-1234', 'groom', 'idle', 1000, {
+        archived: 1,
+        archiveKind: 'operator',
+      });
+      expect(
+        getActivePlanningSessionForTask('ab-cd-1234', 'groom'),
+      ).toBeUndefined();
+    });
+
+    it('still excludes a terminal machine_park row', () => {
+      insertSession('ab-cd-1234', 'groom', 'done', 1000, {
+        archived: 1,
+        archiveKind: 'machine_park',
+      });
+      expect(
+        getActivePlanningSessionForTask('ab-cd-1234', 'groom'),
       ).toBeUndefined();
     });
 
