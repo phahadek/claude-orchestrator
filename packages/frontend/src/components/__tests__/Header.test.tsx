@@ -296,7 +296,6 @@ describe('Header', () => {
         autoMergeEnabled: false,
         dataResidencyConfirmed: false,
         baseBranch: 'dev',
-        testRequestMaxConcurrent: null,
       };
       render(
         <Header
@@ -325,7 +324,6 @@ describe('Header', () => {
         autoMergeEnabled: false,
         dataResidencyConfirmed: false,
         baseBranch: 'dev',
-        testRequestMaxConcurrent: null,
       };
       render(
         <Header
@@ -362,7 +360,6 @@ describe('Header', () => {
         autoMergeEnabled: false,
         dataResidencyConfirmed: false,
         baseBranch: 'dev',
-        testRequestMaxConcurrent: null,
         ...overrides,
       } as ProjectConfig;
     }
@@ -590,7 +587,6 @@ describe('Header', () => {
         autoMergeEnabled: false,
         dataResidencyConfirmed: false,
         baseBranch: 'dev',
-        testRequestMaxConcurrent: null,
         ...overrides,
       } as ProjectConfig;
     }

@@ -114,8 +114,6 @@ export interface Project {
   taskSourceConfig: string | null;
   dataResidencyConfirmed: boolean;
   baseBranch: string;
-  /** Per-project test-lane concurrency cap. Null = fall back to the global default. */
-  testRequestMaxConcurrent: number | null;
   createdAt: number;
   updatedAt: number;
   milestones: ProjectMilestone[];
@@ -135,7 +133,6 @@ export interface CreateProjectInput {
   autoMergeEnabled?: boolean;
   dataResidencyConfirmed?: boolean;
   baseBranch?: string;
-  testRequestMaxConcurrent?: number | null;
 }
 
 export interface UpdateProjectInput {
@@ -152,7 +149,6 @@ export interface UpdateProjectInput {
   nonMilestoneSourceConfig?: NonMilestoneSourceConfig | null;
   dataResidencyConfirmed?: boolean;
   baseBranch?: string;
-  testRequestMaxConcurrent?: number | null;
 }
 
 export interface CreateMilestoneInput {

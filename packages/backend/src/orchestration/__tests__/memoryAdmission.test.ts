@@ -102,14 +102,14 @@ describe('hasMemoryHeadroom', () => {
 });
 
 describe('hasTestRequestAdmission', () => {
-  it('admits when inFlight is below perProjectLimit and memory headroom is fine', () => {
+  it('admits when inFlight is below the global limit and memory headroom is fine', () => {
     (os.freemem as ReturnType<typeof vi.fn>).mockReturnValue(
       10 * 1024 * 1024 * 1024,
     );
     expect(hasTestRequestAdmission(1, 2)).toBe(true);
   });
 
-  it('refuses when inFlight is at or above perProjectLimit, regardless of memory headroom', () => {
+  it('refuses when inFlight is at or above the global limit, regardless of memory headroom', () => {
     (os.freemem as ReturnType<typeof vi.fn>).mockReturnValue(
       10 * 1024 * 1024 * 1024,
     );

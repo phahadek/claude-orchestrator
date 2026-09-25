@@ -81,9 +81,6 @@ function toCreatePayload(values: ProjectFormValues) {
     nonMilestoneSourceConfig,
     dataResidencyConfirmed: values.dataResidencyConfirmed,
     baseBranch: values.baseBranch || 'dev',
-    testRequestMaxConcurrent: values.testRequestMaxConcurrent.trim()
-      ? Number(values.testRequestMaxConcurrent.trim())
-      : null,
   };
 }
 
