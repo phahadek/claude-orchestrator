@@ -1157,6 +1157,14 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         const status = 'error';
         const reason = 'cli_result_error';
         if (!this.hasEnded) {
+          // Written directly (not only passed to markSessionErrored) so the
+          // CLI's own failure text lands in last_error_detail even when
+          // sessionManager is absent, mirroring surfaceUnresolvedToOperator.
+          try {
+            setSessionLastErrorDetail(this.sessionId, cliErrorDetail);
+          } catch {
+            // Best-effort — DB may be unavailable or mocked without this function.
+          }
           this.sessionManager?.markSessionErrored?.(
             this.sessionId,
             status,
