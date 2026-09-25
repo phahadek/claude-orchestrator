@@ -220,7 +220,7 @@ import {
   getLatestTestRequestRunForSession,
   getTestRequestRunById,
   updateTestRequestRunState,
-  listTestRequestRunsForSession,
+  listTestRequestRunsForPrSession,
   listTestRequestRunsForProject,
   listTestRunResultsForRun,
   countTestRunResultsForRun,
@@ -9091,9 +9091,10 @@ export function createStagedIntentsRouter(
       return;
     }
 
-    const runs = listTestRequestRunsForSession(
+    const runs = listTestRequestRunsForPrSession(
       projectId,
       sessionId,
+      getSession(sessionId)?.worktree_path ?? null,
       Number.isFinite(limit) && limit > 0 ? limit : 50,
     );
 
@@ -9122,6 +9123,8 @@ export function createStagedIntentsRouter(
           return {
             id: run.id,
             sessionId: run.session_id,
+            runKind: run.run_kind,
+            isPrPipelineRun: run.session_id === null,
             contentHash: run.content_hash,
             startedAt: run.started_at,
             finishedAt: run.finished_at,
