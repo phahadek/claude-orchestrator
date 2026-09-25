@@ -1327,6 +1327,21 @@ export class SessionManager extends EventEmitter {
   private planningTerminalChecker: ((sessionId: string) => boolean) | null =
     null;
 
+  /**
+   * Late-bound hook to PlanningOrchestrator.attemptDesignRespawnIfIncomplete
+   * — the design-respawn twin of planningTerminalChecker above, wired the
+   * same way and for the same reason (constructor-order dependency).
+   * Consulted by reconcilePlanningSessionLiveness (see
+   * sessionLivenessReconciler.ts's attemptDesignResume dep) once
+   * planningTerminalChecker has declined to terminalize a dead-process
+   * 'running' row, before that sweep would otherwise fall through to a bare
+   * archiveSession(..., 'machine_park') that leaves the design's next
+   * mandated step (its next Open Question, or a gated arch/synthesis write)
+   * undriven.
+   */
+  private planningDesignRespawner: ((sessionId: string) => boolean) | null =
+    null;
+
   /** Last known DisplayStatus per taskId — used to skip no-op broadcasts. */
   private _lastDisplayStatus = new Map<string, DisplayStatus>();
   /** Timestamp of last lastMessage-only task_updated per taskId. */
@@ -6278,6 +6293,7 @@ export class SessionManager extends EventEmitter {
       evictSessionMapEntry: (sessionId) =>
         this.evictDeadSessionEntry(sessionId),
       tryMarkPlanningTerminal: this.planningTerminalChecker ?? undefined,
+      attemptDesignResume: this.planningDesignRespawner ?? undefined,
     });
   }
 
@@ -6289,6 +6305,15 @@ export class SessionManager extends EventEmitter {
    */
   setPlanningTerminalChecker(checker: (sessionId: string) => boolean): void {
     this.planningTerminalChecker = checker;
+  }
+
+  /**
+   * Wires PlanningOrchestrator.attemptDesignRespawnIfIncomplete in — same
+   * constructor-order wiring as setPlanningTerminalChecker, called
+   * alongside it from server.ts.
+   */
+  setPlanningDesignRespawner(respawner: (sessionId: string) => boolean): void {
+    this.planningDesignRespawner = respawner;
   }
 
   /**

@@ -246,6 +246,9 @@ const planningOrchestrator = new PlanningOrchestrator(sessionManager);
 sessionManager.setPlanningTerminalChecker((sessionId) =>
   planningOrchestrator.tryTerminalizeIfComplete(sessionId),
 );
+sessionManager.setPlanningDesignRespawner((sessionId) =>
+  planningOrchestrator.attemptDesignRespawnIfIncomplete(sessionId),
+);
 
 // Wire sessionManager into the deploy-agentic-step spawner before any
 // deploy_run resume below could reach an `agentic` step.
