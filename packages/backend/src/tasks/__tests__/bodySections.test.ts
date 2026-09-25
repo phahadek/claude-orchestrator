@@ -47,4 +47,18 @@ describe('splicePatchBodySection', () => {
     expect(result.applied).toBe(false);
     expect(result.body).toBe('## Summary\nOld.\n');
   });
+
+  it('remove matches a heading regardless of emoji, via the shared normalizeHeadingText posture', () => {
+    const result = splicePatchBodySection(
+      '### 👁️ Manual verification\nOld verification text.\n\n## Summary\nKeep.\n',
+      'Manual verification',
+      {
+        operation: 'remove',
+      },
+    );
+
+    expect(result.applied).toBe(true);
+    expect(result.body).not.toContain('Manual verification');
+    expect(result.body).toContain('## Summary\nKeep.');
+  });
 });
