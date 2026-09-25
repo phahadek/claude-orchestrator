@@ -232,7 +232,8 @@ describe('AgentSession — null exit after a successful result event', () => {
         subtype: 'success',
         is_error: true,
         num_turns: 1,
-        result: 'Failed to authenticate: OAuth session expired and could not be refreshed',
+        result:
+          'Failed to authenticate: OAuth session expired and could not be refreshed',
       }),
       timestamp: Date.now(),
     });
@@ -276,7 +277,8 @@ describe('AgentSession — null exit after a successful result event', () => {
         subtype: 'success',
         is_error: true,
         num_turns: 1,
-        result: 'Failed to authenticate: OAuth session expired and could not be refreshed',
+        result:
+          'Failed to authenticate: OAuth session expired and could not be refreshed',
       }),
       timestamp: Date.now(),
     });
@@ -297,9 +299,7 @@ describe('AgentSession — null exit after a successful result event', () => {
     );
     const row = db
       .prepare('SELECT status, archived FROM sessions WHERE session_id = ?')
-      .get(sessionId) as
-      | { status: string; archived: number }
-      | undefined;
+      .get(sessionId) as { status: string; archived: number } | undefined;
     expect(row?.status).toBe('error');
     expect(row?.archived).not.toBe(1);
   });
@@ -315,7 +315,8 @@ describe('AgentSession — null exit after a successful result event', () => {
         subtype: 'success',
         is_error: true,
         num_turns: 1,
-        result: 'Failed to authenticate: OAuth session expired and could not be refreshed',
+        result:
+          'Failed to authenticate: OAuth session expired and could not be refreshed',
       }),
       timestamp: Date.now(),
     });
@@ -336,9 +337,7 @@ describe('AgentSession — null exit after a successful result event', () => {
     );
     const row = db
       .prepare('SELECT status, archived FROM sessions WHERE session_id = ?')
-      .get(sessionId) as
-      | { status: string; archived: number }
-      | undefined;
+      .get(sessionId) as { status: string; archived: number } | undefined;
     expect(row?.status).toBe('error');
     expect(row?.archived).not.toBe(1);
   });
