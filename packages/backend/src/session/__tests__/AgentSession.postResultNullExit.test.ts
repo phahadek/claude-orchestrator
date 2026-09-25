@@ -98,7 +98,7 @@ function makeSessionManager() {
   };
 }
 
-function seedSession(sessionId: string): void {
+function seedSession(sessionId: string, sessionType = 'groom'): void {
   insertSession({
     session_id: sessionId,
     task_id: 'task-1',
@@ -106,7 +106,7 @@ function seedSession(sessionId: string): void {
     project_context_url: 'https://notion.so/ctx',
     status: 'running',
     started_at: Date.now(),
-    session_type: 'groom',
+    session_type: sessionType,
   });
 }
 
@@ -114,6 +114,7 @@ function makeSession(
   sessionId: string,
   sm: ReturnType<typeof makeSessionManager>,
   runner: ISessionRunner,
+  sessionType = 'groom',
 ): AgentSession {
   return new AgentSession(
     sessionId,
@@ -124,7 +125,7 @@ function makeSession(
     'notion:task-abc',
     undefined,
     undefined,
-    'groom',
+    sessionType,
     sm as unknown as ISessionManager,
     undefined,
     [],
@@ -218,5 +219,126 @@ describe('AgentSession — null exit after a successful result event', () => {
       | undefined;
     expect(row?.archived).toBe(1);
     expect(row?.pause_reason).toBe('runner_killed_unexpected');
+  });
+
+  it('a session whose last event is a result with is_error:true ends terminal error (not idle/machine_park) on a null exit code, with the result text recorded', async () => {
+    const sessionId = 'sess-is-error-result-null-exit';
+    seedSession(sessionId);
+    upsertSessionEvent({
+      session_id: sessionId,
+      event_type: 'system',
+      payload: JSON.stringify({
+        type: 'result',
+        subtype: 'success',
+        is_error: true,
+        num_turns: 1,
+        result:
+          'Failed to authenticate: OAuth session expired and could not be refreshed',
+      }),
+      timestamp: Date.now(),
+    });
+
+    const { runner, resolveRun } = makeFakeRunner();
+    const sm = makeSessionManager();
+    const session = makeSession(sessionId, sm, runner);
+
+    const runPromise = session.run();
+    resolveRun(null);
+    await runPromise;
+
+    expect(sm.markSessionErrored).toHaveBeenCalledWith(
+      sessionId,
+      'error',
+      'cli_result_error',
+      'Failed to authenticate: OAuth session expired and could not be refreshed',
+    );
+    const row = db
+      .prepare(
+        'SELECT status, archived, last_error_detail FROM sessions WHERE session_id = ?',
+      )
+      .get(sessionId) as
+      | { status: string; archived: number; last_error_detail: string | null }
+      | undefined;
+    expect(row?.status).toBe('error');
+    expect(row?.archived).not.toBe(1);
+    expect(row?.last_error_detail).toContain(
+      'Failed to authenticate: OAuth session expired',
+    );
+  });
+
+  it('a session whose last event is a result with is_error:true ends terminal error on a non-zero exit code too, with the result text recorded', async () => {
+    const sessionId = 'sess-is-error-result-nonzero-exit';
+    seedSession(sessionId);
+    upsertSessionEvent({
+      session_id: sessionId,
+      event_type: 'system',
+      payload: JSON.stringify({
+        type: 'result',
+        subtype: 'success',
+        is_error: true,
+        num_turns: 1,
+        result:
+          'Failed to authenticate: OAuth session expired and could not be refreshed',
+      }),
+      timestamp: Date.now(),
+    });
+
+    const { runner, resolveRun } = makeFakeRunner();
+    const sm = makeSessionManager();
+    const session = makeSession(sessionId, sm, runner);
+
+    const runPromise = session.run();
+    resolveRun(1);
+    await runPromise;
+
+    expect(sm.markSessionErrored).toHaveBeenCalledWith(
+      sessionId,
+      'error',
+      'cli_result_error',
+      'Failed to authenticate: OAuth session expired and could not be refreshed',
+    );
+    const row = db
+      .prepare('SELECT status, archived FROM sessions WHERE session_id = ?')
+      .get(sessionId) as { status: string; archived: number } | undefined;
+    expect(row?.status).toBe('error');
+    expect(row?.archived).not.toBe(1);
+  });
+
+  it('applies the same is_error terminalization to a standard (non-planning) session', async () => {
+    const sessionId = 'sess-is-error-result-standard';
+    seedSession(sessionId, 'standard');
+    upsertSessionEvent({
+      session_id: sessionId,
+      event_type: 'system',
+      payload: JSON.stringify({
+        type: 'result',
+        subtype: 'success',
+        is_error: true,
+        num_turns: 1,
+        result:
+          'Failed to authenticate: OAuth session expired and could not be refreshed',
+      }),
+      timestamp: Date.now(),
+    });
+
+    const { runner, resolveRun } = makeFakeRunner();
+    const sm = makeSessionManager();
+    const session = makeSession(sessionId, sm, runner, 'standard');
+
+    const runPromise = session.run();
+    resolveRun(null);
+    await runPromise;
+
+    expect(sm.markSessionErrored).toHaveBeenCalledWith(
+      sessionId,
+      'error',
+      'cli_result_error',
+      'Failed to authenticate: OAuth session expired and could not be refreshed',
+    );
+    const row = db
+      .prepare('SELECT status, archived FROM sessions WHERE session_id = ?')
+      .get(sessionId) as { status: string; archived: number } | undefined;
+    expect(row?.status).toBe('error');
+    expect(row?.archived).not.toBe(1);
   });
 });
