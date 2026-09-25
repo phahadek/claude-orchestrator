@@ -773,6 +773,32 @@ describe('enqueueFeedback — terminal session behavior', () => {
     expect(vi.mocked(markInboxItemsDropped)).toHaveBeenCalledWith(['item-1']);
     expect(vi.mocked(markInboxItemsDelivered)).not.toHaveBeenCalled();
   });
+
+  it('dispositioning an intent whose session is idle-but-archived with archive_kind=machine_park resumes it instead of dropping the item — the overnight-park is not an operator-done signal', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'idle',
+      archived: 1,
+      archive_kind: 'machine_park',
+    } as any);
+    const sendOrResumeSpy = vi
+      .spyOn(sm, 'sendOrResume')
+      .mockResolvedValue(SESSION_ID);
+
+    await sm.enqueueFeedback(
+      SESSION_ID,
+      'operator-disposition',
+      'decision was answered',
+    );
+
+    expect(sendOrResumeSpy).toHaveBeenCalledWith(
+      SESSION_ID,
+      expect.any(String),
+      { persistTextOnDefer: false },
+    );
+    expect(vi.mocked(markInboxItemsDropped)).not.toHaveBeenCalled();
+    expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith(['item-1']);
+  });
 });
 
 // ── enqueueFeedback — usage admission gate ───────────────────────────────────

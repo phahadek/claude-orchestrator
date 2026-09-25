@@ -5259,8 +5259,14 @@ export class SessionManager extends EventEmitter {
     // archived=1 is an explicit operator signal the session is done (see
     // archiveAndEndSession) — unlike done/error/killed, it is never eligible
     // for the attemptTerminalResume resend path below, even when the caller
-    // (e.g. enqueueFeedback informing a session of a disposition) asks for it.
-    const isArchived = row.archived === 1;
+    // (e.g. enqueueFeedback informing a session of a disposition) asks for
+    // it. A machine_park archive is the one exception: it is the overnight
+    // idle-park archive kind, not an operator-done signal (see
+    // isMachineParkedIdle and sendOrResume's own terminal-refusal check,
+    // which already treats it as resumable) — a pickOne answer or other
+    // disposition delivered to it must resume the session so its next Open
+    // Question actually gets staged, not silently dropped.
+    const isArchived = row.archived === 1 && !isMachineParkedIdle(row);
     const isTerminal = isDoneErrorKilled || isArchived;
 
     const items = listUndeliveredInboxItems(sessionId);

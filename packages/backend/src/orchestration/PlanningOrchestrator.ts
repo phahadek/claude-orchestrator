@@ -39,6 +39,7 @@ import type { ServerMessage } from '../ws/types';
 import {
   verifyDispatchedGroupsForSession,
   sessionOwesGatedDesignArtifacts,
+  sessionHasAppliedDesignClosingSet,
   findIncompleteOpsTerminalGroupsForSession,
   isOpsTerminalClosingSetMember,
 } from '../routes/stagedIntents';
@@ -739,6 +740,15 @@ export class PlanningOrchestrator {
    * terminal with nothing left pending — so an abandoned proposal in the
    * session's history blocks the close rather than being silently treated as
    * a completed design.
+   *
+   * Reaching a completing terminal reason (planning_approved or
+   * planning_no_pending_dispositions) is necessary but not sufficient: a
+   * session that only answered Open Questions (decision.pickOne) — or parked
+   * on a withdrawn planning.noOp — can reach either reason without ever
+   * applying its closing set. sessionHasAppliedDesignClosingSet is the actual
+   * gate: a committed completeness.disposition for this task, plus every
+   * DESIGN_EXPECTED_TERMINAL_KINDS group accounted for by a committed
+   * artifact or a committed noOp naming it.
    */
   private completeDesignTask(sessionId: string, row: Session): void {
     const taskId = row.task_id;
@@ -747,6 +757,7 @@ export class PlanningOrchestrator {
 
     const intents = listStagedIntentsBySession(sessionId);
     if (intents.some((i) => i.state === 'rejected')) return;
+    if (!sessionHasAppliedDesignClosingSet(sessionId)) return;
 
     getTaskBackend(projectId)
       .updateStatus(taskId, DESIGN_DONE_STATUS, {

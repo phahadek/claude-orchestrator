@@ -33,6 +33,7 @@ vi.mock('../../db/queries', () =>
 vi.mock('../../routes/stagedIntents', () => ({
   verifyDispatchedGroupsForSession: vi.fn().mockResolvedValue([]),
   sessionOwesGatedDesignArtifacts: vi.fn().mockReturnValue(false),
+  sessionHasAppliedDesignClosingSet: vi.fn().mockReturnValue(true),
   findIncompleteOpsTerminalGroupsForSession: vi.fn().mockReturnValue([]),
   isOpsTerminalClosingSetMember: vi.fn().mockReturnValue(false),
 }));

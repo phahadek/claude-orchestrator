@@ -53,14 +53,22 @@ const DECISION_INTENT_KINDS: ReadonlySet<string> = new Set([
  * since-rejected intent still proves the session produced a real decision)
  * at least one intent of a kind that counts as "staged a decision": a
  * task-write/arch-write/gate/seed intent, an ops_journal transition, or an
- * explicit no-op marker.
+ * explicit no-op marker. A *withdrawn* no-op marker is the one exception —
+ * excluded because the session itself pulled it back, so on its own it is
+ * not evidence of a decision the session stands behind (see the
+ * polimarket-M16 case: a withdrawn planning.noOp must not, alone, make the
+ * next park a completing terminal). A withdrawn intent of any other tracked
+ * kind still counts: e.g. a genuine gate.verify intent withdrawn by
+ * gateService once its item resolved directly is a real decision that
+ * happened, not a self-retraction, and still must drive the session
+ * terminal (see gateService.genuineIntentRetire.test.ts).
  */
 export function hasStagedDecision(intents: StagedIntentRow[]): boolean {
   return intents.some(
     (i) =>
       DECISION_INTENT_KINDS.has(i.kind) ||
       i.kind === OPS_JOURNAL_INTENT_KIND ||
-      i.kind === NO_OP_INTENT_KIND,
+      (i.kind === NO_OP_INTENT_KIND && i.state !== 'withdrawn'),
   );
 }
 
