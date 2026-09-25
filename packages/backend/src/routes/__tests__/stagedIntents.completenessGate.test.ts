@@ -32,6 +32,7 @@ import {
   createStagedIntentsRouter,
   stageIntent,
   sessionOwesGatedDesignArtifacts,
+  sessionHasAppliedDesignClosingSet,
 } from '../stagedIntents';
 import {
   insertSession,
@@ -824,6 +825,165 @@ describe('sessionOwesGatedDesignArtifacts', () => {
     expect(sessionOwesGatedDesignArtifacts('design-session-no-task')).toBe(
       false,
     );
+  });
+});
+
+// ── sessionHasAppliedDesignClosingSet — the actual gate completeDesignTask
+// consults before promoting a design task to Done: reaching a completing
+// terminal reason is not itself sufficient (see the polimarket-M16 case,
+// where a session that only answered one Open Question reached
+// planning_no_pending_dispositions with nothing else ever applied). Requires
+// a *committed* completeness.disposition for this task, plus every
+// DESIGN_EXPECTED_TERMINAL_KINDS group accounted for by a committed artifact
+// or a committed planning.noOp naming it. ─────────────────────────────────
+describe('sessionHasAppliedDesignClosingSet', () => {
+  function commit(id: string): void {
+    db.prepare("UPDATE staged_intent SET state = 'committed' WHERE id = ?").run(
+      id,
+    );
+  }
+
+  it('is false when the session has only answered decision.pickOne — no completeness.disposition at all', () => {
+    expect(sessionHasAppliedDesignClosingSet(SESSION_ID)).toBe(false);
+  });
+
+  it('is false once completeness.disposition is committed but neither expected terminal kind has been applied', () => {
+    const intent = stageDisposition();
+    commit(intent.id);
+    expect(sessionHasAppliedDesignClosingSet(SESSION_ID)).toBe(false);
+  });
+
+  it('is false when the expected-terminal-kind artifacts are only staged, not committed', () => {
+    const disposition = stageDisposition();
+    commit(disposition.id);
+
+    stageIntent(
+      'arch.createUnit',
+      {
+        title: 'A new unit',
+        metadata: { kind: 'invariant', topic: 't', regions: ['r'] },
+        body: 'body',
+      },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+    );
+    stageIntent(
+      'task.create',
+      {
+        databaseId: 'db-1',
+        title: 'Follow-on task',
+        type: '💻 Code',
+        priority: '🔴 High',
+      },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+    );
+
+    expect(sessionHasAppliedDesignClosingSet(SESSION_ID)).toBe(false);
+  });
+
+  it('is true once completeness.disposition, an arch write, and a follow-on task.create are all committed — the cd535150 shape', () => {
+    const disposition = stageDisposition();
+    commit(disposition.id);
+
+    const arch = stageIntent(
+      'arch.createUnit',
+      {
+        title: 'A new unit',
+        metadata: { kind: 'invariant', topic: 't', regions: ['r'] },
+        body: 'body',
+      },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+    );
+    commit(arch.id);
+
+    const followOn = stageIntent(
+      'task.create',
+      {
+        databaseId: 'db-1',
+        title: 'Follow-on task',
+        type: '💻 Code',
+        priority: '🔴 High',
+      },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+    );
+    commit(followOn.id);
+
+    expect(sessionHasAppliedDesignClosingSet(SESSION_ID)).toBe(true);
+  });
+
+  it('is true when both expected terminal kinds are instead satisfied by committed planning.noOp markers naming them', () => {
+    const disposition = stageDisposition();
+    commit(disposition.id);
+
+    const noOpArch = stageIntent(
+      'planning.noOp',
+      {
+        taskId: TASK_ID,
+        reason: 'No architecture change needed.',
+        skippedKind: 'architecture',
+      },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+    );
+    commit(noOpArch.id);
+
+    const noOpTaskCreate = stageIntent(
+      'planning.noOp',
+      {
+        taskId: TASK_ID,
+        reason: 'No follow-on work needed.',
+        skippedKind: 'task.create',
+      },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+    );
+    commit(noOpTaskCreate.id);
+
+    expect(sessionHasAppliedDesignClosingSet(SESSION_ID)).toBe(true);
+  });
+
+  it('is false when the only planning.noOp naming a group is withdrawn rather than committed', () => {
+    const disposition = stageDisposition();
+    commit(disposition.id);
+
+    const noOpArch = stageIntent(
+      'planning.noOp',
+      {
+        taskId: TASK_ID,
+        reason: 'No architecture change needed.',
+        skippedKind: 'architecture',
+      },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+    );
+    db.prepare("UPDATE staged_intent SET state = 'withdrawn' WHERE id = ?").run(
+      noOpArch.id,
+    );
+
+    const noOpTaskCreate = stageIntent(
+      'planning.noOp',
+      {
+        taskId: TASK_ID,
+        reason: 'No follow-on work needed.',
+        skippedKind: 'task.create',
+      },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+    );
+    commit(noOpTaskCreate.id);
+
+    expect(sessionHasAppliedDesignClosingSet(SESSION_ID)).toBe(false);
   });
 });
 

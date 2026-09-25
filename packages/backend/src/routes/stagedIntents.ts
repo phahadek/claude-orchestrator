@@ -3986,6 +3986,59 @@ function assertExpectedTerminalKinds(
 }
 
 /**
+ * True once a design session's closing set has actually been *applied* —
+ * not merely staged. This is the gate PlanningOrchestrator.completeDesignTask
+ * must pass before promoting the bound task to Done: a session that has
+ * answered Open Questions (decision.pickOne) and nothing else, or one that
+ * parked with only a withdrawn planning.noOp, must not read as complete just
+ * because it reached a terminal session reason (see hasStagedDecision's
+ * NO_OP_INTENT_KIND inclusion, which admits a withdrawn noOp on its own).
+ *
+ * Requires both:
+ *  1. a *committed* completeness.disposition intent keyed to this session's
+ *     own bound task (the same check sessionOwesGatedDesignArtifacts makes),
+ *     and
+ *  2. every DESIGN_EXPECTED_TERMINAL_KINDS group accounted for by a
+ *     *committed* artifact of a matching kind, or a *committed* planning.noOp
+ *     naming that group's key as skippedKind — the same predicate
+ *     assertExpectedTerminalKinds enforces at stage time, tightened from
+ *     ACTIVE_STATES to 'committed' because this check runs at close time,
+ *     after the closing set should have been applied, not while it is still
+ *     staged.
+ */
+export function sessionHasAppliedDesignClosingSet(sessionId: string): boolean {
+  const session = getSession(sessionId);
+  if (!session?.task_id || session.session_type !== 'design') return false;
+  const taskId = normalizeTaskId(session.task_id);
+  const intents = listStagedIntentsBySession(sessionId);
+
+  const hasCommittedCompleteness = intents.some((row) => {
+    if (row.kind !== 'completeness.disposition' || row.state !== 'committed') {
+      return false;
+    }
+    const payload = JSON.parse(
+      row.payload,
+    ) as CompletenessDispositionIntentPayload;
+    return normalizeTaskId(payload.taskId) === taskId;
+  });
+  if (!hasCommittedCompleteness) return false;
+
+  const committedNoOpSkippedKinds = new Set(
+    intents
+      .filter((row) => row.kind === 'planning.noOp' && row.state === 'committed')
+      .map((row) => (JSON.parse(row.payload) as NoOpPayload).skippedKind)
+      .filter((skippedKind): skippedKind is string => Boolean(skippedKind)),
+  );
+
+  return DESIGN_EXPECTED_TERMINAL_KINDS.every((group) => {
+    const satisfiedByArtifact = intents.some(
+      (row) => group.matches.has(row.kind) && row.state === 'committed',
+    );
+    return satisfiedByArtifact || committedNoOpSkippedKinds.has(group.key);
+  });
+}
+
+/**
  * Describes one staged terminal artifact for the generated closing-synthesis
  * account below — the title a human reads, independent of the intent kind's
  * payload shape.
