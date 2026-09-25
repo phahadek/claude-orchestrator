@@ -4003,7 +4003,7 @@ describe('PRReviewService.reviewPR() — authoritative pr_pipeline full run', ()
     expect(result.verdict).toBe('approved');
   });
 
-  it("falls back to test_run_summaries totals for the authoritative run when structured_result was cleared", async () => {
+  it('falls back to test_run_summaries totals for the authoritative run when structured_result was cleared', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
     vi.mocked(getSession).mockReturnValue({
       worktree_path: '/srv/worktrees/session-xyz',

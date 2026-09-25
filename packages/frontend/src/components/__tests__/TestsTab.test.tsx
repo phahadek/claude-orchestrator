@@ -121,8 +121,6 @@ describe('TestsTab', () => {
     expect(screen.getByTestId('test-run-source-run-pipeline').textContent).toBe(
       'PR pipeline (full)',
     );
-    expect(
-      screen.queryByTestId('test-run-source-run-own'),
-    ).not.toBeTruthy();
+    expect(screen.queryByTestId('test-run-source-run-own')).not.toBeTruthy();
   });
 });

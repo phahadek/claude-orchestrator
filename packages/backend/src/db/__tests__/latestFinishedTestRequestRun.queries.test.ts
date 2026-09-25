@@ -177,12 +177,7 @@ describe('getAuthoritativeTestRunForPr', () => {
       null,
       WORKTREE_PATH,
     );
-    completeTestRequestRun(
-      'run-scoped-failed',
-      'failed',
-      '',
-      'generic',
-    );
+    completeTestRequestRun('run-scoped-failed', 'failed', '', 'generic');
 
     insertTestRequestRun(
       'run-pr-pipeline-full',

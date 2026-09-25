@@ -567,7 +567,7 @@ function buildTestRunEvidenceSection(
   }
   const sourceLine =
     run.session_id === null
-      ? 'Source: the PR pipeline\'s own full-suite run (run_kind: full)'
+      ? "Source: the PR pipeline's own full-suite run (run_kind: full)"
       : `Source: the coding session's own run (run_kind: ${run.run_kind})`;
   return `\n## Orchestrator-Verified Test Run
 This is a real record from the orchestrator's own F2 test gate for this PR's coding

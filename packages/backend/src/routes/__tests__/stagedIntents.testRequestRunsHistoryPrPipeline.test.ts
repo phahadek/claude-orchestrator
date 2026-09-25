@@ -17,7 +17,11 @@ vi.mock('../../db/db', async () => {
 
 import { db } from '../../db/db';
 import { createStagedIntentsRouter } from '../stagedIntents';
-import { insertSession, insertTestRequestRun, completeTestRequestRun } from '../../db/queries';
+import {
+  insertSession,
+  insertTestRequestRun,
+  completeTestRequestRun,
+} from '../../db/queries';
 
 function buildApp() {
   const app = express();
@@ -99,7 +103,9 @@ describe('GET /api/test-request-runs/history — pr_pipeline visibility', () => 
     expect(pipelineRun.isPrPipelineRun).toBe(true);
     expect(pipelineRun.runKind).toBe('full');
 
-    const ownRun = res.body.runs.find((r: { id: string }) => r.id === 'run-own');
+    const ownRun = res.body.runs.find(
+      (r: { id: string }) => r.id === 'run-own',
+    );
     expect(ownRun.isPrPipelineRun).toBe(false);
   });
 
