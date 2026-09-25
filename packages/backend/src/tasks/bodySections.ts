@@ -1,4 +1,5 @@
 import type { PatchBodySectionOperation } from './TaskBackend';
+import { normalizeHeadingText } from './readinessGate';
 
 /**
  * Heading-bounded range of a section within a flattened markdown body: the
@@ -22,14 +23,14 @@ function findMarkdownSectionRange(
   lines: string[],
   section: string,
 ): MarkdownSectionRange | null {
-  const target = section.trim().toLowerCase();
+  const target = normalizeHeadingText(section);
   let start = -1;
   let end = lines.length;
   for (let i = 0; i < lines.length; i++) {
     const heading = lines[i].match(/^#{1,6}\s*(.+)$/);
     if (!heading) continue;
     if (start === -1) {
-      if (heading[1].trim().toLowerCase() === target) start = i;
+      if (normalizeHeadingText(heading[1]) === target) start = i;
       continue;
     }
     end = i;
@@ -40,9 +41,10 @@ function findMarkdownSectionRange(
 
 /**
  * Result of splicePatchBodySection: `applied: false` means the patch could
- * not be composed (target section missing, or find-text absent from it) —
- * `body` is the input unchanged and `reason` names why, for the caller to
- * either surface (staging-time preview) or fail on (apply-time write).
+ * not be composed — remove of a missing section, or replace whose `find`
+ * text isn't present in an existing section — `body` is the input unchanged
+ * and `reason` names why, for the caller to either surface (staging-time
+ * preview) or fail on (apply-time write).
  */
 export interface SplicePatchResult {
   body: string;
@@ -54,10 +56,13 @@ export interface SplicePatchResult {
  * Splices a task.patchBodySection append/replace/remove operation into a
  * flattened markdown body at the target heading's boundaries. Pure/best
  * effort: never throws, always returns a result describing whether the
- * patch could be composed. Callers decide what to do with `applied: false`
- * — a staging-time preview surfaces it, while an apply-time write (e.g.
+ * patch could be composed. Both append and replace insert a new `## section`
+ * when the target heading is missing (replaceWith / content becomes the
+ * section's body) — a patch targeting a not-yet-created section still
+ * composes. Callers decide what to do with `applied: false` — a
+ * staging-time preview surfaces it, while an apply-time write (e.g.
  * NotionClient.patchBodySection, LocalTaskBackend.patchBodySection) fails
- * explicitly for replace/append and treats it as a no-op for remove.
+ * explicitly for replace and treats it as a no-op for remove.
  */
 export function splicePatchBodySection(
   storedBody: string,
@@ -109,9 +114,14 @@ export function splicePatchBodySection(
   // replace
   if (!range) {
     return {
-      body: storedBody,
-      applied: false,
-      reason: `section "${section}" not found`,
+      body: [
+        storedBody.trimEnd(),
+        '',
+        `## ${section}`,
+        '',
+        patch.replaceWith,
+      ].join('\n'),
+      applied: true,
     };
   }
   const sectionText = lines.slice(range.start + 1, range.end).join('\n');

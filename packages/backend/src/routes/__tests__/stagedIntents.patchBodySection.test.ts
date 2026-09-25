@@ -293,7 +293,7 @@ describe('task.patchBodySection — staging-time preview matches apply-time rend
     expect(preview.reason).toMatch(/find text not present/i);
   });
 
-  it('reports applied: false with a reason when a replace patch targets a missing section', () => {
+  it('inserts the section when a replace patch targets a missing section, applied: true', () => {
     const storedBody = ['## Summary', '', 'Some summary.'].join('\n');
 
     const preview = composePatchBodySectionPreview(storedBody, 'Nonexistent', {
@@ -302,9 +302,9 @@ describe('task.patchBodySection — staging-time preview matches apply-time rend
       replaceWith: 'bar',
     });
 
-    expect(preview.applied).toBe(false);
-    expect(preview.body).toBe(storedBody);
-    expect(preview.reason).toMatch(/not found/i);
+    expect(preview.applied).toBe(true);
+    expect(preview.body).toContain('## Nonexistent');
+    expect(preview.body).toContain('bar');
   });
 
   it('reports applied: false with a reason when a remove patch targets a missing section', () => {

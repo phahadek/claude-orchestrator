@@ -1005,16 +1005,19 @@ describe('group commit — whole-group precheck (all-or-nothing)', () => {
       groupId,
       payload: { taskId, dependsOn: [] },
     });
-    // Targets a section that isn't in the stored body — cannot compose.
+    // Targets find-text that isn't present in the (existing) section —
+    // cannot compose. (A missing heading no longer fails to compose for
+    // replace — it inserts the section instead — so this uses a present
+    // heading with absent find-text to exercise the non-composing path.)
     const patch = await agent.post('/api/staged-intents').send({
       kind: 'task.patchBodySection',
       projectId: 'proj-non-composing',
       groupId,
       payload: {
         taskId,
-        section: 'Files / paths affected',
+        section: 'Summary',
         operation: 'replace',
-        find: 'src/missing.ts',
+        find: 'text that is not present',
         replaceWith: 'src/present.ts',
       },
     });
