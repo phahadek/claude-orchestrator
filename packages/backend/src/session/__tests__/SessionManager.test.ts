@@ -797,9 +797,7 @@ describe('enqueueFeedback — terminal session behavior', () => {
       { persistTextOnDefer: false },
     );
     expect(vi.mocked(markInboxItemsDropped)).not.toHaveBeenCalled();
-    expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith([
-      'item-1',
-    ]);
+    expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith(['item-1']);
   });
 });
 

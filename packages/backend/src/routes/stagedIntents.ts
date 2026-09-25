@@ -4025,7 +4025,9 @@ export function sessionHasAppliedDesignClosingSet(sessionId: string): boolean {
 
   const committedNoOpSkippedKinds = new Set(
     intents
-      .filter((row) => row.kind === 'planning.noOp' && row.state === 'committed')
+      .filter(
+        (row) => row.kind === 'planning.noOp' && row.state === 'committed',
+      )
       .map((row) => (JSON.parse(row.payload) as NoOpPayload).skippedKind)
       .filter((skippedKind): skippedKind is string => Boolean(skippedKind)),
   );
