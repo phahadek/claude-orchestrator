@@ -36,9 +36,13 @@ describe('splicePatchBodySection', () => {
   });
 
   it('remove of a heading that is not present still returns applied: false', () => {
-    const result = splicePatchBodySection('## Summary\nOld.\n', 'Deliverables', {
-      operation: 'remove',
-    });
+    const result = splicePatchBodySection(
+      '## Summary\nOld.\n',
+      'Deliverables',
+      {
+        operation: 'remove',
+      },
+    );
 
     expect(result.applied).toBe(false);
     expect(result.body).toBe('## Summary\nOld.\n');
