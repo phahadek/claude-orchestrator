@@ -160,12 +160,16 @@ The six disciplines below are how that rule is kept:
 >   so any staging that flips a task to Ready has a live side-effect. Stage with
 >   **scratch tasks** and clean rollback (archive scratch, restore survivors); never
 >   flip a real task to Ready just to observe.
-> - **Filing a 🔲 Backlog task on an *armed* milestone is not inert.** The rule above covers a
->   Ready-flip; this is its quieter sibling. Where auto-launch is armed, a task filed at **Backlog**
->   can be groomed, implemented, reviewed and merged **unattended** — one filed task was merged
->   **28 minutes later** while the session recorded "left at Backlog, not groomed" as the end state.
->   *"I left it at Backlog"* describes what **you** did, not where the task ends up. When you file a
->   follow-on mid-gate, say so, and re-read its state before reporting.
+> - **Filing a 🔲 Backlog task on an *armed* milestone is not inert — this is post-file hygiene, not
+>   a reason to hesitate before filing.** The rule above covers a Ready-flip; this is its quieter
+>   sibling. Where auto-launch is armed, a task filed at **Backlog** can be groomed, implemented,
+>   reviewed and merged **unattended** — one filed task was merged **28 minutes later** while the
+>   session recorded "left at Backlog, not groomed" as the end state. *"I left it at Backlog"*
+>   describes what **you** did, not where the task ends up. This never means checking arm/auto-launch
+>   state *before* filing, and never means asking the operator's permission to file because the
+>   milestone happens to be armed — a `fail` always gets its follow-on filed (Step 3, `fail`
+>   disposition). It means: after filing, say so and **re-read the task's state** before reporting,
+>   since it may no longer be sitting inert at Backlog by the time you report.
 
 > **Expect to hand off the final mutating step — that is the stable shape of an RC gate session, not
 > a failure.** The harness reliably permits the entire analysis path and blocks the last
@@ -296,7 +300,7 @@ For every item in the pulled batch:
    | `pass` | ✅ resolves | behavior **observed** — in the operational record (history) or by live staging. Evidence: `verified: <what you observed>`, or `covered-elsewhere: <taskId>` (a Done 🧪 Testing task / sibling already verified it — *done* = **pass**, cite the task; **not** a deferral) |
    | `deferred` | ✅ resolves | **genuinely rare AND unsafe/impossible to manufacture**, punted to a later milestone to verify there — rare last resort, never "I didn't stage it" (`moved-to-<milestone>: <why>`) |
    | `discarded` | ✅ resolves (non-blocking) | the item is **void / mis-accreted / created in error** — not real work and **not** a next-milestone deferral. Terminal, audit-preserving, **requires evidence**. Where a mis-keyed / orphaned `gate_item` goes — **not** `deferred`. |
-   | `fail` | ❌ stays blocking | behavior is **broken** — file the fix as a Code task (`filedFollowon: <taskId>`); the item stays unresolved, re-verified after the fix deploys. "Record `fail`" is not a resolution. |
+   | `fail` | ❌ stays blocking | behavior is **broken** — present the follow-on Code task, then file it at Backlog **unconditionally** (`filedFollowon: <taskId>`; never gated on arm/auto-launch state); the item stays unresolved, re-verified after the fix deploys. "Record `fail`" is not a resolution. |
    | `noted` | non-terminal (stays `runnable`) | "attempted, not yet resolved" — records the event + evidence without advancing state. The sanctioned home for a non-resolving attempt (or just omit `disposition`). |
    | `needs-setup` | non-terminal (stays `runnable`) | the verifier's bounded best-effort **abstain** — records the attempt; `next` skips the item until a later event supersedes it. |
    | `not-yet-triggerable` | non-terminal (advances to `pending`) | **`Read-Only`/`Prod-Mutating`-only, and requires `evidence`** — the triggering condition genuinely hasn't happened yet (no occurrence in history, nothing to stage). Enters a backoff schedule; `next` skips it until the backoff clock elapses, then it resurfaces `runnable` for a fresh look. |
@@ -313,11 +317,15 @@ For every item in the pulled batch:
      for "code-reasoned," "never-occurred-in-prod," or "too fiddly to set up" — those are
      stageable, and mass-deferring them to clear the board is buck-passing dressed as a
      disposition. Reach for the harder observation *before* you ever type `deferred`.
-   - **A broken behavior is not `fail`-and-done — it stays blocking.** File the fix as a
-     Code task and **leave the item unresolved**: record the finding as an event with
-     `filedFollowon: <taskId>` for the log, but the item does *not* resolve — it's pending
-     the fix, re-verified after that fix deploys. "Record `fail`" is not a resolution, and
-     a `fail` state correctly does not clear the rollup.
+   - **A broken behavior is not `fail`-and-done — it stays blocking.** On every `fail`: present
+     the follow-on Code task, then file it at 🔲 Backlog and record `filedFollowon: <taskId>` on
+     the event — **unconditionally**. This is not gated on whether the milestone's auto-launch is
+     armed: never check arm/auto-launch state before filing, and never ask the operator's
+     permission to file on account of it being armed — that is scope this skill does not have (see
+     the armed-milestone note above, which is about re-reading state *after* filing, not a
+     pre-file veto). Leave the gate item itself unresolved: it's pending the fix, re-verified
+     after that fix deploys. "Record `fail`" is not a resolution, and a `fail` state correctly
+     does not clear the rollup.
    - **A mis-accreted / orphaned item → `discarded` (with evidence), never `deferred`.**
      Deferred means punted-to-a-later-milestone; a void item that should never have existed
      is `discarded` — terminal and non-blocking, but audited.
@@ -362,17 +370,15 @@ For every item in the pulled batch:
    For a `Prod-Mutating` item, a `pass` event parks the item at
    `pending-approval` — it does **not** resolve yet.
 
-6. **Prod-Mutating consent step** — after a `Prod-Mutating` item reaches
-   `pending-approval`, get the human's explicit sign-off on the recorded
-   evidence, then:
-
-   ```bash
-   node ~/.claude/scripts/gate-state-client.mjs approve <gateItemId> [operator]
-   ```
-
-   This is the only way a `Prod-Mutating` item resolves to `pass`. Never
-   call `approve` without the human having actually reviewed that item's
-   evidence — it is the consent gate, not a formality.
+6. **Prod-Mutating parks at `pending-approval` — that is where the session's job ends.**
+   Recording the `pass` event (with its evidence and `deploySha`) is the session's
+   entire responsibility for a `Prod-Mutating` item; the item now sits at
+   `pending-approval` and that is a correct, complete stopping point, not an
+   unfinished step. Resolving it to `pass` — reviewing the evidence and calling
+   `approve` — is an operator action taken through the Decision Inbox, not
+   something this skill drives, prompts for, or lists commands to perform. Do not
+   call `approve`, and do not present pending-approval items to the operator as
+   "approve these" asks in the gate report; move on to the next item.
 
 ## Step 4 — Loop
 
@@ -419,8 +425,9 @@ For a gate, *how* you report is part of the deliverable:
 - **Never groom or promote the fix tasks a gate surfaces.** Filing a follow-on Code
   task for a broken behavior is correct; bringing it to 🗂️ Ready is **not** this
   session's job — a gate session verifies, it does not groom. Leave filed fixes at
-  🔲 Backlog. *(But see the armed-milestone warning above — "left at Backlog" is not the same as
-  "inert.")*
+  🔲 Backlog. *(But see the armed-milestone note above — "left at Backlog" is not the same as
+  "inert," so re-read its state before reporting; it is not a reason to have hesitated before
+  filing it.)*
 - **Never claim a sweep is complete without re-pulling it, and never do arithmetic in prose.** Two
   overclaims in one run: a tier sweep (the then-live `Opportunistic` tier, since retired) was
   reported finished while `ca637934` sat untouched,
@@ -467,5 +474,7 @@ node ~/.claude/scripts/gate-state-client.mjs reclassify <gateItemId> <classifica
   the run record.
 - It does not bulk-load a milestone's full item set — always pull one
   classification tier at a time via `next`.
-- It does not resolve a `Prod-Mutating` item without a human-approved
-  `approve` call.
+- It does not call `approve` on a `Prod-Mutating` item, or surface
+  pending-approval items as an "approve these" ask — resolving a
+  `pending-approval` item is an operator action through the Decision Inbox,
+  outside this skill's scope.
