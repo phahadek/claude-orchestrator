@@ -198,6 +198,43 @@ describe('CliSessionRunner spawn args', () => {
     expect(env.BASH_DEFAULT_TIMEOUT_MS).toBe('300000');
   });
 
+  it.each(['groom', 'design', 'ops', 'split', 'docs'] as const)(
+    'sets CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 for a %s (planning) session',
+    async (sessionType) => {
+      const runner = new CliSessionRunner(SESSION_ID);
+      await runner.run(
+        'hello',
+        undefined,
+        { ...defaultOptions, sessionType },
+        () => {},
+      );
+
+      const env = capturedSpawnOptions.env as Record<string, string>;
+      expect(env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBe('1');
+    },
+  );
+
+  it.each(['standard', 'review'] as const)(
+    'does not set CLAUDE_CODE_DISABLE_BACKGROUND_TASKS for a %s (non-planning) session, even when set on the backend process',
+    async (sessionType) => {
+      process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = '1';
+      try {
+        const runner = new CliSessionRunner(SESSION_ID);
+        await runner.run(
+          'hello',
+          undefined,
+          { ...defaultOptions, sessionType },
+          () => {},
+        );
+
+        const env = capturedSpawnOptions.env as Record<string, string>;
+        expect(env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBeUndefined();
+      } finally {
+        delete process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS;
+      }
+    },
+  );
+
   it('includes --settings autoCompactEnabled:false when disableAutoCompact is true', async () => {
     const runner = new CliSessionRunner(SESSION_ID);
     await runner.run(

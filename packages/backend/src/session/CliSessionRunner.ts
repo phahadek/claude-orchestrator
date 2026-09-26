@@ -257,6 +257,7 @@ export class CliSessionRunner implements ISessionRunner {
     const {
       DB_PATH: _productionDbPath,
       ORCHESTRATOR_DEVICE_TOKEN: _sharedDeviceToken,
+      CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: _inheritedDisableBackgroundTasks,
       ...inheritedEnv
     } = process.env;
 
@@ -274,6 +275,13 @@ export class CliSessionRunner implements ISessionRunner {
           ...inheritedEnv,
           BASH_MAX_OUTPUT_LENGTH: String(BASH_MAX_OUTPUT_LENGTH),
           BASH_DEFAULT_TIMEOUT_MS: String(BASH_DEFAULT_TIMEOUT_MS),
+          // Dispatched planning sessions (groom/design/ops/split/docs) must
+          // never auto-background a Bash command that hits its timeout — a
+          // hung subagent process (e.g. a full test suite) would otherwise
+          // keep running in the background indefinitely, starving the host.
+          // Setting this also disables run_in_background, which no
+          // dispatched planning procedure uses.
+          ...(isPlanning && { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' }),
           ...extraEnv,
         },
         ...(process.platform !== 'win32' && { detached: true }),
