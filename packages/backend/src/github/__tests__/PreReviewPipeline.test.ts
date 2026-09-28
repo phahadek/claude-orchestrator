@@ -1777,11 +1777,7 @@ describe('PreReviewPipeline — cross-kind verify/tests reuse now lives in the l
       verify: ['uv run pyright', 'uv run task test-static', 'uv run task test'],
       autofix: [],
       analyze: [],
-      test: [
-        'uv run task test-static',
-        'uv run task test',
-        'uv run vitest',
-      ],
+      test: ['uv run task test-static', 'uv run task test', 'uv run vitest'],
       test_timeout_sec: 300,
       test_max_rss_mb: 0,
       test_fail_fast: true,
@@ -1872,7 +1868,11 @@ describe('PreReviewPipeline — cross-kind verify/tests reuse now lives in the l
     expect(mockAdmitTestRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         runKind: 'verify',
-        commands: ['uv run pyright', 'uv run task test-static', 'uv run task test'],
+        commands: [
+          'uv run pyright',
+          'uv run task test-static',
+          'uv run task test',
+        ],
       }),
     );
   });
