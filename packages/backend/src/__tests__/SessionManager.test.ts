@@ -195,21 +195,7 @@ describe('queries.ts — supersession support', () => {
   });
 
   it('hasActiveSessionForTask excludes superseded sessions', () => {
-    // hasActiveSessionForTask delegates to the row-returning
-    // getActiveStandardSessionForTask (added so callers that need the id of
-    // an already-active session — e.g. fresh-session dedup — don't have to
-    // re-query) — the exclusion SQL lives there now, not spelled out
-    // literally in hasActiveSessionForTask's own body.
-    const delegateIdx = source.indexOf(
-      'export function hasActiveSessionForTask',
-    );
-    const delegateEnd = source.indexOf('\n}', delegateIdx);
-    const delegateBlock = source.slice(delegateIdx, delegateEnd + 2);
-    expect(delegateBlock).toMatch(/getActiveStandardSessionForTask/);
-
-    const fnIdx = source.indexOf(
-      'export function getActiveStandardSessionForTask',
-    );
+    const fnIdx = source.indexOf('export function hasActiveSessionForTask');
     const fnEnd = source.indexOf('\n}', fnIdx);
     const block = source.slice(fnIdx, fnEnd + 2);
     // The superseded status is folded in via the shared

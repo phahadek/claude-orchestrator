@@ -1689,18 +1689,6 @@ export function getActivePlanningSessionForTask(
 }
 
 export function hasActiveSessionForTask(taskId: string): boolean {
-  return getActiveStandardSessionForTask(taskId) !== undefined;
-}
-
-/**
- * Row-returning counterpart to hasActiveSessionForTask — used by callers
- * that, once they know a non-terminal standard session already exists for a
- * task, need its id to route work (e.g. queued feedback) to it instead of
- * spawning a second fresh session for the same task.
- */
-export function getActiveStandardSessionForTask(
-  taskId: string,
-): Session | undefined {
   const norm = taskId.replace(/-/g, '');
   // Matches sessions.task_id_norm — a VIRTUAL generated column mirroring this
   // same REPLACE(...,'-','') expression (see schema.ts) — instead of
@@ -1708,6 +1696,42 @@ export function getActiveStandardSessionForTask(
   // idx_sessions_notion_task_id_session_type (indexed on raw task_id) and
   // forced a full scan of the sessions table on every call; comparing
   // against the indexed generated column turns it into a single index seek.
+  //
+  // Deliberately its own `SELECT 1` query rather than delegating to
+  // getActiveStandardSessionForTask below: that row-returning counterpart's
+  // `SELECT *` hydrates every column of the matched row on every call, which
+  // measurably erodes this function's index-seek speed margin over the
+  // full-scan baseline it's benchmarked against (hasActiveSessionForTaskIndex
+  // test.ts) — this function is the hot path called from every dispatch
+  // dedup check, so it stays on the cheapest possible query.
+  const row = db
+    .prepare<{ task_id_norm: string }>(
+      `
+    SELECT 1 FROM sessions INDEXED BY idx_sessions_task_id_norm
+    WHERE task_id_norm = @task_id_norm
+      AND status NOT IN (${TERMINAL_STATUS_SQL_LIST})
+      AND (session_type = 'standard' OR session_type IS NULL)
+      AND archived = 0
+    LIMIT 1
+  `,
+    )
+    .get({ task_id_norm: norm });
+  return !!row;
+}
+
+/**
+ * Row-returning counterpart to hasActiveSessionForTask — used by callers
+ * that, once they know a non-terminal standard session already exists for a
+ * task, need its id to route work (e.g. queued feedback) to it instead of
+ * spawning a second fresh session for the same task. Not the same query as
+ * hasActiveSessionForTask (see that function's doc comment for why): this
+ * one hydrates the full row via `SELECT *`, which that hot-path boolean
+ * check deliberately avoids paying for.
+ */
+export function getActiveStandardSessionForTask(
+  taskId: string,
+): Session | undefined {
+  const norm = taskId.replace(/-/g, '');
   return db
     .prepare<{ task_id_norm: string }, Session>(
       `
