@@ -4373,7 +4373,14 @@ export class SessionManager extends EventEmitter {
   async kill(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (session) {
-      await session.kill();
+      // The operator kill route — the one caller of AgentSession.kill()
+      // entitled to write reason 'user_kill'. See
+      // automaticSessionKillAllowlist.test.ts, which enforces that no other
+      // call site may pass this literal.
+      await session.kill({
+        reason: 'user_kill',
+        errorDetail: 'killed by user request',
+      });
       // cleanup (sessions.delete + worktree removal) is driven by run().then()
     }
   }
@@ -4959,8 +4966,12 @@ export class SessionManager extends EventEmitter {
     // Kill the process (fire-and-forget — cleanup via run().then() still fires
     // for a genuinely live process, but is a no-op / never fires for a session
     // that has already exited or hung, so we also evict directly below).
+    // The row was already pre-marked 'killed' with reason 'operator_abort'
+    // above, so kill()'s alreadyConcluded guard makes this a no-op on the
+    // markSessionErrored path — the reason is passed anyway to name the
+    // caller's actual intent, not to invent a fallback default.
     if (liveSession) {
-      liveSession.kill().catch((err) => {
+      liveSession.kill({ reason: 'operator_abort' }).catch((err) => {
         logger.error(
           `[SessionManager] abortSession kill error for ${sessionId.slice(0, 8)}: ${err}`,
         );

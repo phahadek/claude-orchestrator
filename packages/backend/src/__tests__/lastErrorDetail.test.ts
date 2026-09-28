@@ -251,7 +251,10 @@ describe('AgentSession error paths pass a concise detail to markSessionErrored',
     const runPromise = session.run();
     await new Promise((r) => setTimeout(r, 10));
 
-    const killPromise = session.kill();
+    const killPromise = session.kill({
+      reason: 'user_kill',
+      errorDetail: 'killed by user request',
+    });
     await new Promise((r) => setTimeout(r, 10));
     mockProc.stdout.push(null);
     await new Promise((r) => setTimeout(r, 50));

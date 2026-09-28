@@ -228,7 +228,10 @@ describe('AgentSession terminal-kill classification', () => {
     const session = makeSession(sessionId, sm, runner);
 
     const runPromise = session.run();
-    const killPromise = session.kill();
+    const killPromise = session.kill({
+      reason: 'user_kill',
+      errorDetail: 'killed by user request',
+    });
     await Promise.all([runPromise, killPromise]);
 
     expect(sm.markSessionErrored).toHaveBeenCalledWith(

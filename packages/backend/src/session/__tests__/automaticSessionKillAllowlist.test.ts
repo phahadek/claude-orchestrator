@@ -69,7 +69,65 @@ const ALLOWED_TERMINAL_WRITES: AllowedWrite[] = [
     reason: 'reason',
     kind: 'evidence-based',
   },
+  {
+    file: 'AgentSession.ts',
+    // AgentSession.kill()'s own markSessionErrored call forwards whatever
+    // reason its caller passed in opts.reason — it never hardcodes
+    // 'user_kill' (or any other reason) itself. The real authorization
+    // check for who may reach a 'user_kill' write lives in the
+    // findUserKillCallSites check below, which inspects the `.kill(...)`
+    // call sites directly instead of this forwarded variable.
+    reason: 'opts.reason',
+    kind: 'operator',
+  },
 ];
+
+/**
+ * Allow-list for `.kill(...)` call sites that pass a literal
+ * reason: 'user_kill' — the one reason string that both (a) is exempt from
+ * the task_crash_counts budget (SessionManager's UNCOUNTED_REASONS) and (b)
+ * suppresses planning re-dispatch (db/queries.ts's isPlanningKillSuppressed).
+ * Because AgentSession.kill() now forwards whatever reason its caller
+ * supplies (see the 'opts.reason' allow-list entry above), a machine path
+ * could silently start claiming this operator-only label by passing the
+ * literal itself — this check catches that at the actual call site instead.
+ * Each entry is anchored by a substring that must appear within
+ * USER_KILL_CONTEXT_WINDOW characters before the match, not just the file,
+ * so a second call site added later in the same file is not implicitly
+ * covered.
+ */
+interface AllowedUserKillCallSite {
+  file: string;
+  contextContains: string;
+}
+
+const ALLOWED_USER_KILL_CALL_SITES: AllowedUserKillCallSite[] = [
+  {
+    file: 'SessionManager.ts',
+    // The operator kill route (SessionManager.kill(sessionId)) — the only
+    // sanctioned writer of reason 'user_kill'.
+    contextContains: 'async kill(sessionId: string): Promise<void> {',
+  },
+];
+
+const USER_KILL_CONTEXT_WINDOW = 400;
+
+/**
+ * Finds every `.kill({ ... reason: 'user_kill' ... })` call site and
+ * returns the string index of each match, so the caller can inspect the
+ * surrounding context to decide whether it's an allow-listed call site.
+ * Exported implicitly via the describe block below — kept local since only
+ * this file's tests need it.
+ */
+function findUserKillCallSites(content: string): number[] {
+  const regex = /\.kill\(\s*\{[^}]*reason:\s*'user_kill'/g;
+  const indices: number[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(content))) {
+    indices.push(match.index);
+  }
+  return indices;
+}
 
 function walk(dir: string, files: string[] = []): string[] {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -174,5 +232,84 @@ describe('automatic session-kill allow-list guard', () => {
     const content = fs.readFileSync(STUCK_SESSION_MONITOR, 'utf8');
     expect(content.includes('sessionManager.kill(')).toBe(false);
     expect(content.includes('sessionManager\n      .kill(')).toBe(false);
+  });
+
+  it("every `.kill(...)` call site passing reason: 'user_kill' is on the operator allow-list", () => {
+    const files = walk(SESSION_DIR).filter((f) => !f.includes('__tests__'));
+    const offenders: string[] = [];
+
+    for (const file of files) {
+      const content = fs.readFileSync(file, 'utf8');
+      const baseName = path.basename(file);
+      for (const idx of findUserKillCallSites(content)) {
+        const context = content.slice(
+          Math.max(0, idx - USER_KILL_CONTEXT_WINDOW),
+          idx,
+        );
+        const allowed = ALLOWED_USER_KILL_CALL_SITES.some(
+          (site) =>
+            site.file === baseName && context.includes(site.contextContains),
+        );
+        if (!allowed) {
+          offenders.push(`${path.relative(SESSION_DIR, file)}@${idx}`);
+        }
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('flags a synthetic non-operator call site that reaches a user_kill write', () => {
+    const synthetic = `
+      async respawnForSomeMachinePath(sessionId: string) {
+        const liveSession = this.sessions.get(sessionId);
+        if (liveSession) {
+          await liveSession.kill({ suppressReap: true, reason: 'user_kill' });
+        }
+      }
+    `;
+
+    const indices = findUserKillCallSites(synthetic);
+    expect(indices.length).toBe(1);
+
+    const context = synthetic.slice(
+      Math.max(0, indices[0] - USER_KILL_CONTEXT_WINDOW),
+      indices[0],
+    );
+    const allowed = ALLOWED_USER_KILL_CALL_SITES.some((site) =>
+      context.includes(site.contextContains),
+    );
+    expect(allowed).toBe(false);
+  });
+
+  it("resumeSession's 30s no-events watchdog calls flagResumeFailure before kill(), and never passes it a reason — the terminal write must already have happened before kill()'s alreadyConcluded guard is reached, not via a user_kill label", () => {
+    const content = fs.readFileSync(
+      path.join(SESSION_DIR, 'SessionManager.ts'),
+      'utf8',
+    );
+    const marker = 'no events within 30s after resume';
+    const markerIdx = content.indexOf(marker);
+    expect(markerIdx).toBeGreaterThan(-1);
+
+    // Scope to the setTimeout callback body around the marker — cheap
+    // proxy for "this specific watchdog", not the whole file.
+    const windowEnd = content.indexOf('}, RESUME_TIMEOUT_MS);', markerIdx);
+    expect(windowEnd).toBeGreaterThan(-1);
+    const body = content.slice(markerIdx, windowEnd);
+
+    const flagIdx = body.indexOf('this.flagResumeFailure(');
+    const killIdx = body.indexOf('session.kill(');
+    expect(flagIdx).toBeGreaterThan(-1);
+    expect(killIdx).toBeGreaterThan(-1);
+    // flagResumeFailure (which writes the terminal 'error' status) must run
+    // first, so kill()'s alreadyConcluded guard is already true by the time
+    // kill() reads the row — no markSessionErrored/user_kill write happens.
+    expect(flagIdx).toBeLessThan(killIdx);
+
+    // The kill() call here must never carry a reason — it relies entirely
+    // on flagResumeFailure's prior write, not on a borrowed operator label.
+    const killCallMatch = body.match(/session\.kill\(([^)]*)\)/);
+    expect(killCallMatch).not.toBeNull();
+    expect(killCallMatch![1].trim()).toBe('');
   });
 });
