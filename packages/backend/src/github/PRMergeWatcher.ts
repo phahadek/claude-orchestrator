@@ -436,34 +436,40 @@ export class PRMergeWatcher extends EventEmitter {
 
   /**
    * Targeted sweep over rows every scheduled loop otherwise skips forever:
-   * state='open' with reconcile_exhausted=1. Both poll() (via
-   * isTerminalStalePR) and StalledPRReconciler deliberately skip these rows
-   * to stop per-PR GitHub churn on parked PRs, but that means nothing ever
-   * re-queries GitHub for them — so a PR that reaches merged or closed on
-   * GitHub after escalation stays stuck at state='open' with a stale flag
-   * forever, showing as a false "needs attention" entry.
+   * every state='open' row for which isTerminalStalePR is true — not just
+   * reconcile_exhausted rows, but also rows parked on an incomplete verdict
+   * (unchanged head) or a verify_failed/autofix_failed verdict with no push
+   * pending. Both poll() (via isTerminalStalePR) and StalledPRReconciler
+   * deliberately skip these rows to stop per-PR GitHub churn on parked PRs,
+   * but that means nothing ever re-queries GitHub for them — so a PR that
+   * reaches merged or closed on GitHub while parked stays stuck at
+   * state='open' forever, showing as a false "needs attention" entry.
    *
-   * Filters the escalated set in-code from getAllOpenPRs() rather than a
+   * Filters the parked set in-code from getAllOpenPRs() rather than a
    * dedicated query, and calls getPRState() per-row — O(this orchestrator's
-   * escalated-open rows), never listOpenPRs(repo) (O(the repo's total open
+   * parked-open rows), never listOpenPRs(repo) (O(the repo's total open
    * PRs), which would paginate thousands of unrelated PRs on a busy repo).
    * A row still open on GitHub (e.g. a PR that's genuinely stuck) is left
    * untouched by reconcileTerminalState.
    *
-   * A row still open is also run through runMergeabilityCheck: this is the
-   * only place anything ever re-categorizes mergeability for an escalated
-   * row (poll() skips it via isTerminalStalePR), so without this a PR that
-   * became mergeable while escalated (e.g. #1449) would sit at a stale
-   * merge_state/mergeable forever. runMergeabilityCheck no longer treats
-   * reconcile_exhausted as a terminal pause at all (see
-   * TERMINAL_MERGE_PAUSE_REASONS), so this refreshes observability columns
-   * and can re-drive AutoMerger.attempt() to "consider" the row without
-   * clearing reconcile_exhausted itself.
+   * A row still open is also run through runMergeabilityCheck, but only when
+   * it's reconcile_exhausted: this is the only place anything ever
+   * re-categorizes mergeability for an escalated row (poll() skips it via
+   * isTerminalStalePR), so without this a PR that became mergeable while
+   * escalated (e.g. #1449) would sit at a stale merge_state/mergeable
+   * forever. runMergeabilityCheck no longer treats reconcile_exhausted as a
+   * terminal pause at all (see TERMINAL_MERGE_PAUSE_REASONS), so this
+   * refreshes observability columns and can re-drive AutoMerger.attempt() to
+   * "consider" the row without clearing reconcile_exhausted itself. The
+   * other two isTerminalStalePR anchors (incomplete/gate-failed verdicts)
+   * are not run through runMergeabilityCheck here — they're parked on a
+   * review verdict, not a merge-side reconciler cap, so mergeability
+   * re-categorization isn't this sweep's job for them.
    */
   async sweepEscalatedStalePRs(): Promise<number> {
-    const escalated = getAllOpenPRs().filter((pr) => pr.reconcile_exhausted);
+    const parked = getAllOpenPRs().filter((pr) => isTerminalStalePR(pr));
     let items_processed = 0;
-    for (const pr of escalated) {
+    for (const pr of parked) {
       if (!getProjectByGithubRepo(pr.repo)) {
         logger.warn(
           `[PRMergeWatcher] stale-open sweep: PR #${pr.pr_number}: no project for repo ${pr.repo} — skipping`,
@@ -471,7 +477,7 @@ export class PRMergeWatcher extends EventEmitter {
         continue;
       }
       const state = await this.reconcileTerminalState(pr);
-      if (state === 'open') {
+      if (state === 'open' && pr.reconcile_exhausted) {
         await this.runMergeabilityCheck(pr);
       }
       items_processed++;

@@ -119,6 +119,7 @@ import {
   consumeAutofixSha,
   deleteAllAutofixShasForPR,
   setHeadSha,
+  clearTerminalPRFlags,
   getLatestTestRequestRun,
   markSessionDone,
   updateSessionStatus,
@@ -164,6 +165,7 @@ function makeMockGitHub(): GitHubClient {
     getFailingChecks: vi.fn().mockResolvedValue([]),
     fetchPR: vi.fn().mockResolvedValue({ headSha: null }),
     getMergeCommitSha: vi.fn().mockResolvedValue(null),
+    listOpenPRs: vi.fn().mockResolvedValue([]),
     deleteBranch: vi.fn().mockResolvedValue(undefined),
     detectBillingBlock: vi
       .fn()
@@ -1912,6 +1914,159 @@ describe('PRMergeWatcher becomes-clean re-drive', () => {
 
     expect(vi.mocked(github.categorizeMergeability)).not.toHaveBeenCalled();
     expect(vi.mocked(autoMerger.attempt)).not.toHaveBeenCalled();
+  });
+});
+
+// ── sweepEscalatedStalePRs — covers all three isTerminalStalePR anchors ────────
+
+describe('PRMergeWatcher.sweepEscalatedStalePRs() — non-reconcile_exhausted parked rows', () => {
+  function makeIncompleteVerdictPR(
+    overrides: Partial<PullRequestRow> = {},
+  ): PullRequestRow {
+    return makePRRow({
+      review_result: JSON.stringify({
+        verdict: 'incomplete',
+        dimensions: [],
+        summary: 'stopped early',
+      }),
+      head_sha: 'sha-1',
+      last_reviewed_sha: 'sha-1',
+      reconcile_exhausted: 0,
+      ...overrides,
+    });
+  }
+
+  it('sweeps an incomplete-verdict row with unchanged head (not reconcile_exhausted)', async () => {
+    const pr = makeIncompleteVerdictPR();
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+
+    const processed = await watcher.sweepEscalatedStalePRs();
+
+    expect(vi.mocked(github.getPRState)).toHaveBeenCalledWith(42, 'owner/repo');
+    expect(processed).toBe(1);
+  });
+
+  it('closes an incomplete-verdict row that GitHub reports as closed, via reconcileTerminalState', async () => {
+    const pr = makeIncompleteVerdictPR();
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    vi.mocked(github.getPRState).mockResolvedValue({
+      state: 'closed',
+      headSha: 'sha-1',
+    });
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+
+    await watcher.sweepEscalatedStalePRs();
+
+    expect(vi.mocked(updatePRState)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'closed',
+    );
+    expect(vi.mocked(clearTerminalPRFlags)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'closed',
+    );
+  });
+
+  it('runs an incomplete-verdict row that GitHub reports as merged through handleMerged', async () => {
+    const pr = makeIncompleteVerdictPR();
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    vi.mocked(github.getPRState).mockResolvedValue({
+      state: 'merged',
+      headSha: 'sha-1',
+    });
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+
+    await watcher.sweepEscalatedStalePRs();
+
+    expect(vi.mocked(updatePRState)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'merged',
+    );
+  });
+
+  it('leaves a swept row still open on GitHub unchanged and does not run runMergeabilityCheck', async () => {
+    const pr = makeIncompleteVerdictPR();
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    vi.mocked(github.getPRState).mockResolvedValue({
+      state: 'open',
+      headSha: 'sha-1',
+    });
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+
+    await watcher.sweepEscalatedStalePRs();
+
+    expect(vi.mocked(updatePRState)).not.toHaveBeenCalled();
+    expect(vi.mocked(clearTerminalPRFlags)).not.toHaveBeenCalled();
+    // Not reconcile_exhausted, so categorizeMergeability (runMergeabilityCheck)
+    // must not be invoked for this row.
+    expect(vi.mocked(github.categorizeMergeability)).not.toHaveBeenCalled();
+  });
+
+  it('never calls listOpenPRs — always per-row getPRState', async () => {
+    const pr = makeIncompleteVerdictPR();
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+
+    await watcher.sweepEscalatedStalePRs();
+
+    expect(vi.mocked(github.getPRState)).toHaveBeenCalled();
+    expect(
+      vi.mocked(
+        (github as unknown as { listOpenPRs: () => Promise<unknown> })
+          .listOpenPRs,
+      ),
+    ).not.toHaveBeenCalled();
+  });
+
+  it('excludes a non-parked open row (e.g. approved verdict) from the sweep', async () => {
+    const pr = makePRRow({ reconcile_exhausted: 0 }); // default approved verdict
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+
+    const processed = await watcher.sweepEscalatedStalePRs();
+
+    expect(processed).toBe(0);
+    expect(vi.mocked(github.getPRState)).not.toHaveBeenCalled();
   });
 });
 
