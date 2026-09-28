@@ -230,6 +230,7 @@ import {
   countTestRunResultsForRun,
   getTaskTestFlipRateFlags,
   isRunFailureBreadthAttributable,
+  getProjectRowById,
 } from '../db/queries';
 import { classifyTestRunOutcome } from '../orchestration/testRequestLane';
 import type {
@@ -9282,6 +9283,11 @@ export function createStagedIntentsRouter(
       Number.isFinite(limit) && limit > 0 ? limit : 50,
     );
 
+    const projectDir = getProjectRowById(projectId)?.project_dir;
+    const crashSignatures = projectDir
+      ? (loadOrchestratorConfig(projectDir).test_crash_signatures ?? [])
+      : [];
+
     const windowN = typedGetSetting('flip_rate_window_n');
     const thresholdK = typedGetSetting('flip_rate_threshold_k');
     const seenTestIds = new Set<string>();
@@ -9303,7 +9309,7 @@ export function createStagedIntentsRouter(
       cycleLimit: typedGetSetting('test_request_cycle_limit'),
       runs: runsWithResults.map(
         ({ run, testResults, totalTestResultCount }) => {
-          const classification = classifyTestRunOutcome(run);
+          const classification = classifyTestRunOutcome(run, crashSignatures);
           return {
             id: run.id,
             sessionId: run.session_id,
@@ -9356,9 +9362,14 @@ export function createStagedIntentsRouter(
       Number.isFinite(limit) && limit > 0 ? limit : 100,
     );
 
+    const projectDir = getProjectRowById(projectId)?.project_dir;
+    const crashSignatures = projectDir
+      ? (loadOrchestratorConfig(projectDir).test_crash_signatures ?? [])
+      : [];
+
     res.json({
       runs: rows.map(({ run, outcomeCounts }) => {
-        const classification = classifyTestRunOutcome(run);
+        const classification = classifyTestRunOutcome(run, crashSignatures);
         return {
           id: run.id,
           projectId: run.project_id,

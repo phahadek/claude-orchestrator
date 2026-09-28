@@ -695,6 +695,52 @@ describe('runProjectTestRequest — coalescing', () => {
     expect(reasonFor('hash-spawn')).toBe('execution_failed');
   });
 
+  it('classifies a timed-out run whose output matches a configured crash signature as worker_crash, not timeout', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({
+      test_report_glob: '',
+      test_crash_signatures: ['node down: Not properly terminated'],
+    });
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: false,
+      output:
+        "[gw3] node down: Not properly terminated\nreplacing crashed worker gw3\nworker gw3 crashed while running 'tests/foo.py::test_bar'",
+      timedOut: true,
+    });
+    await runProjectTestRequest(baseSpec({ contentHash: 'hash-worker-crash' }));
+
+    const reasonFor = (contentHash: string) =>
+      (
+        db
+          .prepare(
+            `SELECT failure_reason FROM test_request_runs WHERE project_id = ? AND content_hash = ?`,
+          )
+          .get('proj-1', contentHash) as { failure_reason: string }
+      ).failure_reason;
+
+    expect(reasonFor('hash-worker-crash')).toBe('worker_crash');
+  });
+
+  it('keeps failure_reason=timeout for a timed-out run when test_crash_signatures is unset or empty', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '' });
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: false,
+      output: '[gw3] node down: Not properly terminated',
+      timedOut: true,
+    });
+    await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-timeout-no-signatures' }),
+    );
+
+    const row = db
+      .prepare(
+        `SELECT failure_reason FROM test_request_runs WHERE project_id = ? AND content_hash = ?`,
+      )
+      .get('proj-1', 'hash-timeout-no-signatures') as {
+      failure_reason: string;
+    };
+    expect(row.failure_reason).toBe('timeout');
+  });
+
   it('a spawn failure is never replayed as a cached unchangedReplay result — a retry against the same tree re-executes', async () => {
     mockRunTestCommands.mockResolvedValueOnce({
       passed: false,
