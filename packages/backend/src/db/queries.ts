@@ -3698,7 +3698,7 @@ export function getPRBySessionId(sessionId: string): PullRequestRow | null {
 }
 
 /** Direct pr_url lookup — used by the canonical-PR write guard (resolveGuardedSessionPrUrl). */
-export function getPRByUrl(prUrl: string): PullRequestRow | null {
+function getPRByUrl(prUrl: string): PullRequestRow | null {
   return db
     .prepare<{ pr_url: string }>(
       `
