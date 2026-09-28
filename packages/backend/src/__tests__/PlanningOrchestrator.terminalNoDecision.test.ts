@@ -115,8 +115,12 @@ function crashCountFor(taskId: string): number {
 
 function terminalReasonFor(sessionId: string): string | null {
   const row = db
-    .prepare('SELECT terminal_completion_reason FROM sessions WHERE session_id = ?')
-    .get(sessionId) as { terminal_completion_reason: string | null } | undefined;
+    .prepare(
+      'SELECT terminal_completion_reason FROM sessions WHERE session_id = ?',
+    )
+    .get(sessionId) as
+    | { terminal_completion_reason: string | null }
+    | undefined;
   return row?.terminal_completion_reason ?? null;
 }
 
@@ -370,7 +374,9 @@ describe('PlanningOrchestrator.checkTerminal — design closing-set-incomplete b
     expect(orchestrator.checkTerminal(SESSION_ID)).toBe(false);
     expect(orchestrator.checkTerminal(SESSION_ID)).toBe(true);
     expect(sessionManager.endSession).toHaveBeenCalledWith(SESSION_ID);
-    expect(terminalReasonFor(SESSION_ID)).toBe('planning_no_pending_dispositions');
+    expect(terminalReasonFor(SESSION_ID)).toBe(
+      'planning_no_pending_dispositions',
+    );
     expect(getTaskPauseReason(TASK_ID)).toBeNull();
     expect(updateStatus).toHaveBeenCalledWith(
       TASK_ID,
