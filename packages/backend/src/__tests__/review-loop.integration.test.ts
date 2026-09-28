@@ -24,7 +24,7 @@
  * re-tested here.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mockDbQueries } from './helpers/mockDbQueries';
 import { EventEmitter } from 'events';
 
@@ -246,6 +246,11 @@ function makeMockReviewService(): PRReviewService {
 
 // ── Harness ───────────────────────────────────────────────────────────────────
 
+// Every ReviewOrchestrator constructed via makeHarness() below — torn down
+// in the shared afterEach so its stall-detector interval and pendingSyncs
+// bookkeeping don't outlive the test that created it.
+const harnessOrchestrators: ReviewOrchestrator[] = [];
+
 function makeHarness(headSha: string = HEAD_SHA) {
   const sessionManager = new MockSessionManager();
   const github = makeMockGitHub(headSha);
@@ -258,6 +263,7 @@ function makeHarness(headSha: string = HEAD_SHA) {
     true,
     github,
   );
+  harnessOrchestrators.push(orchestrator);
   const broadcast = vi.fn();
   const watcher = new PRMergeWatcher(
     github,
@@ -286,6 +292,14 @@ beforeEach(() => {
   // earlier test (e.g. the autofix-only-push test below) — re-arm the
   // non-autofix-only default explicitly so it can't leak into later tests.
   vi.mocked(queries.consumeAutofixSha).mockReturnValue(false);
+});
+
+afterEach(() => {
+  // Release every real ReviewOrchestrator's stall-detector interval so it
+  // doesn't outlive this test file's own run.
+  for (const orchestrator of harnessOrchestrators.splice(0)) {
+    orchestrator.destroy();
+  }
 });
 
 // ── 1. Push before review session → pending_push queued, no review job ────────
