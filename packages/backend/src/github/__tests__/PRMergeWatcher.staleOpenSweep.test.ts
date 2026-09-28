@@ -56,9 +56,10 @@ vi.mock('../reviewUtils', () => ({
   CI_LOG_EXCERPT_CAP: 4000,
 }));
 vi.mock('../conflictNudge', () => ({ sendConflictNudge: vi.fn() }));
-vi.mock('../pollUtils', () => ({
-  isTerminalStalePR: vi.fn().mockReturnValue(false),
-}));
+// isTerminalStalePR is left real (not mocked): the sweep now filters through
+// it directly rather than checking reconcile_exhausted in-line, so these
+// tests rely on its actual reconcile_exhausted-first branch to behave like
+// the old inline filter for the escalated rows exercised below.
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 // The sweep's filtering logic keys off the orthogonal reconcile_exhausted
