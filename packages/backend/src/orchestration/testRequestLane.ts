@@ -51,6 +51,7 @@ import {
   sharesCheckoutNodeModules,
 } from './checkoutInstallLock';
 import { checkToolchainVersions, formatToolchainMismatch } from './gateEnv';
+import { detectCrashSignature } from './workerCrashDetection';
 import { typedGetSetting } from '../config/settings';
 import {
   insertTestRequestRun,
@@ -277,13 +278,25 @@ export interface TestRequestAdmission {
   result: Promise<TestRequestRunResult>;
 }
 
-function failureReasonFor(result: TestCommandResult): TestRequestFailureReason {
+function failureReasonFor(
+  result: TestCommandResult,
+  crashSignatures: string[],
+): TestRequestFailureReason {
   if (result.isToolInfraFailure) return 'tool_infra_failure';
   if (result.spawnFailed) return 'execution_failed';
   // Checked ahead of timedOut/oomKilled: a surviving process means teardown
   // itself failed, which is the more actionable/alarming fact regardless of
   // what triggered the teardown attempt in the first place.
   if (result.teardownVerificationFailed) return 'teardown_failed';
+  // Checked ahead of the generic 'timeout': a timeout whose output matches a
+  // project-declared crash signature is a worker crash the suite stalled
+  // behind, not a hung/wedged process — see workerCrashDetection.ts.
+  if (
+    result.timedOut &&
+    detectCrashSignature(result.output, crashSignatures)
+  ) {
+    return 'worker_crash';
+  }
   if (result.timedOut) return 'timeout';
   if (result.oomKilled) return 'oom_killed';
   return 'generic';
@@ -1218,9 +1231,9 @@ async function executeTestRequestRun(
     // worktree's own config, rather than trusted from the caller — every
     // caller that runs against a project declaring test_report_glob gets
     // acquisition, with no call site able to silently opt out.
-    const testReportGlob = loadOrchestratorConfig(
-      spec.worktreePath,
-    ).test_report_glob;
+    const laneConfig = loadOrchestratorConfig(spec.worktreePath);
+    const testReportGlob = laneConfig.test_report_glob;
+    const crashSignatures = laneConfig.test_crash_signatures ?? [];
     const acquisitionAttempted = !!testReportGlob;
     // Delete any report file left over from a previous run before this run's
     // commands execute — otherwise a command that fails/crashes before its
@@ -1297,7 +1310,7 @@ async function executeTestRequestRun(
       runId,
       result.passed ? 'passed' : 'failed',
       result.output,
-      result.passed ? null : failureReasonFor(result),
+      result.passed ? null : failureReasonFor(result, crashSignatures),
       structuredResultJson,
       oomKilled,
       acquisitionAttempted,
@@ -1337,7 +1350,9 @@ async function executeTestRequestRun(
       requested_at: requestedAt,
       started_at: startedAt,
       finished_at: Date.now(),
-      failure_reason: result.passed ? null : failureReasonFor(result),
+      failure_reason: result.passed
+        ? null
+        : failureReasonFor(result, crashSignatures),
       structured_result: structuredResultJson,
       concurrent_run_count: concurrentRunCount,
       oom_killed: oomKilled ? 1 : 0,
@@ -1672,6 +1687,7 @@ type TestRunOutcome =
   | 'failed-with-named-tests'
   | 'failed-with-no-report-acquired'
   | 'crashed-oom'
+  | 'crashed-worker'
   | 'timed-out'
   | 'execution-failed'
   | 'running'
@@ -1692,6 +1708,8 @@ const TEST_RUN_NEXT_ACTIONS: Record<TestRunOutcome, string> = {
     'No per-test report was produced — check the raw run output for a crash before any report was written.',
   'crashed-oom':
     'The test run was OOM-killed — reduce test memory usage/parallelism, or retry.',
+  'crashed-worker':
+    'A test crashed its worker — re-running the unchanged tree will not help; fix the crash.',
   'timed-out':
     'The test run exceeded its time limit — investigate a hang or split the run.',
   'execution-failed':
@@ -1702,6 +1720,7 @@ const TEST_RUN_NEXT_ACTIONS: Record<TestRunOutcome, string> = {
 
 export function classifyTestRunOutcome(
   run: TestRequestRunRow,
+  crashSignatures: string[] = [],
 ): TestRunOutcomeInfo {
   let outcome: TestRunOutcome;
   if (run.state === 'queued') {
@@ -1715,6 +1734,8 @@ export function classifyTestRunOutcome(
     run.failure_reason === 'interrupted_queued'
   ) {
     outcome = 'execution-failed';
+  } else if (run.failure_reason === 'worker_crash') {
+    outcome = 'crashed-worker';
   } else if (run.oom_killed || run.failure_reason === 'oom_killed') {
     outcome = 'crashed-oom';
   } else if (run.failure_reason === 'timeout') {
@@ -1723,6 +1744,15 @@ export function classifyTestRunOutcome(
     outcome = 'failed-with-named-tests';
   } else {
     outcome = 'failed-with-no-report-acquired';
+  }
+  if (outcome === 'crashed-worker') {
+    const nodeId = detectCrashSignature(run.output, crashSignatures)?.nodeId;
+    return {
+      outcome,
+      nextAction: nodeId
+        ? `A test crashed its worker while running '${nodeId}' — re-running the unchanged tree will not help; fix the crash.`
+        : TEST_RUN_NEXT_ACTIONS[outcome],
+    };
   }
   return { outcome, nextAction: TEST_RUN_NEXT_ACTIONS[outcome] };
 }

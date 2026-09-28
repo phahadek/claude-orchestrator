@@ -1200,7 +1200,15 @@ export type TestRequestFailureReason =
   | 'generic'
   | 'interrupted_queued'
   | 'superseded'
-  | 'tool_infra_failure';
+  | 'tool_infra_failure'
+  /**
+   * A timed-out run whose output matched a project-declared
+   * test_crash_signatures entry — a pytest-xdist/worker-crash-class code
+   * defect the run stalled behind, not a hung/wedged host process. Routed
+   * to the session as an ordinary failed-gate, never as
+   * gate_timeout_infra_failure. See testRequestLane.ts's failureReasonFor.
+   */
+  | 'worker_crash';
 
 /**
  * Explicit identity a caller states about the run it's originating —

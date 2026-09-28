@@ -74,6 +74,22 @@ function makeNonClosingProc(): MockProc {
   };
 }
 
+/** A proc that emits `stdout` once, then hangs forever — a worker-crash stall, not a bare wedge. */
+function makeNonClosingProcWithOutput(stdout: string): MockProc {
+  const outCbs: Array<(d: Buffer) => void> = [];
+  setTimeout(() => outCbs.forEach((cb) => cb(Buffer.from(stdout))), 0);
+  return {
+    pid: 6789,
+    stdout: {
+      on: (e, cb) => {
+        if (e === 'data') outCbs.push(cb);
+      },
+    },
+    stderr: { on: () => {} },
+    on: () => {},
+  };
+}
+
 // ── sessionCgroup partial mock: spy on the two calls that prove bounded placement ──
 
 vi.mock('../../session/sessionCgroup', async (importOriginal) => {
@@ -123,6 +139,32 @@ describe('runVerifyAsGate — bounded via the shared test-run machinery', () => 
     expect(result.passed).toBe(false);
     expect(result.failedCommand).toBe('pytest -n 2');
     expect(result.truncatedOutput).toContain('[verify] TIMEOUT');
+    expect(result.isTimeoutInfraFailure).toBe(true);
+    expect(result.isWorkerCrash).toBeUndefined();
+  });
+
+  it('classifies a timeout whose output matches a configured crash signature as isWorkerCrash — never isTimeoutInfraFailure — and returns a capped crashMessage instead of raw output', async () => {
+    _spawnHook = () =>
+      makeNonClosingProcWithOutput(
+        "[gw3] node down: Not properly terminated\nworker gw3 crashed while running 'tests/foo.py::test_bar'\n",
+      );
+
+    const promise = runVerifyAsGate('/repo', ['pytest -n 2'], undefined, {
+      timeoutSec: 5,
+      crashSignatures: ['node down: Not properly terminated'],
+    });
+    await vi.advanceTimersByTimeAsync(11_000);
+    const result = await promise;
+
+    expect(result.passed).toBe(false);
+    expect(result.isWorkerCrash).toBe(true);
+    expect(result.isTimeoutInfraFailure).toBeUndefined();
+    expect(result.crashMessage).toBeDefined();
+    expect(result.crashMessage!.length).toBeLessThanOrEqual(2000);
+    expect(result.crashMessage).toContain('tests/foo.py::test_bar');
+    expect(result.crashMessage).toContain(
+      'node down: Not properly terminated',
+    );
   });
 
   it('places each verify command via spawnIntoTestRunCgroup with one runId per runVerifyAsGate invocation, and verifies teardown on completion', async () => {

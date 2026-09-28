@@ -1233,6 +1233,108 @@ describe('PreReviewPipeline — verify gate', () => {
   });
 });
 
+describe('PreReviewPipeline — verify gate worker_crash classification', () => {
+  const CRASH_SIGNATURE = 'node down: Not properly terminated';
+  const NODE_ID = 'tests/foo.py::test_bar';
+  const CRASH_OUTPUT = [
+    'collecting tests...',
+    `[gw3] ${CRASH_SIGNATURE}`,
+    `worker gw3 crashed while running '${NODE_ID}'`,
+    'replacing crashed worker gw3',
+  ].join('\n');
+
+  beforeEach(() => {
+    mockLoadOrchestratorConfig.mockReturnValue({
+      verify: ['pytest -n 2'],
+      autofix: [],
+      analyze: [],
+      test: [],
+      test_timeout_sec: 300,
+      test_max_rss_mb: 0,
+      test_fail_fast: true,
+      analyze_timeout_sec: 300,
+      analyze_max_rss_mb: 0,
+      analyze_fail_fast: true,
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+      test_crash_signatures: [CRASH_SIGNATURE],
+    });
+  });
+
+  it('routes a timed-out verify run whose output matches a configured crash signature to the session — never gate_timeout_infra_failure — with exactly one capped message naming the matched line and node id, and no raw/tail output', async () => {
+    mockLaneResult({
+      passed: false,
+      output: CRASH_OUTPUT,
+      failedCommand: 'pytest -n 2',
+      timedOut: true,
+    });
+    mockGetTestRequestRunById.mockReturnValue({
+      failure_reason: 'worker_crash',
+      output: CRASH_OUTPUT,
+      structured_result: null,
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(false);
+    expect(mockSetPauseReason).not.toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'gate_timeout_infra_failure',
+      expect.anything(),
+    );
+    expect(mockSetPauseReason).not.toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'gate_timeout_infra_failure',
+    );
+    expect(mockSetPRReviewResult).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      expect.not.stringContaining('gate_timeout_infra_failure'),
+    );
+
+    expect(sm.sendOrResume).toHaveBeenCalledTimes(1);
+    const [, message] = vi.mocked(sm.sendOrResume).mock.calls[0];
+    expect(message.length).toBeLessThanOrEqual(2000);
+    expect(message).toContain(NODE_ID);
+    expect(message).toContain(CRASH_SIGNATURE);
+    expect(message).not.toContain('collecting tests...');
+  });
+
+  it('keeps an unmatched timeout as gate_timeout_infra_failure and never messages the session', async () => {
+    const HANG_OUTPUT = 'pytest is still running...\n'.repeat(50);
+    mockLaneResult({
+      passed: false,
+      output: HANG_OUTPUT,
+      failedCommand: 'pytest -n 2',
+      timedOut: true,
+    });
+    mockGetTestRequestRunById.mockReturnValue({
+      failure_reason: 'timeout',
+      output: HANG_OUTPUT,
+      structured_result: null,
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(false);
+    expect(mockSetPauseReason).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'gate_timeout_infra_failure',
+      expect.anything(),
+    );
+    expect(sm.sendOrResume).not.toHaveBeenCalled();
+  });
+});
+
 describe('PreReviewPipeline — analyze gate (parity with autofix/verify)', () => {
   beforeEach(() => {
     mockLoadOrchestratorConfig.mockReturnValue({

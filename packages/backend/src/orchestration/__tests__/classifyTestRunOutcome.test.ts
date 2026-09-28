@@ -100,6 +100,33 @@ describe('classifyTestRunOutcome', () => {
     expect(result.outcome).toBe('timed-out');
   });
 
+  it('classifies a failed run with failure_reason=worker_crash as crashed-worker, naming the extracted node id in nextAction', () => {
+    const result = classifyTestRunOutcome(
+      makeRun({
+        state: 'failed',
+        structured_result: null,
+        failure_reason: 'worker_crash',
+        output:
+          "[gw3] node down: Not properly terminated\nworker gw3 crashed while running 'tests/foo.py::test_bar'",
+      }),
+      ['node down: Not properly terminated'],
+    );
+    expect(result.outcome).toBe('crashed-worker');
+    expect(result.nextAction).toContain('tests/foo.py::test_bar');
+  });
+
+  it('classifies a failed run with failure_reason=worker_crash as crashed-worker even with no crashSignatures passed (falls back to the generic next-action)', () => {
+    const result = classifyTestRunOutcome(
+      makeRun({
+        state: 'failed',
+        structured_result: null,
+        failure_reason: 'worker_crash',
+      }),
+    );
+    expect(result.outcome).toBe('crashed-worker');
+    expect(result.nextAction).toBeTruthy();
+  });
+
   it('classifies a post-sweep failed run (structured_result cleared, durable test_run_summaries has a per-test breakdown) as failed-with-named-tests, not failed-with-no-report-acquired', () => {
     const id = 'run-classify-post-sweep-partial';
     insertTestRequestRun(id, 'proj-1', 'hash-classify-1', null, Date.now());

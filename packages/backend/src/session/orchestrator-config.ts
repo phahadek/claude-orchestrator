@@ -154,6 +154,17 @@ export interface OrchestratorConfig {
    * can't safely skip. Ignored when `test_scoped` is empty.
    */
   test_full_run_paths: string[];
+  /**
+   * Plain substrings (not regexes) matched against a timed-out test run's
+   * output that identify a known worker-crash signature for this project
+   * (e.g. a pytest-xdist "node down" marker) — a code defect the run stalled
+   * behind, not a hung/wedged process. A match reclassifies the run's
+   * failure_reason from 'timeout' to 'worker_crash' (see failureReasonFor in
+   * testRequestLane.ts) and routes it to the session instead of parking the
+   * PR as host infra. Empty = feature off (every timeout stays 'timeout',
+   * today's behavior unchanged).
+   */
+  test_crash_signatures: string[];
   /** Commands the orchestrator runs as static analysis gate, between verify and test. Empty = gate skipped. */
   analyze: AnalyzeCommand[];
   /** Per-command timeout in seconds for analyze commands. Default 300. */
@@ -304,6 +315,7 @@ const DEFAULTS: OrchestratorConfig = {
   test_report_glob: '',
   test_scoped: [],
   test_full_run_paths: [],
+  test_crash_signatures: [],
   analyze: [],
   analyze_timeout_sec: 300,
   analyze_max_rss_mb: 0,
@@ -627,6 +639,9 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
       test_full_run_paths: Array.isArray(parsed.test_full_run_paths)
         ? parsed.test_full_run_paths
         : DEFAULTS.test_full_run_paths,
+      test_crash_signatures: Array.isArray(parsed.test_crash_signatures)
+        ? parsed.test_crash_signatures
+        : DEFAULTS.test_crash_signatures,
       analyze: Array.isArray(parsed.analyze)
         ? (parsed.analyze as unknown[]).filter(isValidAnalyzeEntry)
         : DEFAULTS.analyze,

@@ -11,6 +11,10 @@ import {
   checkToolchainVersions,
   formatToolchainMismatch,
 } from './gateEnv';
+import {
+  detectCrashSignature,
+  buildWorkerCrashMessage,
+} from './workerCrashDetection';
 
 export interface VerifyResult {
   passed: boolean;
@@ -22,6 +26,10 @@ export interface VerifyResult {
   toolFailureReason?: string;
   /** True when the failure is a command that exceeded its timeout budget — a hung/wedged process, not a code defect. */
   isTimeoutInfraFailure?: boolean;
+  /** True when a timed-out command's output matched a declared test_crash_signatures entry — a worker crash the run stalled behind, not a hung host process. Mutually exclusive with isTimeoutInfraFailure. */
+  isWorkerCrash?: boolean;
+  /** Present only when isWorkerCrash — the size-capped matched-lines/node-id message (see workerCrashDetection.ts), never raw/tail output. */
+  crashMessage?: string;
   /**
    * The failing command's own report, parsed against `testReportGlob` when
    * one is configured — null when no glob is configured, the glob matched
@@ -58,6 +66,8 @@ export interface RunVerifyAsGateOptions {
   timeoutSec?: number;
   /** Max RSS in MB per verify subprocess, mirroring OrchestratorConfig.test_max_rss_mb. 0 = disabled. */
   maxRssMb?: number;
+  /** Worker-crash signature substrings, mirroring OrchestratorConfig.test_crash_signatures. */
+  crashSignatures?: string[];
 }
 
 export async function runVerifyAsGate(
@@ -125,12 +135,22 @@ export async function runVerifyAsGate(
           structuredResult = null;
         }
       }
+      const crashMatch = timedOut
+        ? detectCrashSignature(output, options.crashSignatures ?? [])
+        : null;
       return {
         passed: false,
         failedCommand: cmd,
         truncatedOutput: truncated,
         structuredResult,
-        ...(timedOut ? { isTimeoutInfraFailure: true } : {}),
+        ...(crashMatch
+          ? {
+              isWorkerCrash: true,
+              crashMessage: buildWorkerCrashMessage(crashMatch),
+            }
+          : timedOut
+            ? { isTimeoutInfraFailure: true }
+            : {}),
       };
     }
   }

@@ -43,6 +43,10 @@ import {
 import { validateAndRepairGitConfig } from '../orchestration/gitConfigIntegrity';
 import { runVerifyAsGate, tailOfLog } from '../orchestration/verifyRunner';
 import {
+  detectCrashSignature,
+  buildWorkerCrashMessage,
+} from '../orchestration/workerCrashDetection';
+import {
   buildScopedEnv,
   checkToolchainVersions,
   formatToolchainMismatch,
@@ -86,6 +90,13 @@ interface GateFailureDetail {
   isToolInfraFailure?: boolean;
   toolFailureReason?: string;
   isTimeoutInfraFailure?: boolean;
+  /**
+   * Present only for a worker_crash gate failure — the size-capped message
+   * (matched signature lines + node id, never raw/tail output; see
+   * workerCrashDetection.ts) handleGateFailure sends to the session in place
+   * of stage.formatFailure's own output-tail-bearing text.
+   */
+  sessionMessage?: string;
 }
 
 interface GateStageDescriptor {
@@ -362,6 +373,8 @@ export class PreReviewPipeline {
           isToolInfraFailure?: boolean;
           toolFailureReason?: string;
           isTimeoutInfraFailure?: boolean;
+          isWorkerCrash?: boolean;
+          crashMessage?: string;
           structuredResult: StructuredTestResult | null;
         }
 
@@ -449,13 +462,24 @@ export class PreReviewPipeline {
               structuredResult = null;
             }
           }
+          const isWorkerCrash = run?.failure_reason === 'worker_crash';
           outcome = {
             passed: laneResult.passed,
             failedCommand: laneResult.failedCommand,
             truncatedOutput: tailOfLog(laneResult.output),
             isToolInfraFailure: laneResult.isToolInfraFailure,
             toolFailureReason: laneResult.toolFailureReason,
-            isTimeoutInfraFailure: laneResult.timedOut,
+            isTimeoutInfraFailure: run?.failure_reason === 'timeout',
+            isWorkerCrash,
+            crashMessage:
+              isWorkerCrash && run
+                ? buildWorkerCrashMessage(
+                    detectCrashSignature(
+                      run.output,
+                      config.test_crash_signatures ?? [],
+                    ) ?? { matchedLines: [] },
+                  )
+                : undefined,
             structuredResult,
           };
           break;
@@ -480,6 +504,7 @@ export class PreReviewPipeline {
               expectedToolVersions: config.expected_tool_versions,
               timeoutSec: config.test_timeout_sec,
               maxRssMb: config.test_max_rss_mb,
+              crashSignatures: config.test_crash_signatures ?? [],
             },
           );
           outcome = {
@@ -489,6 +514,8 @@ export class PreReviewPipeline {
             isToolInfraFailure: gateResult.isToolInfraFailure,
             toolFailureReason: gateResult.toolFailureReason,
             isTimeoutInfraFailure: gateResult.isTimeoutInfraFailure,
+            isWorkerCrash: gateResult.isWorkerCrash,
+            crashMessage: gateResult.crashMessage,
             structuredResult: gateResult.structuredResult ?? null,
           };
         }
@@ -498,6 +525,15 @@ export class PreReviewPipeline {
             summary: outcome.toolFailureReason ?? 'toolchain version mismatch',
             isToolInfraFailure: true,
             toolFailureReason: outcome.toolFailureReason,
+          };
+        }
+        if (outcome.isWorkerCrash) {
+          return {
+            failedCommand: outcome.failedCommand,
+            summary: outcome.failedCommand
+              ? `verify: test worker crashed running ${outcome.failedCommand}`
+              : 'verify: test worker crashed',
+            sessionMessage: outcome.crashMessage,
           };
         }
         if (outcome.isTimeoutInfraFailure) {
@@ -1210,10 +1246,11 @@ export class PreReviewPipeline {
 
     const message = detail.isGitInfraFailure
       ? `## Autofix Infrastructure Failure\n\nA git operation failed with exit code 128, indicating a git infrastructure issue (likely a corrupted .git/config). The orchestrator has attempted to repair the configuration automatically.\n\n**Detail:** ${detail.summary}`
-      : stage.formatFailure(detail, {
+      : (detail.sessionMessage ??
+        stage.formatFailure(detail, {
           conflicted: prRow?.merge_state === 'dirty',
           baseBranch: prRow?.base_branch ?? 'dev',
-        });
+        }));
     try {
       await this.sessionManager.sendOrResume(sessionId, message);
     } catch (e) {
