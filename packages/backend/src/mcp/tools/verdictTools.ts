@@ -18,7 +18,10 @@ import {
   getPRBySessionId,
   evaluateTestFlakinessCorpus,
   getLatestTestRequestRunForSession,
+  getLatestPrGateRunForWorktree,
+  getFailingTestIdsForRun,
   markTestResultExcused,
+  type FailingTestForRun,
 } from '../../db/queries';
 import {
   isTestIdTouchedByChangedFiles,
@@ -94,6 +97,42 @@ function findTouchedTestFile(
       noExt.endsWith(`/${candidatePath}`)
     );
   });
+}
+
+const KNOWN_FAILING_IDS_LISTED_MAX = 10;
+
+/**
+ * Refuses a testId that isn't one of the targeted gate run's own failing
+ * test ids — fast, and before any corpus/flip-rate check runs, so a wrong id
+ * is never misreported as an evidence shortfall (the digest renders each
+ * test as `<test_id> — <name>`, and a session copying the name part instead
+ * of the id is the case this exists to catch). Returns an `invalid(...)`
+ * response to return as-is on refusal, or null when testId matches a
+ * failing test of this run.
+ */
+function checkKnownFailingTestId(
+  testId: string,
+  failing: FailingTestForRun[],
+): ReturnType<typeof invalid> | null {
+  if (failing.some((f) => f.test_id === testId)) return null;
+
+  const nameMatch = failing.find((f) => f.name === testId);
+  if (nameMatch) {
+    return invalid(
+      `"${testId}" is this test's name, not its id — use testId "${nameMatch.test_id}" instead`,
+    );
+  }
+
+  const ids = failing.map((f) => f.test_id);
+  const listed = ids.slice(0, KNOWN_FAILING_IDS_LISTED_MAX);
+  const remainder = ids.length - listed.length;
+  const known =
+    listed.length > 0
+      ? `${listed.map((id) => `"${id}"`).join(', ')}${remainder > 0 ? ` (+${remainder} more)` : ''}`
+      : '(none recorded for this run)';
+  return invalid(
+    `unknown test id "${testId}" for this run — this run's failing test ids are: ${known}`,
+  );
 }
 
 /**
@@ -256,6 +295,12 @@ export function registerVerdictTools(
           if (!run) {
             return invalid('no active test_request run for this session');
           }
+          const idRefusal = checkKnownFailingTestId(
+            args.testId,
+            getFailingTestIdsForRun(run.id),
+          );
+          if (idRefusal) return idRefusal;
+
           const project = getProjectById(session.projectId);
           const beforeMs = project
             ? firstRunCutoffMs(project, run)
@@ -286,6 +331,16 @@ export function registerVerdictTools(
               `gate "${args.gate}" requires testId and testName identifying the failing test so the backend can check it against the cross-SHA corpus`,
             );
           }
+          const gateRun = getLatestPrGateRunForWorktree(
+            session.projectId,
+            session.worktreePath,
+          );
+          const idRefusal = checkKnownFailingTestId(
+            args.testId,
+            gateRun ? getFailingTestIdsForRun(gateRun.id) : [],
+          );
+          if (idRefusal) return idRefusal;
+
           const beforeMs = pr.created_at ? Date.parse(pr.created_at) : NaN;
           if (!Number.isFinite(beforeMs)) {
             return invalid(

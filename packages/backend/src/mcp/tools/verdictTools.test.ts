@@ -20,6 +20,8 @@ import {
   getPRBySessionId,
   evaluateTestFlakinessCorpus,
   getLatestTestRequestRunForSession,
+  getLatestPrGateRunForWorktree,
+  getFailingTestIdsForRun,
   markTestResultExcused,
 } from '../../db/queries';
 import { getChangedFiles } from '../../session/autofix-runner';
@@ -34,6 +36,8 @@ vi.mock('../../db/queries', () => ({
   getPRBySessionId: vi.fn(),
   evaluateTestFlakinessCorpus: vi.fn(),
   getLatestTestRequestRunForSession: vi.fn(),
+  getLatestPrGateRunForWorktree: vi.fn(),
+  getFailingTestIdsForRun: vi.fn(),
   markTestResultExcused: vi.fn(),
 }));
 
@@ -288,6 +292,7 @@ describe('flaky.confirm', () => {
   const TEST_NAME = 'test_something';
 
   beforeEach(() => {
+    vi.mocked(evaluateTestFlakinessCorpus).mockClear();
     vi.mocked(getPRBySessionId).mockReturnValue({
       pr_number: 7,
       repo: 'owner/repo',
@@ -295,6 +300,12 @@ describe('flaky.confirm', () => {
       base_branch: 'dev',
       pause_reason: CI_FAILING_PAUSE,
     } as never);
+    vi.mocked(getLatestPrGateRunForWorktree).mockReturnValue({
+      id: 'gate-run-1',
+    } as never);
+    vi.mocked(getFailingTestIdsForRun).mockReturnValue([
+      { test_id: TEST_ID, name: TEST_NAME, failure_message: null, failure_trace_excerpt: null },
+    ]);
     vi.mocked(evaluateTestFlakinessCorpus).mockReturnValue({
       testId: TEST_ID,
       eligible: true,
@@ -519,6 +530,48 @@ describe('flaky.confirm', () => {
     expect(session.recordVerifiedFlakyDisposition).not.toHaveBeenCalled();
     await close();
   });
+
+  it('refuses a testId that matches none of the targeted gate run\'s failing test ids, listing the known ids, and never reports a corpus/breadth shortfall', async () => {
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session);
+    const result = await client.callTool({
+      name: 'flaky.confirm',
+      arguments: {
+        gate: 'f2',
+        reason: 'seems flaky',
+        testId: 'src/tests/vitestConfig.test.ts',
+        testName: TEST_NAME,
+      },
+    });
+    expect(result.isError).toBe(true);
+    const error = resultOf(result as never).error as string;
+    expect(error).toContain('unknown test id');
+    expect(error).toContain(TEST_ID);
+    expect(error).not.toContain('distinct trees');
+    expect(evaluateTestFlakinessCorpus).not.toHaveBeenCalled();
+    expect(session.recordVerifiedFlakyDisposition).not.toHaveBeenCalled();
+    await close();
+  });
+
+  it("refuses a testId that is a failing test's display name rather than its id, naming the matching id", async () => {
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session);
+    const result = await client.callTool({
+      name: 'flaky.confirm',
+      arguments: {
+        gate: 'f2',
+        reason: 'seems flaky',
+        testId: TEST_NAME,
+        testName: TEST_NAME,
+      },
+    });
+    expect(result.isError).toBe(true);
+    const error = resultOf(result as never).error as string;
+    expect(error).toContain(TEST_ID);
+    expect(evaluateTestFlakinessCorpus).not.toHaveBeenCalled();
+    expect(session.recordVerifiedFlakyDisposition).not.toHaveBeenCalled();
+    await close();
+  });
 });
 
 describe('flaky.confirm gate "test_request" (pre-PR)', () => {
@@ -529,7 +582,11 @@ describe('flaky.confirm gate "test_request" (pre-PR)', () => {
   beforeEach(() => {
     vi.mocked(markTestResultExcused).mockClear();
     vi.mocked(getPRBySessionId).mockClear();
+    vi.mocked(evaluateTestFlakinessCorpus).mockClear();
     vi.mocked(getLatestTestRequestRunForSession).mockReturnValue(RUN);
+    vi.mocked(getFailingTestIdsForRun).mockReturnValue([
+      { test_id: TEST_ID, name: TEST_NAME, failure_message: null, failure_trace_excerpt: null },
+    ]);
     vi.mocked(getProjectById).mockReturnValue({
       id: 'proj-1',
       baseBranch: 'dev',
@@ -542,6 +599,28 @@ describe('flaky.confirm gate "test_request" (pre-PR)', () => {
     vi.mocked(getChangedFiles).mockResolvedValue([
       'packages/backend/src/unrelated.ts',
     ]);
+  });
+
+  it('refuses a testId that matches none of the run\'s failing test ids, listing the known ids, before touching the corpus', async () => {
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session);
+    const result = await client.callTool({
+      name: 'flaky.confirm',
+      arguments: {
+        gate: 'test_request',
+        reason: 'seems flaky',
+        testId: 'src/tests/vitestConfig.test.ts',
+        testName: TEST_NAME,
+      },
+    });
+    expect(result.isError).toBe(true);
+    const error = resultOf(result as never).error as string;
+    expect(error).toContain('unknown test id');
+    expect(error).toContain(TEST_ID);
+    expect(error).not.toContain('distinct trees');
+    expect(evaluateTestFlakinessCorpus).not.toHaveBeenCalled();
+    expect(markTestResultExcused).not.toHaveBeenCalled();
+    await close();
   });
 
   it('writes the excused marker and succeeds when the test clears the corpus and is absent from the diff', async () => {

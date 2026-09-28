@@ -9942,6 +9942,35 @@ export function getAuthoritativeTestRunForPr(
 }
 
 /**
+ * The most recent finished producer='pr_gate' row for a PR's worktree,
+ * regardless of run_kind — a flaky.confirm(gate: 'ci'|'f2') call's known-id
+ * source: which test ids actually failed on the run this confirmation
+ * targets. Unlike getAuthoritativeTestRunForPr this is not restricted to
+ * run_kind='full', since a pre-review verify run (run_kind='verify') also
+ * persists test_run_results rows under producer='pr_gate' and a session can
+ * be confirming against that failure too.
+ */
+export function getLatestPrGateRunForWorktree(
+  projectId: string,
+  worktreePath: string,
+): TestRequestRunRow | undefined {
+  return db
+    .prepare<{ project_id: string; worktree_path: string }>(
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
+       FROM test_request_runs
+       WHERE project_id = @project_id
+         AND producer = 'pr_gate'
+         AND worktree_path = @worktree_path
+         AND state NOT IN ('running', 'queued')
+       ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
+    )
+    .get({
+      project_id: projectId,
+      worktree_path: worktreePath,
+    }) as TestRequestRunRow | undefined;
+}
+
+/**
  * listTestRequestRunsForSession's PR-review counterpart for the Tests tab:
  * also surfaces the PR pipeline's NULL-session rows for the same worktree,
  * so an operator viewing a task's Tests tab can see the full-suite gate the
