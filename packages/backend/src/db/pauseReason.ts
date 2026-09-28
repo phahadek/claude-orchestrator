@@ -51,6 +51,7 @@ export type CanonicalPauseReason =
   | 'planning_first_turn_empty'
   | 'planning_terminal_no_decision'
   | 'planning_terminal_blocked_members'
+  | 'planning_design_closing_set_resume_exhausted'
   | 'ops_terminal_group_incomplete'
   | 'ops_journal_terminal_incomplete'
   | 'usage_limit_deferred'
@@ -362,6 +363,15 @@ export const PAUSE_REASON_REGISTRY: Record<
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
   },
+  // A design session's own closing-set resume budget (checkTerminal) is
+  // exhausted — unlike planning_terminal_no_decision, the session is never
+  // terminalized for this: it stays resumable, so the recovery click is
+  // 'resume' (see RECOVERY_ACTION_MAP), not a task-level redispatch.
+  planning_design_closing_set_resume_exhausted: {
+    source: 'session',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
   ops_terminal_group_incomplete: {
     source: 'session',
     severity: 'needs_attention',
@@ -585,6 +595,9 @@ const RECOVERY_ACTION_MAP: Record<
   // Escalated form of api_overloaded once the in-session respawn/backoff
   // budget is exhausted — flagged for manual attention, then resumed.
   api_overloaded_exhausted: 'resume',
+  // The session itself is still alive/resumable — the fix is an operator
+  // resume (with a fresh look), not a task-level redispatch.
+  planning_design_closing_set_resume_exhausted: 'resume',
   // none: no click in this map fixes it — either the system already
   // auto-clears it, or the fix is structurally outside redispatch/rerun/resume.
   max_reviews: 'none', // reviewed and closed by the reviewer/operator directly

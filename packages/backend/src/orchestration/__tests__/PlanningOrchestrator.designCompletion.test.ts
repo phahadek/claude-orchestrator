@@ -356,7 +356,7 @@ describe('PlanningOrchestrator — design task completion', () => {
     expect(updateStatus).not.toHaveBeenCalled();
   });
 
-  it('does not close the task when the session reaches planning_no_pending_dispositions having only answered decision.pickOne — the polimarket-M16 shape', async () => {
+  it('never terminalizes — resumes instead — when the session parks empty having only answered decision.pickOne — the polimarket-M16/efa347ee shape', async () => {
     const sm = makeSessionManager();
     vi.mocked(getSession).mockReturnValue(makeSessionRow());
     vi.mocked(listStagedIntentsBySession).mockReturnValue([
@@ -373,18 +373,27 @@ describe('PlanningOrchestrator — design task completion', () => {
     const orch = new PlanningOrchestrator(sm as any);
 
     // decision.pickOne alone does not count as "staged a decision" (see
-    // hasStagedDecision), so checkTerminal takes the no-decision-nudge path
-    // first: park 1 primes the resume-count snapshot, park 2 sends the
-    // bounded self-correct nudge (still not terminal), park 3 — the nudge's
-    // own re-turn also staging nothing new — is what actually reaches
-    // planning_no_pending_dispositions, mirroring the real session's second
-    // park after answering its one Open Question.
+    // hasStagedDecision), so checkTerminal would otherwise take the
+    // no-decision-nudge->pause->terminal backstop path — but a design
+    // session whose closing set is not yet applied is gated the same way
+    // isSessionCompleteForIdleSweep already gates the cold idle-sweep path:
+    // every empty park resumes it (bounded by its own resume budget) instead
+    // of ever reaching planning_no_pending_dispositions. Park 1 primes the
+    // snapshot; parks 2+ each resume via the design-closing-set-incomplete
+    // nudge and stay non-terminal.
     orch.checkTerminal('design-session-1');
     orch.checkTerminal('design-session-1');
     const terminal = orch.checkTerminal('design-session-1');
     await flush();
 
-    expect(terminal).toBe(true);
+    expect(terminal).toBe(false);
+    expect(sm.endSession).not.toHaveBeenCalled();
+    expect(sm.enqueueFeedback).toHaveBeenCalledWith(
+      'design-session-1',
+      expect.any(String),
+      expect.stringContaining('closing set'),
+      { attemptTerminalResume: true },
+    );
     expect(updateStatus).not.toHaveBeenCalled();
   });
 

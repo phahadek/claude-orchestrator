@@ -122,6 +122,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Planning session reached a terminal state without ever staging a decision — review and redispatch planning when ready.',
   planning_terminal_blocked_members:
     'Planning session reached a terminal state with staged intents still blocked in verification — the group can no longer be superseded by that session; review and disposition the blocked members manually.',
+  planning_design_closing_set_resume_exhausted:
+    'Design session parked terminal-empty repeatedly without applying its closing set, and its automatic resume budget is exhausted — the session is still resumable; review and resume it manually.',
   ops_terminal_group_incomplete:
     'Ops session reached a terminal state with its closing group missing the journal.setState -> "resolved" transition — the investigation journal is stuck and the task will not close; stage the missing transition manually.',
   ops_journal_terminal_incomplete:

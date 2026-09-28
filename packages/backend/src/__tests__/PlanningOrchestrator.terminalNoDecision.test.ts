@@ -18,6 +18,10 @@ vi.mock('../db/db', async () => {
   return { db: setupTestDb() };
 });
 
+vi.mock('../tasks/TaskBackend', () => ({
+  getTaskBackend: vi.fn(),
+}));
+
 import { db } from '../db/db';
 import {
   insertSession,
@@ -28,6 +32,7 @@ import {
 import type { StagedIntentRow } from '../db/types';
 import { PlanningOrchestrator } from '../orchestration/PlanningOrchestrator';
 import type { SessionManager } from '../session/SessionManager';
+import { getTaskBackend } from '../tasks/TaskBackend';
 
 function makeSessionManager() {
   const emitter = new EventEmitter();
@@ -45,7 +50,11 @@ function makeSessionManager() {
 const SESSION_ID = 'session-1';
 const TASK_ID = 'task-1';
 
-function seedSession(sessionId = SESSION_ID, sessionType = 'groom'): void {
+function seedSession(
+  sessionId = SESSION_ID,
+  sessionType = 'groom',
+  opts: { projectId?: string } = {},
+): void {
   insertSession({
     session_id: sessionId,
     task_id: TASK_ID,
@@ -54,6 +63,7 @@ function seedSession(sessionId = SESSION_ID, sessionType = 'groom'): void {
     status: 'running',
     started_at: Date.now(),
     session_type: sessionType,
+    project_id: opts.projectId ?? null,
   });
 }
 
@@ -103,12 +113,20 @@ function crashCountFor(taskId: string): number {
   return row?.consecutive_crashes ?? 0;
 }
 
+function terminalReasonFor(sessionId: string): string | null {
+  const row = db
+    .prepare('SELECT terminal_completion_reason FROM sessions WHERE session_id = ?')
+    .get(sessionId) as { terminal_completion_reason: string | null } | undefined;
+  return row?.terminal_completion_reason ?? null;
+}
+
 beforeEach(() => {
   db.prepare('DELETE FROM staged_intent').run();
   db.prepare('DELETE FROM sessions').run();
   db.prepare('DELETE FROM task_crash_counts').run();
   db.prepare('DELETE FROM task_pause_reasons').run();
   counter = 0;
+  vi.mocked(getTaskBackend).mockReset();
 });
 
 describe('PlanningOrchestrator.checkTerminal — kind-aware "staged a decision" predicate', () => {
@@ -274,4 +292,138 @@ describe('PlanningOrchestrator.checkTerminal — terminal-no-decision backstop',
     expect(paused?.reason).toBe('planning_terminal_no_decision');
     expect(paused?.severity).toBe('needs_attention');
   });
+});
+
+describe('PlanningOrchestrator.checkTerminal — design closing-set-incomplete backstop', () => {
+  it('a design session with only a committed decision.pickOne intent that parks empty twice is not terminalized — resumed instead of nudged into the no-decision pause', () => {
+    seedSession(SESSION_ID, 'design');
+    const sessionManager = makeSessionManager();
+    const orchestrator = new PlanningOrchestrator(sessionManager);
+
+    const intent = stageIntent({ kind: 'decision.pickOne' });
+    orchestrator.checkTerminal(SESSION_ID); // prime snapshot: intent still staged
+    db.prepare(`UPDATE staged_intent SET state = 'committed' WHERE id = ?`).run(
+      intent.id,
+    );
+
+    // Park 1: nothing pending, nothing new, closing set not applied — resumed,
+    // not terminalized, and not routed through the no-decision nudge/pause.
+    expect(orchestrator.checkTerminal(SESSION_ID)).toBe(false);
+    expect(sessionManager.endSession).not.toHaveBeenCalled();
+    expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
+    expect(sessionManager.enqueueFeedback).toHaveBeenCalledWith(
+      SESSION_ID,
+      expect.any(String),
+      expect.stringContaining('closing set'),
+      { attemptTerminalResume: true },
+    );
+    expect(getSession(SESSION_ID)?.status).toBe('running');
+    expect(getTaskPauseReason(TASK_ID)).toBeNull();
+
+    // Park 2: still nothing new — resumed again (one resume per park), still
+    // not terminalized.
+    expect(orchestrator.checkTerminal(SESSION_ID)).toBe(false);
+    expect(sessionManager.endSession).not.toHaveBeenCalled();
+    expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(2);
+    expect(getSession(SESSION_ID)?.status).toBe('running');
+    expect(getTaskPauseReason(TASK_ID)).toBeNull();
+  });
+
+  it('the same design session terminalizes as planning_no_pending_dispositions and closes the task once its closing set is applied', () => {
+    seedSession(SESSION_ID, 'design', { projectId: 'proj-1' });
+    const sessionManager = makeSessionManager();
+    const orchestrator = new PlanningOrchestrator(sessionManager);
+    const updateStatus = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(getTaskBackend).mockReturnValue({
+      fetchTaskPage: vi.fn(),
+      updateStatus,
+    } as unknown as ReturnType<typeof getTaskBackend>);
+
+    const pickOne = stageIntent({ kind: 'decision.pickOne' });
+    orchestrator.checkTerminal(SESSION_ID); // prime snapshot
+    db.prepare(`UPDATE staged_intent SET state = 'committed' WHERE id = ?`).run(
+      pickOne.id,
+    );
+    // Still not applied — one resume, not terminal.
+    expect(orchestrator.checkTerminal(SESSION_ID)).toBe(false);
+
+    // Now the session stages and commits its full closing set.
+    stageIntent({
+      kind: 'completeness.disposition',
+      state: 'committed',
+      payload: JSON.stringify({
+        taskId: TASK_ID,
+        rowId: 1,
+        project: null,
+        milestone: null,
+        probed: [],
+        questions: [],
+        runAt: new Date().toISOString(),
+      }),
+    });
+    stageIntent({ kind: 'arch.updateUnit', state: 'committed' });
+    stageIntent({ kind: 'task.create', state: 'committed' });
+
+    // Prime the snapshot for this newly staged batch, then confirm on the
+    // next (empty) park — the same staged-count-snapshot discipline every
+    // other test in this file follows.
+    expect(orchestrator.checkTerminal(SESSION_ID)).toBe(false);
+    expect(orchestrator.checkTerminal(SESSION_ID)).toBe(true);
+    expect(sessionManager.endSession).toHaveBeenCalledWith(SESSION_ID);
+    expect(terminalReasonFor(SESSION_ID)).toBe('planning_no_pending_dispositions');
+    expect(getTaskPauseReason(TASK_ID)).toBeNull();
+    expect(updateStatus).toHaveBeenCalledWith(
+      TASK_ID,
+      '✅ Done',
+      expect.objectContaining({ sessionId: SESSION_ID }),
+    );
+  });
+
+  it('a design session that exceeds the resume budget gets a needs-attention pause and stays non-terminal', () => {
+    seedSession(SESSION_ID, 'design');
+    const sessionManager = makeSessionManager();
+    const orchestrator = new PlanningOrchestrator(sessionManager);
+
+    const intent = stageIntent({ kind: 'decision.pickOne' });
+    orchestrator.checkTerminal(SESSION_ID); // prime snapshot
+    db.prepare(`UPDATE staged_intent SET state = 'committed' WHERE id = ?`).run(
+      intent.id,
+    );
+
+    // Exhaust the resume budget with repeated empty parks.
+    let terminal = false;
+    for (let i = 0; i < 10; i++) {
+      terminal = orchestrator.checkTerminal(SESSION_ID);
+      if (terminal) break;
+    }
+
+    expect(terminal).toBe(false);
+    expect(sessionManager.endSession).not.toHaveBeenCalled();
+    expect(getSession(SESSION_ID)?.status).toBe('running');
+    const paused = getTaskPauseReason(TASK_ID);
+    expect(paused?.reason).toBe('planning_design_closing_set_resume_exhausted');
+    expect(paused?.severity).toBe('needs_attention');
+  });
+});
+
+describe('PlanningOrchestrator.checkTerminal — non-design session types keep the two-strike backstop', () => {
+  it.each(['groom', 'ops', 'docs'])(
+    'a %s session with no staged decision still gets the nudge->pause->terminal treatment unchanged',
+    (sessionType) => {
+      seedSession(SESSION_ID, sessionType);
+      const sessionManager = makeSessionManager();
+      const orchestrator = new PlanningOrchestrator(sessionManager);
+
+      expect(orchestrator.checkTerminal(SESSION_ID)).toBe(false);
+      expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
+      expect(getSession(SESSION_ID)?.status).toBe('running');
+      expect(getTaskPauseReason(TASK_ID)).toBeNull();
+
+      expect(orchestrator.checkTerminal(SESSION_ID)).toBe(true);
+      expect(sessionManager.endSession).toHaveBeenCalledWith(SESSION_ID);
+      expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
+      const paused = getTaskPauseReason(TASK_ID);
+      expect(paused?.reason).toBe('planning_terminal_no_decision');
+    },
+  );
 });
