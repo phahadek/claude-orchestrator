@@ -73,7 +73,6 @@ import {
   setReviewSessionId,
   clearReviewSessionId,
   updatePRDraftStatus,
-  incrementReviewIteration,
   setLocalBranchReviewResult,
   getLocalBranchById,
   setLastReviewedSha,
