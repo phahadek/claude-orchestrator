@@ -1,15 +1,13 @@
 import crypto from 'crypto';
 import { EventEmitter } from 'events';
 import { logger } from '../logger';
-import { randomUUID } from 'crypto';
 import {
   getEventsBySession,
   getTaskNoOpAttempts,
   bumpTaskNoOpAttempts,
   getSession,
   getSessionMilestoneId,
-  findActiveStagedIntentForTask,
-  insertStagedIntent,
+  stageNoOpIfAbsent,
   hashIntentPayload,
 } from '../db/queries';
 import { typedGetSetting } from '../config/settings';
@@ -116,7 +114,9 @@ export async function applyResolvedNoOp(
  * built around a live staging session's own turn, not a system-driven
  * verdict reached after that session (often already terminal) has ended.
  * Idempotent per (project, task): a second `resolved` verdict for the same
- * task while an earlier one still stands (staged/approved) is a no-op here.
+ * task while an earlier one still stands (staged/approved) is a no-op here —
+ * enforced atomically by stageNoOpIfAbsent, not by a separate check-then-act
+ * pair a concurrent caller could race.
  */
 function stageInvestigatorResolvedNoOp(
   taskId: string,
@@ -124,13 +124,17 @@ function stageInvestigatorResolvedNoOp(
   sessionId: string,
   projectId: string,
 ): void {
-  if (findActiveStagedIntentForTask(projectId, 'planning.noOp', taskId)) {
-    return;
-  }
   const payload = { taskId, reason };
   const now = Date.now();
-  insertStagedIntent({
-    id: randomUUID(),
+  // stageNoOpIfAbsent runs the "is one already standing" check and the
+  // insert inside a single DB transaction — see its own doc comment for why
+  // this can't be two separate calls here (findActiveStagedIntentForTask
+  // then insertStagedIntent): that would let two concurrent callers (two
+  // investigator runs, or an investigator run racing a standard/ops
+  // session's own no-op declaration) both pass the check and insert
+  // duplicate standalone no-ops for the same task.
+  stageNoOpIfAbsent({
+    id: crypto.randomUUID(),
     kind: 'planning.noOp',
     payload: JSON.stringify(payload),
     payload_hash: hashIntentPayload(payload),
