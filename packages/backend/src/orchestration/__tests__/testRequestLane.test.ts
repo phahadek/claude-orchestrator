@@ -375,7 +375,10 @@ describe('checkTestRequestHold', () => {
   it('does not hold when an in-flight (coalescing) run already exists for this exact key', () => {
     mockRunTestCommands.mockImplementation(() => new Promise(() => {}));
     const admission = admitTestRequest(
-      baseSpec({ projectId: 'proj-hold-inflight', contentHash: 'inflight-hash' }),
+      baseSpec({
+        projectId: 'proj-hold-inflight',
+        contentHash: 'inflight-hash',
+      }),
     );
     admission.result.catch(() => {});
 
