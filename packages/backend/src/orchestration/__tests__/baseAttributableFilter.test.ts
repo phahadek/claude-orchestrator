@@ -81,6 +81,7 @@ vi.mock('../testRequestLane', () => ({
 import {
   filterBaseAttributableFailures,
   filterVerifyFailureByBaseHealth,
+  filterBaseAttributableFailuresForF2Gate,
   renderBaseAttributableFilterDigest,
   applyF2GateMaskingGuards,
   type BaseAttributableFilterResult,
@@ -596,6 +597,46 @@ describe('applyF2GateMaskingGuards', () => {
 
     expect(guardBlocked).toEqual([{ test_id: 'suite.testA', name: 'testA' }]);
     expect(result.excludedTests).toEqual([]);
+  });
+});
+
+describe('filterBaseAttributableFailuresForF2Gate — the shared PreReviewPipeline/AutoMerger/stagedIntents F2-gate entry point', () => {
+  it("awaits the run's own tracked in-flight ingestion dispatch before reading the failing set — the same ordering guarantee filterBaseAttributableFailures provides, inherited here since this is a thin wrapper with no db/queries reads of its own before delegating", async () => {
+    // PreReviewPipeline.ts (applyBaseAttributableF2GateFilter) and
+    // AutoMerger.ts both call this exact function — neither reads
+    // test_run_results directly, so proving the ordering guarantee holds
+    // here proves it holds at both of those call sites too.
+    const order: string[] = [];
+    let resolveIngestion: () => void = () => {};
+    const pendingIngestion = new Promise<void>((resolve) => {
+      resolveIngestion = resolve;
+    }).then(() => {
+      order.push('ingestion-committed');
+    });
+    mockGetRunIngestionPromise.mockImplementation((runId: string) =>
+      runId === 'run-session-1' ? pendingIngestion : undefined,
+    );
+    stubBreadthFlags(new Set(['suite.testA']));
+    mockGetFailingTestIdsForRun.mockImplementation(() => {
+      order.push('read-failing-set');
+      return [{ test_id: 'suite.testA', name: 'testA' }];
+    });
+
+    const gatePromise = filterBaseAttributableFailuresForF2Gate(
+      PROJECT,
+      makeRun(),
+      [],
+      'task-1',
+    );
+
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(order).toEqual([]);
+
+    resolveIngestion();
+    const { result } = await gatePromise;
+
+    expect(order).toEqual(['ingestion-committed', 'read-failing-set']);
+    expect(result.outcome).toBe('filtered_pass');
   });
 });
 
