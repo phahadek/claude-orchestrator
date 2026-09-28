@@ -248,9 +248,7 @@ describe('StuckSessionMonitor — stuck_session_alive_subprocess park escalation
 
     await (monitor as any).scanForStuckAliveSubprocessParks();
 
-    expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith(
-      'sess-1',
-    );
+    expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith('sess-1');
   });
 
   it('takes exactly one process snapshot per sweep and escalates only rows present in it, regardless of row count', async () => {
