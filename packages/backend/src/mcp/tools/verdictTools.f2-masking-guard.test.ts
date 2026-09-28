@@ -23,6 +23,8 @@ import type { AgentSession } from '../../session/AgentSession';
 import {
   getPRBySessionId,
   evaluateTestFlakinessCorpus,
+  getLatestPrGateRunForWorktree,
+  getFailingTestIdsForRun,
 } from '../../db/queries';
 import {
   pauseReasonFromCanonical,
@@ -33,6 +35,8 @@ vi.mock('../../db/queries', () => ({
   getPRBySessionId: vi.fn(),
   evaluateTestFlakinessCorpus: vi.fn(),
   getLatestTestRequestRunForSession: vi.fn(),
+  getLatestPrGateRunForWorktree: vi.fn(),
+  getFailingTestIdsForRun: vi.fn(),
   markTestResultExcused: vi.fn(),
 }));
 
@@ -168,6 +172,17 @@ describe('flaky.confirm gate=f2 masking guard against a real worktree', () => {
       testId: 'tests.ops.test_canary_verifier.TestCanary.test_x',
       eligible: true,
     });
+    vi.mocked(getLatestPrGateRunForWorktree).mockReturnValue({
+      id: 'gate-run-1',
+    } as never);
+    vi.mocked(getFailingTestIdsForRun).mockReturnValue([
+      {
+        test_id: 'tests.ops.test_canary_verifier.TestCanary.test_x',
+        name: 'test_x',
+        failure_message: null,
+        failure_trace_excerpt: null,
+      },
+    ]);
   });
 
   it('does not refuse a test whose only touching file predates the PR on a stale local dev ref', async () => {
