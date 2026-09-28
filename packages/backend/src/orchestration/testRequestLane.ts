@@ -576,38 +576,36 @@ function admitFromCoverageWait(
   baseSha: string | null,
   otherEntry: InFlightEntry,
 ): TestRequestAdmission {
-  const result: Promise<TestRequestRunResult> = otherEntry.promise.then(
-    (r) => {
-      if (r.passed && !r.superseded) {
-        const source = getTestRequestRunById(otherEntry.runId);
-        if (source) {
-          const newId = randomUUID();
-          insertCoverageTestRequestRun(
-            newId,
-            spec.projectId,
-            spec.contentHash,
-            spec.sessionId,
-            runKind,
-            baseSha,
-            spec.worktreePath,
-            spec.runOrigin,
-            spec.producer,
-            spec.commands,
-            Date.now(),
-            source,
-          );
-          emitSettled({
-            projectId: spec.projectId,
-            contentHash: spec.contentHash,
-            runKind,
-            state: 'passed',
-          });
-          return buildCoverageResult(newId, source, true);
-        }
+  const result: Promise<TestRequestRunResult> = otherEntry.promise.then((r) => {
+    if (r.passed && !r.superseded) {
+      const source = getTestRequestRunById(otherEntry.runId);
+      if (source) {
+        const newId = randomUUID();
+        insertCoverageTestRequestRun(
+          newId,
+          spec.projectId,
+          spec.contentHash,
+          spec.sessionId,
+          runKind,
+          baseSha,
+          spec.worktreePath,
+          spec.runOrigin,
+          spec.producer,
+          spec.commands,
+          Date.now(),
+          source,
+        );
+        emitSettled({
+          projectId: spec.projectId,
+          contentHash: spec.contentHash,
+          runKind,
+          state: 'passed',
+        });
+        return buildCoverageResult(newId, source, true);
       }
-      return admitTestRequest(spec).result;
-    },
-  );
+    }
+    return admitTestRequest(spec).result;
+  });
   return {
     runId: otherEntry.runId,
     reused: false,
@@ -876,7 +874,9 @@ export function admitTestRequest(
       queueDepth: 0,
       reused: false,
       unchangedReplay: true,
-      result: Promise.resolve(buildCoverageResult(newId, coveringSettled, false)),
+      result: Promise.resolve(
+        buildCoverageResult(newId, coveringSettled, false),
+      ),
     };
   }
 

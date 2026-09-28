@@ -2743,7 +2743,9 @@ describe('admitTestRequest — coverage reuse', () => {
     expect(scopedResult.unchangedReplay).toBe(false);
 
     const row = db
-      .prepare(`SELECT coverage_source_run_id FROM test_request_runs WHERE id = ?`)
+      .prepare(
+        `SELECT coverage_source_run_id FROM test_request_runs WHERE id = ?`,
+      )
       .get(scopedResult.runId) as { coverage_source_run_id: string | null };
     expect(row.coverage_source_run_id).toBeNull();
   });
