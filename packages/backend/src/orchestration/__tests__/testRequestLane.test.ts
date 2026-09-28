@@ -3510,7 +3510,7 @@ describe('structured_result acquisition', () => {
 
 // ── ingestTestRunResults — per-test extraction from structured_result ──────
 
-describe('getRunIngestionPromise — tracks a completed run\'s own ingestion dispatch while committed rows are still in flight', () => {
+describe("getRunIngestionPromise — tracks a completed run's own ingestion dispatch while committed rows are still in flight", () => {
   it("stays pending — and the run's test_run_results rows stay unwritten — until the held-open dispatch is released, then resolves once the write commits", async () => {
     mockRunTestCommands.mockResolvedValue({ passed: false, output: 'boom' });
     mockCollectStructuredTestResult.mockReturnValue({
@@ -3519,7 +3519,12 @@ describe('getRunIngestionPromise — tracks a completed run\'s own ingestion dis
         {
           name: 'pytest',
           tests: [
-            { id: 't-race', name: 'test race', outcome: 'failed', durationMs: 5 },
+            {
+              id: 't-race',
+              name: 'test race',
+              outcome: 'failed',
+              durationMs: 5,
+            },
           ],
         },
       ],

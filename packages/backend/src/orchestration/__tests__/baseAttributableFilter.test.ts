@@ -70,9 +70,9 @@ vi.mock('../../session/test-runner', () => ({
 // module this file already mocks wholesale above) so tests can control
 // exactly when that dispatch is "still pending" vs. "already settled".
 const { mockGetRunIngestionPromise } = vi.hoisted(() => ({
-  mockGetRunIngestionPromise: vi.fn((_runId: string) => undefined as
-    | Promise<void>
-    | undefined),
+  mockGetRunIngestionPromise: vi.fn(
+    (_runId: string) => undefined as Promise<void> | undefined,
+  ),
 }));
 vi.mock('../testRequestLane', () => ({
   getRunIngestionPromise: mockGetRunIngestionPromise,
@@ -345,7 +345,7 @@ describe('filterBaseAttributableFailures', () => {
   });
 });
 
-describe('filterBaseAttributableFailures — ingestion-ordering race (test_request_lane races the run\'s own test_run_results write)', () => {
+describe("filterBaseAttributableFailures — ingestion-ordering race (test_request_lane races the run's own test_run_results write)", () => {
   it("awaits the run's own tracked in-flight ingestion dispatch before reading the failing set, rather than reading test_run_results while it is still uncommitted", async () => {
     const order: string[] = [];
     let resolveIngestion: () => void = () => {};

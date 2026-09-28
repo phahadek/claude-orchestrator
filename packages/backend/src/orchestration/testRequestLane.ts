@@ -1520,7 +1520,9 @@ const runIngestionPromises = new Map<string, Promise<void>>();
  * once the dispatch has settled or if it was never tracked (e.g. a run
  * predating this process, or one with no structured_result to ingest).
  */
-export function getRunIngestionPromise(runId: string): Promise<void> | undefined {
+export function getRunIngestionPromise(
+  runId: string,
+): Promise<void> | undefined {
   return runIngestionPromises.get(runId);
 }
 
