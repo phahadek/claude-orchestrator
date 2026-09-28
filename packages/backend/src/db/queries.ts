@@ -339,6 +339,16 @@ export function setSessionFeatureBranch(
   });
 }
 
+/**
+ * Session-level pause_reason for an implementation (standard/ops) session
+ * left non-terminal because its conclusion requires an operator decision —
+ * either an undispositioned planning.noOp, or a machine-detected path
+ * (no PR + no live process, a closed-unmerged PR) that used to write `done`
+ * on its own say-so. See sessionPredicates.ts's isOperatorConcludedSession.
+ */
+export const AWAITING_OPERATOR_CONCLUSION_PAUSE_REASON =
+  'awaiting_operator_conclusion';
+
 export function setSessionPauseReason(sessionId: string, reason: string): void {
   db.prepare<{ session_id: string; pause_reason: string }>(
     `UPDATE sessions SET pause_reason = @pause_reason WHERE session_id = @session_id`,
@@ -12046,6 +12056,33 @@ export function hasUndispositionedStagedIntentsForSession(
   );
   return (
     _stmtHasUndispositionedStagedIntentsForSession.get({
+      session_id: sessionId,
+    }) !== undefined
+  );
+}
+
+let _stmtHasUndispositionedNoOpForSession: Database.Statement | null = null;
+
+/**
+ * True if this session holds a standalone planning.noOp still awaiting
+ * operator Approve/Reject (state IN staged/approved, no group_id — a grouped
+ * noOp commits only via its group and is never operator-dispositioned on its
+ * own). Used by StalledPRReconciler to suppress its stall nudge for a
+ * session parked on the operator per the 2026-09-27 ruling — nudging it to
+ * "continue" makes no sense while its conclusion is pending an approval only
+ * the operator can give.
+ */
+export function hasUndispositionedNoOpForSession(sessionId: string): boolean {
+  _stmtHasUndispositionedNoOpForSession ??= db.prepare<{
+    session_id: string;
+  }>(
+    `SELECT 1 FROM staged_intent
+     WHERE session_id = @session_id AND kind = 'planning.noOp'
+       AND group_id IS NULL AND state IN ('staged', 'approved')
+     LIMIT 1`,
+  );
+  return (
+    _stmtHasUndispositionedNoOpForSession.get({
       session_id: sessionId,
     }) !== undefined
   );

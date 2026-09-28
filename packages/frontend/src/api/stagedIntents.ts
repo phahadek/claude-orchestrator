@@ -163,6 +163,16 @@ export interface StagedIntent {
   blockingGroupId?: string | null;
   /** The blocked-member count of `blockingGroupId`, or null when that's null. */
   blockingGroupBlockedMemberCount?: number | null;
+  /**
+   * `planning.noOp` only: true for a standalone no-op staged by a standard
+   * or ops session declaring the dispatched task's work already satisfied
+   * elsewhere — the 2026-09-27 operator ruling requires an explicit
+   * Approve/Reject for this case rather than the existing
+   * informational-only Acknowledge (see StagedIntentPanel.tsx's isNoOp
+   * rendering). False/undefined for every other kind, and for a
+   * groom/design/split/docs informational no-op, which keeps Acknowledge.
+   */
+  noOpOperatorApprovable?: boolean;
 }
 
 /** The two explicit operator-chosen outcomes for a reject disposition. */

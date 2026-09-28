@@ -1,11 +1,16 @@
 import crypto from 'crypto';
 import { EventEmitter } from 'events';
 import { logger } from '../logger';
+import { randomUUID } from 'crypto';
 import {
   getEventsBySession,
   getTaskNoOpAttempts,
   bumpTaskNoOpAttempts,
   getSession,
+  getSessionMilestoneId,
+  findActiveStagedIntentForTask,
+  insertStagedIntent,
+  hashIntentPayload,
 } from '../db/queries';
 import { typedGetSetting } from '../config/settings';
 import { renderNoOpInvestigationPrompt } from './reviewUtils';
@@ -65,13 +70,14 @@ export type NoOpVerdict =
 /**
  * Shared "already resolved elsewhere" disposition: closes the task Done and
  * records the resolving evidence as an implementation note, so a Done with
- * no PR of its own is explicable later. Used both by this investigator's own
- * `resolved` verdict (reached via a secondary investigator session) and by
- * routes/stagedIntents.ts's maybeAutoResolveCodeNoOp (reached directly, when
- * a standard/ops session already did that investigation itself and named the
- * evidence in its own planning.noOp `reason`) — one place for "what closing
- * a task via an already-satisfied no-op durably records" to avoid the two
- * paths drifting apart.
+ * no PR of its own is explicable later. Called only once an operator has
+ * approved the standalone planning.noOp that proposes it — by
+ * routes/stagedIntents.ts's applyOperatorApprovedNoOp, for both a standard/
+ * ops session's own no-op declaration and this investigator's `resolved`
+ * verdict (staged via stageInvestigatorResolvedNoOp below rather than
+ * applied directly — see the 2026-09-27 operator ruling) — one place for
+ * "what closing a task via an already-satisfied no-op durably records" to
+ * avoid the two paths drifting apart.
  */
 export async function applyResolvedNoOp(
   taskBackend: TaskBackend,
@@ -94,6 +100,58 @@ export async function applyResolvedNoOp(
       e,
     );
   }
+}
+
+/**
+ * Stages a standalone planning.noOp on behalf of this investigator's own
+ * `resolved` verdict, in the staging session's name (`ctx.noOpSessionId`) —
+ * the investigator-verdict analog of a standard/ops session's own
+ * standalone no-op declaration (see routes/stagedIntents.ts's
+ * isOperatorNoOpCandidate/applyOperatorApprovedNoOp), reached through a
+ * secondary investigator session rather than staged directly by the
+ * dispatched session, but subject to the same operator-approval requirement
+ * per the 2026-09-27 ruling. A plain insert rather than a call into
+ * routes/stagedIntents.ts's full stageIntent pipeline — that module already
+ * imports this one (for applyResolvedNoOp), and its validator pipeline is
+ * built around a live staging session's own turn, not a system-driven
+ * verdict reached after that session (often already terminal) has ended.
+ * Idempotent per (project, task): a second `resolved` verdict for the same
+ * task while an earlier one still stands (staged/approved) is a no-op here.
+ */
+function stageInvestigatorResolvedNoOp(
+  taskId: string,
+  reason: string,
+  sessionId: string,
+  projectId: string,
+): void {
+  if (findActiveStagedIntentForTask(projectId, 'planning.noOp', taskId)) {
+    return;
+  }
+  const payload = { taskId, reason };
+  const now = Date.now();
+  insertStagedIntent({
+    id: randomUUID(),
+    kind: 'planning.noOp',
+    payload: JSON.stringify(payload),
+    payload_hash: hashIntentPayload(payload),
+    task_id: taskId,
+    project_id: projectId,
+    session_id: sessionId,
+    group_id: null,
+    milestone: getSessionMilestoneId(sessionId) ?? null,
+    state: 'staged',
+    supersedes: null,
+    annotation: null,
+    decision_proposal: null,
+    investigation: null,
+    groom_proposal: null,
+    advisory: null,
+    disposition_reason: null,
+    answer: null,
+    applied_task_id: null,
+    created_at: now,
+    updated_at: now,
+  });
 }
 
 export interface NoOpInvestigatorContext {
@@ -408,10 +466,17 @@ export async function applyNoOpVerdict(
   const { taskId, repo, featureBranchName, noOpSessionId, projectId } = ctx;
 
   if (verdict.kind === 'resolved') {
-    await applyResolvedNoOp(
-      taskBackend,
+    // Per the 2026-09-27 operator ruling, an investigator's own verdict
+    // cannot conclude the task on its say-so either — it stages the same
+    // operator-approvable planning.noOp a standard/ops session's own
+    // no-op declaration would (see isOperatorNoOpCandidate /
+    // applyOperatorApprovedNoOp in routes/stagedIntents.ts), leaving the
+    // Done write to an explicit operator Approve.
+    stageInvestigatorResolvedNoOp(
       taskId,
       `Auto-resolved by investigator: ${verdict.resolvedByPrUrl} — ${verdict.reason}`,
+      noOpSessionId,
+      projectId,
     );
     if (githubClient && repo && featureBranchName) {
       try {

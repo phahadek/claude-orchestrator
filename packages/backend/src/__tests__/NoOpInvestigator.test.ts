@@ -11,6 +11,10 @@ vi.mock('../db/queries', () => ({
   // (genuinely dead), matching the pre-existing tests' assumption that the
   // investigated session has already ended with no further activity.
   getSession: vi.fn(() => undefined),
+  getSessionMilestoneId: vi.fn(() => undefined),
+  findActiveStagedIntentForTask: vi.fn(() => undefined),
+  insertStagedIntent: vi.fn(),
+  hashIntentPayload: vi.fn(() => 'hash'),
 }));
 
 vi.mock('../config/settings', () => ({
@@ -34,6 +38,8 @@ import {
   getTaskNoOpAttempts,
   bumpTaskNoOpAttempts,
   getSession,
+  findActiveStagedIntentForTask,
+  insertStagedIntent,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import type { TaskBackend } from '../tasks/TaskBackend';
@@ -197,18 +203,66 @@ describe('NoOpInvestigator.investigate', () => {
 
     await investigatePromise;
 
-    expect(backend.updateStatus).toHaveBeenCalledWith(
-      'notion:abc123',
-      '✅ Done',
-    );
-    expect(backend.appendImplementationNote).toHaveBeenCalledWith(
-      'notion:abc123',
-      expect.stringContaining('Auto-resolved by investigator'),
+    // Per the 2026-09-27 operator ruling, a `resolved` verdict no longer
+    // concludes the task on the investigator's own say-so — it stages an
+    // operator-approvable planning.noOp instead, leaving the Done write
+    // (and the evidence note) to an explicit operator Approve.
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(backend.appendImplementationNote).not.toHaveBeenCalled();
+    expect(insertStagedIntent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'planning.noOp',
+        task_id: 'notion:abc123',
+        project_id: 'proj-1',
+        session_id: 'session-abc',
+        group_id: null,
+        state: 'staged',
+        payload: expect.stringContaining('Auto-resolved by investigator'),
+      }),
     );
     expect(gh.deleteBranch).toHaveBeenCalledWith(
       'owner/repo',
       'feature/my-task',
     );
+  });
+
+  it('does not stage a second no-op while one already stands for the task', async () => {
+    const sm = fakeSessionManager();
+    const backend = fakeTaskBackend();
+    const investigator = new NoOpInvestigator(sm, backend, undefined);
+
+    vi.mocked(findActiveStagedIntentForTask).mockReturnValue({
+      id: 'existing-intent',
+    } as never);
+    vi.mocked(getEventsBySession).mockReturnValue([]);
+
+    const investigatePromise = investigator.investigate(baseCtx());
+    await new Promise((r) => setTimeout(r, 10));
+
+    const startFn = (sm as unknown as Record<string, unknown>)
+      .start as ReturnType<typeof vi.fn>;
+    const sessionId = startFn.mock.calls[0][2].sessionId as string;
+
+    sm.emit('message', {
+      type: 'session_event',
+      sessionId,
+      eventType: 'text',
+      content: JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'text',
+              text: '{"kind":"resolved","resolvedByPrUrl":"https://github.com/owner/repo/pull/5","reason":"Already done"}',
+            },
+          ],
+        },
+      }),
+    });
+
+    await investigatePromise;
+
+    expect(insertStagedIntent).not.toHaveBeenCalled();
   });
 
   it('sets status to Ready on first retry verdict (retry_count === 0)', async () => {

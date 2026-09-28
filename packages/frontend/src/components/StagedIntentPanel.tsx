@@ -1271,14 +1271,25 @@ export function StagedIntentPanel({
   // The grant-approval kind: never applied — dispositioned only through
   // approve / reject / pushback, the existing consent vocabulary.
   const isCapabilityRequest = intent.kind === 'session.requestCapability';
+  // A standalone planning.noOp staged by a standard/ops session — the
+  // 2026-09-27 operator ruling requires an explicit Approve/Reject for this
+  // case (see routes/stagedIntents.ts's isOperatorNoOpCandidate), unlike a
+  // groom/design/split/docs informational no-op, which stays Acknowledge-only.
+  const isOperatorNoOp =
+    intent.kind === 'planning.noOp' && !!intent.noOpOperatorApprovable;
   // Derived from the shared backend/frontend set rather than restated here —
   // ops.prIntent and review.dispute are terminal-on-approve too (the backend
   // rejects apply for every kind in this set); see
-  // TERMINAL_ON_APPROVE_INTENT_KINDS in db/types.ts.
-  const skipsApply = TERMINAL_ON_APPROVE_INTENT_KINDS.has(intent.kind);
-  // planning.noOp is purely informational/auditable — no operator
-  // disposition (commit/approve/reject) is ever offered for it.
-  const isNoOp = intent.kind === 'planning.noOp';
+  // TERMINAL_ON_APPROVE_INTENT_KINDS in db/types.ts. An operator-approvable
+  // no-op is terminal-on-approve the same way, just not a static member of
+  // that kind-only set (its sibling informational no-op shares the kind but
+  // not this disposition).
+  const skipsApply =
+    TERMINAL_ON_APPROVE_INTENT_KINDS.has(intent.kind) || isOperatorNoOp;
+  // A groom/design/split/docs informational no-op is purely
+  // informational/auditable — no operator disposition (commit/approve/
+  // reject) is ever offered for it, only Acknowledge.
+  const isNoOp = intent.kind === 'planning.noOp' && !isOperatorNoOp;
   const isGrouped = !!intent.groupId;
   // A Human-Observation mirror, or an 'unresolved-source' merge-commit
   // escalation, carries no pre-set disposition — no verifier ever observed

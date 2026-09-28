@@ -240,6 +240,7 @@ vi.mock('../db/queries', () =>
     getSetting: vi.fn(() => null),
     hasActiveSessionForTask: vi.fn(() => false),
     setTaskPauseReason: vi.fn(),
+    setSessionPauseReason: vi.fn(),
     setSessionLastErrorDetail: vi.fn(),
     TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
     getSessionsWithUnappliedPendingDone: vi.fn(() => []),
@@ -590,7 +591,7 @@ describe('resumeOrphanSessions() — parked planning session with staged intents
     expect(queries.markSessionIdle).not.toHaveBeenCalled();
   });
 
-  it.each(['standard', 'review', 'depth_review'])(
+  it.each(['review', 'depth_review'])(
     'marks a %s session done regardless of staged intents — PR-anchored path is unchanged',
     async (sessionType) => {
       vi.mocked(queries.getSessionsByStatus).mockReturnValue([]);
@@ -612,6 +613,44 @@ describe('resumeOrphanSessions() — parked planning session with staged intents
         { skipInFlightGuard: true },
       );
       expect(queries.markSessionIdle).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['standard', 'ops'])(
+    'parks a %s session idle with a pause reason instead of marking it done — its conclusion is gated on the operator (2026-09-27 ruling)',
+    async (sessionType) => {
+      vi.mocked(queries.getSessionsByStatus).mockReturnValue([]);
+      vi.mocked(queries.getStuckResultSessionRows).mockReturnValue([
+        makeStuckRow({ session_type: sessionType }),
+      ]);
+      // No staged intents pending — the case the old code would have
+      // written `done` for outright. (An 'ops' session with undispositioned
+      // intents already parks idle via the pre-existing planning carve-out
+      // above, tested separately.)
+      vi.mocked(
+        queries.hasUndispositionedStagedIntentsForSession,
+      ).mockReturnValue(false);
+
+      const sm = new SessionManager();
+      await sm.resumeOrphanSessions();
+
+      expect(queries.markSessionIdle).toHaveBeenCalledWith(
+        'stuck-sess',
+        1_000_000,
+        null,
+        expect.stringContaining('awaiting_operator'),
+      );
+      expect(queries.markSessionDone).not.toHaveBeenCalled();
+      expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
+        'stuck-sess',
+        queries.AWAITING_OPERATOR_CONCLUSION_PAUSE_REASON,
+      );
+      // Still recovers — the no-op investigation side effect still fires,
+      // it just no longer concludes the session on its own say-so.
+      expect(recoverSession).toHaveBeenCalledWith(
+        'stuck-sess',
+        expect.objectContaining({ scope: 'boot' }),
+      );
     },
   );
 });

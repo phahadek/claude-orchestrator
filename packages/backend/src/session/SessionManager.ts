@@ -102,6 +102,7 @@ import {
   hasActivePlanningSessionForTask,
   getOtherRunningSessionsForTask,
   setSessionPauseReason,
+  AWAITING_OPERATOR_CONCLUSION_PAUSE_REASON,
   setSessionLastErrorDetail,
   incrementTaskCrashCount,
   setTaskPauseReason,
@@ -164,6 +165,7 @@ import {
   countsAgainstCodeSessionConcurrency,
   isGateVerifySession,
   isMachineParkedIdle,
+  isOperatorConcludedSession,
   isPlanningSession,
   movesTargetInProgress,
   usesWorktree,
@@ -3708,14 +3710,32 @@ export class SessionManager extends EventEmitter {
         // Boot-time recovery: no process for this session exists yet this
         // run, so status='running' here reflects a stale write from before
         // the crash/restart, not a turn actually in flight — safe to bypass
-        // the in-flight guard.
-        markSessionDone(
-          row.session_id,
-          row.last_ts,
-          row.pr_url ?? null,
-          'boot_orphan_result_event',
-          { skipInFlightGuard: true },
-        );
+        // the in-flight guard. An implementation (standard/ops) session's
+        // conclusion is gated by the operator ruling, so a stale orphaned
+        // result is not itself sanction to write `done` — park it idle with
+        // a pause reason instead. recoverSession below still runs, so its
+        // no-op-investigation side effect (which now stages rather than
+        // applies its verdict) still fires.
+        if (isOperatorConcludedSession(row.session_type, row.task_id)) {
+          markSessionIdle(
+            row.session_id,
+            row.last_ts,
+            row.pr_url ?? null,
+            'boot_orphan_result_event_awaiting_operator',
+          );
+          setSessionPauseReason(
+            row.session_id,
+            AWAITING_OPERATOR_CONCLUSION_PAUSE_REASON,
+          );
+        } else {
+          markSessionDone(
+            row.session_id,
+            row.last_ts,
+            row.pr_url ?? null,
+            'boot_orphan_result_event',
+            { skipInFlightGuard: true },
+          );
+        }
         let taskBackend;
         try {
           taskBackend = row.project_id ? getTaskBackend(row.project_id) : null;
@@ -3755,14 +3775,35 @@ export class SessionManager extends EventEmitter {
       );
       for (const row of mergedPrRows) {
         // Same boot-time reasoning as above — no live process for this
-        // session exists yet this run.
-        markSessionDone(
-          row.session_id,
-          row.last_ts,
-          row.pr_url ?? null,
-          'boot_merged_or_closed_pr',
-          { skipInFlightGuard: true },
-        );
+        // session exists yet this run. Merged is the sanctioned conclusion
+        // path and proceeds unchanged; closed-without-merging is not — an
+        // implementation session whose PR was closed unmerged is parked idle
+        // with a pause reason instead of being written `done` on this
+        // machine detection's own say-so.
+        const pr = getPRBySessionId(row.session_id);
+        if (
+          pr?.state === 'closed' &&
+          isOperatorConcludedSession(row.session_type, row.task_id)
+        ) {
+          markSessionIdle(
+            row.session_id,
+            row.last_ts,
+            row.pr_url ?? null,
+            'boot_closed_unmerged_pr_awaiting_operator',
+          );
+          setSessionPauseReason(
+            row.session_id,
+            AWAITING_OPERATOR_CONCLUSION_PAUSE_REASON,
+          );
+        } else {
+          markSessionDone(
+            row.session_id,
+            row.last_ts,
+            row.pr_url ?? null,
+            'boot_merged_or_closed_pr',
+            { skipInFlightGuard: true },
+          );
+        }
         let taskBackend;
         try {
           taskBackend = row.project_id ? getTaskBackend(row.project_id) : null;
