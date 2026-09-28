@@ -98,6 +98,27 @@ const NO_DECISION_NUDGE_MESSAGE =
   'write-up is not the deliverable.';
 
 /**
+ * Per-session resume budget for a design session that parks terminal-empty
+ * without having applied its closing set (see checkTerminal's design branch
+ * of the no-decision backstop). Bounds attemptDesignRespawnIfIncomplete-style
+ * resumption — a design session that genuinely stalls (parks empty on every
+ * resume, closing set never lands) must not be resumed forever.
+ */
+const DESIGN_CLOSING_SET_RESUME_BUDGET = 3;
+
+/**
+ * Resume nudge for a design session that reached terminal without having
+ * applied its closing set — the decision.pickOne-only phase of a design
+ * session (see checkTerminal's design branch of the no-decision backstop).
+ * Mirrors attemptDesignRespawnIfIncomplete's message, reused for the live
+ * park path rather than only the dead-process idle-sweep path.
+ */
+const DESIGN_CLOSING_SET_RESUME_MESSAGE =
+  'You reached terminal without applying your design closing set — stage ' +
+  'the next Open Question (decision.pickOne), or the gated architecture/' +
+  'synthesis write your last completeness approval unblocked.';
+
+/**
  * The bounded self-correct re-turn nudge sent once per distinct blocked-set
  * (see checkTerminal's blockedMembersNudgeSentFor guard) when a planning
  * session ends its turn while holding staged intents of its own at
@@ -221,6 +242,16 @@ export class PlanningOrchestrator {
    * others) earns a fresh nudge.
    */
   private blockedMembersNudgeSentFor = new Map<string, string>();
+
+  /**
+   * Resume count for a design session parking terminal-empty without having
+   * applied its closing set (see checkTerminal's design branch of the
+   * no-decision backstop) — a separate, session-scoped budget from
+   * noDecisionNudgeSent, since this path resumes the session (never
+   * terminalizes it) up to DESIGN_CLOSING_SET_RESUME_BUDGET times before
+   * surfacing a needs-attention pause and leaving it parked.
+   */
+  private designClosingSetResumeCount = new Map<string, number>();
 
   constructor(private sessionManager: SessionManager) {
     sessionManager.on('message', (msg: ServerMessage) => this.onMessage(msg));
@@ -555,11 +586,66 @@ export class PlanningOrchestrator {
     }
 
     // Terminal with nothing that counts as a staged decision — the backstop
-    // this class exists to close. First occurrence: one bounded self-correct
-    // re-turn nudge, no pause, session stays parked (not terminal). Second
-    // occurrence (the nudge's own re-turn also reached terminal empty):
-    // surface a needs-attention pause reason and let the session go terminal
-    // rather than nudging forever.
+    // this class exists to close. A design session whose only staged work so
+    // far is decision.pickOne (Open Questions) reads identically to a
+    // session that staged nothing at all, since hasStagedDecision
+    // deliberately excludes decision.pickOne (planningDecisionKinds.ts) — but
+    // it is not actually done: isSessionCompleteForIdleSweep already treats
+    // !sessionHasAppliedDesignClosingSet as not_ready for the cold
+    // idle-sweep/liveness-reconciler routes. This live park path must apply
+    // the same gate rather than deviating into the two-strike
+    // nudge->pause->terminal backstop below, which has no such check and
+    // would terminalize (and, via completeDesignTask's own closing-set gate,
+    // strand at In Progress) a design session mid-closing-set. Route it
+    // through the same design-resume treatment attemptDesignRespawnIfIncomplete
+    // gives a dead-process design session instead, bounded by its own resume
+    // budget so a design session that genuinely stalls (parks empty on every
+    // resume, closing set never lands) is not resumed forever.
+    const row0 = getSession(sessionId);
+    if (
+      row0?.session_type === 'design' &&
+      !sessionHasAppliedDesignClosingSet(sessionId)
+    ) {
+      const resumeCount = this.designClosingSetResumeCount.get(sessionId) ?? 0;
+      if (resumeCount < DESIGN_CLOSING_SET_RESUME_BUDGET) {
+        this.designClosingSetResumeCount.set(sessionId, resumeCount + 1);
+        this.stagedCountAtResume.set(sessionId, countable.length);
+        this.sessionManager
+          .enqueueFeedback(
+            sessionId,
+            'planning-terminal-design-closing-set-incomplete-nudge',
+            DESIGN_CLOSING_SET_RESUME_MESSAGE,
+            { attemptTerminalResume: true },
+          )
+          .catch((err) => {
+            logger.error(
+              `[PlanningOrchestrator] resume failed for session ${sessionId.slice(0, 8)} after design-closing-set-incomplete nudge: ${err}`,
+            );
+          });
+        return false;
+      }
+
+      // Budget exhausted: surface a needs-attention pause but do not
+      // terminalize — the session stays resumable for the operator, same as
+      // every other budget-exhausted pause in this file (e.g.
+      // planning_terminal_blocked_members).
+      if (row0.task_id) {
+        setTaskPauseReason(
+          row0.task_id,
+          'planning_design_closing_set_resume_exhausted',
+          `Design session ${sessionId} parked terminal-empty ` +
+            `${resumeCount} times without applying its closing set — ` +
+            'needs operator attention.',
+        );
+      }
+      return false;
+    }
+
+    // First occurrence: one bounded self-correct re-turn nudge, no pause,
+    // session stays parked (not terminal). Second occurrence (the nudge's
+    // own re-turn also reached terminal empty): surface a needs-attention
+    // pause reason and let the session go terminal rather than nudging
+    // forever.
     if (!this.noDecisionNudgeSent.has(sessionId)) {
       this.noDecisionNudgeSent.add(sessionId);
       this.stagedCountAtResume.set(sessionId, countable.length);
@@ -672,6 +758,7 @@ export class PlanningOrchestrator {
     this.stagedCountAtResume.delete(sessionId);
     this.noDecisionNudgeSent.delete(sessionId);
     this.blockedMembersNudgeSentFor.delete(sessionId);
+    this.designClosingSetResumeCount.delete(sessionId);
     // The normal run().then() cleanup that frees a session's in-memory
     // planning-concurrency slot only fires when its subprocess exits — a
     // session marked terminal here (from the apply path, which can fire
