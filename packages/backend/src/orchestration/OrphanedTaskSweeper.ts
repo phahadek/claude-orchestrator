@@ -29,7 +29,10 @@ import {
   sessionDidWork,
   checkInteractiveOpsJournal,
 } from '../session/sessionLifecycle';
-import { isMachineParkedIdle, isParkedIdle } from '../session/sessionPredicates';
+import {
+  isMachineParkedIdle,
+  isParkedIdle,
+} from '../session/sessionPredicates';
 import { isUsageAdmitted } from './usageAdmission';
 import { yieldToEventLoop } from '../utils/concurrency';
 import {

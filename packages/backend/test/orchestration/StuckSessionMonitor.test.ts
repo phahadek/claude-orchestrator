@@ -36,7 +36,11 @@ function getSessionRow(sessionId: string) {
       'SELECT archived, parked_at, pause_reason FROM sessions WHERE session_id = ?',
     )
     .get(sessionId) as
-    | { archived: number; parked_at: number | null; pause_reason: string | null }
+    | {
+        archived: number;
+        parked_at: number | null;
+        pause_reason: string | null;
+      }
     | undefined;
 }
 

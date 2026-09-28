@@ -1834,9 +1834,9 @@ export function setSessionParkedAt(sessionId: string, parkedAt: number): void {
  * while still live), so it counts against occupancy again.
  */
 export function clearSessionParkedAt(sessionId: string): void {
-  db.prepare(
-    'UPDATE sessions SET parked_at = NULL WHERE session_id = ?',
-  ).run(sessionId);
+  db.prepare('UPDATE sessions SET parked_at = NULL WHERE session_id = ?').run(
+    sessionId,
+  );
 }
 
 export function unarchiveSession(sessionId: string): boolean {
