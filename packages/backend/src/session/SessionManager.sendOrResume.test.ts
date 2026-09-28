@@ -396,21 +396,4 @@ describe('SessionManager.sendOrResume — null sentinel on non-resumable session
       }),
     );
   });
-
-  it('resumes a superseded row when allowTerminal is set — relaunchFixerForPR opt-out is preserved', async () => {
-    vi.mocked(getSession).mockReturnValue({
-      status: 'superseded',
-      project_id: 'missing-project',
-    } as any);
-
-    const sm = new SessionManager();
-    const result = await sm.sendOrResume('superseded-allow-id', 'hello', {
-      allowTerminal: true,
-    });
-
-    // getProjectById is mocked to return null, so the respawn path returns
-    // early with the sessionId — the point is that the terminal guard did
-    // not fire and reject it first.
-    expect(result).toBe('superseded-allow-id');
-  });
 });

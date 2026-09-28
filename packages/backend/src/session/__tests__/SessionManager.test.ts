@@ -561,29 +561,6 @@ describe('sendOrResume — dead session path', () => {
     );
   });
 
-  it('with allowTerminal, resumes an idle-but-archived session — recovery paths still work', async () => {
-    vi.mocked(getSession).mockReturnValue({
-      ...makeDeadRow(),
-      status: 'idle',
-      archived: 1,
-    } as any);
-
-    const p = sm.sendOrResume(SESSION_ID, 're-open me', {
-      allowTerminal: true,
-    });
-    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
-    capturedSessions[0].emit('message', {
-      type: 'session_event',
-      sessionId: SESSION_ID,
-      eventType: 'system',
-      content: 'boot',
-    });
-    const result = await p;
-
-    expect(result).toBe(SESSION_ID);
-    expect(vi.mocked(AgentSession)).toHaveBeenCalledOnce();
-  });
-
   it('an idle, unarchived session still resumes normally — idle is not reclassified as terminal', async () => {
     vi.mocked(getSession).mockReturnValue({
       ...makeDeadRow(),
@@ -605,34 +582,22 @@ describe('sendOrResume — dead session path', () => {
     expect(vi.mocked(AgentSession)).toHaveBeenCalledOnce();
   });
 
-  it('with allowTerminal, respawns a terminal session and records session_terminal_reopened instead of silently writing running', async () => {
+  it('never respawns a terminal session — done is done, no override exists', async () => {
     vi.mocked(getSession).mockReturnValue({
       ...makeDeadRow(),
       status: 'done',
     } as any);
 
-    const p = sm.sendOrResume(SESSION_ID, 're-open me', {
-      allowTerminal: true,
-    });
-    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
-    capturedSessions[0].emit('message', {
-      type: 'session_event',
-      sessionId: SESSION_ID,
-      eventType: 'system',
-      content: 'boot',
-    });
-    await p;
+    const result = await sm.sendOrResume(SESSION_ID, 're-open me');
 
-    expect(vi.mocked(updateSessionStatus)).toHaveBeenCalledWith(
+    expect(result).toBeNull();
+    expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+    expect(vi.mocked(updateSessionStatus)).not.toHaveBeenCalledWith(
       SESSION_ID,
       'running',
     );
-    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event_type: 'session_terminal_reopened',
-        actor_id: SESSION_ID,
-        payload: expect.objectContaining({ status_before: 'done' }),
-      }),
+    expect(vi.mocked(recordEvent)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'session_terminal_reopened' }),
     );
   });
 
@@ -681,23 +646,22 @@ describe('enqueueFeedback — terminal session behavior', () => {
   });
 
   it.each(['done', 'error', 'killed'])(
-    'defaults to attempting a resume on a terminal (%s) session (no opts passed — existing callers unaffected)',
+    'defaults to spawning a fresh session (never reopening) for a terminal (%s) session (no opts passed — existing callers unaffected)',
     async (terminalStatus) => {
-      vi.mocked(getSession).mockReturnValue({
-        ...makeDeadRow(),
-        status: terminalStatus,
-      } as any);
-      const sendOrResumeSpy = vi
-        .spyOn(sm, 'sendOrResume')
-        .mockResolvedValue(SESSION_ID);
+      const deadRow = { ...makeDeadRow(), status: terminalStatus };
+      vi.mocked(getSession).mockReturnValue(deadRow as any);
+      const spawnFreshSpy = vi
+        .spyOn(sm, 'spawnFreshSessionForTask')
+        .mockResolvedValue('fresh-session-id');
+      const sendOrResumeSpy = vi.spyOn(sm, 'sendOrResume');
 
       await sm.enqueueFeedback(SESSION_ID, 'some-source', 'payload');
 
-      expect(sendOrResumeSpy).toHaveBeenCalledWith(
-        SESSION_ID,
-        expect.any(String),
-        { allowTerminal: true, persistTextOnDefer: false },
+      expect(spawnFreshSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ session_id: SESSION_ID }),
+        expect.objectContaining({ briefing: expect.any(String) }),
       );
+      expect(sendOrResumeSpy).not.toHaveBeenCalled();
       expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith([
         'item-1',
       ]);
@@ -997,7 +961,7 @@ describe('sendOrResume — live session fast path', () => {
     },
   );
 
-  it('explicitly reopens a live-but-terminal session when allowTerminal is set, recording session_terminal_reopened', async () => {
+  it('never reopens a live-but-terminal session — there is no override', async () => {
     const p = sm.sendOrResume(SESSION_ID, 'first');
     await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
     capturedSessions[0].emit('message', {
@@ -1015,18 +979,11 @@ describe('sendOrResume — live session fast path', () => {
       status: 'done',
     } as any);
 
-    await sm.sendOrResume(SESSION_ID, 'live message', { allowTerminal: true });
+    await sm.sendOrResume(SESSION_ID, 'live message');
 
-    expect(vi.mocked(updateSessionStatus)).toHaveBeenCalledWith(
-      SESSION_ID,
-      'running',
-    );
-    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event_type: 'session_terminal_reopened',
-        actor_id: SESSION_ID,
-        payload: expect.objectContaining({ status_before: 'done' }),
-      }),
+    expect(vi.mocked(updateSessionStatus)).not.toHaveBeenCalled();
+    expect(vi.mocked(recordEvent)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'session_terminal_reopened' }),
     );
   });
 });

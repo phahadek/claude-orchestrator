@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { logger } from '../logger';
+import type { FixerRelaunchFailure } from '../session/SessionManager';
 import { getProjectById, getAllProjects, runtimeSettings } from '../config';
 import { getProjectRepos } from '../projects/ProjectService';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -586,11 +587,11 @@ export function summarizeEvent(payload: string): string {
 }
 
 interface SessionManagerLike {
-  sendOrResume(
+  sendOrResume(sessionId: string, text: string): Promise<string | null>;
+  deliverOrSpawnFresh(
     sessionId: string,
     text: string,
-    opts?: { allowTerminal?: boolean },
-  ): Promise<string | null>;
+  ): Promise<string | FixerRelaunchFailure | null>;
   findLiveSessionIdForTask(taskId: string): string | undefined;
   abortSession(sessionId: string): Promise<void>;
 }
@@ -1205,11 +1206,19 @@ export function createTasksRouter(
           }
 
           if (sessionManager) {
-            await sessionManager.sendOrResume(
+            const result = await sessionManager.deliverOrSpawnFresh(
               sessionId,
               'Recovery requested. Please review the current state and continue working on the task.',
-              { allowTerminal: true },
             );
+            if (result && typeof result === 'object' && 'outcome' in result) {
+              res.status(422).json({
+                error:
+                  result.outcome === 'missing_head_branch'
+                    ? "Session ended and this task's PR has no head_branch — cannot relaunch on an unknown branch."
+                    : 'Session record is missing — cannot relaunch.',
+              });
+              return;
+            }
           }
 
           emitTaskUpdated(taskId);

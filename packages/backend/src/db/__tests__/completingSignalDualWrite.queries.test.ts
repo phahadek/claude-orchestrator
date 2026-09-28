@@ -91,13 +91,14 @@ describe('updateSessionStatus dual-write', () => {
     expect(listCompletingSignalsForSession('s2')).toHaveLength(0);
   });
 
-  it("reopen-terminal guard: an explicit reopen of a terminal row (respawnSession/sendOrResume's allowReopenTerminal path) still flips status and now also records the reopen in the ledger", () => {
+  it('updateSessionStatus itself has no terminal guard — that guard lives entirely in SessionManager, which no longer ever calls it to reopen a done/error/killed row', () => {
     insertSession({ session_id: 's3', status: 'done' });
 
-    // Mirrors respawnSession/sendOrResume's explicit, audited reopen path —
-    // the guard itself lives in SessionManager (unchanged by this task); this
-    // exercises the same call updateSessionStatus receives once that guard
-    // has decided to allow the reopen.
+    // updateSessionStatus is a plain write with no status-transition guard of
+    // its own — SessionManager's respawnSession/sendOrResume never call it
+    // for a terminal row post the "never reopen a terminal session" ruling,
+    // but this exercises the DB function's own (unguarded) behavior in
+    // isolation, same as before that ruling.
     updateSessionStatus('s3', 'running');
 
     const row = db

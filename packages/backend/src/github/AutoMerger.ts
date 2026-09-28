@@ -223,13 +223,30 @@ export class AutoMerger {
       if (isDeadSession) {
         // The implementing session is dead — the live-session nudge path
         // (sendOrResume) can't reach it. Relaunch a coding fixer bound to the
-        // PR's existing branch instead, with a rebase prompt.
+        // PR's existing branch instead, with a rebase prompt. For a terminal
+        // (done/error/killed) session this spawns a brand-new session on the
+        // PR's head_branch rather than reopening the dead one — see
+        // relaunchFixerForPR's own doc comment.
         if (!this.sessions) continue;
         const prompt = formatMergeConflictFeedback({
           branchName: pr.head_branch,
           baseBranch: pr.base_branch ?? 'dev',
         });
-        await this.sessions.relaunchFixerForPR(pr, prompt);
+        const relaunched = await this.sessions.relaunchFixerForPR(pr, prompt);
+        if (relaunched === null || typeof relaunched !== 'string') {
+          // Refused before it started (admission deferral, deleted session
+          // row, or — new since fresh-spawn replaced in-place reopen — a
+          // terminal session whose PR has no head_branch to spawn onto).
+          // Not recorded as a nudge; StalledPRReconciler's own retry/escalate
+          // path (or the next sweep pass, since nothing here is SHA-dedup'd)
+          // picks this candidate back up.
+          logger.warn(
+            `[AutoMerger] conflictNudgeSweep: fixer relaunch for PR #${pr_number} (${repo}) did not spawn/resume (${
+              relaunched === null ? 'refused' : `outcome=${relaunched.outcome}`
+            })`,
+          );
+          continue;
+        }
         recordEvent({
           event_type: 'conflict_nudge_sent',
           actor_type: 'system',

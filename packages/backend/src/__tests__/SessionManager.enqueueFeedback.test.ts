@@ -12,10 +12,10 @@
  *   sendOrResume (a direct send() for a live session) and marked delivered.
  * - Idle/exited session (not in-map): item is enqueued, then delivered
  *   immediately via a clean respawn (sendOrResume) and marked delivered.
- * - Terminal session (done/error/killed): a resume is attempted (bypassing
- *   the normal terminal refusal, via sendOrResume({allowTerminal: true})) so
- *   a pushback/verification-error to an ended session is not silently
- *   record-only. Only when that resume attempt itself yields nothing is the
+ * - Terminal session (done/error/killed): the terminal session is never
+ *   reopened — a fresh session is spawned (spawnFreshSessionForTask) so a
+ *   pushback/verification-error to an ended session is not silently
+ *   record-only. Only when that spawn attempt itself yields nothing is the
  *   item marked delivered-without-resend — and even then a needs-attention
  *   signal (pause reason + session_action_failed) is surfaced instead of a
  *   silent drop.
@@ -495,14 +495,17 @@ describe('SessionManager.enqueueFeedback()', () => {
     expect(queries.listUndeliveredInboxItems('sess-idle-4')).toHaveLength(1);
   });
 
-  it('terminal, resumable session: attempts a resume (bypassing the terminal refusal) and delivers on success', async () => {
+  it('terminal session: spawns a fresh session (never reopens) and delivers on success', async () => {
     vi.mocked(queries.getSession).mockReturnValue({
       session_id: 'sess-done',
       status: 'done',
     } as never);
 
     const sm = new SessionManager();
-    const sendSpy = vi.spyOn(sm, 'sendOrResume').mockResolvedValue('sess-done');
+    const spawnSpy = vi
+      .spyOn(sm, 'spawnFreshSessionForTask')
+      .mockResolvedValue('fresh-session-id');
+    const sendSpy = vi.spyOn(sm, 'sendOrResume');
 
     await sm.enqueueFeedback('sess-done', 'ci-failure', 'stale failure');
 
@@ -511,17 +514,19 @@ describe('SessionManager.enqueueFeedback()', () => {
       'ci-failure',
       'stale failure',
     );
-    expect(sendSpy).toHaveBeenCalledWith(
-      'sess-done',
-      expect.stringContaining('stale failure'),
-      { allowTerminal: true, persistTextOnDefer: false },
+    expect(spawnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ session_id: 'sess-done' }),
+      expect.objectContaining({
+        briefing: expect.stringContaining('stale failure'),
+      }),
     );
+    expect(sendSpy).not.toHaveBeenCalled();
     expect(queries.markInboxItemsDelivered).toHaveBeenCalled();
     expect(queries.listUndeliveredInboxItems('sess-done')).toHaveLength(0);
     expect(queries.setSessionPauseReason).not.toHaveBeenCalled();
   });
 
-  it('terminal, unresumable session: surfaces needs-attention instead of silently dropping the feedback', async () => {
+  it('terminal, unspawnable session: surfaces needs-attention instead of silently dropping the feedback', async () => {
     vi.mocked(queries.getSession).mockReturnValue({
       session_id: 'sess-dead',
       status: 'error',
@@ -529,7 +534,7 @@ describe('SessionManager.enqueueFeedback()', () => {
 
     const sm = new SessionManager();
     const emitSpy = vi.spyOn(sm, 'emit');
-    vi.spyOn(sm, 'sendOrResume').mockResolvedValue(null);
+    vi.spyOn(sm, 'spawnFreshSessionForTask').mockResolvedValue(null);
 
     await sm.enqueueFeedback(
       'sess-dead',
@@ -554,14 +559,16 @@ describe('SessionManager.enqueueFeedback()', () => {
     expect(queries.listUndeliveredInboxItems('sess-dead')).toHaveLength(0);
   });
 
-  it('terminal session: a resume attempt that throws also surfaces needs-attention rather than crashing', async () => {
+  it('terminal session: a fresh-spawn attempt that throws also surfaces needs-attention rather than crashing', async () => {
     vi.mocked(queries.getSession).mockReturnValue({
       session_id: 'sess-killed',
       status: 'killed',
     } as never);
 
     const sm = new SessionManager();
-    vi.spyOn(sm, 'sendOrResume').mockRejectedValue(new Error('worktree gone'));
+    vi.spyOn(sm, 'spawnFreshSessionForTask').mockRejectedValue(
+      new Error('worktree gone'),
+    );
 
     await sm.enqueueFeedback('sess-killed', 'ci-failure', 'stale failure');
 
