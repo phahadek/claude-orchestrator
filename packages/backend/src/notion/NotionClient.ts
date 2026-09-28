@@ -565,29 +565,71 @@ async function insertChildBlocks(
  * still stopping at unrecognised sibling sections like "## Notion pages
  * affected" instead of silently absorbing them.
  */
-export function parseSection(markdown: string, headingKeyword: string): string {
+export interface SectionHeadingMatch {
+  /** The heading's line index within the markdown body's lines. */
+  index: number;
+  /** Heading level (1-3, the number of leading `#`s). */
+  level: number;
+  /** The heading text with the leading `#`s stripped, original case. */
+  headingText: string;
+  /**
+   * True when the heading's normalized text starts with the keyword (the
+   * precise match this fix prefers). False means the match was found only
+   * via the permissive substring fallback — e.g. a Context subheading that
+   * merely mentions the keyword shadowing the real section.
+   */
+  isPrefixMatch: boolean;
+}
+
+/**
+ * Locates the heading `parseSection` would select for `headingKeyword`:
+ * among all `^#{1,3} ` headings in document order, prefers the first whose
+ * normalized text *starts with* the keyword, falling back to the first
+ * whose text merely *contains* it when no heading prefix-matches. Exported
+ * separately from `parseSection` so callers that need to know *which*
+ * heading matched (and whether that match was precise) — e.g. to name a
+ * shadowing heading in an error message — don't have to re-implement the
+ * selection rule and risk disagreeing with it.
+ */
+export function findSectionHeadingMatch(
+  markdown: string,
+  headingKeyword: string,
+): SectionHeadingMatch | null {
+  const keyword = headingKeyword.toLowerCase();
   const lines = markdown.split('\n');
-  let inSection = false;
-  let sectionLevel = 0;
-  const buf: string[] = [];
-  for (const line of lines) {
+  const headings: { index: number; level: number; headingText: string }[] =
+    [];
+  lines.forEach((line, index) => {
     const headingMatch = line.match(/^(#{1,3}) /);
     if (headingMatch) {
-      const level = headingMatch[1].length;
-      const heading = line.replace(/^#+\s*/, '').toLowerCase();
-      if (!inSection && heading.includes(headingKeyword.toLowerCase())) {
-        inSection = true;
-        sectionLevel = level;
-        continue;
-      } else if (inSection) {
-        if (level <= sectionLevel) {
-          break;
-        }
-        buf.push(line);
-      }
-    } else if (inSection) {
-      buf.push(line);
+      headings.push({
+        index,
+        level: headingMatch[1].length,
+        headingText: line.replace(/^#+\s*/, ''),
+      });
     }
+  });
+  const prefixMatch = headings.find((h) =>
+    h.headingText.trim().toLowerCase().startsWith(keyword),
+  );
+  if (prefixMatch) return { ...prefixMatch, isPrefixMatch: true };
+  const substringMatch = headings.find((h) =>
+    h.headingText.toLowerCase().includes(keyword),
+  );
+  if (substringMatch) return { ...substringMatch, isPrefixMatch: false };
+  return null;
+}
+
+export function parseSection(markdown: string, headingKeyword: string): string {
+  const match = findSectionHeadingMatch(markdown, headingKeyword);
+  if (!match) return '';
+  const lines = markdown.split('\n');
+  const buf: string[] = [];
+  for (let i = match.index + 1; i < lines.length; i++) {
+    const line = lines[i];
+    const headingMatch = line.match(/^(#{1,3}) /);
+    if (headingMatch && headingMatch[1].length <= match.level) break;
+    buf.push(line);
   }
   return buf.join('\n').trim();
 }

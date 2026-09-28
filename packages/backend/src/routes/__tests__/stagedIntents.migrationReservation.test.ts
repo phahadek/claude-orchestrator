@@ -223,6 +223,74 @@ describe('Ready-flip apply-time migration-number allocation (direct commitGroupI
   });
 });
 
+describe('Ready-flip apply-time migration-number allocation — a colliding Context subheading does not block allocation', () => {
+  it('still allocates a number when a Context subheading contains "files" above the real Files/paths section', async () => {
+    const migrationRaw =
+      'packages/backend/migrations/NNN_add_thing.sql *(new)*';
+    const collidingBody = [
+      '## Context',
+      '',
+      '### The fallback both files claim does not exist',
+      '',
+      'A subheading whose text happens to contain the word "files".',
+      '',
+      '## Files / paths affected',
+      `- ${migrationRaw}`,
+      '',
+    ].join('\n');
+    const patchBodySection = vi.fn().mockResolvedValue(undefined);
+    const updateStatus = vi.fn().mockResolvedValue(undefined);
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue(collidingBody),
+      updateStatus,
+      setDependsOn: vi.fn().mockResolvedValue(undefined),
+      patchBodySection,
+    });
+
+    const taskId = 'notion:mig-colliding-heading';
+    const groupId = 'group-mig-colliding-heading';
+    recordAccretion(taskId);
+
+    stageIntent(
+      'task.setDependsOn',
+      { taskId, dependsOn: [] },
+      'proj-mig',
+      groupId,
+    );
+    stageIntent(
+      'task.setStatus',
+      { taskId, status: 'Ready', groomingGate: codeGroomingGate(migrationRaw) },
+      'proj-mig',
+      groupId,
+    );
+
+    const result = await commitGroupIntents(groupId, {
+      override: false,
+      reason: '',
+      autoApprove: true,
+      actorType: 'human',
+    });
+
+    expect(result.status).toBe(200);
+    expect(patchBodySection).toHaveBeenCalledWith(
+      taskId,
+      'Files / paths affected',
+      expect.objectContaining({
+        operation: 'replace',
+        find: migrationRaw,
+        replaceWith: expect.stringContaining(
+          'packages/backend/migrations/0001_add_thing.sql',
+        ),
+      }),
+    );
+
+    const reservation = getReservationForTask(taskId);
+    expect(reservation).toBeDefined();
+    expect(reservation?.number).toBe(1);
+  });
+});
+
 describe('Ready-flip apply-time migration-number allocation (actual staged group commit over HTTP)', () => {
   it('leaves the applied task body reflecting the reservation table’s recorded number', async () => {
     const migrationRaw =
