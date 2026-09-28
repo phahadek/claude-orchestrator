@@ -119,7 +119,9 @@ describe('markSessionIdle / markSessionDone — pr_url write guard', () => {
       started_at: Date.now(),
     });
     if (storedPrUrl) {
-      db.prepare(`UPDATE sessions SET pr_url = @pr_url WHERE session_id = @session_id`).run({
+      db.prepare(
+        `UPDATE sessions SET pr_url = @pr_url WHERE session_id = @session_id`,
+      ).run({
         session_id: sessionId,
         pr_url: storedPrUrl,
       });
@@ -133,10 +135,7 @@ describe('markSessionIdle / markSessionDone — pr_url write guard', () => {
       sessionId: 'sess-idle-1',
       state: 'open',
     });
-    makeSession(
-      'sess-idle-1',
-      'https://github.com/owner/repo/pull/1756',
-    );
+    makeSession('sess-idle-1', 'https://github.com/owner/repo/pull/1756');
 
     markSessionIdle(
       'sess-idle-1',
@@ -156,10 +155,7 @@ describe('markSessionIdle / markSessionDone — pr_url write guard', () => {
       sessionId: 'sess-idle-2',
       state: 'closed',
     });
-    makeSession(
-      'sess-idle-2',
-      'https://github.com/owner/repo/pull/1756',
-    );
+    makeSession('sess-idle-2', 'https://github.com/owner/repo/pull/1756');
 
     markSessionIdle(
       'sess-idle-2',
@@ -179,10 +175,7 @@ describe('markSessionIdle / markSessionDone — pr_url write guard', () => {
       sessionId: 'sess-done-1',
       state: 'open',
     });
-    makeSession(
-      'sess-done-1',
-      'https://github.com/owner/repo/pull/1756',
-    );
+    makeSession('sess-done-1', 'https://github.com/owner/repo/pull/1756');
 
     markSessionDone(
       'sess-done-1',
