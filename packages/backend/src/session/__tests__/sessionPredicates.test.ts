@@ -311,9 +311,9 @@ describe('sessionPredicates', () => {
 
   describe('isSurfacedParkedIdle', () => {
     it('is false when parked_at is null, regardless of park_kind', () => {
-      expect(
-        isSurfacedParkedIdle({ parked_at: null, park_kind: null }),
-      ).toBe(false);
+      expect(isSurfacedParkedIdle({ parked_at: null, park_kind: null })).toBe(
+        false,
+      );
       expect(
         isSurfacedParkedIdle({ parked_at: null, park_kind: 'surfaced' }),
       ).toBe(false);
