@@ -284,6 +284,7 @@ import {
   setSessionLastErrorDetail,
   setTaskPauseReason,
   getPRBySessionId,
+  getPRByNotionTaskId,
   listStagedIntentsBySession,
   applyPendingDone,
   getSessionsWithUnappliedPendingDone,
@@ -2736,6 +2737,36 @@ describe('markSessionErrored — Notion status revert respects the task current 
       expect(vi.mocked(incrementTaskCrashCount)).not.toHaveBeenCalled();
     },
   );
+
+  // getPRByNotionTaskId now resolves "oldest open wins" (see
+  // canonicalPrResolution.test.ts): for a task with an older still-open PR
+  // and a newer closed one, it returns the older open row, not the newer
+  // closed one. This asserts the demotion guard here correctly trusts that
+  // resolution and skips the task-status write in that exact scenario.
+  it('skips demotion when the canonical (oldest-open) PR for the task is open, even though a newer PR already closed', () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+    });
+    vi.mocked(getTaskCache).mockReturnValue(taskCacheRow('🔄 In Progress'));
+    // Simulates getPRByNotionTaskId's oldest-open-wins resolution: the
+    // task's older PR (#1756) is still open even though a newer PR (#1766)
+    // the session later opened already closed.
+    vi.mocked(getPRByNotionTaskId).mockReturnValue({
+      pr_number: 1756,
+      state: 'open',
+    } as any);
+
+    sm.markSessionErrored(SESSION_ID, 'killed', 'user_kill');
+
+    const backend = vi.mocked(getTaskBackend)('');
+    expect(vi.mocked(backend.updateStatus)).not.toHaveBeenCalled();
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'session_errored_write_skipped_open_pr',
+        payload: expect.objectContaining({ pr_number: 1756 }),
+      }),
+    );
+  });
 });
 
 // ── endSession: terminal-status guard + escalation delegation ────────────────
