@@ -101,6 +101,8 @@ import {
   getStuckResultSessionRows,
   getRunningSessionsWithMergedOrClosedPR,
   hasActiveSessionForTask,
+  getActiveStandardSessionForTask,
+  setPRSessionId,
   hasActivePlanningSessionForTask,
   getOtherRunningSessionsForTask,
   setSessionPauseReason,
@@ -552,6 +554,15 @@ export interface StartOptions {
    * Used for branch deletion and other GitHub API calls in completeStart.
    */
   repo?: string;
+  /**
+   * An already-existing branch to check the new worktree out onto, instead
+   * of cutting a fresh `feature/<slug>` branch off the base branch. Used
+   * when spawning a brand-new session to continue work on a PR whose prior
+   * implementing session concluded (done/error/killed) — the fresh session
+   * must land on the PR's own head_branch, never a new branch, or a second
+   * PR would be opened for the same task. See spawnFreshSessionForTask.
+   */
+  existingBranch?: string;
   /**
    * Backend-injected ops context for an Ops(N)-launched session (loadOpsContext
    * output + the task's ops_journal entry, rendered as markdown). Appended to
@@ -1051,7 +1062,7 @@ export interface BaseFetchOutcome {
  * doc comment.
  */
 export interface FixerRelaunchFailure {
-  outcome: 'session_row_missing';
+  outcome: 'session_row_missing' | 'missing_head_branch';
 }
 
 /** Matches git's ref-lock contention error text across git versions loosely enough to detect the failure mode without depending on exact wording. */
@@ -1303,6 +1314,8 @@ export class SessionManager extends EventEmitter {
   >();
   /** Concurrency guard: prevents double-spawning when two concurrent sendOrResume calls race. */
   private resumesInFlight = new Map<string, Promise<string | null>>();
+  /** Single-flight guard for spawnFreshSessionForTask — see its doc comment. */
+  private freshSessionSpawnsInFlight = new Map<string, Promise<string | null>>();
 
   /**
    * Set by respawnSession immediately before it returns null, so a
@@ -2141,6 +2154,7 @@ export class SessionManager extends EventEmitter {
       model: launchModel,
       effort: launchEffort,
       docsTargetSurface,
+      existingBranch,
     } = options;
 
     const project = getProjectById(projectId)!;
@@ -2237,6 +2251,54 @@ export class SessionManager extends EventEmitter {
           ? startingPoint
           : `origin/${project.baseBranch}`;
 
+      if (existingBranch) {
+        // A fresh session continuing PR-scoped work must land on the PR's
+        // own head_branch, never a new branch — cutting a new one would
+        // open a second PR for the same task. Fetch it fresh (it lives on
+        // origin only; this project checkout has no local ref for it) and
+        // check it out into the new worktree.
+        try {
+          await exec(`git fetch origin "${existingBranch}"`, {
+            cwd: projectDir,
+          });
+        } catch (err) {
+          const e = err as { stderr?: string | Buffer; message: string };
+          const stderr = e.stderr ? e.stderr.toString() : '';
+          const fullMsg =
+            `${e.message}${stderr ? `\nstderr: ${stderr}` : ''}`.trim();
+          logger.error(
+            `[SessionManager] completeStart: failed to fetch existing branch ${existingBranch} for ${sessionId}: ${fullMsg}`,
+          );
+          throw buildWorktreeSetupError(err, fullMsg, false);
+        }
+        try {
+          await gitWorktreeAddWithRetry(
+            `git worktree add -b "${existingBranch}" "${worktreePath}" "origin/${existingBranch}"`,
+            { cwd: projectDir },
+          );
+          setSessionFeatureBranch(sessionId, existingBranch);
+        } catch (err) {
+          // A local branch by this name may already be registered (e.g. a
+          // prior partial attempt) — check it out directly instead of
+          // creating it again.
+          try {
+            await gitWorktreeAddWithRetry(
+              `git worktree add "${worktreePath}" "${existingBranch}"`,
+              { cwd: projectDir },
+            );
+            setSessionFeatureBranch(sessionId, existingBranch);
+          } catch (retryErr) {
+            const re = retryErr as { stderr?: string | Buffer; message: string };
+            const retryStderr = re.stderr ? re.stderr.toString() : '';
+            const fullMsg =
+              `${re.message}${retryStderr ? `\nstderr: ${retryStderr}` : ''}`.trim();
+            logger.error(
+              `[SessionManager] completeStart: failed to check out existing branch ${existingBranch} for ${sessionId}: ${fullMsg}`,
+            );
+            throw buildWorktreeSetupError(retryErr, fullMsg, false);
+          }
+        }
+      } else {
       const featureBranch = taskName
         ? resolveAvailableBranchSlug(
             deriveBranchSlug(taskName, sessionTaskId),
@@ -2402,6 +2464,7 @@ export class SessionManager extends EventEmitter {
           );
           throw buildWorktreeSetupError(err, fullMsg, false);
         }
+      }
       }
 
       const isUnixStylePath =
@@ -3031,7 +3094,6 @@ export class SessionManager extends EventEmitter {
     runner: ISessionRunner,
     mcpConfigPath: string | undefined,
     systemPromptFilePath?: string,
-    opts: { allowReopenTerminal?: boolean } = {},
   ): AgentSession | null {
     this.lastRespawnDeferral = null;
     const usageAdmission = isUsageAdmitted();
@@ -3090,26 +3152,16 @@ export class SessionManager extends EventEmitter {
     this.sessions.set(row.session_id, session);
     // Update (not insert) the existing DB row — the session is resuming in-place.
     //
-    // Terminal is sticky: a done/error/killed row must not be silently
-    // overwritten with 'running' by a resume. The only way in is an explicit,
-    // audited reopen (opts.allowReopenTerminal — threaded from sendOrResume's
-    // allowTerminal, used by relaunchFixerForPR / terminal feedback-delivery),
-    // never an implicit side effect of respawning a process.
+    // Terminal is sticky: a done/error/killed row must never be overwritten
+    // with 'running' by a resume. A done session is done — further work
+    // spawns a fresh session (with a fresh worktree) instead of reopening
+    // this one. There is no override.
     const isTerminal = TERMINAL_SESSION_STATUSES.has(row.status);
-    if (isTerminal && !opts.allowReopenTerminal) {
+    if (isTerminal) {
       logger.warn(
         `[SessionManager] respawnSession: refusing to overwrite terminal status '${row.status}' with running for ${row.session_id.slice(0, 8)}`,
       );
     } else {
-      if (isTerminal) {
-        recordEvent({
-          event_type: 'session_terminal_reopened',
-          actor_type: 'system',
-          actor_id: row.session_id,
-          task_id: row.task_id ?? null,
-          payload: { status_before: row.status },
-        });
-      }
       updateSessionStatus(row.session_id, 'running');
       this.emit('message', {
         type: 'session_status',
@@ -5296,8 +5348,9 @@ export class SessionManager extends EventEmitter {
    * reconcileInboxAtBoot so the two never diverge:
    *  - terminal sessions (done/error/killed): by default marked delivered
    *    without resending. When `attemptTerminalResume` is set (enqueueFeedback
-   *    only), a resume is attempted first via sendOrResume({allowTerminal}) —
-   *    on failure, a needs-attention signal is surfaced instead of a silent drop.
+   *    only), a fresh session is spawned first (spawnFreshSessionForTask) —
+   *    the terminal session itself is never reopened — on failure, a
+   *    needs-attention signal is surfaced instead of a silent drop.
    *  - otherwise: coalesce undelivered items into one message and deliver via
    *    sendOrResume (direct send() for a live session, a clean --resume
    *    respawn otherwise), then mark delivered only after a successful send.
@@ -5348,18 +5401,37 @@ export class SessionManager extends EventEmitter {
     this.emitFeedbackPending(sessionId, true);
 
     if (isTerminal) {
-      let resumed: string | null = null;
+      // Done is done — the terminal session is never reopened. Spawn a
+      // fresh session (fresh id, fresh worktree) carrying the queued
+      // feedback in its initial prompt instead. Single-flighted by
+      // spawnFreshSessionForTask, so a burst of items enqueued together
+      // still spawns only one replacement.
+      let freshSessionId: string | null = null;
       try {
-        resumed = await this.sendOrResume(sessionId, combined, {
-          allowTerminal: true,
-          persistTextOnDefer: false,
-        });
+        const prRow = getPRBySessionId(sessionId);
+        const headBranch = prRow?.head_branch ?? null;
+        if (prRow && !headBranch) {
+          logger.error(
+            `[SessionManager] ${logContext}: PR #${prRow.pr_number} (${prRow.repo}) has no head_branch — cannot spawn a fresh session for terminal session ${sessionId.slice(0, 8)}`,
+          );
+        } else {
+          freshSessionId = await this.spawnFreshSessionForTask(row, {
+            existingBranch: headBranch ?? undefined,
+            briefing:
+              `The previous session (${sessionId}) for this task ended ` +
+              `(status: ${row.status}) with feedback still pending ` +
+              `delivery.\n\n${combined}`,
+          });
+          if (freshSessionId && prRow) {
+            setPRSessionId(prRow.pr_number, prRow.repo, freshSessionId);
+          }
+        }
       } catch (err) {
         logger.warn(
-          `[SessionManager] ${logContext}: resume of terminal session ${sessionId.slice(0, 8)} failed: ${err}`,
+          `[SessionManager] ${logContext}: fresh-session spawn for terminal session ${sessionId.slice(0, 8)} failed: ${err}`,
         );
       }
-      if (!resumed) {
+      if (!freshSessionId) {
         setSessionPauseReason(sessionId, 'feedback_undelivered_terminal');
         this.emit('message', {
           type: 'session_action_failed',
@@ -5367,7 +5439,7 @@ export class SessionManager extends EventEmitter {
           action: 'enqueue_feedback',
           reason: 'terminal_session_unresumable',
           detail:
-            'Session ended and could not be resumed to deliver pending feedback — needs operator attention.',
+            'Session ended and a fresh session could not be spawned to deliver pending feedback — needs operator attention.',
         } satisfies ServerMessage);
       }
       markInboxItemsDelivered(items.map((i) => i.id));
@@ -5460,7 +5532,7 @@ export class SessionManager extends EventEmitter {
   async sendOrResume(
     sessionId: string,
     text: string,
-    opts: { allowTerminal?: boolean; persistTextOnDefer?: boolean } = {},
+    opts: { persistTextOnDefer?: boolean } = {},
   ): Promise<string | null> {
     // Live session — deliver directly. hasEnded excludes a session whose
     // process has already exited (session_ended broadcast) but whose map
@@ -5480,26 +5552,16 @@ export class SessionManager extends EventEmitter {
         clearSessionParkedAt(sessionId);
         // Mirror the respawn path: ensure status reflects the resumed activity
         // so the UI doesn't keep rendering this session as idle. Terminal is
-        // sticky — a done/error/killed row is never silently overwritten with
-        // 'running' here; only an explicit allowTerminal caller may reopen it,
-        // and that reopen is audited rather than folded into this status write.
+        // sticky — a done/error/killed row is never overwritten with
+        // 'running' here. There is no override.
         const row = getSession(sessionId);
         if (row && row.status !== 'running') {
           const isTerminal = TERMINAL_STATUSES.has(row.status);
-          if (isTerminal && !opts.allowTerminal) {
+          if (isTerminal) {
             logger.warn(
               `[SessionManager] sendOrResume: session ${sessionId.slice(0, 8)} is live but DB status is terminal (${row.status}) — not overwriting with running`,
             );
           } else {
-            if (isTerminal) {
-              recordEvent({
-                event_type: 'session_terminal_reopened',
-                actor_type: 'system',
-                actor_id: sessionId,
-                task_id: row.task_id ?? null,
-                payload: { status_before: row.status },
-              });
-            }
             updateSessionStatus(sessionId, 'running');
             this.emit('message', {
               type: 'session_status',
@@ -5580,7 +5642,7 @@ export class SessionManager extends EventEmitter {
   private async _doSendOrResume(
     sessionId: string,
     text: string,
-    opts: { allowTerminal?: boolean; persistTextOnDefer?: boolean } = {},
+    opts: { persistTextOnDefer?: boolean } = {},
   ): Promise<string | null> {
     // Session not live — look up details from DB and re-launch with --resume
     const row = getSession(sessionId);
@@ -5607,12 +5669,12 @@ export class SessionManager extends EventEmitter {
     // fail-closed) session must not be silently resumed. A machine_park archive
     // is the opposite signal — a session explicitly left non-terminal so the
     // operator (or sendOrResume itself) can act on it — so it stays resumable.
-    // PR-scoped relaunches (relaunchFixerForPR) opt out via allowTerminal since
-    // a dead session is exactly the case they exist to recover from.
+    // There is no override: a terminal/archived session is never reopened —
+    // callers that need further work done (relaunchFixerForPR, terminal
+    // feedback delivery) spawn a fresh session instead.
     if (
-      !opts.allowTerminal &&
-      (TERMINAL_STATUSES.has(row.status) ||
-        (row.archived === 1 && !isMachineParkedIdle(row)))
+      TERMINAL_STATUSES.has(row.status) ||
+      (row.archived === 1 && !isMachineParkedIdle(row))
     ) {
       logger.warn(
         `[SessionManager] sendOrResume: refusing to respawn terminal session ${sessionId} (status=${row.status}, archived=${row.archived}, archive_kind=${row.archive_kind ?? 'null'})`,
@@ -5751,7 +5813,6 @@ export class SessionManager extends EventEmitter {
         runner,
         mcpConfigPath,
         fastPathSystemPromptPath,
-        { allowReopenTerminal: opts.allowTerminal },
       );
       const respawnDelivery = this.resolveRespawnDelivery(
         sessionId,
@@ -6133,7 +6194,6 @@ export class SessionManager extends EventEmitter {
       runner,
       mcpConfigPath,
       slowPathSystemPromptPath,
-      { allowReopenTerminal: opts.allowTerminal },
     );
     const respawnDelivery = this.resolveRespawnDelivery(
       sessionId,
@@ -6384,6 +6444,152 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
+   * Spawn a brand-new session (fresh id, fresh worktree, fresh conversation)
+   * to continue `row`'s task on `opts.existingBranch` — the replacement for
+   * every path that used to reopen a terminal (done/error/killed) session
+   * via sendOrResume({allowTerminal: true}). "Done is done": further work on
+   * a concluded session's task always spawns fresh rather than reviving it.
+   *
+   * Dedups against the existing hasActiveSessionForTask/task-dispatch guard:
+   * if a non-terminal standard session already exists for this task (e.g. a
+   * fresh session was already spawned by a concurrent caller), returns that
+   * session's id instead of spawning a second one.
+   *
+   * Returns null if row has no task_id/project_id/task_url to relaunch from,
+   * or if start() fails for any other reason.
+   */
+  async spawnFreshSessionForTask(
+    row: Session,
+    opts: { existingBranch?: string; briefing: string },
+  ): Promise<string | null> {
+    // Single-flight per concluded session id: several callers (e.g. a burst
+    // of feedback items enqueued together) can race to spawn a replacement
+    // for the same terminal session in the same tick, before either has
+    // inserted the new session row that getActiveStandardSessionForTask
+    // below would otherwise dedup against. Only one fresh session is ever
+    // spawned per terminal session.
+    const inflight = this.freshSessionSpawnsInFlight.get(row.session_id);
+    if (inflight) return inflight;
+    const promise = this._doSpawnFreshSessionForTask(row, opts);
+    this.freshSessionSpawnsInFlight.set(row.session_id, promise);
+    try {
+      return await promise;
+    } finally {
+      this.freshSessionSpawnsInFlight.delete(row.session_id);
+    }
+  }
+
+  private async _doSpawnFreshSessionForTask(
+    row: Session,
+    opts: { existingBranch?: string; briefing: string },
+  ): Promise<string | null> {
+    const taskId = row.task_id;
+    if (!taskId || !row.project_id || !row.task_url) {
+      logger.error(
+        `[SessionManager] spawnFreshSessionForTask: session ${row.session_id} is missing task_id/project_id/task_url — cannot spawn a fresh session`,
+      );
+      return null;
+    }
+
+    const existing = getActiveStandardSessionForTask(taskId);
+    if (existing) {
+      logger.info(
+        `[SessionManager] spawnFreshSessionForTask: task ${taskId} already has an active session (${existing.session_id.slice(0, 8)}) — reusing instead of spawning a second one`,
+      );
+      return existing.session_id;
+    }
+
+    const milestoneId = getSessionMilestoneId(row.session_id) ?? null;
+    try {
+      return await this.start(row.task_url, row.project_context_url ?? '', {
+        sessionType: 'standard',
+        projectId: row.project_id,
+        taskName: row.task_name ?? undefined,
+        taskId,
+        taskKind: milestoneId ? 'milestone' : 'non_milestone',
+        milestoneId,
+        prUrl: row.pr_url ?? undefined,
+        existingBranch: opts.existingBranch,
+        customPrompt: opts.briefing,
+      });
+    } catch (err) {
+      if ((err as { alreadyRunning?: boolean })?.alreadyRunning) {
+        const sessionId = (err as { sessionId?: string }).sessionId;
+        logger.info(
+          `[SessionManager] spawnFreshSessionForTask: task ${taskId} gained an active session concurrently (${sessionId?.slice(0, 8)}) — reusing`,
+        );
+        return sessionId ?? null;
+      }
+      logger.error(
+        `[SessionManager] spawnFreshSessionForTask: failed to spawn fresh session for task ${taskId}: ${err}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Deliver `message` to a session that is expected to still be working a
+   * PR, resuming it in place when it's alive — or, if it has reached a
+   * terminal state (done/error/killed), spawning a fresh session on the
+   * PR's existing head_branch instead of reopening it. Used by the PR
+   * conflict-resolution and review-findings-fix routes, and by task
+   * recovery's 'resume' action — every caller that used to resume a
+   * terminal session via sendOrResume({allowTerminal: true}).
+   *
+   * Returns the id of whichever session ends up handling the message (the
+   * original, or a freshly-spawned replacement), `{outcome:
+   * 'session_row_missing'}` if `sessionId` has no DB row, `{outcome:
+   * 'missing_head_branch'}` if the session is terminal and its linked PR
+   * has no head_branch to continue on (a NULL head branch must never be
+   * guessed at — see spawnFreshSessionForTask), or null if delivery/spawn
+   * otherwise failed.
+   */
+  async deliverOrSpawnFresh(
+    sessionId: string,
+    message: string,
+  ): Promise<string | FixerRelaunchFailure | null> {
+    const row = getSession(sessionId);
+    if (!row) {
+      logger.error(
+        `[SessionManager] deliverOrSpawnFresh: session ${sessionId} not found in DB`,
+      );
+      return { outcome: 'session_row_missing' };
+    }
+
+    if (!TERMINAL_SESSION_STATUSES.has(row.status)) {
+      return this.sendOrResume(sessionId, message);
+    }
+
+    const prRow = getPRBySessionId(sessionId);
+    const headBranch = prRow?.head_branch ?? null;
+    if (!headBranch) {
+      logger.error(
+        `[SessionManager] deliverOrSpawnFresh: terminal session ${sessionId} has no linked PR (or no head_branch) — cannot spawn a fresh session`,
+      );
+      this.emit('message', {
+        type: 'session_action_failed',
+        sessionId,
+        action: 'send_message',
+        reason: 'missing_head_branch',
+        detail:
+          'Session ended and its PR has no head_branch — cannot relaunch on an unknown branch.',
+      } satisfies ServerMessage);
+      return { outcome: 'missing_head_branch' };
+    }
+
+    const fresh = await this.spawnFreshSessionForTask(row, {
+      existingBranch: headBranch,
+      briefing:
+        `Continuing work on PR #${prRow!.pr_number} (${prRow!.repo}) — the ` +
+        `previous session (${sessionId}) ended (status: ${row.status}) ` +
+        `before this was resolved.\n\n${message}`,
+    });
+    if (!fresh) return null;
+    setPRSessionId(prRow!.pr_number, prRow!.repo, fresh);
+    return fresh;
+  }
+
+  /**
    * Relaunch a coding fixer on a PR's existing branch when the implementing
    * session has died (or is idle) and the normal gate-failure /
    * conflict-nudge delivery path (sendOrResume to job.sessionId) can't reach
@@ -6433,29 +6639,20 @@ export class SessionManager extends EventEmitter {
       return { outcome: 'session_row_missing' };
     }
 
-    // sessionLivenessReconciler.runLivenessSweep archives a dead-process
-    // session (archiveSession(id, 'machine_park')) without touching its
-    // status — a deliberate operator ruling (see that reconciler's doc
-    // comment). That leaves a 'running' row whose worktree is already torn
-    // down; treating that specific archival as terminal-equivalent here
-    // routes it through the same recreate-worktree-and-resume path as a
-    // genuinely terminal row instead of falling into the
-    // idle-with-worktree-check branch below, which would otherwise refuse
-    // forever (setSessionPauseReason + null return, with no retry-budget or
-    // escalation signal for the caller). Deliberately scoped to
-    // isMachineParkedIdle rather than a bare `archived` check — an
-    // operator-initiated archive (archive_kind: 'operator') also leaves
-    // status='running' untouched, and that flavor is an explicit "this
-    // session is done, do not resume it" signal (see isMachineParkedIdle's
-    // doc and _doSendOrResume's terminal refusal above) that must still be
-    // refused, not silently resurrected.
-    const isTerminal =
-      row.status === 'done' ||
-      row.status === 'error' ||
-      row.status === 'killed' ||
-      isMachineParkedIdle(row);
+    // done/error/killed is a hard terminal boundary — that session is never
+    // reopened. sessionLivenessReconciler.runLivenessSweep also archives a
+    // dead-process session (archiveSession(id, 'machine_park')) without
+    // touching its status, leaving a 'running' row whose worktree is already
+    // torn down; that flavor is NOT in TERMINAL_SESSION_STATUSES (its status
+    // stays running/idle) and is still resumed in place below, same as
+    // before — a machine_park archival is an explicit "still the standing
+    // owner of this task" signal (see isMachineParkedIdle's doc), unlike
+    // done/error/killed.
+    const isDoneErrorKilled =
+      row.status === 'done' || row.status === 'error' || row.status === 'killed';
+    const isMachineParked = isMachineParkedIdle(row);
 
-    if (!isTerminal) {
+    if (!isDoneErrorKilled && !isMachineParked) {
       const project = getProjectById(row.project_id ?? '');
       const projectDir = project ? normalizePath(project.projectDir) : null;
       const recordedPath =
@@ -6484,9 +6681,48 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    // Idle-with-worktree resumes normally; terminal sessions bypass the
-    // terminal refusal since PR-scoped recovery is exactly what this is for.
-    return this.sendOrResume(sessionId, prompt, { allowTerminal: true });
+    if (isDoneErrorKilled) {
+      // Done is done — spawn a fresh session (fresh id, fresh worktree, no
+      // --resume) on the PR's own head_branch rather than reopening this
+      // one. A NULL head_branch must fail loudly rather than guess a branch
+      // name, since a wrong guess would open a second PR for this task.
+      const prRow = getPRByNumber(pr.pr_number, pr.repo);
+      const headBranch = prRow?.head_branch ?? null;
+      if (!headBranch) {
+        logger.error(
+          `[SessionManager] relaunchFixerForPR: PR #${pr.pr_number} (${pr.repo}) has no head_branch — cannot spawn a fresh session`,
+        );
+        recordEvent({
+          event_type: 'fresh_session_spawn_refused',
+          actor_type: 'system',
+          actor_id: sessionId,
+          task_id: row.task_id ?? null,
+          payload: { reason: 'missing_head_branch', prNumber: pr.pr_number, repo: pr.repo },
+        });
+        this.emit('message', {
+          type: 'session_action_failed',
+          sessionId,
+          action: 'relaunch_fixer',
+          reason: 'missing_head_branch',
+          detail: `PR #${pr.pr_number} (${pr.repo}) has no head_branch — cannot relaunch on an unknown branch.`,
+        } satisfies ServerMessage);
+        return { outcome: 'missing_head_branch' };
+      }
+
+      const fresh = await this.spawnFreshSessionForTask(row, {
+        existingBranch: headBranch,
+        briefing:
+          `Continuing stalled work on PR #${pr.pr_number} (${pr.repo}) — the ` +
+          `previous session (${sessionId}) ended (status: ${row.status}) ` +
+          `before this was resolved.\n\n${prompt}`,
+      });
+      if (!fresh) return null;
+      setPRSessionId(pr.pr_number, pr.repo, fresh);
+      return fresh;
+    }
+
+    // Idle-with-worktree, or machine-parked: resume in place.
+    return this.sendOrResume(sessionId, prompt);
   }
 
   async shutdownAll(): Promise<void> {

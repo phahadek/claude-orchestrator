@@ -1062,11 +1062,20 @@ export function createPrsRouter(
       const message =
         `PR #${prNumber} has merge conflicts with the base branch. ` +
         `Please rebase onto \`dev\`, resolve the conflicts, and push the fixed branch.`;
-      const sessionId = await sessionManager.sendOrResume(
+      const result = await sessionManager.deliverOrSpawnFresh(
         prRow.session_id,
         message,
-        { allowTerminal: true },
       );
+      if (result && typeof result === 'object' && 'outcome' in result) {
+        res.status(422).json({
+          error:
+            result.outcome === 'missing_head_branch'
+              ? 'Session ended and this PR has no head_branch — cannot relaunch on an unknown branch.'
+              : 'Session record is missing — cannot relaunch.',
+        });
+        return;
+      }
+      const sessionId = result;
       // Reset merge state so PRMergeWatcher will re-check after the push
       updateMergeState(prNumber, repo, null, null);
       _broadcast({
@@ -1142,10 +1151,20 @@ export function createPrsRouter(
         .filter((s): s is string => Boolean(s))
         .join(' ');
       const fixMessage = `PR #${prNumber} review findings — please address the following:\n\n${lines}\n\nOverall: ${overall}`;
-      await sessionManager.sendOrResume(prRow.session_id, fixMessage, {
-        allowTerminal: true,
-      });
-      res.json({ sessionId: prRow.session_id });
+      const result = await sessionManager.deliverOrSpawnFresh(
+        prRow.session_id,
+        fixMessage,
+      );
+      if (result && typeof result === 'object' && 'outcome' in result) {
+        res.status(422).json({
+          error:
+            result.outcome === 'missing_head_branch'
+              ? 'Session ended and this PR has no head_branch — cannot relaunch on an unknown branch.'
+              : 'Session record is missing — cannot relaunch.',
+        });
+        return;
+      }
+      res.json({ sessionId: result ?? prRow.session_id });
     }),
   );
 

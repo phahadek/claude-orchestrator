@@ -46,6 +46,7 @@ type EventType =
   | 'session_errored_write_skipped_terminal'
   | 'session_errored_write_skipped_open_pr'
   | 'session_terminal_reopened'
+  | 'fresh_session_spawn_refused'
   | 'conflict_nudge_delivery_failed'
   | 'conflict_nudge_sent'
   | 'worktree_remove_failed'

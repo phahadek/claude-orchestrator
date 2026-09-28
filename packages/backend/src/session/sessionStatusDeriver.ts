@@ -69,11 +69,10 @@
  *  2. markSessionIdle's terminal-status guard: a clean-exit write must not
  *     revert an already-terminal row (e.g. one this deriver already marked
  *     done from a PR-merge signal) back to 'idle'.
- *  3. updateSessionStatus's reopen-terminal guard (the audited
- *     allowReopenTerminal path used by respawnSession/sendOrResume): a
- *     terminal row may only be reopened to a non-terminal status through
- *     that explicit, audited path — never as a side effect of a stale
- *     write racing behind it.
+ *  3. updateSessionStatus's terminal-is-sticky guard: a done/error/killed
+ *     row is never overwritten with a non-terminal status by any write,
+ *     stale or otherwise — a session is never reopened; further work spawns
+ *     a fresh session instead (see spawnFreshSessionForTask).
  *
  * This task documents the contract rather than enforcing it in code: no
  * real call site invokes deriveSessionStatus yet, so there is nothing here

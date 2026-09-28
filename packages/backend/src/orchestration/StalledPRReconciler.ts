@@ -785,6 +785,29 @@ export class StalledPRReconciler {
       this.recordUnchargedRefusal(pr, kind);
       return false;
     }
+    if (
+      relaunched !== null &&
+      typeof relaunched === 'object' &&
+      relaunched.outcome === 'missing_head_branch'
+    ) {
+      // The implementing session concluded (done/error/killed) and this PR
+      // has no head_branch to spawn a fresh session onto — a wrong-guessed
+      // branch name would open a second PR, so this must surface to the
+      // operator rather than retry (or silently degrade to a resume, which
+      // would reopen a terminal session). Not charged against the retry
+      // budget — no relaunch attempt actually happened.
+      logger.error(
+        `[StalledPRReconciler] PR #${prNumber} (${repo}): relaunch refused — session ${pr.session_id ?? '(none)'} is terminal and this PR has no head_branch`,
+      );
+      setPauseReason(
+        prNumber,
+        repo,
+        'stalled_no_relaunch_target',
+        `${kind} — implementing session is terminal and PR has no head_branch to relaunch onto`,
+      );
+      this.recordUnchargedRefusal(pr, kind);
+      return false;
+    }
     if (!relaunched) {
       logger.info(
         `[StalledPRReconciler] PR #${prNumber} (${repo}): fixer relaunch (kind=${kind}) was refused before it started — not counting as an attempt`,

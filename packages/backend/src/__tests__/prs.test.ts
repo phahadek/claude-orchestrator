@@ -257,6 +257,7 @@ function makeMockPRReviewService(): PRReviewService {
 function makeMockSessionManager(): SessionManager {
   return {
     sendOrResume: vi.fn().mockResolvedValue(undefined),
+    deliverOrSpawnFresh: vi.fn().mockResolvedValue(undefined),
     endSession: vi.fn(),
     markForBranchDeletion: vi.fn(),
     enqueueFeedback: vi.fn().mockResolvedValue(undefined),
@@ -1542,16 +1543,15 @@ describe('POST /api/prs/:prNumber/fix', () => {
       .query({ projectId: 'proj-1' });
 
     expect(res.status).toBe(200);
-    expect(vi.mocked(sessionManager.sendOrResume)).toHaveBeenCalledOnce();
-    const [, message, opts] = vi.mocked(sessionManager.sendOrResume).mock
+    expect(vi.mocked(sessionManager.deliverOrSpawnFresh)).toHaveBeenCalledOnce();
+    const [, message] = vi.mocked(sessionManager.deliverOrSpawnFresh).mock
       .calls[0];
     expect(message).toContain('Data integrity & parsing correctness');
     expect(message).toContain(
       'Duplicated planningSessionTypeLabel mapping docs/split to Ops.',
     );
-    // allowTerminal:true so an operator can recover a PR whose session was
-    // killed — the terminal-refusal guard otherwise blocks the respawn.
-    expect(opts).toEqual({ allowTerminal: true });
+    // deliverOrSpawnFresh (not sendOrResume) — a terminal session is never
+    // reopened; deliverOrSpawnFresh spawns a fresh one instead when needed.
   });
 
   it('sends the conformance failing dimensions unchanged when there is no depth verdict', async () => {
@@ -1577,7 +1577,8 @@ describe('POST /api/prs/:prNumber/fix', () => {
       .query({ projectId: 'proj-1' });
 
     expect(res.status).toBe(200);
-    const [, message] = vi.mocked(sessionManager.sendOrResume).mock.calls[0];
+    const [, message] = vi.mocked(sessionManager.deliverOrSpawnFresh).mock
+      .calls[0];
     expect(message).toBe(
       'PR #42 review findings — please address the following:\n\n' +
         '❌ Tests: Missing test coverage.\n\nOverall: Needs changes.',
@@ -1618,7 +1619,7 @@ describe('POST /api/prs/:prNumber/fix', () => {
       .query({ projectId: 'proj-1' });
 
     expect(res.status).toBe(422);
-    expect(vi.mocked(sessionManager.sendOrResume)).not.toHaveBeenCalled();
+    expect(vi.mocked(sessionManager.deliverOrSpawnFresh)).not.toHaveBeenCalled();
   });
 
   it('returns 422 when there is no review of either kind', async () => {
@@ -1633,28 +1634,43 @@ describe('POST /api/prs/:prNumber/fix', () => {
 
     expect(res.status).toBe(422);
     expect(res.body.error).toMatch(/Run a review/);
-    expect(vi.mocked(sessionManager.sendOrResume)).not.toHaveBeenCalled();
+    expect(vi.mocked(sessionManager.deliverOrSpawnFresh)).not.toHaveBeenCalled();
   });
 });
 
 // ── POST /api/prs/:owner/:repoName/:prNumber/fix-conflicts ──────────────────
 
 describe('POST /api/prs/:owner/:repoName/:prNumber/fix-conflicts', () => {
-  it('respawns a killed session (allowTerminal:true)', async () => {
+  it('delivers via deliverOrSpawnFresh — never reopens a terminal session directly', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
     const sessionManager = makeMockSessionManager();
-    vi.mocked(sessionManager.sendOrResume).mockResolvedValue('session-xyz');
+    vi.mocked(sessionManager.deliverOrSpawnFresh).mockResolvedValue(
+      'session-xyz',
+    );
 
     const res = await supertest(
       buildApp(undefined, undefined, sessionManager),
     ).post('/api/prs/owner/repo/42/fix-conflicts');
 
     expect(res.status).toBe(200);
-    expect(vi.mocked(sessionManager.sendOrResume)).toHaveBeenCalledWith(
+    expect(vi.mocked(sessionManager.deliverOrSpawnFresh)).toHaveBeenCalledWith(
       'session-xyz',
       expect.stringContaining('merge conflicts'),
-      { allowTerminal: true },
     );
+  });
+
+  it('returns 422 when the deliverOrSpawnFresh reports a missing head_branch', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const sessionManager = makeMockSessionManager();
+    vi.mocked(sessionManager.deliverOrSpawnFresh).mockResolvedValue({
+      outcome: 'missing_head_branch',
+    });
+
+    const res = await supertest(
+      buildApp(undefined, undefined, sessionManager),
+    ).post('/api/prs/owner/repo/42/fix-conflicts');
+
+    expect(res.status).toBe(422);
   });
 
   it('returns 422 when the PR has no linked session', async () => {
@@ -1669,7 +1685,7 @@ describe('POST /api/prs/:owner/:repoName/:prNumber/fix-conflicts', () => {
     ).post('/api/prs/owner/repo/42/fix-conflicts');
 
     expect(res.status).toBe(422);
-    expect(vi.mocked(sessionManager.sendOrResume)).not.toHaveBeenCalled();
+    expect(vi.mocked(sessionManager.deliverOrSpawnFresh)).not.toHaveBeenCalled();
   });
 });
 

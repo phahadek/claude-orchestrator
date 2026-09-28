@@ -1403,7 +1403,10 @@ describe('TaskView displayStatus — auto_recovering threading', () => {
 // ── POST /api/tasks/:taskId/recover ────────────────────────────────────────────
 
 function buildAppWithServices(
-  sessionManagerOverride?: { sendOrResume: ReturnType<typeof vi.fn> },
+  sessionManagerOverride?: {
+    sendOrResume: ReturnType<typeof vi.fn>;
+    deliverOrSpawnFresh?: ReturnType<typeof vi.fn>;
+  },
   reviewOrchestratorOverride?: {
     runAutofixPipeline: ReturnType<typeof vi.fn>;
   },
@@ -1655,9 +1658,10 @@ describe('POST /api/tasks/:taskId/recover', () => {
       expect(res.body.error).toMatch(/No code session/);
     });
 
-    it('clears PR flags and calls sendOrResume with a nudge', async () => {
+    it('clears PR flags and calls deliverOrSpawnFresh with a nudge', async () => {
       const sendOrResume = vi.fn().mockResolvedValue('sess-1');
-      const app = buildAppWithServices({ sendOrResume });
+      const deliverOrSpawnFresh = vi.fn().mockResolvedValue('sess-1');
+      const app = buildAppWithServices({ sendOrResume, deliverOrSpawnFresh });
 
       const res = await supertest(app).post(
         '/api/tasks/task-1/recover?projectId=proj-1',
@@ -1669,14 +1673,14 @@ describe('POST /api/tasks/:taskId/recover', () => {
         'owner/repo',
         'human_unpark',
       );
-      expect(sendOrResume).toHaveBeenCalledWith(
+      expect(deliverOrSpawnFresh).toHaveBeenCalledWith(
         'sess-1',
         expect.stringContaining('Recovery requested'),
-        { allowTerminal: true },
       );
+      expect(sendOrResume).not.toHaveBeenCalled();
     });
 
-    it('passes allowTerminal:true so a killed session can be respawned', async () => {
+    it('never reopens a killed session directly — routes through deliverOrSpawnFresh', async () => {
       vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
         makeAggregate('task-1', '⚠️ Needs Attention', {
           pr_pause_reason: 'ci_failing',
@@ -1685,15 +1689,38 @@ describe('POST /api/tasks/:taskId/recover', () => {
         }),
       ]);
       const sendOrResume = vi.fn().mockResolvedValue('sess-1');
-      const app = buildAppWithServices({ sendOrResume });
+      const deliverOrSpawnFresh = vi.fn().mockResolvedValue('fresh-sess-1');
+      const app = buildAppWithServices({ sendOrResume, deliverOrSpawnFresh });
 
       const res = await supertest(app).post(
         '/api/tasks/task-1/recover?projectId=proj-1',
       );
       expect(res.status).toBe(200);
-      expect(sendOrResume).toHaveBeenCalledWith('sess-1', expect.any(String), {
-        allowTerminal: true,
-      });
+      expect(deliverOrSpawnFresh).toHaveBeenCalledWith(
+        'sess-1',
+        expect.any(String),
+      );
+      expect(sendOrResume).not.toHaveBeenCalled();
+    });
+
+    it('returns 422 when deliverOrSpawnFresh reports a missing head_branch', async () => {
+      vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+        makeAggregate('task-1', '⚠️ Needs Attention', {
+          pr_pause_reason: 'ci_failing',
+          code_session_id: 'sess-1',
+          code_session_status: 'killed',
+        }),
+      ]);
+      const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+      const deliverOrSpawnFresh = vi
+        .fn()
+        .mockResolvedValue({ outcome: 'missing_head_branch' });
+      const app = buildAppWithServices({ sendOrResume, deliverOrSpawnFresh });
+
+      const res = await supertest(app).post(
+        '/api/tasks/task-1/recover?projectId=proj-1',
+      );
+      expect(res.status).toBe(422);
     });
 
     it('records a task_recovered audit event with resume action', async () => {

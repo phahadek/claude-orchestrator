@@ -1689,6 +1689,18 @@ export function getActivePlanningSessionForTask(
 }
 
 export function hasActiveSessionForTask(taskId: string): boolean {
+  return getActiveStandardSessionForTask(taskId) !== undefined;
+}
+
+/**
+ * Row-returning counterpart to hasActiveSessionForTask — used by callers
+ * that, once they know a non-terminal standard session already exists for a
+ * task, need its id to route work (e.g. queued feedback) to it instead of
+ * spawning a second fresh session for the same task.
+ */
+export function getActiveStandardSessionForTask(
+  taskId: string,
+): Session | undefined {
   const norm = taskId.replace(/-/g, '');
   // Matches sessions.task_id_norm — a VIRTUAL generated column mirroring this
   // same REPLACE(...,'-','') expression (see schema.ts) — instead of
@@ -1696,10 +1708,10 @@ export function hasActiveSessionForTask(taskId: string): boolean {
   // idx_sessions_notion_task_id_session_type (indexed on raw task_id) and
   // forced a full scan of the sessions table on every call; comparing
   // against the indexed generated column turns it into a single index seek.
-  const row = db
-    .prepare<{ task_id_norm: string }>(
+  return db
+    .prepare<{ task_id_norm: string }, Session>(
       `
-    SELECT 1 FROM sessions INDEXED BY idx_sessions_task_id_norm
+    SELECT * FROM sessions INDEXED BY idx_sessions_task_id_norm
     WHERE task_id_norm = @task_id_norm
       AND status NOT IN (${TERMINAL_STATUS_SQL_LIST})
       AND (session_type = 'standard' OR session_type IS NULL)
@@ -1707,8 +1719,7 @@ export function hasActiveSessionForTask(taskId: string): boolean {
     LIMIT 1
   `,
     )
-    .get({ task_id_norm: norm });
-  return !!row;
+    .get({ task_id_norm: norm }) as Session | undefined;
 }
 
 export function getActiveSessions(): Session[] {
@@ -4077,6 +4088,24 @@ export function linkPRTaskAndSession(
     `UPDATE pull_requests SET task_id = @task_id, session_id = COALESCE(@session_id, session_id)
      WHERE pr_number = @pr_number AND repo = @repo`,
   ).run({ task_id: taskId, session_id: sessionId, pr_number: prNumber, repo });
+}
+
+/**
+ * Unconditionally re-point a PR row at a freshly-spawned session — unlike
+ * linkPRTaskAndSession's COALESCE, this overwrites an existing session_id.
+ * Used when a PR's prior implementing session concluded (done/error/killed)
+ * and a fresh session was spawned to continue the work on the PR's existing
+ * branch — see the "never reopen a terminal session" ruling.
+ */
+export function setPRSessionId(
+  prNumber: number,
+  repo: string,
+  sessionId: string,
+): void {
+  db.prepare<{ session_id: string; pr_number: number; repo: string }>(
+    `UPDATE pull_requests SET session_id = @session_id
+     WHERE pr_number = @pr_number AND repo = @repo`,
+  ).run({ session_id: sessionId, pr_number: prNumber, repo });
 }
 
 // ─── settings ────────────────────────────────────────────────────────────────
