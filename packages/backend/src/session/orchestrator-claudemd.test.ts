@@ -139,6 +139,47 @@ describe('buildOrchestratorClaudeMd', () => {
     expect(result).not.toContain('## PR Format Standards');
   });
 
+  it('Branch Rules forbid opening a second PR or branch, including to "split out" work', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    const branchSection = result.slice(
+      result.indexOf('## Branch Rules'),
+      result.indexOf('## Commit Attribution'),
+    );
+    expect(branchSection).toContain(
+      'A session owns exactly one PR, opened from its assigned `feature/<task-name>` branch',
+    );
+    expect(branchSection).toContain(
+      'never create another branch or open another PR',
+    );
+    expect(branchSection).toContain('including to "split out" work');
+  });
+
+  it('Branch Rules instruct removing the session own unrelated changes with revert commits', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    const branchSection = result.slice(
+      result.indexOf('## Branch Rules'),
+      result.indexOf('## Commit Attribution'),
+    );
+    expect(branchSection).toContain(
+      'When review flags changes as unrelated to the task, remove them from your own branch with revert commits and push',
+    );
+    expect(branchSection).toContain('do not move them to another branch or PR');
+  });
+
+  it('local-only mode omits the new one-PR and unrelated-changes-removal rules', () => {
+    const result = buildOrchestratorClaudeMd({
+      ...defaultParams,
+      gitMode: 'local-only',
+    });
+    expect(result).not.toContain('A session owns exactly one PR');
+    expect(result).not.toContain(
+      'never create another branch or open another PR',
+    );
+    expect(result).not.toContain(
+      'When review flags changes as unrelated to the task, remove them',
+    );
+  });
+
   it('Bash Rule 3 instructs repeated -m flags for multi-line commit messages', () => {
     const result = buildOrchestratorClaudeMd(defaultParams);
     // Repeated -m flag approach must be present
@@ -147,6 +188,17 @@ describe('buildOrchestratorClaudeMd', () => {
     // Old scratch-file approach must NOT be present
     expect(result).not.toContain('.claude/.commit-msg');
     expect(result).not.toContain('git commit -F');
+  });
+
+  it('Bash Rule 3 covers gh pr create/edit/comment bodies and names the <pr-body> marker', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    expect(result).toContain(
+      'Rule 3 — No heredoc subshells in git commit or gh PR bodies.',
+    );
+    expect(result).toContain('`gh pr create`/`gh pr edit`/`gh pr comment`');
+    expect(result).toContain(
+      'use the `<pr-body>` marker (see PR Format Standards) to set or update the PR body instead',
+    );
   });
 
   it('permits --force-with-lease on the session own feature branch while still forbidding bare/other force pushes', () => {

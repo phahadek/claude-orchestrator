@@ -198,9 +198,9 @@ function renderPrBodySectionsBlock(
  * a fixed base plus a per-section allowance generous enough to cover any
  * known or custom section's header + hint line.
  */
-const SIZE_BUDGET_BASE_CHARS = 10800;
+const SIZE_BUDGET_BASE_CHARS = 11100;
 const SIZE_BUDGET_PER_SECTION_CHARS = 100;
-const SIZE_BUDGET_BASE_WORDS = 1760;
+const SIZE_BUDGET_BASE_WORDS = 1810;
 const SIZE_BUDGET_PER_SECTION_WORDS = 10;
 
 export function computeSizeBudget(sections: readonly string[]): {
@@ -269,6 +269,11 @@ export function buildOrchestratorClaudeMd(
   const resolvedBashRules = bashRules ?? [
     'Use `npx` instead of bare tool names.\n`tsc` → `npx tsc`. Bare commands may not be on PATH.',
   ];
+
+  const rule3Text =
+    gitMode === 'local-only'
+      ? '**Rule 3 — No heredoc subshells in git commit.**\nUse repeated `-m` flags instead: `git commit -m "subject" -m "body"` — git concatenates them.'
+      : '**Rule 3 — No heredoc subshells in git commit or gh PR bodies.**\nUse repeated `-m` flags for `git commit` instead: `git commit -m "subject" -m "body"` — git concatenates them. For `gh pr create`/`gh pr edit`/`gh pr comment`, don\'t pass `--body "$(cat <<\'EOF\' …)"` — use the `<pr-body>` marker (see PR Format Standards) to set or update the PR body instead.';
 
   const bashRulesText = resolvedBashRules
     .map((rule, i) => {
@@ -428,7 +433,9 @@ ${
   gitMode === 'local-only'
     ? `- One task per session — no scope creep`
     : `- Never merge your own PR
-- One task per session — no scope creep`
+- One task per session — no scope creep
+- A session owns exactly one PR, opened from its assigned \`feature/<task-name>\` branch — never create another branch or open another PR, including to "split out" work.
+- When review flags changes as unrelated to the task, remove them from your own branch with revert commits and push — do not move them to another branch or PR.`
 }
 
 ---
@@ -520,8 +527,7 @@ Never chain with \`&&\`, \`;\`, or \`||\`. Split into separate Bash calls.
 
 **Rule 2 — Never prefix with \`cd path &&\`.** You're already in the worktree; run commands directly.
 
-**Rule 3 — No heredoc subshells in git commit.**
-Use repeated \`-m\` flags instead: \`git commit -m "subject" -m "body"\` — git concatenates them.
+${rule3Text}
 
 **Rule 4 — Do not write to \`/tmp/\` or paths outside the worktree.**
 Use the Write tool; never use \`cat >\`, \`printf >\`, or \`echo >\` redirects.
