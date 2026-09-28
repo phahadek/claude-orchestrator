@@ -32,6 +32,8 @@ import {
 } from '../db/queries';
 import { typedGetSetting } from '../config/settings';
 import { isTestIdTouchedByChangedFiles } from '../session/test-runner';
+import { getRunIngestionPromise } from './testRequestLane';
+import { logger } from '../logger';
 
 type BaseAttributableFilterOutcome =
   | 'unfiltered'
@@ -108,6 +110,24 @@ export async function filterBaseAttributableFailures(
 ): Promise<BaseAttributableFilterResult> {
   if (run.state !== 'failed') {
     return UNFILTERED(run.state === 'passed');
+  }
+
+  // The run's own test_run_results rows are written by a fire-and-forget
+  // worker-thread dispatch (testRequestLane.ts) that is still in flight when
+  // this filter runs immediately after completion — reading
+  // getFailingTestIdsForRun before that write commits would find an empty
+  // failing set and silently charge an attributable failure to the session.
+  // Await this run's own dispatch (if it's still tracked as in flight) so
+  // the read below is always sequenced after the write.
+  const pendingIngestion = getRunIngestionPromise(run.id);
+  if (pendingIngestion) {
+    try {
+      await pendingIngestion;
+    } catch (err) {
+      logger.warn(
+        `[baseAttributableFilter] ingestion failed for run ${run.id} — filtering against a possibly-incomplete failing set: ${err instanceof Error ? err.message : err}`,
+      );
+    }
   }
 
   const sessionFailing = getFailingTestIdsForRun(run.id);

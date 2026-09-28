@@ -63,13 +63,30 @@ vi.mock('../../session/test-runner', () => ({
   isTestIdTouchedByChangedFiles: mockIsTestIdTouchedByChangedFiles,
 }));
 
+// filterBaseAttributableFailures awaits this run's own in-flight ingestion
+// dispatch (see testRequestLane.ts's runIngestionPromises) before reading
+// test_run_results — mocked directly (rather than pulling in the real, much
+// heavier testRequestLane module, which itself imports the db/queries
+// module this file already mocks wholesale above) so tests can control
+// exactly when that dispatch is "still pending" vs. "already settled".
+const { mockGetRunIngestionPromise } = vi.hoisted(() => ({
+  mockGetRunIngestionPromise: vi.fn(
+    (_runId: string) => undefined as Promise<void> | undefined,
+  ),
+}));
+vi.mock('../testRequestLane', () => ({
+  getRunIngestionPromise: mockGetRunIngestionPromise,
+}));
+
 import {
   filterBaseAttributableFailures,
   filterVerifyFailureByBaseHealth,
+  filterBaseAttributableFailuresForF2Gate,
   renderBaseAttributableFilterDigest,
   applyF2GateMaskingGuards,
   type BaseAttributableFilterResult,
 } from '../baseAttributableFilter';
+import { logger } from '../../logger';
 import type { ProjectConfig } from '../../config';
 import type { StructuredTestResult, TestRequestRunRow } from '../../db/types';
 
@@ -121,6 +138,8 @@ beforeEach(() => {
     confident: true,
   });
   mockMarkTestResultExcused.mockReset();
+  mockGetRunIngestionPromise.mockReset();
+  mockGetRunIngestionPromise.mockReturnValue(undefined);
 });
 
 describe('baseAttributableFilter.ts source', () => {
@@ -327,6 +346,85 @@ describe('filterBaseAttributableFailures', () => {
   });
 });
 
+describe("filterBaseAttributableFailures — ingestion-ordering race (test_request_lane races the run's own test_run_results write)", () => {
+  it("awaits the run's own tracked in-flight ingestion dispatch before reading the failing set, rather than reading test_run_results while it is still uncommitted", async () => {
+    const order: string[] = [];
+    let resolveIngestion: () => void = () => {};
+    const pendingIngestion = new Promise<void>((resolve) => {
+      resolveIngestion = resolve;
+    }).then(() => {
+      order.push('ingestion-committed');
+    });
+    mockGetRunIngestionPromise.mockImplementation((runId: string) =>
+      runId === 'run-session-1' ? pendingIngestion : undefined,
+    );
+    stubBreadthFlags(new Set(['suite.testA']));
+    mockGetFailingTestIdsForRun.mockImplementation(() => {
+      order.push('read-failing-set');
+      return [{ test_id: 'suite.testA', name: 'testA' }];
+    });
+
+    const resultPromise = filterBaseAttributableFailures(
+      PROJECT,
+      makeRun(),
+      'task-1',
+    );
+
+    // Flush pending microtasks several times over while the ingestion gate
+    // stays closed — if the filter read ahead of the write, 'read-failing-set'
+    // would already be in `order` by now.
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(order).toEqual([]);
+    expect(mockGetFailingTestIdsForRun).not.toHaveBeenCalled();
+
+    resolveIngestion();
+    const result = await resultPromise;
+
+    expect(order).toEqual(['ingestion-committed', 'read-failing-set']);
+    expect(result.outcome).toBe('filtered_pass');
+  });
+
+  it('reads the failing set immediately, with no wait, when no ingestion dispatch is tracked for this run (already settled, or never dispatched)', async () => {
+    mockGetRunIngestionPromise.mockReturnValue(undefined);
+    stubBreadthFlags(new Set());
+    mockGetFailingTestIdsForRun.mockReturnValue([
+      { test_id: 'suite.testC', name: 'testC' },
+    ]);
+
+    const result = await filterBaseAttributableFailures(
+      PROJECT,
+      makeRun(),
+      'task-1',
+    );
+
+    expect(mockGetFailingTestIdsForRun).toHaveBeenCalled();
+    expect(result.outcome).toBe('unfiltered');
+  });
+
+  it('logs a warning naming the run id, but still proceeds to filter against whatever committed, when the tracked ingestion dispatch rejects', async () => {
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    mockGetRunIngestionPromise.mockReturnValue(
+      Promise.reject(new Error('worker crashed')),
+    );
+    stubBreadthFlags(new Set());
+    mockGetFailingTestIdsForRun.mockReturnValue([
+      { test_id: 'suite.testC', name: 'testC' },
+    ]);
+
+    const result = await filterBaseAttributableFailures(
+      PROJECT,
+      makeRun({ id: 'run-ingestion-failed' }),
+      'task-1',
+    );
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('run-ingestion-failed'),
+    );
+    expect(result.outcome).toBe('unfiltered');
+    warnSpy.mockRestore();
+  });
+});
+
 describe('filterBaseAttributableFailures does not file remediation tasks', () => {
   it('never imports or calls a remediation-filing module for any outcome', async () => {
     stubBreadthFlags(new Set(['suite.testA']));
@@ -499,6 +597,46 @@ describe('applyF2GateMaskingGuards', () => {
 
     expect(guardBlocked).toEqual([{ test_id: 'suite.testA', name: 'testA' }]);
     expect(result.excludedTests).toEqual([]);
+  });
+});
+
+describe('filterBaseAttributableFailuresForF2Gate — the shared PreReviewPipeline/AutoMerger/stagedIntents F2-gate entry point', () => {
+  it("awaits the run's own tracked in-flight ingestion dispatch before reading the failing set — the same ordering guarantee filterBaseAttributableFailures provides, inherited here since this is a thin wrapper with no db/queries reads of its own before delegating", async () => {
+    // PreReviewPipeline.ts (applyBaseAttributableF2GateFilter) and
+    // AutoMerger.ts both call this exact function — neither reads
+    // test_run_results directly, so proving the ordering guarantee holds
+    // here proves it holds at both of those call sites too.
+    const order: string[] = [];
+    let resolveIngestion: () => void = () => {};
+    const pendingIngestion = new Promise<void>((resolve) => {
+      resolveIngestion = resolve;
+    }).then(() => {
+      order.push('ingestion-committed');
+    });
+    mockGetRunIngestionPromise.mockImplementation((runId: string) =>
+      runId === 'run-session-1' ? pendingIngestion : undefined,
+    );
+    stubBreadthFlags(new Set(['suite.testA']));
+    mockGetFailingTestIdsForRun.mockImplementation(() => {
+      order.push('read-failing-set');
+      return [{ test_id: 'suite.testA', name: 'testA' }];
+    });
+
+    const gatePromise = filterBaseAttributableFailuresForF2Gate(
+      PROJECT,
+      makeRun(),
+      [],
+      'task-1',
+    );
+
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(order).toEqual([]);
+
+    resolveIngestion();
+    const { result } = await gatePromise;
+
+    expect(order).toEqual(['ingestion-committed', 'read-failing-set']);
+    expect(result.outcome).toBe('filtered_pass');
   });
 });
 

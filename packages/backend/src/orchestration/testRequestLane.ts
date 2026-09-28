@@ -1331,13 +1331,17 @@ async function executeTestRequestRun(
       runKind: spec.runKind ?? 'full',
       state: result.passed ? 'passed' : 'failed',
     });
-    // Fire-and-forget: dispatch is off the main thread (worker thread for a
-    // file-backed db) and single-flighted per project — never awaited here,
-    // so a large suite's extraction/baseline recompute never delays this
-    // completion handler's return. Errors are logged, not thrown — an
+    // Fire-and-forget from this completion handler's own point of view:
+    // dispatch is off the main thread (worker thread for a file-backed db)
+    // and single-flighted per project, so a large suite's extraction/baseline
+    // recompute never delays this handler's return. The promise itself is
+    // tracked in runIngestionPromises (keyed by runId) so a downstream reader
+    // of this run's failing set — the base-attribution filter — can await
+    // this run's own ingestion before it reads test_run_results, without
+    // this handler ever blocking on it. Errors are logged, not thrown — an
     // ingestion failure never fails the run itself, and sweepTestRunResultsExtraction
     // picks up anything left unextracted.
-    void ingestTestRunResults({
+    const ingestionPromise = ingestTestRunResults({
       id: runId,
       project_id: spec.projectId,
       content_hash: spec.contentHash,
@@ -1364,12 +1368,20 @@ async function executeTestRequestRun(
       failed_command: result.passed ? null : (result.failedCommand ?? null),
       commands: JSON.stringify(spec.commands),
       coverage_source_run_id: null,
-    }).catch((err) => {
-      logger.error(
-        `[testRequestLane] ingestion dispatch failed for run ${runId}:`,
-        err,
-      );
     });
+    runIngestionPromises.set(runId, ingestionPromise);
+    ingestionPromise
+      .catch((err) => {
+        logger.error(
+          `[testRequestLane] ingestion dispatch failed for run ${runId}:`,
+          err,
+        );
+      })
+      .finally(() => {
+        if (runIngestionPromises.get(runId) === ingestionPromise) {
+          runIngestionPromises.delete(runId);
+        }
+      });
     return { ...result, runId };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -1485,6 +1497,34 @@ export function recoverInterruptedTestRequestRuns(): void {
  * unswallowed promise.
  */
 const projectIngestionQueues = new Map<string, Promise<void>>();
+
+/**
+ * A completed run's own ingestTestRunResults dispatch promise, keyed by
+ * run id, live only while that dispatch is still in flight — removed as
+ * soon as it settles (success or failure), so the map never grows past the
+ * count of runs currently mid-ingestion. Lets a reader of this run's failing
+ * set (baseAttributableFilter.ts's filterBaseAttributableFailures) await
+ * this specific run's own write before querying test_run_results, without
+ * the completion handler above ever blocking on it, and without waiting on
+ * any other run's ingestion beyond what this run's own FIFO position in
+ * enqueueProjectIngestion already implies. Absence of an entry means either
+ * "already settled" (the common case by the time a filter call gets here)
+ * or "never dispatched" — both are safe to treat as "nothing to wait for".
+ */
+const runIngestionPromises = new Map<string, Promise<void>>();
+
+/**
+ * Lets a caller outside this module (the base-attribution filter) await a
+ * specific run's own ingestion dispatch before reading its extracted
+ * test_run_results rows — see runIngestionPromises above. Returns undefined
+ * once the dispatch has settled or if it was never tracked (e.g. a run
+ * predating this process, or one with no structured_result to ingest).
+ */
+export function getRunIngestionPromise(
+  runId: string,
+): Promise<void> | undefined {
+  return runIngestionPromises.get(runId);
+}
 
 function enqueueProjectIngestion(
   projectId: string,
