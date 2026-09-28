@@ -32,6 +32,7 @@ import {
   UNATTRIBUTED_MILESTONE_BUCKET,
   backfillStagedIntentMilestones,
   isSessionComplete,
+  stageNoOpIfAbsent,
 } from '../queries.js';
 import type { StagedIntentRow } from '../types.js';
 
@@ -642,5 +643,67 @@ describe('backfillStagedIntentMilestones', () => {
     expect(updated).toBe(0);
     expect(resolve).not.toHaveBeenCalled();
     expect(getStagedIntent('already-set')!.milestone).toBe('M12');
+  });
+});
+
+describe('stageNoOpIfAbsent — atomic check-then-insert for a standalone planning.noOp', () => {
+  function noOpRow(overrides: Partial<StagedIntentRow> = {}): StagedIntentRow {
+    return makeRow({
+      id: 'noop-1',
+      kind: 'planning.noOp',
+      group_id: null,
+      payload: JSON.stringify({ taskId: 't-1', reason: 'already resolved' }),
+      session_id: 'sess-1',
+      ...overrides,
+    });
+  }
+
+  it('inserts and returns true when no active no-op stands for the task', () => {
+    const inserted = stageNoOpIfAbsent(noOpRow());
+
+    expect(inserted).toBe(true);
+    expect(getStagedIntent('noop-1')?.state).toBe('staged');
+  });
+
+  it('returns false and does not insert a second row while an earlier one still stands (staged)', () => {
+    stageNoOpIfAbsent(noOpRow({ id: 'noop-first' }));
+
+    const insertedSecond = stageNoOpIfAbsent(
+      noOpRow({ id: 'noop-second', payload: JSON.stringify({ taskId: 't-1', reason: 'a different reason' }) }),
+    );
+
+    expect(insertedSecond).toBe(false);
+    expect(getStagedIntent('noop-second')).toBeUndefined();
+    expect(getStagedIntent('noop-first')?.state).toBe('staged');
+  });
+
+  it('the check and insert are one transaction, not two racy calls — this is the guard two concurrent callers (e.g. two investigator runs) rely on to never both insert', () => {
+    // Sequential calls exercise the same code path a race would hit: each
+    // call's own findActiveStagedIntentForTask + insertStagedIntent runs
+    // inside a single db.transaction(), so there is no window between the
+    // check and the insert for a second caller to observe a false-empty
+    // state. Three calls "racing" for the same task must yield exactly one
+    // winner.
+    const results = [
+      stageNoOpIfAbsent(noOpRow({ id: 'race-1' })),
+      stageNoOpIfAbsent(noOpRow({ id: 'race-2' })),
+      stageNoOpIfAbsent(noOpRow({ id: 'race-3' })),
+    ];
+
+    expect(results.filter(Boolean)).toHaveLength(1);
+    const persisted = ['race-1', 'race-2', 'race-3'].filter(
+      (id) => getStagedIntent(id) !== undefined,
+    );
+    expect(persisted).toHaveLength(1);
+  });
+
+  it('allows a fresh no-op once the standing one is no longer active (committed)', () => {
+    stageNoOpIfAbsent(noOpRow({ id: 'noop-committed' }));
+    transitionStagedIntent('noop-committed', 'committed');
+
+    const inserted = stageNoOpIfAbsent(noOpRow({ id: 'noop-fresh' }));
+
+    expect(inserted).toBe(true);
+    expect(getStagedIntent('noop-fresh')?.state).toBe('staged');
   });
 });
