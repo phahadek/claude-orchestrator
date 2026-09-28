@@ -21,6 +21,7 @@ import {
   markSessionIdle,
   getSession,
   getProjectRowById,
+  AWAITING_OPERATOR_CONCLUSION_PAUSE_REASON,
 } from '../db/queries';
 import type { ServerMessage } from '../ws/types';
 import type { GitHubClient } from '../github/GitHubClient';
@@ -29,6 +30,7 @@ import { recoverSession } from '../session/sessionRecovery';
 import { getCurrentBranch, hasNonEmptyDiff } from './localBranchHelpers';
 import { submitLocalBranch } from './localBranchSubmission';
 import { sessionIsLive } from '../session/sessionLifecycle';
+import { isOperatorConcludedSession } from '../session/sessionPredicates';
 import {
   isSessionProcessAlive,
   readLiveSessionProcessIds,
@@ -330,15 +332,34 @@ export class StuckSessionMonitor {
           continue;
         }
 
-        markSessionDone(
-          row.session_id,
-          row.last_ts,
-          row.pr_url ?? null,
-          'stuck_session_no_pr_periodic',
-          // Already confirmed via isAlive() above that no live process exists
-          // for this session — safe to bypass the in-flight guard.
-          { skipInFlightGuard: true },
-        );
+        // An implementation (standard/ops) session's conclusion is gated by
+        // the operator ruling — no PR + no live process is not itself a
+        // sanctioned reason to write `done`. Park it idle with a pause
+        // reason instead; recoverSession below still runs its normal
+        // no-op-investigation side effects, which now stage rather than
+        // apply their verdict (see NoOpInvestigator.applyNoOpVerdict).
+        if (isOperatorConcludedSession(row.session_type, row.task_id)) {
+          markSessionIdle(
+            row.session_id,
+            row.last_ts,
+            row.pr_url ?? null,
+            'stuck_session_no_pr_awaiting_operator',
+          );
+          setSessionPauseReason(
+            row.session_id,
+            AWAITING_OPERATOR_CONCLUSION_PAUSE_REASON,
+          );
+        } else {
+          markSessionDone(
+            row.session_id,
+            row.last_ts,
+            row.pr_url ?? null,
+            'stuck_session_no_pr_periodic',
+            // Already confirmed via isAlive() above that no live process exists
+            // for this session — safe to bypass the in-flight guard.
+            { skipInFlightGuard: true },
+          );
+        }
         let taskBackend;
         try {
           taskBackend = row.project_id ? getTaskBackend(row.project_id) : null;

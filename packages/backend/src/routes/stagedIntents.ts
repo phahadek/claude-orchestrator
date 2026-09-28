@@ -53,7 +53,10 @@ import {
 import type { TrackedFileSetCache } from '../groom/groomLoad';
 import { reserveMigrationNumber } from '../db/migrationReservation';
 import { isInteractiveTaskType } from '../planning/triage';
-import { isInvestigateSession } from '../session/sessionPredicates';
+import {
+  isInvestigateSession,
+  isOperatorConcludedSession,
+} from '../session/sessionPredicates';
 import type {
   StagedIntentRow,
   StagedIntentState,
@@ -1777,6 +1780,15 @@ export interface StagedIntent {
   blockingGroupId?: string | null;
   /** The blocked-member count of `blockingGroupId`, or null when that's null. */
   blockingGroupBlockedMemberCount?: number | null;
+  /**
+   * `planning.noOp` only: true for a standalone no-op staged by a standard
+   * or ops session declaring the dispatched task's work already satisfied
+   * elsewhere — the 2026-09-27 operator ruling requires an explicit
+   * Approve/Reject for this case (see isOperatorNoOpCandidate) rather than
+   * the informational-only Acknowledge a groom/design/split/docs no-op
+   * keeps. Undefined for every other kind.
+   */
+  noOpOperatorApprovable?: boolean;
 }
 
 /**
@@ -2000,6 +2012,19 @@ function rowToApi(
       : null,
     dispositionReason: row.disposition_reason,
     answer: row.answer ? (JSON.parse(row.answer) as StagedIntentAnswer) : null,
+    // True only for a standalone planning.noOp staged by a standard/ops
+    // session — the operator-approvable case the 2026-09-27 ruling requires
+    // an explicit Approve/Reject for (see isOperatorNoOpCandidate). A
+    // groom/design/split/docs informational no-op stays false, and the
+    // frontend keeps rendering its existing Acknowledge-only affordance.
+    noOpOperatorApprovable:
+      row.kind === 'planning.noOp'
+        ? isOperatorNoOpCandidate({
+            kind: row.kind,
+            groupId: row.group_id,
+            sessionId: row.session_id,
+          })
+        : undefined,
     sessionComplete: row.session_id
       ? getSessionCompleteCached(
           row.session_id,
@@ -5862,6 +5887,29 @@ async function rejectStagedIntentRow(
         );
       }
     }
+  } else if (
+    rejectedIntent.kind === 'planning.noOp' &&
+    isOperatorNoOpCandidate(rejectedIntent)
+  ) {
+    // The staging session is a standard/ops session, not a planning session —
+    // planningOrchestrator.handleDisposition (the `else` branch below) would
+    // just no-op for it (isPlanningSession check). The operator's reason is
+    // the actionable feedback: enqueue it directly so the session — left
+    // non-terminal by this reject, per the operator ruling — resumes and
+    // continues toward a real artifact or a corrected no-op.
+    if (rejectedIntent.sessionId && sessionManager) {
+      try {
+        await sessionManager.enqueueFeedback(
+          rejectedIntent.sessionId,
+          'no_op_rejected',
+          `Your no-op declaration was rejected by the operator: ${reason}`,
+        );
+      } catch (err) {
+        logger.error(
+          `[stagedIntents] resume failed for session ${rejectedIntent.sessionId.slice(0, 8)} after planning.noOp ${outcome}: ${err}`,
+        );
+      }
+    }
   } else {
     await planningOrchestrator?.handleDisposition({
       intent: rejected,
@@ -7623,8 +7671,8 @@ export function formatStageTimeBlockFeedback(
  */
 /**
  * The distinct terminal_completion_reason a standard/ops session's
- * auto-resolved planning.noOp leaves on its session row — deliberately not
- * 'idle' (the silent-stop shape this task exists to close off) and
+ * operator-approved planning.noOp leaves on its session row — deliberately
+ * not 'idle' (the silent-stop shape this task exists to close off) and
  * deliberately not shared with any PR-driven completing reason, so a later
  * query can tell "closed because its own no-op resolved the task" apart from
  * every other terminal path.
@@ -7632,69 +7680,75 @@ export function formatStageTimeBlockFeedback(
 const NO_OP_RESOLVED_REASON = 'no_op_resolved';
 
 /**
- * Auto-resolves a standalone planning.noOp staged by a standard or ops
- * session declaring the dispatched task's work is already satisfied
- * elsewhere — the dispatched-session analog of NoOpInvestigator's
- * `resolved` verdict, reached directly rather than through a secondary
- * investigator session, since the staging session already did that
- * investigation itself and named the evidence in `reason` (see the
- * scaffold text in orchestrator-claudemd.ts).
- *
- * Deliberately narrower than the general planning.noOp path: a groom/
+ * True for a standalone (ungrouped) planning.noOp staged by a standard or
+ * ops session declaring the dispatched task's work is already satisfied
+ * elsewhere — the case the 2026-09-27 operator ruling requires an explicit
+ * operator Approve/Reject for (see the POST /staged-intents/:id/approve and
+ * /reject branches below), rather than the session's own say-so committing
+ * it. Deliberately narrower than the general planning.noOp path: a groom/
  * design/split/docs no-op declares "nothing to change this turn", not "this
- * task is already done" — those still commit only via the operator's
- * Acknowledge (see StagedIntentPanel.tsx's isNoOp branch and the
- * /staged-intents/:id/acknowledge route), unchanged. Gated on the staging
- * session's session_type rather than on the intent's kind-eligibility list,
- * since groom/design/ops all list `planning.noOp` as an allowed kind but
- * only standard/ops sessions get this auto-close semantics. A grouped
- * planning.noOp (part of a design closing-synthesis pass) is untouched —
- * it commits only through the group-commit path (see applyIntent's
- * 'planning.noOp' case).
+ * task is already done" — those stay on the operator's Acknowledge (see
+ * StagedIntentPanel.tsx's isNoOp branch and the /staged-intents/:id/acknowledge
+ * route), unchanged. Gated on the staging session's session_type rather than
+ * on the intent's kind-eligibility list, since groom/design/ops all list
+ * `planning.noOp` as an allowed kind but only standard/ops sessions get this
+ * operator-approval semantics. A grouped planning.noOp (part of a design
+ * closing-synthesis pass) is excluded — it commits only through the
+ * group-commit path (see applyIntent's 'planning.noOp' case). Also excludes
+ * investigate-batch and gate-item-verification sub-flavors of 'ops', which
+ * have their own sanctioned completion semantics untouched by this task.
  */
-async function maybeAutoResolveCodeNoOp(
-  intent: StagedIntent,
-): Promise<StagedIntent> {
-  if (
-    intent.kind !== 'planning.noOp' ||
-    intent.groupId ||
-    !intent.sessionId ||
-    intent.state !== 'staged'
-  ) {
-    return intent;
+function isOperatorNoOpCandidate(intent: {
+  kind: string;
+  groupId?: string | null;
+  sessionId?: string | null;
+}): boolean {
+  if (intent.kind !== 'planning.noOp' || intent.groupId || !intent.sessionId) {
+    return false;
   }
   const session = getSession(intent.sessionId);
-  if (
-    !session ||
-    (session.session_type !== 'standard' && session.session_type !== 'ops') ||
-    isInvestigateSession(session.task_id)
-  ) {
-    return intent;
-  }
-  const payload = intent.payload as { taskId?: string; reason?: string };
-  if (!payload?.taskId || !payload.reason) return intent;
+  if (!session) return false;
+  return isOperatorConcludedSession(session.session_type, session.task_id);
+}
 
-  const committed = transitionStagedIntent(intent.id, 'committed');
+/**
+ * Applies an operator-approved standalone planning.noOp: commits the intent,
+ * writes the bound task Done with the staging session's evidence, and
+ * terminalizes the staging session — the one write path left for a
+ * standard/ops session's own no-op declaration, gated on an explicit
+ * operator Approve (see the /approve route branch) rather than reached
+ * automatically at stage time.
+ */
+async function applyOperatorApprovedNoOp(
+  intent: StagedIntent,
+  taskId: string,
+  reason: string,
+): Promise<StagedIntent> {
+  const committed = transitionStagedIntent(intent.id, 'committed', {
+    annotation: null,
+  });
   const committedIntent = rowToApi(committed);
   broadcastIntentChange(committedIntent);
 
   recordEvent({
     event_type: 'staged_intent_disposition',
-    actor_type: 'system',
+    actor_type: 'human',
     actor_id: null,
     project_id: committedIntent.projectId,
-    task_id: payload.taskId,
-    payload: { intentId: committedIntent.id, disposition: 'auto_committed' },
+    task_id: taskId,
+    payload: { intentId: committedIntent.id, disposition: 'operator_approved_no_op' },
   });
 
   await applyResolvedNoOp(
     getTaskBackend(intent.projectId),
-    payload.taskId,
-    `Auto-resolved via planning.noOp — this task's work was already satisfied: ${payload.reason}`,
+    taskId,
+    `Approved via planning.noOp — this task's work was already satisfied: ${reason}`,
   );
 
-  markSessionDone(intent.sessionId, Date.now(), null, NO_OP_RESOLVED_REASON);
-  setSessionTerminalCompletionReason(intent.sessionId, NO_OP_RESOLVED_REASON);
+  if (intent.sessionId) {
+    markSessionDone(intent.sessionId, Date.now(), null, NO_OP_RESOLVED_REASON);
+    setSessionTerminalCompletionReason(intent.sessionId, NO_OP_RESOLVED_REASON);
+  }
 
   return committedIntent;
 }
@@ -7765,9 +7819,12 @@ export async function routeStageTimeBlock(
   sessionManager: SessionManager | undefined,
 ): Promise<StagedIntent> {
   if (intent.kind === 'planning.noOp') {
-    const resolved = await maybeAutoResolveCodeNoOp(intent);
-    if (resolved.state === 'committed') return resolved;
-    const investigateResolved = await maybeAutoResolveInvestigateNoOp(resolved);
+    // A standard/ops session's standalone no-op no longer auto-commits at
+    // stage time — it stays staged for an explicit operator Approve/Reject
+    // (see isOperatorNoOpCandidate and the /approve, /reject route
+    // branches). Investigate-batch no-ops are unaffected — out of scope for
+    // this ruling; see maybeAutoResolveInvestigateNoOp's own doc comment.
+    const investigateResolved = await maybeAutoResolveInvestigateNoOp(intent);
     if (investigateResolved.state === 'committed') return investigateResolved;
     intent = investigateResolved;
   }
@@ -9399,6 +9456,22 @@ export function createStagedIntentsRouter(
         });
         return;
       }
+      if (
+        row.kind === 'planning.noOp' &&
+        isOperatorNoOpCandidate({
+          kind: row.kind,
+          groupId: row.group_id,
+          sessionId: row.session_id,
+        })
+      ) {
+        res.status(409).json({
+          error:
+            `staged intent "${row.id}" is an operator-approvable planning.noOp — ` +
+            'approval is terminal for it (no separate apply step); resolve it via ' +
+            'POST /staged-intents/:id/approve or /reject',
+        });
+        return;
+      }
       if (TERMINAL_ON_APPROVE_INTENT_KINDS.has(row.kind)) {
         const article = /^[aeiou]/i.test(row.kind) ? 'an' : 'a';
         res.status(409).json({
@@ -9555,6 +9628,31 @@ export function createStagedIntentsRouter(
         return;
       }
       const intent = rowToApi(row);
+
+      // A standard/ops session's standalone planning.noOp has no separate
+      // apply step either — approval is terminal, and it is the *only* write
+      // path for it per the 2026-09-27 operator ruling: it commits the
+      // intent, marks the bound task Done, and terminalizes the staging
+      // session. A groom/design/split/docs informational no-op (isNoOp in
+      // StagedIntentPanel.tsx) is not an operator-noOp candidate and falls
+      // through unchanged to the generic approve below (though its real
+      // disposition remains /acknowledge).
+      if (intent.kind === 'planning.noOp' && isOperatorNoOpCandidate(intent)) {
+        const payload = intent.payload as { taskId?: string; reason?: string };
+        if (!payload?.taskId || !payload.reason) {
+          res.status(409).json({
+            error: `staged intent "${intent.id}" is missing taskId/reason and cannot be approved`,
+          });
+          return;
+        }
+        const committedIntent = await applyOperatorApprovedNoOp(
+          intent,
+          payload.taskId,
+          payload.reason,
+        );
+        res.json(committedIntent);
+        return;
+      }
 
       // A capability-request has no separate apply step — approval is the
       // terminal action: it grants exactly the requested capability and

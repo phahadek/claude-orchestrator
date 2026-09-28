@@ -82,12 +82,13 @@ function insertSession(
   sessionId: string,
   status: string,
   taskId = 'task-1',
+  sessionType = 'standard',
 ): void {
   db.prepare(
     `INSERT INTO sessions (session_id, task_id, task_url, project_context_url,
        status, started_at, session_type)
-     VALUES (?, ?, 'https://notion.so/task', 'https://notion.so/ctx', ?, ?, 'standard')`,
-  ).run(sessionId, taskId, status, Date.now() - 10 * 60 * 1000);
+     VALUES (?, ?, 'https://notion.so/task', 'https://notion.so/ctx', ?, ?, ?)`,
+  ).run(sessionId, taskId, status, Date.now() - 10 * 60 * 1000, sessionType);
 }
 
 function insertResultEvent(sessionId: string): void {
@@ -685,8 +686,8 @@ describe('StuckSessionMonitor.scanForStuckSessions — liveness guard (no PR row
     );
   });
 
-  it('marks done (not idle) when subprocess is NOT alive and no PR row exists', async () => {
-    insertSession('sess-dead', 'running');
+  it('marks done (not idle) when subprocess is NOT alive and no PR row exists — a session type outside the operator-conclusion gate (e.g. review)', async () => {
+    insertSession('sess-dead', 'running', 'task-1', 'review');
     insertResultEvent('sess-dead');
 
     const sm = makeMockSessionManager(false); // subprocess NOT alive
@@ -698,7 +699,7 @@ describe('StuckSessionMonitor.scanForStuckSessions — liveness guard (no PR row
   });
 
   it('does not defer or emit session_done_deferred_while_running when subprocess is confirmed dead — StuckSessionMonitor already verified liveness itself', async () => {
-    insertSession('sess-dead-audit', 'running');
+    insertSession('sess-dead-audit', 'running', 'task-1', 'review');
     insertResultEvent('sess-dead-audit');
 
     const sm = makeMockSessionManager(false);
@@ -708,5 +709,21 @@ describe('StuckSessionMonitor.scanForStuckSessions — liveness guard (no PR row
 
     expect(getAuditRows('session_done_deferred_while_running')).toHaveLength(0);
     expect(getStatus('sess-dead-audit')).toBe('done');
+  });
+
+  it('parks a standard session idle with a pause reason instead of marking it done — its conclusion is gated on the operator (2026-09-27 ruling)', async () => {
+    insertSession('sess-dead-standard', 'running', 'task-1', 'standard');
+    insertResultEvent('sess-dead-standard');
+
+    const sm = makeMockSessionManager(false); // subprocess NOT alive
+    const monitor = new StuckSessionMonitor(sm, vi.fn());
+
+    await monitor.scanForStuckSessions();
+
+    expect(getStatus('sess-dead-standard')).toBe('idle');
+    const row = db
+      .prepare('SELECT pause_reason FROM sessions WHERE session_id = ?')
+      .get('sess-dead-standard') as { pause_reason: string | null };
+    expect(row.pause_reason).toBe('awaiting_operator_conclusion');
   });
 });

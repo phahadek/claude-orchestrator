@@ -651,6 +651,71 @@ describe('StagedIntentPanel', () => {
     expect(screen.queryByRole('button', { name: /pushback/i })).toBeNull();
   });
 
+  describe('operator-approvable planning.noOp (standard/ops session)', () => {
+    function makeOperatorNoOpIntent(overrides: Partial<StagedIntent> = {}) {
+      return makeIntent({
+        kind: 'planning.noOp',
+        payload: {
+          taskId: 'notion:abc',
+          reason: 'already resolved by PR #42',
+        },
+        noOpOperatorApprovable: true,
+        ...overrides,
+      });
+    }
+
+    it('renders Approve and Reject, not the Acknowledge-only affordance', () => {
+      render(<StagedIntentPanel intent={makeOperatorNoOpIntent()} />);
+
+      expect(screen.getByRole('button', { name: /^approve$/i })).toBeTruthy();
+      expect(
+        screen.queryByTestId('staged-intent-acknowledge'),
+      ).toBeNull();
+      expect(screen.queryByRole('button', { name: /commit/i })).toBeNull();
+    });
+
+    it('approving calls the approve route, not apply', async () => {
+      const approve = vi
+        .spyOn(stagedIntentsApi, 'approve')
+        .mockResolvedValue({ ...makeOperatorNoOpIntent(), state: 'committed' });
+      const apply = vi.spyOn(stagedIntentsApi, 'apply');
+
+      render(<StagedIntentPanel intent={makeOperatorNoOpIntent()} />);
+      fireEvent.click(screen.getByRole('button', { name: /^approve$/i }));
+
+      await waitFor(() => expect(approve).toHaveBeenCalledWith('intent-1'));
+      expect(apply).not.toHaveBeenCalled();
+    });
+
+    it('reject requires a reason and posts it to the reject route', async () => {
+      const reject = vi
+        .spyOn(stagedIntentsApi, 'reject')
+        .mockResolvedValue({ ok: true });
+
+      render(<StagedIntentPanel intent={makeOperatorNoOpIntent()} />);
+
+      const rejectButton = screen.getByRole('button', {
+        name: /pushback|decline/i,
+      });
+      expect(rejectButton).toHaveProperty('disabled', true);
+
+      fireEvent.change(
+        screen.getByPlaceholderText(/what should the session revise|why is this being declined/i),
+        { target: { value: 'that PR never merged — keep going' } },
+      );
+      fireEvent.click(rejectButton);
+
+      await waitFor(() =>
+        expect(reject).toHaveBeenCalledWith(
+          'intent-1',
+          expect.objectContaining({
+            reason: 'that PR never merged — keep going',
+          }),
+        ),
+      );
+    });
+  });
+
   describe('task.create body contrast', () => {
     function hexToRgb(hex: string) {
       const clean = hex.replace('#', '');

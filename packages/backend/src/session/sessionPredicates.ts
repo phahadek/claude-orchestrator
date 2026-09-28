@@ -241,6 +241,25 @@ export function isInvestigateSession(
 }
 
 /**
+ * True for a 'standard' or 'ops' session whose conclusion is gated by the
+ * 2026-09-27 operator ruling — closed only by an operator-approved no-op or
+ * its PR merging, never by the session's or the machine's own say-so. Excludes
+ * the 'ops' sub-flavors that already have their own sanctioned completion
+ * semantics: gate-item verification (isGateVerifySession) and
+ * investigate-batch (isInvestigateSession), neither of which opens a PR or
+ * declares a task-closing no-op the way a dispatched code/ops session does.
+ */
+export function isOperatorConcludedSession(
+  sessionType: string,
+  taskId: string | null | undefined,
+): boolean {
+  if (sessionType !== 'standard' && sessionType !== 'ops') return false;
+  if (isGateVerifySession(taskId)) return false;
+  if (isInvestigateSession(taskId)) return false;
+  return true;
+}
+
+/**
  * True for a session row left non-terminal (often status='idle') by
  * StuckSessionMonitor.escalateHardStop's machine-park archival — writing a
  * terminal status there would violate the invariant that a session is only

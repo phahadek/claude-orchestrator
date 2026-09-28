@@ -25,6 +25,7 @@ import {
   setReconcileExhausted,
   getLatestTestRequestRunForSession,
   isRunFailureBreadthAttributable,
+  hasUndispositionedNoOpForSession,
 } from '../db/queries';
 import { isManualActionPause } from '../db/pauseReason';
 import { getProjectByGithubRepo } from '../config';
@@ -438,6 +439,16 @@ export class StalledPRReconciler {
     const taskId = pr.task_id;
     const sessionId = pr.session_id;
     const headSha = pr.head_sha ?? null;
+
+    // The implementing session's conclusion is already awaiting an explicit
+    // operator Approve/Reject on its standalone planning.noOp — nudging it
+    // to "continue toward getting it mergeable" (the session_inert prompt
+    // below) or relaunching a fixer is exactly the silent-conclusion loop
+    // the 2026-09-27 operator ruling closes off. Abstain until the operator
+    // dispositions it; the retry count is left untouched.
+    if (sessionId && hasUndispositionedNoOpForSession(sessionId)) {
+      return false;
+    }
 
     if (kind === 'session_inert') {
       const forced = this.tryForceReReviewForAppliedRemedy(pr);
