@@ -62,10 +62,15 @@ import {
   checkGroomingPromotionGate,
   checkAccretionContributions,
   looksLikeRepoPath,
+  hasFilesPathsHeading,
   type GroomingGateEntry,
   type AccretionCheckOptions,
 } from '../groomGate';
-import { filesPathsEntryExistsInRepo } from '../groomLoad';
+import {
+  filesPathsEntryExistsInRepo,
+  parseFilesPathsRawItems,
+} from '../groomLoad';
+import { parseSection } from '../../notion/NotionClient';
 import { upsertTaskCache, deleteTaskCacheRow } from '../../db/queries';
 import { recordAccretionMarker } from '../../gate/gateStore';
 import { recordAccretionMarker as recordSeedAccretionMarker } from '../../seed/seedStore';
@@ -1407,6 +1412,120 @@ describe('checkGroomingPromotionGate — Files/paths derived from the task body,
             r.includes('tracked-file set')),
       ),
     ).toBe(true);
+  });
+});
+
+describe('Files/paths — a Context subheading collision does not shadow the real section', () => {
+  const BASE = {
+    size_check: { decision: 'n/a' },
+    type_check: { decision: 'none' },
+    seam_check: { decision: 'n/a' },
+    type: '💻 Code',
+  };
+
+  const collidingBody = [
+    '## Context',
+    '',
+    'Some background.',
+    '',
+    '### The fallback both files claim does not exist',
+    '',
+    'A subheading whose text happens to contain the word "files".',
+    '',
+    '## Files / paths affected',
+    '',
+    '- packages/backend/src/checkout.ts (update)',
+  ].join('\n');
+
+  beforeEach(() => {
+    recordAccretionMarker({
+      sourceTaskId: 'notion:files-collision-task',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'n/a',
+      reason: 'This task type is exempt from gate accretion.',
+      accretedAt: new Date(0).toISOString(),
+    });
+    recordSeedAccretionMarker({
+      sourceTaskId: 'notion:files-collision-task',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'n/a',
+      accretedAt: new Date(0).toISOString(),
+    });
+  });
+
+  it('hasFilesPathsHeading and parseSection agree: whenever the former is true, the latter yields the real entry list', async () => {
+    expect(await hasFilesPathsHeading(collidingBody)).toBe(true);
+    const section = parseSection(collidingBody, 'files');
+    const items = parseFilesPathsRawItems(section);
+    expect(items.map((i) => i.raw)).toEqual([
+      'packages/backend/src/checkout.ts (update)',
+    ]);
+  });
+
+  it('promotes a Code task whose Context carries a colliding "files" subheading above a valid Files/paths section', async () => {
+    const result = await checkGroomingPromotionGate(
+      { ...BASE, filesPathsEntries: [] },
+      'notion:files-collision-task',
+      undefined,
+      undefined,
+      'polimarket-analyser',
+      collidingBody,
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it('still blocks a genuinely empty Files/paths section, and names the shadowing heading when one matched instead of the canonical section', async () => {
+    const shadowedEmptyBody = [
+      '## Context',
+      '',
+      '### The fallback both files claim does not exist',
+      '',
+      'Nothing resembling a Files/paths list anywhere in this body.',
+    ].join('\n');
+
+    const result = await checkGroomingPromotionGate(
+      { ...BASE, filesPathsEntries: [] },
+      'notion:files-collision-task',
+      undefined,
+      undefined,
+      'polimarket-analyser',
+      shadowedEmptyBody,
+    );
+    expect(result.allowed).toBe(false);
+    expect(
+      result.reasons.some(
+        (r) =>
+          r.includes('shadowing') &&
+          r.includes('The fallback both files claim does not exist'),
+      ),
+    ).toBe(true);
+  });
+
+  it('blocks a genuinely empty canonical Files/paths section without a shadowing-heading claim', async () => {
+    const genuinelyEmptyBody = [
+      '## Summary',
+      '',
+      'Clean.',
+      '',
+      '## Files / paths affected',
+      '',
+    ].join('\n');
+
+    const result = await checkGroomingPromotionGate(
+      { ...BASE, filesPathsEntries: [] },
+      'notion:files-collision-task',
+      undefined,
+      undefined,
+      'polimarket-analyser',
+      genuinelyEmptyBody,
+    );
+    expect(result.allowed).toBe(false);
+    expect(
+      result.reasons.some((r) => r.includes('has no parseable entries')),
+    ).toBe(true);
+    expect(result.reasons.some((r) => r.includes('shadowing'))).toBe(false);
   });
 });
 

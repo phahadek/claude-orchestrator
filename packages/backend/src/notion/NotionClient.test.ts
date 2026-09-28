@@ -232,6 +232,41 @@ describe('parseSection()', () => {
     const result = parseSection(md, 'files');
     expect(result).toBe('- packages/backend/src/foo.ts (update)');
   });
+
+  it('prefers the canonical Files/paths section over a Context subheading that merely mentions "files" (2026-09-26 repro)', () => {
+    const md = [
+      '## Context',
+      '',
+      'Some background.',
+      '',
+      '### The fallback both files claim does not exist',
+      '',
+      'A subheading whose text happens to contain the word "files".',
+      '',
+      '## Files / paths affected',
+      '',
+      '- packages/backend/src/foo.ts (update)',
+      '- packages/backend/src/bar.ts (update)',
+    ].join('\n');
+    const result = parseSection(md, 'files');
+    expect(result).toContain('packages/backend/src/foo.ts');
+    expect(result).toContain('packages/backend/src/bar.ts');
+    expect(result).not.toContain('subheading whose text');
+  });
+
+  it('falls back to a substring match when no heading prefix-matches the keyword', () => {
+    const md = [
+      '## Executive Summary',
+      '',
+      'This is the summary content.',
+      '',
+      '## Context',
+      '',
+      'Some context here.',
+    ].join('\n');
+    const result = parseSection(md, 'summary');
+    expect(result).toBe('This is the summary content.');
+  });
 });
 
 // ─── parseDependsOn unit tests ───────────────────────────────────────────────

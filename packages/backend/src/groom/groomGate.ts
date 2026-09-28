@@ -620,16 +620,20 @@ function entryNeedsTrackedFileResolution(entry: FilesPathsEntry): boolean {
  * groomLoad.ts is, and a static import would put that whole surface area on
  * every one of those callers' module graphs.
  */
-/** Whether `markdown` carries a top-level `## Files / paths affected`-style heading at all, independent of whether that section has any content. */
-function hasFilesPathsHeading(markdown: string): boolean {
-  return markdown.split('\n').some(
-    (line) =>
-      /^#{1,3}\s/.test(line) &&
-      line
-        .replace(/^#+\s*/, '')
-        .toLowerCase()
-        .includes('files'),
-  );
+/**
+ * Whether `markdown` carries a heading `parseSection(markdown, 'files')`
+ * would select, independent of whether that section has any content. Uses
+ * `findSectionHeadingMatch` — the exact same selection rule `parseSection`
+ * itself uses — so this can never disagree with `parseSection` about which
+ * heading is "the" Files/paths heading; a body whose only "files"-ish
+ * heading is a Context subheading still returns true here, but
+ * `parseSection` will resolve to that same subheading, not silently to
+ * nothing, so the caller's empty-entries check still has a real heading to
+ * report against.
+ */
+export async function hasFilesPathsHeading(markdown: string): Promise<boolean> {
+  const { findSectionHeadingMatch } = await import('../notion/NotionClient');
+  return findSectionHeadingMatch(markdown, 'files') !== null;
 }
 
 async function resolveFilesPathsEntriesServerSide(
@@ -651,16 +655,36 @@ async function resolveFilesPathsEntriesServerSide(
   // has no such heading at all (a task-writing.md violation on its own,
   // already blocked upstream by the readiness gate for a real Ready flip;
   // never a live path this loses precision on).
-  const bodyHasFilesHeading = !!taskBody && hasFilesPathsHeading(taskBody);
+  const bodyHasFilesHeading =
+    !!taskBody && (await hasFilesPathsHeading(taskBody));
   let bodySection: string | undefined;
   let candidates: { raw: string; isNew: boolean }[];
+  let shadowingHeading: string | undefined;
   if (bodyHasFilesHeading) {
-    const { parseSection } = await import('../notion/NotionClient');
+    const { parseSection, findSectionHeadingMatch } =
+      await import('../notion/NotionClient');
     const { parseFilesPathsRawItems } = await import('./groomLoad');
     bodySection = parseSection(taskBody as string, 'files');
     candidates = parseFilesPathsRawItems(bodySection);
+    if (candidates.length === 0) {
+      const match = findSectionHeadingMatch(taskBody as string, 'files');
+      if (match && !match.isPrefixMatch) {
+        shadowingHeading = match.headingText;
+      }
+    }
   } else {
     candidates = entries ?? [];
+  }
+
+  if (shadowingHeading) {
+    return {
+      entries,
+      blockedReason:
+        `Files / paths affected has no parseable entries for a 💻 Code task — the "files" keyword ` +
+        `matched heading "${shadowingHeading}", not a canonical "## Files / paths affected" section. ` +
+        'A Context (or other) subheading is shadowing the real section — rename or remove it so the ' +
+        'canonical heading is matched.',
+    };
   }
 
   if (
