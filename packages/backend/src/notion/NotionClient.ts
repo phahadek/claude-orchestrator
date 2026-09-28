@@ -597,8 +597,7 @@ export function findSectionHeadingMatch(
 ): SectionHeadingMatch | null {
   const keyword = headingKeyword.toLowerCase();
   const lines = markdown.split('\n');
-  const headings: { index: number; level: number; headingText: string }[] =
-    [];
+  const headings: { index: number; level: number; headingText: string }[] = [];
   lines.forEach((line, index) => {
     const headingMatch = line.match(/^(#{1,3}) /);
     if (headingMatch) {

@@ -66,7 +66,10 @@ import {
   type GroomingGateEntry,
   type AccretionCheckOptions,
 } from '../groomGate';
-import { filesPathsEntryExistsInRepo, parseFilesPathsRawItems } from '../groomLoad';
+import {
+  filesPathsEntryExistsInRepo,
+  parseFilesPathsRawItems,
+} from '../groomLoad';
 import { parseSection } from '../../notion/NotionClient';
 import { upsertTaskCache, deleteTaskCacheRow } from '../../db/queries';
 import { recordAccretionMarker } from '../../gate/gateStore';

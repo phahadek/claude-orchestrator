@@ -655,14 +655,14 @@ async function resolveFilesPathsEntriesServerSide(
   // has no such heading at all (a task-writing.md violation on its own,
   // already blocked upstream by the readiness gate for a real Ready flip;
   // never a live path this loses precision on).
-  const bodyHasFilesHeading = !!taskBody && (await hasFilesPathsHeading(taskBody));
+  const bodyHasFilesHeading =
+    !!taskBody && (await hasFilesPathsHeading(taskBody));
   let bodySection: string | undefined;
   let candidates: { raw: string; isNew: boolean }[];
   let shadowingHeading: string | undefined;
   if (bodyHasFilesHeading) {
-    const { parseSection, findSectionHeadingMatch } = await import(
-      '../notion/NotionClient'
-    );
+    const { parseSection, findSectionHeadingMatch } =
+      await import('../notion/NotionClient');
     const { parseFilesPathsRawItems } = await import('./groomLoad');
     bodySection = parseSection(taskBody as string, 'files');
     candidates = parseFilesPathsRawItems(bodySection);
