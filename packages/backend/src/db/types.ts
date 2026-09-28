@@ -1277,6 +1277,10 @@ export interface TestRequestRunRow {
   superseded_by: string | null;
   /** First command (from `commands`) that exited non-zero, for a fail-fast run. Null for a passing run and for rows predating this column. */
   failed_command: string | null;
+  /** JSON array of the exact command strings this run executed. Null for rows predating this column and for a coverage row (see coverage_source_run_id), which carries no execution of its own. Used by the coverage-reuse check (testRequestLane.ts) to compare command sets across run_kind. */
+  commands: string | null;
+  /** Set only on a row synthesized by coverage reuse (testRequestLane.ts's admitTestRequest coverage layer): the covering run's id whose verdict was copied onto this row. Null for every genuinely executed row. Execution-shaped reads (test-duration baselines, flip-rate/breadth corpus, concurrency stats) filter this column to exclude coverage rows. */
+  coverage_source_run_id: string | null;
 }
 
 // ─── dependency_cache_entries ───────────────────────────────────────────────

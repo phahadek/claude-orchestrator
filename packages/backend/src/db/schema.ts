@@ -3547,6 +3547,36 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // commands: the exact command list a test_request_runs row executed —
+  // persisted so a later request's coverage-reuse check
+  // (testRequestLane.ts's findCoveringSettledRun) can compare command sets
+  // across run_kind without re-deriving them from project config, which may
+  // have changed since this row was written. NULL for rows predating this
+  // column and for a coverage row (see coverage_source_run_id below), which
+  // never carries a comparable list of its own.
+  try {
+    target.exec(`ALTER TABLE test_request_runs ADD COLUMN commands TEXT`);
+  } catch {
+    /* already exists */
+  }
+
+  // coverage_source_run_id: set only on a row synthesized by the coverage
+  // reuse path — a request satisfied by a same-hash, different-run_kind run
+  // whose commands already cover it, rather than by an execution of its
+  // own. Holds the id of the covering run whose verdict was copied.
+  // Distinguishes such a row from a genuine execution — unlike
+  // mirrorTestRequestRunAsKind's copy, which is indistinguishable from one
+  // and already misleads concurrency analysis — so execution-shaped reads
+  // (duration baselines, flip-rate/breadth corpus, concurrency stats) can
+  // filter it out. NULL for every genuinely executed row.
+  try {
+    target.exec(
+      `ALTER TABLE test_request_runs ADD COLUMN coverage_source_run_id TEXT`,
+    );
+  } catch {
+    /* already exists */
+  }
 }
 
 // ─── test_run_results → test_perf_baselines digest backfill ────────────────

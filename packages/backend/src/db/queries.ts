@@ -9228,10 +9228,21 @@ export function insertTestRequestRun(
   runKind: TestRunKind = 'full',
   baseSha?: string | null,
   worktreePath?: string | null,
+  /**
+   * The exact command list this run is about to execute — persisted so a
+   * later request's coverage-reuse check (findCoveringSettledRun in
+   * testRequestLane.ts) can compare command sets across run_kind without
+   * re-deriving them from project config, which may have changed since this
+   * row was written. Omitted for every call site that predates coverage
+   * reuse and for the historical crash-recovery/base-probe test helpers —
+   * such a row simply carries no comparable command list and is never a
+   * coverage source (see listSettledPassedTestRequestRunsForCoverage).
+   */
+  commands?: string[] | null,
 ): void {
   db.prepare(
-    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, concurrent_run_count, run_origin, producer, run_kind, base_sha, worktree_path)
-     VALUES (?, ?, ?, ?, ?, '', ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, concurrent_run_count, run_origin, producer, run_kind, base_sha, worktree_path, commands)
+     VALUES (?, ?, ?, ?, ?, '', ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     projectId,
@@ -9249,6 +9260,65 @@ export function insertTestRequestRun(
     runKind,
     baseSha ?? null,
     worktreePath ?? null,
+    commands ? JSON.stringify(commands) : null,
+  );
+}
+
+/**
+ * Writes a coverage-reuse row: a request satisfied by a same-hash,
+ * different-run_kind run that already covers its commands, without an
+ * execution of its own. Attributed to the requesting session under the
+ * request's own run_kind, copying only the covering run's verdict fields
+ * (state/output/failure_reason/structured_result/oom_killed/
+ * test_report_acquisition_attempted/failed_command) — never its
+ * started_at/finished_at/concurrent_run_count, which would misrepresent
+ * this row as an execution the way mirrorTestRequestRunAsKind's copy does.
+ * `coverage_source_run_id` is set to `source.id` — the field
+ * execution-shaped reads (test-duration baselines, flip-rate/breadth
+ * corpus, concurrency stats) filter out to exclude this row.
+ */
+export function insertCoverageTestRequestRun(
+  newId: string,
+  projectId: string,
+  contentHash: string,
+  sessionId: string | null,
+  runKind: TestRunKind,
+  baseSha: string | null,
+  worktreePath: string | null,
+  runOrigin: RunOrigin,
+  producer: TestRunProducer | null,
+  requestedCommands: string[],
+  requestedAt: number,
+  source: TestRequestRunRow,
+): void {
+  db.prepare(
+    `INSERT INTO test_request_runs (
+       id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at,
+       failure_reason, structured_result, oom_killed, test_report_acquisition_attempted,
+       run_origin, producer, run_kind, base_sha, worktree_path, failed_command, commands, coverage_source_run_id
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    newId,
+    projectId,
+    contentHash,
+    sessionId,
+    source.state,
+    source.output,
+    requestedAt,
+    requestedAt,
+    requestedAt,
+    source.failure_reason,
+    source.structured_result,
+    source.oom_killed,
+    source.test_report_acquisition_attempted,
+    runOrigin,
+    producer,
+    runKind,
+    baseSha,
+    worktreePath,
+    source.failed_command,
+    JSON.stringify(requestedCommands),
+    source.id,
   );
 }
 
@@ -9396,7 +9466,48 @@ export function updateTestRequestRunState(
   );
 }
 
-const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha, foreign_concurrent_run_count, worktree_path, superseded_by, failed_command`;
+const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha, foreign_concurrent_run_count, worktree_path, superseded_by, failed_command, commands, coverage_source_run_id`;
+
+/**
+ * Every settled `passed` run for (project_id, content_hash) that carries a
+ * comparable command list of its own — the coverage-reuse candidate pool
+ * (see testRequestLane.ts's findCoveringSettledRun, which further filters by
+ * command-set containment and base_sha). `coverage_source_run_id IS NULL`
+ * excludes a coverage row from ever becoming a source for a later coverage
+ * hit — only a genuine execution's verdict is ever chained. `commands IS
+ * NOT NULL` excludes rows predating that column, which carry no comparable
+ * list at all. The final clause is the same vacuous-pass squat guard
+ * getLatestTestRequestRun applies (see that function's own doc comment): a
+ * passed row whose report acquisition was attempted but never matched
+ * anything carries no real verdict and must never be handed out as a
+ * covering source either.
+ */
+export function listSettledPassedTestRequestRunsForCoverage(
+  projectId: string,
+  contentHash: string,
+): TestRequestRunRow[] {
+  return db
+    .prepare<{ project_id: string; content_hash: string }>(
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
+       FROM test_request_runs
+       WHERE project_id = @project_id AND content_hash = @content_hash
+         AND state = 'passed' AND commands IS NOT NULL
+         AND coverage_source_run_id IS NULL
+         AND (
+           structured_result IS NOT NULL
+           OR test_report_acquisition_attempted IS NOT 1
+           OR EXISTS (
+             SELECT 1 FROM test_run_summaries
+             WHERE test_run_summaries.test_request_run_id = test_request_runs.id
+           )
+         )
+       ORDER BY finished_at DESC, rowid DESC`,
+    )
+    .all({
+      project_id: projectId,
+      content_hash: contentHash,
+    }) as TestRequestRunRow[];
+}
 
 /** Every run still `running` — used by the boot-time crash-recovery sweep. */
 export function listRunningTestRequestRuns(): TestRequestRunRow[] {

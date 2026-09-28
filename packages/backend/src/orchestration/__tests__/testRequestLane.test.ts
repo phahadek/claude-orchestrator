@@ -112,6 +112,7 @@ import {
   insertProject,
   getFailingTestIdsForRun,
   getTestRequestRunById,
+  getLatestTestRequestRunForSession,
 } from '../../db/queries';
 import {
   withCheckoutInstallLock,
@@ -430,11 +431,23 @@ describe('runProjectTestRequest — coalescing', () => {
   it('a scoped run and a full run against the identical content-hash execute independently and are stored as two distinct rows, each queryable by run_kind', async () => {
     mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
 
+    // Distinct, non-overlapping commands — this test asserts run_kind
+    // independence, not the coverage-reuse mechanism (see the "admitTestRequest
+    // — coverage reuse" describe block for that), so the two runs must not
+    // be eligible to cover one another.
     await runProjectTestRequest(
-      baseSpec({ contentHash: 'hash-kind', runKind: 'full' }),
+      baseSpec({
+        contentHash: 'hash-kind',
+        runKind: 'full',
+        commands: ['npm run full-only'],
+      }),
     );
     await runProjectTestRequest(
-      baseSpec({ contentHash: 'hash-kind', runKind: 'scoped' }),
+      baseSpec({
+        contentHash: 'hash-kind',
+        runKind: 'scoped',
+        commands: ['npm run scoped-only'],
+      }),
     );
 
     expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
@@ -1333,11 +1346,23 @@ describe('runProjectTestRequest — verify run_kind (failFast/env/failed_command
   it('a verify run and a full run against the identical content-hash never coalesce, and each is independently queryable by run_kind', async () => {
     mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
 
+    // Distinct, non-overlapping commands — this test asserts run_kind
+    // independence, not the coverage-reuse mechanism (see the "admitTestRequest
+    // — coverage reuse" describe block for that), so the two runs must not
+    // be eligible to cover one another.
     await runProjectTestRequest(
-      baseSpec({ contentHash: 'hash-verify-vs-full', runKind: 'full' }),
+      baseSpec({
+        contentHash: 'hash-verify-vs-full',
+        runKind: 'full',
+        commands: ['npm run full-only'],
+      }),
     );
     await runProjectTestRequest(
-      baseSpec({ contentHash: 'hash-verify-vs-full', runKind: 'verify' }),
+      baseSpec({
+        contentHash: 'hash-verify-vs-full',
+        runKind: 'verify',
+        commands: ['npm run verify-only'],
+      }),
     );
 
     expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
@@ -2606,6 +2631,312 @@ describe('admitTestRequest — settled-run guard', () => {
     expect(result.unchangedReplay).toBe(true);
     expect(result.passed).toBe(true);
     expect(result.runId).toBe(runId);
+  });
+});
+
+describe('admitTestRequest — coverage reuse', () => {
+  const VERIFY_COMMANDS = ['npm test', 'npm run lint'];
+  const TEST_COMMANDS = ['npm test'];
+  const SCOPED_COMMANDS = ['npm test -- --changed foo.ts'];
+
+  it('a scoped request joins an in-flight verify run whose commands cover test:, and resolves passed from it once the verify run passes — without a second execution', async () => {
+    let resolveVerify: (v: { passed: boolean; output: string }) => void;
+    mockRunTestCommands.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveVerify = resolve;
+        }),
+    );
+
+    const verifyAdmission = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-1',
+        contentHash: 'cov-1-hash',
+        commands: VERIFY_COMMANDS,
+        runKind: 'verify',
+      }),
+    );
+
+    const scopedAdmission = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-1',
+        contentHash: 'cov-1-hash',
+        commands: SCOPED_COMMANDS,
+        coverageCommands: TEST_COMMANDS,
+        runKind: 'scoped',
+        sessionId: 'session-cov-1',
+      }),
+    );
+
+    // No second execution was started for the scoped request — it's
+    // waiting on the in-flight verify run instead.
+    await vi.waitFor(() => expect(mockRunTestCommands).toHaveBeenCalled());
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    resolveVerify!({ passed: true, output: 'verify ok' });
+    const [verifyResult, scopedResult] = await Promise.all([
+      verifyAdmission.result,
+      scopedAdmission.result,
+    ]);
+
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    expect(verifyResult.passed).toBe(true);
+    expect(scopedResult.passed).toBe(true);
+    expect(scopedResult.runId).not.toBe(verifyResult.runId);
+
+    const coverageRow = db
+      .prepare(`SELECT * FROM test_request_runs WHERE id = ?`)
+      .get(scopedResult.runId) as {
+      coverage_source_run_id: string | null;
+      session_id: string | null;
+      run_kind: string;
+      state: string;
+    };
+    expect(coverageRow.coverage_source_run_id).toBe(verifyResult.runId);
+    expect(coverageRow.session_id).toBe('session-cov-1');
+    expect(coverageRow.run_kind).toBe('scoped');
+    expect(coverageRow.state).toBe('passed');
+  });
+
+  it('when the covering in-flight verify run fails, the waiting scoped request falls through and executes fresh', async () => {
+    let resolveVerify: (v: { passed: boolean; output: string }) => void;
+    mockRunTestCommands.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveVerify = resolve;
+        }),
+    );
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: true,
+      output: 'scoped ok',
+    });
+
+    const verifyAdmission = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-2',
+        contentHash: 'cov-2-hash',
+        commands: VERIFY_COMMANDS,
+        runKind: 'verify',
+      }),
+    );
+    const scopedAdmission = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-2',
+        contentHash: 'cov-2-hash',
+        commands: SCOPED_COMMANDS,
+        coverageCommands: TEST_COMMANDS,
+        runKind: 'scoped',
+        sessionId: 'session-cov-2',
+      }),
+    );
+
+    await vi.waitFor(() => expect(mockRunTestCommands).toHaveBeenCalled());
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    resolveVerify!({ passed: false, output: 'verify failed' });
+
+    const scopedResult = await scopedAdmission.result;
+    await verifyAdmission.result;
+
+    // The scoped request executed fresh once the covering run failed.
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
+    expect(scopedResult.passed).toBe(true);
+    expect(scopedResult.unchangedReplay).toBe(false);
+
+    const row = db
+      .prepare(`SELECT coverage_source_run_id FROM test_request_runs WHERE id = ?`)
+      .get(scopedResult.runId) as { coverage_source_run_id: string | null };
+    expect(row.coverage_source_run_id).toBeNull();
+  });
+
+  it('a full request with a settled passed covering verify run returns without executing, writing one session-attributed coverage row', async () => {
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: true,
+      output: 'verify ok',
+    });
+    const verifyResult = await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-3',
+        contentHash: 'cov-3-hash',
+        commands: VERIFY_COMMANDS,
+        runKind: 'verify',
+      }),
+    );
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    const fullResult = await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-3',
+        contentHash: 'cov-3-hash',
+        commands: TEST_COMMANDS,
+        runKind: 'full',
+        sessionId: 'session-cov-3',
+      }),
+    );
+
+    // No second execution — satisfied by the settled verify run's verdict.
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    expect(fullResult.passed).toBe(true);
+    expect(fullResult.unchangedReplay).toBe(true);
+    expect(fullResult.runId).not.toBe(verifyResult.runId);
+
+    const rows = db
+      .prepare(
+        `SELECT id, coverage_source_run_id, session_id, run_kind FROM test_request_runs WHERE project_id = ? AND content_hash = ?`,
+      )
+      .all('proj-cov-3', 'cov-3-hash') as Array<{
+      id: string;
+      coverage_source_run_id: string | null;
+      session_id: string | null;
+      run_kind: string;
+    }>;
+    expect(rows).toHaveLength(2);
+    const coverageRow = rows.find((r) => r.id === fullResult.runId);
+    expect(coverageRow?.coverage_source_run_id).toBe(verifyResult.runId);
+    expect(coverageRow?.session_id).toBe('session-cov-3');
+    expect(coverageRow?.run_kind).toBe('full');
+  });
+
+  it('a settled failed covering run is never reused for a narrower request — it executes fresh', async () => {
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: false,
+      output: 'verify failed',
+    });
+    await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-4',
+        contentHash: 'cov-4-hash',
+        commands: VERIFY_COMMANDS,
+        runKind: 'verify',
+      }),
+    );
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: true,
+      output: 'scoped ok',
+    });
+    const scopedResult = await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-4',
+        contentHash: 'cov-4-hash',
+        commands: SCOPED_COMMANDS,
+        coverageCommands: TEST_COMMANDS,
+        runKind: 'scoped',
+      }),
+    );
+
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
+    expect(scopedResult.unchangedReplay).toBe(false);
+  });
+
+  it('a request whose commands are not covered by the settled run behaves exactly as today — it executes fresh', async () => {
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: true,
+      output: 'lint only',
+    });
+    await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-5',
+        contentHash: 'cov-5-hash',
+        // Missing 'npm test' — does not cover a full request's test: set.
+        commands: ['npm run lint'],
+        runKind: 'verify',
+      }),
+    );
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: true,
+      output: 'full ok',
+    });
+    const fullResult = await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-5',
+        contentHash: 'cov-5-hash',
+        commands: TEST_COMMANDS,
+        runKind: 'full',
+      }),
+    );
+
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
+    expect(fullResult.unchangedReplay).toBe(false);
+  });
+
+  it('getLatestTestRequestRunForSession returns the session-attributed coverage row', async () => {
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: true,
+      output: 'verify ok',
+    });
+    await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-6',
+        contentHash: 'cov-6-hash',
+        commands: VERIFY_COMMANDS,
+        runKind: 'verify',
+      }),
+    );
+
+    const fullResult = await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-6',
+        contentHash: 'cov-6-hash',
+        commands: TEST_COMMANDS,
+        runKind: 'full',
+        sessionId: 'session-cov-6',
+      }),
+    );
+
+    const forSession = getLatestTestRequestRunForSession(
+      'proj-cov-6',
+      'session-cov-6',
+    );
+    expect(forSession?.id).toBe(fullResult.runId);
+    expect(forSession?.coverage_source_run_id).not.toBeNull();
+  });
+
+  it('excludes the coverage row from execution-shaped reads — no test_run_results/summary row, and it is invisible to the duration/flip-rate/breadth corpus', async () => {
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: true,
+      output: 'verify ok',
+    });
+    await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-7',
+        contentHash: 'cov-7-hash',
+        commands: VERIFY_COMMANDS,
+        runKind: 'verify',
+      }),
+    );
+
+    const fullResult = await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-7',
+        contentHash: 'cov-7-hash',
+        commands: TEST_COMMANDS,
+        runKind: 'full',
+      }),
+    );
+
+    // The coverage path never dispatches ingestion — no digest/summary rows
+    // are ever written against it, so duration baselines, flip-rate and
+    // breadth-corpus reads (all sourced from those tables) never see it.
+    const summaryCount = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM test_run_summaries WHERE test_request_run_id = ?`,
+      )
+      .get(fullResult.runId) as { n: number };
+    expect(summaryCount.n).toBe(0);
+
+    const resultsCount = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM test_run_results WHERE test_request_run_id = ?`,
+      )
+      .get(fullResult.runId) as { n: number };
+    expect(resultsCount.n).toBe(0);
+
+    expect(mockIngestOffMainThread).not.toHaveBeenCalledWith(
+      expect.objectContaining({ id: fullResult.runId }),
+    );
   });
 });
 
