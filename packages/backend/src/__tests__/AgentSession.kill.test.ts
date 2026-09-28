@@ -100,7 +100,10 @@ describe('AgentSession.kill() after reclaimProcess()', () => {
     await session.reclaimProcess();
     expect(session.hasEnded).toBe(true);
 
-    await session.kill({ reason: 'user_kill', errorDetail: 'killed by user request' });
+    await session.kill({
+      reason: 'user_kill',
+      errorDetail: 'killed by user request',
+    });
 
     expect(markSessionErrored).toHaveBeenCalledWith(
       'sess-reclaimed',
@@ -130,7 +133,10 @@ describe('AgentSession.kill() after reclaimProcess()', () => {
     await session.reclaimProcess();
     expect(session.hasEnded).toBe(true);
 
-    await session.kill({ reason: 'user_kill', errorDetail: 'killed by user request' });
+    await session.kill({
+      reason: 'user_kill',
+      errorDetail: 'killed by user request',
+    });
 
     expect(updateSessionStatus).toHaveBeenCalledWith(
       'sess-reclaimed-nomgr',
@@ -163,7 +169,10 @@ describe('AgentSession.kill() after reclaimProcess()', () => {
       sessionManager,
     );
 
-    await session.kill({ reason: 'user_kill', errorDetail: 'killed by user request' });
+    await session.kill({
+      reason: 'user_kill',
+      errorDetail: 'killed by user request',
+    });
 
     expect(markSessionErrored).not.toHaveBeenCalled();
     expect(updateSessionStatus).not.toHaveBeenCalled();

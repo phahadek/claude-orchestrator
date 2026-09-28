@@ -234,7 +234,7 @@ describe('automatic session-kill allow-list guard', () => {
     expect(content.includes('sessionManager\n      .kill(')).toBe(false);
   });
 
-  it('every `.kill(...)` call site passing reason: \'user_kill\' is on the operator allow-list', () => {
+  it("every `.kill(...)` call site passing reason: 'user_kill' is on the operator allow-list", () => {
     const files = walk(SESSION_DIR).filter((f) => !f.includes('__tests__'));
     const offenders: string[] = [];
 
@@ -282,7 +282,7 @@ describe('automatic session-kill allow-list guard', () => {
     expect(allowed).toBe(false);
   });
 
-  it('resumeSession\'s 30s no-events watchdog calls flagResumeFailure before kill(), and never passes it a reason — the terminal write must already have happened before kill()\'s alreadyConcluded guard is reached, not via a user_kill label', () => {
+  it("resumeSession's 30s no-events watchdog calls flagResumeFailure before kill(), and never passes it a reason — the terminal write must already have happened before kill()'s alreadyConcluded guard is reached, not via a user_kill label", () => {
     const content = fs.readFileSync(
       path.join(SESSION_DIR, 'SessionManager.ts'),
       'utf8',
