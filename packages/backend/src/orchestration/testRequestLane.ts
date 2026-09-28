@@ -76,6 +76,9 @@ import {
   listQueuedTestRequestRunsForWorktree,
   withdrawTestRequestRun,
   ingestTestRunResultsOffMainThread,
+  listSettledPassedTestRequestRunsForCoverage,
+  insertCoverageTestRequestRun,
+  getTestRequestRunById,
 } from '../db/queries';
 import { db } from '../db/db';
 import type {
@@ -166,6 +169,19 @@ export interface TestRequestRunSpec {
    * marker-exclusion scoped run that has no base dependency.
    */
   baseSha?: string | null;
+  /**
+   * The command set a same-hash run of a *different* run_kind must cover for
+   * this request to be satisfiable without executing — see admitTestRequest's
+   * coverage-reuse layer. Omitted defaults to `commands`, which is already
+   * correct for 'full' and 'verify' (their own `commands` already is the
+   * project's declared test:/verify: set). A 'scoped' request must pass its
+   * project's full `test:` command set here explicitly: its own `commands`
+   * is the narrower test_scoped subset actually about to execute, and a
+   * passing scoped run proves nothing about the full suite, but a passing
+   * *full* run proves the scoped subset drawn from it — so a scoped
+   * request's coverage target is the full set, not its own commands.
+   */
+  coverageCommands?: string[];
   /**
    * Stop running subsequent commands after the first failure — forwarded to
    * runTestCommands, which otherwise always runs every declared command
@@ -434,13 +450,21 @@ interface InFlightEntry {
   contentHash: string;
   runKind: TestRunKind;
   baseSha: string | null;
+  /** This entry's own command set — what the coverage-reuse layer checks a waiting request's coverageCommands against. */
+  commands: string[];
   /** Live admission status, re-derived from the semaphore on every call — never a fixed snapshot. */
   admission: () => {
     status: TestRequestAdmissionStatus;
     position: number;
     queueDepth: number;
   };
-  promise: Promise<TestCommandResult & { runId: string }>;
+  promise: Promise<
+    TestCommandResult & {
+      runId: string;
+      superseded?: boolean;
+      supersededBy?: string;
+    }
+  >;
 }
 
 const inFlightRuns = new Map<string, InFlightEntry>();
@@ -463,6 +487,132 @@ function coalesceKey(
 
 function sessionKey(projectId: string, sessionId: string): string {
   return `${projectId}:${sessionId}`;
+}
+
+/**
+ * True when every command in `required` (trimmed) also appears (trimmed) in
+ * `candidateCommands` — the coverage-reuse test: a run whose own command set
+ * is a superset of what a request needs can satisfy that request without a
+ * fresh execution. Mirrors PreReviewPipeline.ts's commandsAreSubset, which
+ * this task's sibling retires in favor of this lane-level check. A `null`
+ * candidate (a row predating the `commands` column, or a coverage row that
+ * carries no comparable command list of its own) never covers anything.
+ */
+function commandsCovered(
+  required: string[],
+  candidateCommands: string[] | null,
+): boolean {
+  if (!candidateCommands) return false;
+  const have = new Set(candidateCommands.map((c) => c.trim()));
+  return required.every((c) => have.has(c.trim()));
+}
+
+function parseCommands(json: string | null): string[] | null {
+  if (!json) return null;
+  try {
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? (parsed as string[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A settled passed run at (projectId, contentHash) — of any run_kind — whose
+ * own commands cover `coverageTarget`, and whose base_sha (when it carries
+ * one) matches `baseSha`. Coverage rows are excluded at the query layer
+ * (listSettledPassedTestRequestRunsForCoverage) so a coverage hit can never
+ * itself become a covering source for a later request.
+ */
+function findCoveringSettledRun(
+  projectId: string,
+  contentHash: string,
+  coverageTarget: string[],
+  baseSha: string | null,
+): TestRequestRunRow | undefined {
+  const candidates = listSettledPassedTestRequestRunsForCoverage(
+    projectId,
+    contentHash,
+  );
+  return candidates.find((r) => {
+    if (!commandsCovered(coverageTarget, parseCommands(r.commands)))
+      return false;
+    if (baseSha !== null && r.base_sha !== null && r.base_sha !== baseSha)
+      return false;
+    return true;
+  });
+}
+
+/** Builds the result a coverage hit (in-flight join or settled reuse) resolves with, from the covering run's verdict. */
+function buildCoverageResult(
+  runId: string,
+  source: TestRequestRunRow,
+  joined: boolean,
+): TestRequestRunResult {
+  return {
+    passed: source.state === 'passed',
+    output: source.output,
+    timedOut: source.failure_reason === 'timeout',
+    oomKilled: !!source.oom_killed,
+    failedCommand: source.failed_command ?? undefined,
+    isToolInfraFailure: source.failure_reason === 'tool_infra_failure',
+    runId,
+    joined,
+    unchangedReplay: !joined,
+  };
+}
+
+/**
+ * Joins an in-flight run of a different run_kind that would cover this
+ * request, instead of admitting a concurrent execution against the
+ * identical tree — waits for it to settle, then decides: a pass satisfies
+ * this request (a session-attributed coverage row is written, copying its
+ * verdict); a fail or withdrawal is not shareable, so this request falls
+ * through to fresh admission exactly as if no coverage had been found.
+ */
+function admitFromCoverageWait(
+  spec: TestRequestRunSpec,
+  runKind: TestRunKind,
+  baseSha: string | null,
+  otherEntry: InFlightEntry,
+): TestRequestAdmission {
+  const result: Promise<TestRequestRunResult> = otherEntry.promise.then((r) => {
+    if (r.passed && !r.superseded) {
+      const source = getTestRequestRunById(otherEntry.runId);
+      if (source) {
+        const newId = randomUUID();
+        insertCoverageTestRequestRun(
+          newId,
+          spec.projectId,
+          spec.contentHash,
+          spec.sessionId,
+          runKind,
+          baseSha,
+          spec.worktreePath,
+          spec.runOrigin,
+          spec.producer,
+          spec.commands,
+          Date.now(),
+          source,
+        );
+        emitSettled({
+          projectId: spec.projectId,
+          contentHash: spec.contentHash,
+          runKind,
+          state: 'passed',
+        });
+        return buildCoverageResult(newId, source, true);
+      }
+    }
+    return admitTestRequest(spec).result;
+  });
+  return {
+    runId: otherEntry.runId,
+    reused: false,
+    unchangedReplay: false,
+    result,
+    ...otherEntry.admission(),
+  };
 }
 
 const ADMISSION_POLL_MS = 5_000;
@@ -654,6 +804,82 @@ export function admitTestRequest(
     };
   }
 
+  // Coverage layer: exact run_kind coalescing/settled-replay above found
+  // nothing, but a same-hash run of a *different* run_kind may already
+  // cover what this request needs — a passed verify run's commands are a
+  // superset of test:'s, or a passed full run proves the scoped subset
+  // drawn from it. See TestRequestRunSpec.coverageCommands's doc comment
+  // for what a scoped request must pass here to be checked against the
+  // project's full command set rather than its own narrower one.
+  const coverageTarget = spec.coverageCommands ?? spec.commands;
+
+  // 4a. In-flight coverage: wait on an already-running/queued run rather
+  // than starting a concurrent execution against the identical tree. Its
+  // eventual pass satisfies this request; its failure/withdrawal falls
+  // through to fresh admission exactly as today.
+  for (const otherEntry of inFlightRuns.values()) {
+    if (otherEntry.projectId !== spec.projectId) continue;
+    if (otherEntry.contentHash !== spec.contentHash) continue;
+    if (!commandsCovered(coverageTarget, otherEntry.commands)) continue;
+    if (
+      baseSha !== null &&
+      otherEntry.baseSha !== null &&
+      otherEntry.baseSha !== baseSha
+    )
+      continue;
+    withdrawStaleSameWorktreeRuns(
+      spec.projectId,
+      spec.worktreePath,
+      spec.contentHash,
+      otherEntry.runId,
+    );
+    return admitFromCoverageWait(spec, runKind, baseSha, otherEntry);
+  }
+
+  // 4b. Settled coverage: a passed run of a different run_kind already
+  // proves this request's commands. Only a *passed* covering run is ever
+  // reused this way — see findCoveringSettledRun's own doc comment.
+  const coveringSettled = findCoveringSettledRun(
+    spec.projectId,
+    spec.contentHash,
+    coverageTarget,
+    baseSha,
+  );
+  if (coveringSettled) {
+    withdrawStaleSameWorktreeRuns(
+      spec.projectId,
+      spec.worktreePath,
+      spec.contentHash,
+      coveringSettled.id,
+    );
+    const newId = randomUUID();
+    insertCoverageTestRequestRun(
+      newId,
+      spec.projectId,
+      spec.contentHash,
+      spec.sessionId,
+      runKind,
+      baseSha,
+      spec.worktreePath,
+      spec.runOrigin,
+      spec.producer,
+      spec.commands,
+      Date.now(),
+      coveringSettled,
+    );
+    return {
+      runId: newId,
+      status: 'running',
+      position: 0,
+      queueDepth: 0,
+      reused: false,
+      unchangedReplay: true,
+      result: Promise.resolve(
+        buildCoverageResult(newId, coveringSettled, false),
+      ),
+    };
+  }
+
   const requestedAt = Date.now();
   const runId = randomUUID();
   // Durably recorded as 'queued' before the semaphore permit is even
@@ -674,6 +900,7 @@ export function admitTestRequest(
     runKind,
     baseSha,
     spec.worktreePath,
+    spec.commands,
   );
   withdrawStaleSameWorktreeRuns(
     spec.projectId,
@@ -716,6 +943,7 @@ export function admitTestRequest(
     contentHash: spec.contentHash,
     runKind,
     baseSha,
+    commands: spec.commands,
     admission,
     promise,
   };
@@ -1122,6 +1350,8 @@ async function executeTestRequestRun(
       worktree_path: spec.worktreePath,
       superseded_by: null,
       failed_command: result.passed ? null : (result.failedCommand ?? null),
+      commands: JSON.stringify(spec.commands),
+      coverage_source_run_id: null,
     }).catch((err) => {
       logger.error(
         `[testRequestLane] ingestion dispatch failed for run ${runId}:`,
