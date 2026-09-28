@@ -282,6 +282,10 @@ function makeHarness(headSha: string = HEAD_SHA) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // clearAllMocks() resets call history but not a mockReturnValue set by an
+  // earlier test (e.g. the autofix-only-push test below) — re-arm the
+  // non-autofix-only default explicitly so it can't leak into later tests.
+  vi.mocked(queries.consumeAutofixSha).mockReturnValue(false);
 });
 
 // ── 1. Push before review session → pending_push queued, no review job ────────

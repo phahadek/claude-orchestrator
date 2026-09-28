@@ -2779,8 +2779,14 @@ describe('PRReviewService — verdict persisted before side effects', () => {
       review_session_id: 'dead-session-id',
       draft: 1,
     } as any);
-    // Session row exists and is idle — qualifies for Case 2
-    vi.mocked(getSession).mockReturnValueOnce({ status: 'idle' } as any);
+    // Session row exists and is idle — qualifies for Case 2. Keyed on
+    // sessionId (not a positional mockReturnValueOnce) since reviewPR()
+    // also calls getSession(prRow.session_id) earlier, for sessionWorktreePath,
+    // which would otherwise consume a once-only value before the isResumable
+    // check ever sees it.
+    vi.mocked(getSession).mockImplementation((sessionId: string) =>
+      sessionId === 'dead-session-id' ? ({ status: 'idle' } as any) : null,
+    );
 
     const callOrder: string[] = [];
     const mockGH = makeMockGitHub();

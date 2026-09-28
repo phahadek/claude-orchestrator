@@ -1990,6 +1990,17 @@ export class PRMergeWatcher extends EventEmitter {
     }
 
     if (!this.reviewOrchestrator) {
+      if (!prRow.review_session_id) {
+        // Gate-failure retry with no established review session and no
+        // orchestrator wired — queue as pending_push so a later poll (once
+        // the orchestrator is available) or sweepPendingPushDeadLetters can
+        // still pick this push up, rather than dropping it.
+        setPendingPush(prRow.pr_number, prRow.repo, 1);
+        logger.warn(
+          `[PRMergeWatcher] handlePushDetected: reviewOrchestrator not set — queued PR #${prRow.pr_number} as pending_push`,
+        );
+        return;
+      }
       logger.warn(
         `[PRMergeWatcher] handlePushDetected: reviewOrchestrator not set — skipping re-review for PR #${prRow.pr_number}`,
       );

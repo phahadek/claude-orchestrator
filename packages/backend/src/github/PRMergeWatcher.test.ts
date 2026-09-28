@@ -5157,13 +5157,16 @@ describe('PRMergeWatcher.handlePushDetected() — post-gate-failure enqueue', ()
 
     expect(
       vi.mocked(reviewOrchestrator.enqueueReview as ReturnType<typeof vi.fn>),
-    ).toHaveBeenCalledWith({
-      prNumber: 42,
-      repo: 'owner/repo',
-      taskId: 'notion:task-abc',
-      taskUrl: 'https://notion.so/task-1',
-      contextUrl: 'https://notion.so/ctx',
-    });
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prNumber: 42,
+        repo: 'owner/repo',
+        taskId: 'notion:task-abc',
+        taskUrl: 'https://notion.so/task-1',
+        contextUrl: 'https://notion.so/ctx',
+        pushTriggered: true,
+      }),
+    );
     expect(vi.mocked(setPendingPush)).not.toHaveBeenCalled();
   });
 
@@ -5252,7 +5255,11 @@ describe('PRMergeWatcher.handlePushDetected() — post-gate-failure enqueue', ()
     expect(vi.mocked(setPendingPush)).not.toHaveBeenCalled();
   });
 
-  it('push after autofix_failed with review in flight → falls back to setPendingPush', async () => {
+  it('push after autofix_failed with another review in flight → still delegates to enqueueReview (admitJob owns in-flight coalescing)', async () => {
+    // isReviewInFlight is no longer consulted by handlePushDetected itself —
+    // ReviewOrchestrator.admitJob is the single place that decides whether an
+    // in-flight review coalesces a duplicate enqueue or the new push queues
+    // a genuine follow-up job (see the task's single-flight requirement).
     const pr = makePRRow({
       review_session_id: null,
       review_result: JSON.stringify({
@@ -5286,8 +5293,10 @@ describe('PRMergeWatcher.handlePushDetected() — post-gate-failure enqueue', ()
 
     expect(
       vi.mocked(reviewOrchestrator.enqueueReview as ReturnType<typeof vi.fn>),
-    ).not.toHaveBeenCalled();
-    expect(vi.mocked(setPendingPush)).toHaveBeenCalledWith(42, 'owner/repo', 1);
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({ prNumber: 42, repo: 'owner/repo' }),
+    );
+    expect(vi.mocked(setPendingPush)).not.toHaveBeenCalled();
   });
 
   it('push after autofix_failed but orchestrator not set → falls back to setPendingPush', async () => {
