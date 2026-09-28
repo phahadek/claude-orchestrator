@@ -20,7 +20,6 @@ const mockUpdateTestRequestRunState = vi.fn();
 const mockAddAutofixSha = vi.fn();
 const mockGetAnalyzeContentCacheResult = vi.fn().mockReturnValue(undefined);
 const mockInsertAnalyzeContentCacheResult = vi.fn();
-const mockMirrorTestRequestRunAsKind = vi.fn();
 
 vi.mock('../../db/queries', () => ({
   getPRByNumber: (...args: unknown[]) => mockGetPRByNumber(...args),
@@ -47,8 +46,6 @@ vi.mock('../../db/queries', () => ({
   insertAnalyzeContentCacheResult: (...args: unknown[]) =>
     mockInsertAnalyzeContentCacheResult(...args),
   addAutofixSha: (...args: unknown[]) => mockAddAutofixSha(...args),
-  mirrorTestRequestRunAsKind: (...args: unknown[]) =>
-    mockMirrorTestRequestRunAsKind(...args),
 }));
 
 const mockComputeTriggerContentHash = vi.fn().mockResolvedValue(null);
@@ -1828,12 +1825,16 @@ describe('PreReviewPipeline — tests record stage (non-blocking)', () => {
   });
 });
 
-describe('PreReviewPipeline — cross-kind verify/tests reuse', () => {
+describe('PreReviewPipeline — cross-kind verify/tests reuse now lives in the lane', () => {
+  // config.test is a strict subset of config.verify's command set here,
+  // matching the polimarket-analyser shape the retired special case was
+  // grounded in (verify: pyright + test-static + test; test: test-static +
+  // test) — but PreReviewPipeline itself no longer inspects that
+  // relationship at all: both stages hand their own full, unfiltered
+  // command set to admitTestRequest and let the lane's own coverage-reuse
+  // layer (testRequestLane.ts, exercised by that module's own test suite)
+  // decide whether a same-hash run of the other kind covers it.
   beforeEach(() => {
-    // config.test is a strict subset of config.verify's command set in
-    // every test in this block, matching the polimarket-analyser shape the
-    // task is grounded in (verify: pyright + test-static + test; test:
-    // test-static + test).
     mockLoadOrchestratorConfig.mockReturnValue({
       verify: ['uv run pyright', 'uv run task test-static', 'uv run task test'],
       autofix: [],
@@ -1852,51 +1853,29 @@ describe('PreReviewPipeline — cross-kind verify/tests reuse', () => {
     });
   });
 
-  it('reuses a passed same-hash verify run as a tests-stage cache hit and mirrors it under run_kind full', async () => {
-    const verifyRun = {
-      id: 'verify-run-1',
-      project_id: 'proj-1',
-      content_hash: 'worktree-content-hash',
-      state: 'passed',
-      output: 'ok',
-      run_kind: 'verify',
-      started_at: 1000,
-      finished_at: 2000,
-    };
-    mockGetLatestTestRequestRun.mockImplementation(
-      (_projectId: string, _contentHash: string, runKind?: string) =>
-        runKind === 'verify' ? verifyRun : undefined,
-    );
+  it('tests stage always admits its own full command set through the lane — no in-process subset check gates it', async () => {
+    // No settled run of either kind — this asserts the tests stage no
+    // longer special-cases a passed verify row itself (that's the lane's
+    // job now); it simply requests its own commands unconditionally.
+    mockGetLatestTestRequestRun.mockReturnValue(undefined);
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 
     await pipeline.run(makeJob(), makeProject());
 
-    // No lane request for the tests stage's own commands — the verify
-    // run's verdict stood in for it.
-    expect(mockAdmitTestRequest).not.toHaveBeenCalledWith(
+    expect(mockAdmitTestRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         commands: ['uv run task test-static', 'uv run task test'],
       }),
     );
-    expect(mockRunTestCommands).not.toHaveBeenCalled();
-    expect(mockMirrorTestRequestRunAsKind).toHaveBeenCalledWith(
-      verifyRun,
-      expect.any(String),
-      'full',
-    );
   });
 
-  it('still admits a full tests run when config.test contains a command absent from config.verify', async () => {
+  it('tests stage still executes fresh (polimarket-shaped drift: test: carries a command verify: lacks)', async () => {
     mockLoadOrchestratorConfig.mockReturnValue({
       verify: ['uv run pyright', 'uv run task test-static', 'uv run task test'],
       autofix: [],
       analyze: [],
-      test: [
-        'uv run task test-static',
-        'uv run task test',
-        'uv run extra-check',
-      ],
+      test: ['uv run task test-static', 'uv run task test', 'uv run vitest'],
       test_timeout_sec: 300,
       test_max_rss_mb: 0,
       test_fail_fast: true,
@@ -1908,32 +1887,7 @@ describe('PreReviewPipeline — cross-kind verify/tests reuse', () => {
       bash_rules: [],
       bootstrap_script: '',
     });
-    mockGetLatestTestRequestRun.mockImplementation(
-      (_projectId: string, _contentHash: string, runKind?: string) =>
-        runKind === 'verify'
-          ? {
-              id: 'verify-run-1',
-              project_id: 'proj-1',
-              content_hash: 'worktree-content-hash',
-              state: 'passed',
-              output: 'ok',
-              run_kind: 'verify',
-              started_at: 1000,
-              finished_at: 2000,
-            }
-          : undefined,
-    );
-    mockAdmitTestRequest.mockImplementation(
-      (_spec: { commands: string[] }) => ({
-        runId: 'run-enqueued',
-        status: 'running',
-        position: 0,
-        queueDepth: 0,
-        reused: false,
-        unchangedReplay: false,
-        result: Promise.resolve({ passed: true, output: '' }),
-      }),
-    );
+    mockGetLatestTestRequestRun.mockReturnValue(undefined);
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 
@@ -1944,11 +1898,10 @@ describe('PreReviewPipeline — cross-kind verify/tests reuse', () => {
         commands: [
           'uv run task test-static',
           'uv run task test',
-          'uv run extra-check',
+          'uv run vitest',
         ],
       }),
     );
-    expect(mockMirrorTestRequestRunAsKind).not.toHaveBeenCalled();
   });
 
   it('a failed verify at H blocks the pipeline before the tests stage — unchanged from today', async () => {
@@ -1956,6 +1909,7 @@ describe('PreReviewPipeline — cross-kind verify/tests reuse', () => {
     // its live execution, which halts the pipeline (a gate failure) before
     // the (record-mode, non-blocking) tests stage is ever reached — same as
     // before this change.
+    mockGetLatestTestRequestRun.mockReturnValue(undefined);
     mockAdmitTestRequest.mockImplementation((spec: { runKind?: string }) => ({
       runId: 'run-enqueued',
       status: 'running',
@@ -1979,54 +1933,98 @@ describe('PreReviewPipeline — cross-kind verify/tests reuse', () => {
         commands: ['uv run task test-static', 'uv run task test'],
       }),
     );
-    expect(mockMirrorTestRequestRunAsKind).not.toHaveBeenCalled();
   });
 
-  it('verify stage skips the commands already covered by a passed same-hash full run', async () => {
-    const fullRun = {
-      id: 'full-run-1',
-      project_id: 'proj-1',
-      content_hash: 'worktree-content-hash',
-      state: 'passed',
-      output: 'ok',
-      run_kind: 'full',
-      started_at: 1000,
-      finished_at: 2000,
-    };
+  it('verify stage hands its full, unfiltered command set to the lane even when a passed same-hash full run exists', async () => {
     mockGetLatestTestRequestRun.mockImplementation(
       (_projectId: string, _contentHash: string, runKind?: string) =>
-        runKind === 'full' ? fullRun : undefined,
+        runKind === 'full'
+          ? {
+              id: 'full-run-1',
+              project_id: 'proj-1',
+              content_hash: 'worktree-content-hash',
+              state: 'passed',
+              output: 'ok',
+              run_kind: 'full',
+              started_at: 1000,
+              finished_at: 2000,
+            }
+          : undefined,
     );
-    mockAdmitTestRequest.mockImplementation(
-      (_spec: { commands: string[] }) => ({
-        runId: 'run-enqueued',
-        status: 'running',
-        position: 0,
-        queueDepth: 0,
-        reused: false,
-        unchangedReplay: false,
-        result: Promise.resolve({ passed: true, output: '' }),
-      }),
-    );
+    mockLaneResult({ passed: true, output: '' });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 
     await pipeline.run(makeJob(), makeProject());
 
-    // Only the uncovered verify command (pyright) is admitted through the
-    // lane — test-static/test, already proven by the passed full run, are
-    // never re-requested.
+    // No in-process filtering of config.verify's commands — whether a
+    // passed full run at this hash covers any of them is now entirely the
+    // lane's own coverage-reuse decision (admitTestRequest is mocked here,
+    // so this only asserts what PreReviewPipeline itself hands it).
     expect(mockAdmitTestRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         runKind: 'verify',
-        commands: ['uv run pyright'],
+        commands: [
+          'uv run pyright',
+          'uv run task test-static',
+          'uv run task test',
+        ],
       }),
     );
-    expect(mockAdmitTestRequest).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        runKind: 'verify',
-        commands: expect.arrayContaining(['uv run task test']),
+  });
+
+  it('verify resolves passed when the lane reports a coverage hit (unchangedReplay) from a covering session run', async () => {
+    // Stands in for admitTestRequest's own in-flight/settled coverage join
+    // (see testRequestLane.test.ts's 'admitTestRequest — coverage reuse'
+    // suite for that mechanism itself) — from PreReviewPipeline's side, a
+    // coverage hit is indistinguishable from any other lane result: it just
+    // consumes whatever admitTestRequest hands back.
+    mockAdmitTestRequest.mockReturnValue({
+      runId: 'coverage-row-1',
+      status: 'running',
+      position: 0,
+      queueDepth: 0,
+      reused: false,
+      unchangedReplay: true,
+      result: Promise.resolve({
+        passed: true,
+        output: 'covered by session run',
+        runId: 'coverage-row-1',
+        joined: false,
+        unchangedReplay: true,
       }),
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(true);
+  });
+
+  it('verify does not reuse a settled failed covering run — a failing lane result still gates the pipeline', async () => {
+    mockAdmitTestRequest.mockImplementation((spec: { runKind?: string }) => ({
+      runId: 'run-enqueued',
+      status: 'running',
+      position: 0,
+      queueDepth: 0,
+      reused: false,
+      unchangedReplay: false,
+      result:
+        spec.runKind === 'verify'
+          ? Promise.resolve({ passed: false, output: 'covering run failed' })
+          : Promise.resolve({ passed: true, output: '' }),
+    }));
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(false);
+    expect(mockSetPreReviewStage).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'blocked_verify',
     );
   });
 });
