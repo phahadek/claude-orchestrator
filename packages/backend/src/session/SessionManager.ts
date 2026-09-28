@@ -2280,7 +2280,7 @@ export class SessionManager extends EventEmitter {
             { cwd: projectDir },
           );
           setSessionFeatureBranch(sessionId, existingBranch);
-        } catch (err) {
+        } catch {
           // A local branch by this name may already be registered (e.g. a
           // prior partial attempt) — check it out directly instead of
           // creating it again.
