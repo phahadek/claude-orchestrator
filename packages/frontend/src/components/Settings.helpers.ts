@@ -49,6 +49,7 @@ export const MIN_POLL_INTERVAL_MS = 5000;
 export const MODEL_OPTIONS = [
   { label: '(CLI default)', value: '' },
   { label: 'claude-opus-4-6', value: 'claude-opus-4-6' },
+  { label: 'claude-sonnet-5-5', value: 'claude-sonnet-5-5' },
   { label: 'claude-sonnet-5', value: 'claude-sonnet-5' },
   { label: 'claude-sonnet-4-6', value: 'claude-sonnet-4-6' },
   { label: 'claude-haiku-4-5', value: 'claude-haiku-4-5' },

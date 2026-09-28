@@ -4,7 +4,7 @@
  * pricing: cache writes (creation) cost 1.25x the base input rate, cache
  * reads cost 0.1x the base input rate.
  *
- * All current generations within a family (Opus 4.6/4.7/4.8/5, Sonnet 4.6/5,
+ * All current generations within a family (Opus 4.6/4.7/4.8/5, Sonnet 4.6/5/5.5,
  * Haiku 4.5) share one published rate, so a family-level match is sufficient
  * today. Note: Sonnet 5 currently carries a promotional rate distinct from
  * its list price below — this shape cannot represent a per-generation

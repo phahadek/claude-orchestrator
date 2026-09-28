@@ -21,6 +21,7 @@ const LARGE_TASK_MODEL_OPTIONS = [
   { label: 'claude-opus-4-8[1m]', value: 'claude-opus-4-8[1m]' },
   { label: 'claude-opus-4-7[1m]', value: 'claude-opus-4-7[1m]' },
   { label: 'claude-opus-4-6[1m]', value: 'claude-opus-4-6[1m]' },
+  { label: 'claude-sonnet-5-5[1m]', value: 'claude-sonnet-5-5[1m]' },
   { label: 'claude-sonnet-5[1m]', value: 'claude-sonnet-5[1m]' },
   { label: 'claude-sonnet-4-6[1m]', value: 'claude-sonnet-4-6[1m]' },
 ];
