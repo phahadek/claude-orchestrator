@@ -11,7 +11,9 @@ describe('detectCrashSignature', () => {
 
   it('returns null when no signature substring appears in the output', () => {
     expect(
-      detectCrashSignature('all tests passed', ['node down: Not properly terminated']),
+      detectCrashSignature('all tests passed', [
+        'node down: Not properly terminated',
+      ]),
     ).toBeNull();
   });
 

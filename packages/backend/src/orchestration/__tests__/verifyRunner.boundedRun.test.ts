@@ -162,9 +162,7 @@ describe('runVerifyAsGate — bounded via the shared test-run machinery', () => 
     expect(result.crashMessage).toBeDefined();
     expect(result.crashMessage!.length).toBeLessThanOrEqual(2000);
     expect(result.crashMessage).toContain('tests/foo.py::test_bar');
-    expect(result.crashMessage).toContain(
-      'node down: Not properly terminated',
-    );
+    expect(result.crashMessage).toContain('node down: Not properly terminated');
   });
 
   it('places each verify command via spawnIntoTestRunCgroup with one runId per runVerifyAsGate invocation, and verifies teardown on completion', async () => {

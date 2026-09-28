@@ -291,10 +291,7 @@ function failureReasonFor(
   // Checked ahead of the generic 'timeout': a timeout whose output matches a
   // project-declared crash signature is a worker crash the suite stalled
   // behind, not a hung/wedged process — see workerCrashDetection.ts.
-  if (
-    result.timedOut &&
-    detectCrashSignature(result.output, crashSignatures)
-  ) {
+  if (result.timedOut && detectCrashSignature(result.output, crashSignatures)) {
     return 'worker_crash';
   }
   if (result.timedOut) return 'timeout';

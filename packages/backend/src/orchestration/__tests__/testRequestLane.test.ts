@@ -698,7 +698,7 @@ describe('runProjectTestRequest — coalescing', () => {
   it('classifies a timed-out run whose output matches a configured crash signature as worker_crash, not timeout', async () => {
     mockLoadOrchestratorConfig.mockReturnValue({
       test_report_glob: '',
-      test_crash_signatures: ["node down: Not properly terminated"],
+      test_crash_signatures: ['node down: Not properly terminated'],
     });
     mockRunTestCommands.mockResolvedValueOnce({
       passed: false,
