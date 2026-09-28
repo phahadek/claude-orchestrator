@@ -96,7 +96,6 @@ const SCRIPT_SOURCES = [
       'gate-state-client.mjs',
       'seed-state-client.mjs',
       'staged-intents-client.mjs',
-      'read-session-record.mjs',
     ],
   },
 ];
