@@ -148,7 +148,12 @@ describe('StuckSessionMonitor.scanForStuckSessions — local-only submission', (
   });
 
   it('routes the dead-process, no-PR, local-only path through recoverSession with scope periodic', async () => {
-    vi.mocked(getStuckResultSessionRows).mockReturnValue([baseRow] as never);
+    // session_type outside the operator-conclusion gate (e.g. review) — this
+    // test exercises the recoverSession routing/scope plumbing, not the
+    // standard/ops done-vs-idle disposition (covered separately).
+    vi.mocked(getStuckResultSessionRows).mockReturnValue([
+      { ...baseRow, session_type: 'review' },
+    ] as never);
 
     const { monitor } = makeMonitor(false);
     await monitor.scanForStuckSessions();
