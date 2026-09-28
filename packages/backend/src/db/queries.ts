@@ -13091,6 +13091,31 @@ export function findActiveStagedIntentForTask(
   }) as StagedIntentRow | undefined;
 }
 
+let _txnStageNoOpIfAbsent: ((...args: unknown[]) => boolean) | null = null;
+
+/**
+ * Atomically checks findActiveStagedIntentForTask(kind: 'planning.noOp') and
+ * inserts `row` only if nothing active was found — the transactional guard
+ * NoOpInvestigator.ts's stageInvestigatorResolvedNoOp needs so two
+ * concurrent callers (e.g. two investigator runs racing each other, or an
+ * investigator run racing a standard/ops session's own no-op declaration)
+ * can never both pass the emptiness check and insert duplicate standalone
+ * no-ops for the same task. `row.kind` must be 'planning.noOp' and
+ * `row.task_id` must be non-null — both already guaranteed by every caller.
+ * Returns true if `row` was inserted, false if an active no-op already stood
+ * (in which case `row` is discarded).
+ */
+export function stageNoOpIfAbsent(row: StagedIntentRow): boolean {
+  _txnStageNoOpIfAbsent ??= db.transaction((r: StagedIntentRow) => {
+    if (findActiveStagedIntentForTask(r.project_id, r.kind, r.task_id!)) {
+      return false;
+    }
+    insertStagedIntent(r);
+    return true;
+  }) as unknown as (...args: unknown[]) => boolean;
+  return _txnStageNoOpIfAbsent(row);
+}
+
 let _stmtListActiveOpsSetStateIntentsForTask: Database.Statement | null = null;
 
 /**

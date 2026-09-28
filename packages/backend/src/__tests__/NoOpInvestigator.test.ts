@@ -12,8 +12,7 @@ vi.mock('../db/queries', () => ({
   // investigated session has already ended with no further activity.
   getSession: vi.fn(() => undefined),
   getSessionMilestoneId: vi.fn(() => undefined),
-  findActiveStagedIntentForTask: vi.fn(() => undefined),
-  insertStagedIntent: vi.fn(),
+  stageNoOpIfAbsent: vi.fn(() => true),
   hashIntentPayload: vi.fn(() => 'hash'),
 }));
 
@@ -38,8 +37,7 @@ import {
   getTaskNoOpAttempts,
   bumpTaskNoOpAttempts,
   getSession,
-  findActiveStagedIntentForTask,
-  insertStagedIntent,
+  stageNoOpIfAbsent,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import type { TaskBackend } from '../tasks/TaskBackend';
@@ -209,7 +207,11 @@ describe('NoOpInvestigator.investigate', () => {
     // (and the evidence note) to an explicit operator Approve.
     expect(backend.updateStatus).not.toHaveBeenCalled();
     expect(backend.appendImplementationNote).not.toHaveBeenCalled();
-    expect(insertStagedIntent).toHaveBeenCalledWith(
+    // stageNoOpIfAbsent (db/queries.ts) does the check-then-insert as a
+    // single transaction — see stagedIntent.queries.test.ts's
+    // "stageNoOpIfAbsent" suite for the at-most-one-active-no-op guarantee
+    // that would otherwise be racy across concurrent investigator runs.
+    expect(stageNoOpIfAbsent).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: 'planning.noOp',
         task_id: 'notion:abc123',
@@ -226,14 +228,17 @@ describe('NoOpInvestigator.investigate', () => {
     );
   });
 
-  it('does not stage a second no-op while one already stands for the task', async () => {
+  it('does not error, and still deletes the feature branch, when stageNoOpIfAbsent finds a no-op already standing (returns false)', async () => {
     const sm = fakeSessionManager();
     const backend = fakeTaskBackend();
-    const investigator = new NoOpInvestigator(sm, backend, undefined);
+    const gh = fakeGithubClient();
+    const investigator = new NoOpInvestigator(
+      sm,
+      backend,
+      gh as unknown as GitHubClient,
+    );
 
-    vi.mocked(findActiveStagedIntentForTask).mockReturnValue({
-      id: 'existing-intent',
-    } as never);
+    vi.mocked(stageNoOpIfAbsent).mockReturnValueOnce(false);
     vi.mocked(getEventsBySession).mockReturnValue([]);
 
     const investigatePromise = investigator.investigate(baseCtx());
@@ -262,7 +267,11 @@ describe('NoOpInvestigator.investigate', () => {
 
     await investigatePromise;
 
-    expect(insertStagedIntent).not.toHaveBeenCalled();
+    expect(stageNoOpIfAbsent).toHaveBeenCalledTimes(1);
+    expect(gh.deleteBranch).toHaveBeenCalledWith(
+      'owner/repo',
+      'feature/my-task',
+    );
   });
 
   it('sets status to Ready on first retry verdict (retry_count === 0)', async () => {
