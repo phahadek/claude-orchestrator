@@ -286,8 +286,8 @@ describe('PRMergeWatcher.handlePushDetected — routes through ReviewOrchestrato
     );
     expect(reviewOrchestrator.enqueueReview).toHaveBeenCalledTimes(1);
 
-    const clearOrder = vi.mocked(clearTerminalPRFlags).mock
-      .invocationCallOrder[0];
+    const clearOrder =
+      vi.mocked(clearTerminalPRFlags).mock.invocationCallOrder[0];
     const enqueueOrder = vi.mocked(reviewOrchestrator.enqueueReview).mock
       .invocationCallOrder[0];
     expect(clearOrder).toBeLessThan(enqueueOrder);

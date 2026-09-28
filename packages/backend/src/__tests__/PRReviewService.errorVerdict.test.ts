@@ -678,4 +678,3 @@ describe('PRReviewService verdict idempotency per head SHA', () => {
     );
   });
 });
-

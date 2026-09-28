@@ -138,7 +138,10 @@ import { PRMergeWatcher } from '../github/PRMergeWatcher.js';
 import * as queries from '../db/queries.js';
 import type { PullRequestRow } from '../db/types.js';
 import type { GitHubClient } from '../github/GitHubClient.js';
-import type { PRReviewService, PRReviewResult } from '../github/PRReviewService.js';
+import type {
+  PRReviewService,
+  PRReviewResult,
+} from '../github/PRReviewService.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -265,7 +268,14 @@ function makeHarness(headSha: string = HEAD_SHA) {
     broadcast,
   );
   watcher.setReviewOrchestrator(orchestrator);
-  return { sessionManager, github, reviewService, orchestrator, watcher, broadcast };
+  return {
+    sessionManager,
+    github,
+    reviewService,
+    orchestrator,
+    watcher,
+    broadcast,
+  };
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -330,9 +340,8 @@ describe('initial review dispatch via ReviewOrchestrator.onPrOpened', () => {
 
 describe('subsequent push enqueues and drains a re-review through the real ReviewOrchestrator', () => {
   it('increments review_iteration exactly once and delivers feedback threaded with the new iteration', async () => {
-    const { sessionManager, reviewService, watcher, github } = makeHarness(
-      NEW_SHA,
-    );
+    const { sessionManager, reviewService, watcher, github } =
+      makeHarness(NEW_SHA);
 
     const prRow = makePRRow({
       review_session_id: REVIEW_SESSION_ID,
@@ -450,7 +459,11 @@ describe('push after a gate-failure verdict with no established review session',
 
     expect(enqueueSpy).toHaveBeenCalledTimes(1);
     expect(enqueueSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ prNumber: PR_NUMBER, repo: REPO, pushTriggered: true }),
+      expect.objectContaining({
+        prNumber: PR_NUMBER,
+        repo: REPO,
+        pushTriggered: true,
+      }),
     );
     expect(vi.mocked(queries.setPendingPush)).not.toHaveBeenCalled();
   });

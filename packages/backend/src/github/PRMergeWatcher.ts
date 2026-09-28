@@ -2050,9 +2050,7 @@ export class PRMergeWatcher extends EventEmitter {
     }
 
     const project = getProjectByGithubRepo(prRow.repo);
-    const session = prRow.session_id
-      ? getSession(prRow.session_id)
-      : undefined;
+    const session = prRow.session_id ? getSession(prRow.session_id) : undefined;
 
     // Mirrors StalledPRReconciler.reDriveIfPushDetected: a push lands on a
     // tree the no-diff-autofix guard must not mistake for a retry of a tree

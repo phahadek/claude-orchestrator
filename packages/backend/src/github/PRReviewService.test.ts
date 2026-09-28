@@ -2659,7 +2659,6 @@ describe('PRReviewService — review session supersession wired into call sites'
   });
 });
 
-
 // ── Verdict persisted before GitHub side effects (all four review paths) ───────
 
 describe('PRReviewService — verdict persisted before side effects', () => {
@@ -2824,7 +2823,6 @@ describe('PRReviewService — verdict persisted before side effects', () => {
       callOrder.indexOf('markPRReady'),
     );
   });
-
 });
 
 // ── Verdict persisted on GitHub outage — regression for #627 ──────────────────
