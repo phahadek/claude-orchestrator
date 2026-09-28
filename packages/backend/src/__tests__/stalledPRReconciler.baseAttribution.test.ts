@@ -43,6 +43,7 @@ vi.mock('../db/queries.js', () => ({
   getSessionLastActivityMs: vi.fn(() => null),
   getLatestTestRequestRunForSession: vi.fn(),
   isRunFailureBreadthAttributable: vi.fn(),
+  hasUndispositionedNoOpForSession: vi.fn(() => false),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({

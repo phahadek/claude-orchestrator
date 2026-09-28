@@ -98,8 +98,8 @@ describe('StuckSessionMonitor.scanForStuckSessions() — periodic recovery', () 
     );
   });
 
-  it('marks the session as done in the DB before calling recoverSession', async () => {
-    insertStuckSession('sess-done', 'proj-1', 10 * 60 * 1000);
+  it('marks the session as done in the DB before calling recoverSession — a session type outside the operator-conclusion gate (e.g. review)', async () => {
+    insertStuckSession('sess-done', 'proj-1', 10 * 60 * 1000, 'review');
 
     const sm = makeMockSessionManager();
     const monitor = new StuckSessionMonitor(sm, vi.fn());
@@ -109,6 +109,27 @@ describe('StuckSessionMonitor.scanForStuckSessions() — periodic recovery', () 
       .prepare('SELECT status FROM sessions WHERE session_id = ?')
       .get('sess-done') as { status: string } | undefined;
     expect(row?.status).toBe('done');
+  });
+
+  it('parks a standard session idle instead of marking it done — its conclusion is gated on the operator (2026-09-27 ruling)', async () => {
+    insertStuckSession('sess-standard', 'proj-1', 10 * 60 * 1000, 'standard');
+
+    const sm = makeMockSessionManager();
+    const monitor = new StuckSessionMonitor(sm, vi.fn());
+    await monitor.scanForStuckSessions();
+
+    const row = db
+      .prepare('SELECT status, pause_reason FROM sessions WHERE session_id = ?')
+      .get('sess-standard') as
+      | { status: string; pause_reason: string | null }
+      | undefined;
+    expect(row?.status).toBe('idle');
+    expect(row?.pause_reason).toBe('awaiting_operator_conclusion');
+    // Still recovers — the no-op investigation side effect still fires.
+    expect(recoverSession).toHaveBeenCalledWith(
+      'sess-standard',
+      expect.objectContaining({ scope: 'periodic' }),
+    );
   });
 
   it('skips sessions younger than 5 minutes', async () => {

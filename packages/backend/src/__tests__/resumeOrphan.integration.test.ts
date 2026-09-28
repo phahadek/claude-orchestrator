@@ -623,9 +623,13 @@ describe('resumeOrphanSessions() — parked planning session with staged intents
       vi.mocked(queries.getStuckResultSessionRows).mockReturnValue([
         makeStuckRow({ session_type: sessionType }),
       ]);
+      // No staged intents pending — the case the old code would have
+      // written `done` for outright. (An 'ops' session with undispositioned
+      // intents already parks idle via the pre-existing planning carve-out
+      // above, tested separately.)
       vi.mocked(
         queries.hasUndispositionedStagedIntentsForSession,
-      ).mockReturnValue(true);
+      ).mockReturnValue(false);
 
       const sm = new SessionManager();
       await sm.resumeOrphanSessions();

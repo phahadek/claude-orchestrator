@@ -37,6 +37,7 @@ vi.mock('../db/queries.js', () => ({
   hasQueuedOrRunningTestRunForSession: vi.fn(() => false),
   hasQueuedOrRunningTestRunForWorktree: vi.fn(() => false),
   markSessionSuperseded: vi.fn(),
+  hasUndispositionedNoOpForSession: vi.fn(() => false),
   TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED: new Set([
     'done',
     'error',
