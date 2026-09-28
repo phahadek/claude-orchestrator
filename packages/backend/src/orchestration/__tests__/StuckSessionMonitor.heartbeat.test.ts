@@ -15,7 +15,7 @@ vi.mock('../../db/queries.js', () => ({
   setPauseReason: vi.fn(),
   setTaskPauseReason: vi.fn(),
   setSessionPauseReason: vi.fn(),
-  archiveSession: vi.fn(),
+  setSessionParkedAt: vi.fn(),
   insertPauseInterval: vi.fn(),
   closePauseInterval: vi.fn(),
   upsertStuckSessionTimer: vi.fn(),
@@ -155,9 +155,9 @@ describe('StuckSessionMonitor intra-tool heartbeat', () => {
     // activity — the session is reclaimed (OS process torn down) and
     // surfaced to the operator, never terminalized directly.
     expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith('sess-2');
-    expect(queries.archiveSession).toHaveBeenCalledWith(
+    expect(queries.setSessionParkedAt).toHaveBeenCalledWith(
       'sess-2',
-      'machine_park',
+      expect.any(Number),
     );
     expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
       'sess-2',
@@ -192,9 +192,9 @@ describe('StuckSessionMonitor intra-tool heartbeat', () => {
     // the hard-stop window — it still expires and reclaims the (already
     // dead) process, surfacing the session rather than terminalizing it.
     expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith('sess-3');
-    expect(queries.archiveSession).toHaveBeenCalledWith(
+    expect(queries.setSessionParkedAt).toHaveBeenCalledWith(
       'sess-3',
-      'machine_park',
+      expect.any(Number),
     );
   });
 

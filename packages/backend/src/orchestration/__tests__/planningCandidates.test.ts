@@ -478,7 +478,12 @@ describe('isGroomCandidate', () => {
     ).toBe(false);
   });
 
-  it('skips a task whose only groom session is machine_park-archived and idle, wired through the real DB-backed predicate — a runner_killed_unexpected park still owns the task', () => {
+  it('admits a task whose only groom session is machine_park-archived and idle — machine_park archival is no longer a dedup-active signal', () => {
+    // Only the OS-liveness reconciler's dead-'running'-session archival
+    // still produces this shape; every other machine path that used to
+    // archive('machine_park') now sets parked_at instead and stays
+    // archived = 0 (see the next test), so getActivePlanningSessionForTask
+    // intentionally dropped its archive_kind = 'machine_park' disjunct.
     db.prepare('DELETE FROM sessions').run();
     db.prepare(
       `INSERT INTO sessions (session_id, task_id, task_url, project_context_url,
@@ -486,6 +491,25 @@ describe('isGroomCandidate', () => {
        VALUES ('sess-machine-park', 'task-1', 'https://notion.so/task', 'https://notion.so/ctx',
          'idle', ?, 'groom', 1, 'machine_park')`,
     ).run(Date.now() - 10 * 60 * 1000);
+
+    const t = task();
+    expect(
+      isGroomCandidate(t, {
+        ...baseDeps,
+        hasActiveGroomSession: (taskId) =>
+          hasActivePlanningSessionForTask(taskId, 'groom'),
+      }),
+    ).toBe(true);
+  });
+
+  it('skips a task whose only groom session is parked idle (archived=0, parked_at set), wired through the real DB-backed predicate — a runner_killed_unexpected park still owns the task', () => {
+    db.prepare('DELETE FROM sessions').run();
+    db.prepare(
+      `INSERT INTO sessions (session_id, task_id, task_url, project_context_url,
+         status, started_at, session_type, archived, parked_at)
+       VALUES ('sess-parked', 'task-1', 'https://notion.so/task', 'https://notion.so/ctx',
+         'idle', ?, 'groom', 0, ?)`,
+    ).run(Date.now() - 10 * 60 * 1000, Date.now());
 
     const t = task();
     expect(
@@ -1047,7 +1071,7 @@ describe('isDesignCandidate', () => {
     ).toBe(false);
   });
 
-  it('skips a task whose only design session is machine_park-archived and idle, wired through the real DB-backed predicate — an overnight design relaunch must not race the parked owner', () => {
+  it('admits a task whose only design session is machine_park-archived and idle — machine_park archival is no longer a dedup-active signal', () => {
     db.prepare('DELETE FROM sessions').run();
     db.prepare(
       `INSERT INTO sessions (session_id, task_id, task_url, project_context_url,
@@ -1055,6 +1079,25 @@ describe('isDesignCandidate', () => {
        VALUES ('sess-design-machine-park', 'task-1', 'https://notion.so/task', 'https://notion.so/ctx',
          'idle', ?, 'design', 1, 'machine_park')`,
     ).run(Date.now() - 10 * 60 * 1000);
+
+    const t = task({ status: '🗂️ Ready', type: '📐 Design' });
+    expect(
+      isDesignCandidate(t, {
+        ...baseDeps,
+        hasActiveDesignSession: (taskId) =>
+          hasActivePlanningSessionForTask(taskId, 'design'),
+      }),
+    ).toBe(true);
+  });
+
+  it('skips a task whose only design session is parked idle (archived=0, parked_at set), wired through the real DB-backed predicate — an overnight design relaunch must not race the parked owner', () => {
+    db.prepare('DELETE FROM sessions').run();
+    db.prepare(
+      `INSERT INTO sessions (session_id, task_id, task_url, project_context_url,
+         status, started_at, session_type, archived, parked_at)
+       VALUES ('sess-design-parked', 'task-1', 'https://notion.so/task', 'https://notion.so/ctx',
+         'idle', ?, 'design', 0, ?)`,
+    ).run(Date.now() - 10 * 60 * 1000, Date.now());
 
     const t = task({ status: '🗂️ Ready', type: '📐 Design' });
     expect(

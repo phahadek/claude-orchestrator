@@ -1495,7 +1495,8 @@ export function countLivePlanningSessions(): number {
     .prepare(
       `SELECT session_type FROM sessions
        WHERE status NOT IN ('done', 'error', 'killed', 'superseded')
-         AND archived = 0`,
+         AND archived = 0
+         AND parked_at IS NULL`,
     )
     .all() as { session_type: string | null }[];
   return rows.filter((r) => isPlanningSession(r.session_type ?? '')).length;
@@ -1513,7 +1514,8 @@ export function listLivePlanningSessionRows(): Session[] {
     .prepare(
       `SELECT * FROM sessions
        WHERE status NOT IN ('done', 'error', 'killed', 'superseded')
-         AND archived = 0`,
+         AND archived = 0
+         AND parked_at IS NULL`,
     )
     .all() as Session[];
   return rows.filter((r) => isPlanningSession(r.session_type ?? ''));
@@ -1536,7 +1538,8 @@ export function listLiveSessionRows(): Session[] {
     .prepare(
       `SELECT * FROM sessions
        WHERE status NOT IN ('done', 'error', 'killed', 'superseded')
-         AND archived = 0`,
+         AND archived = 0
+         AND parked_at IS NULL`,
     )
     .all() as Session[];
 }
@@ -1652,14 +1655,12 @@ export function hasActivePlanningSessionForTask(
  * The row-returning counterpart to hasActivePlanningSessionForTask — used by
  * the abort route (routes/taskAbort.ts) to resolve the specific session id
  * to kill, rather than just a boolean. Same non-terminal (running OR parked
- * idle), flow-scoped filter — an unarchived row, OR a machine_park-archived
- * row (isMachineParkedIdle in sessionPredicates.ts: archived=1 AND
- * archive_kind='machine_park'), still counts as active. A machine_park
- * archival (StuckSessionMonitor.escalateHardStop, on a runner_killed_unexpected
- * pause) leaves the session as the still-standing owner of the task — it can
- * be resumed at any moment, so it must keep blocking re-dispatch the same as
- * an unarchived one. An operator-archived row (any other archive_kind) stays
- * excluded — that is the deliberate "this session is done" signal.
+ * idle), flow-scoped filter — a parked idle row (parked_at set by a machine
+ * path that reclaimed or lost its process — see schema.ts's parked_at
+ * migration comment) stays archived = 0, so it is still matched by the plain
+ * `archived = 0` filter below and keeps blocking re-dispatch as the task's
+ * still-standing owner, exactly like a live/unparked row. An operator-archived
+ * row stays excluded — that is the deliberate "this session is done" signal.
  *
  * Matches against sessions.task_id_norm — the same STORED generated column
  * hasActiveSessionForTask (above) matches against — instead of a JS
@@ -1680,7 +1681,7 @@ export function getActivePlanningSessionForTask(
     WHERE task_id_norm = @task_id_norm
       AND status NOT IN (${TERMINAL_STATUS_SQL_LIST})
       AND session_type = @flow
-      AND (archived = 0 OR archive_kind = 'machine_park')
+      AND archived = 0
     LIMIT 1
   `,
     )
@@ -1807,6 +1808,35 @@ export function archiveSession(
     );
   }
   return result.changes > 0;
+}
+
+/**
+ * Marks a session parked: idle and resumable, but with no live OS process —
+ * the occupancy marker a machine path sets in place of
+ * archiveSession(id, 'machine_park') when a session's process is reclaimed
+ * or dies without a result (see the operator ruling this replaces the
+ * archive call for: process/kill absence is never grounds to archive or
+ * terminalize a session). The row stays archived = 0 so operator-facing
+ * session lists and dedup/ownership checks keep treating it as a live,
+ * active session; only the occupancy counts (countLivePlanningSessions,
+ * listLive*SessionRows) exclude it, via `AND parked_at IS NULL`.
+ */
+export function setSessionParkedAt(sessionId: string, parkedAt: number): void {
+  db.prepare('UPDATE sessions SET parked_at = ? WHERE session_id = ?').run(
+    parkedAt,
+    sessionId,
+  );
+}
+
+/**
+ * Clears a session's parked marker — called by SessionManager.sendOrResume
+ * once a parked session has been successfully resumed (or directly poked
+ * while still live), so it counts against occupancy again.
+ */
+export function clearSessionParkedAt(sessionId: string): void {
+  db.prepare(
+    'UPDATE sessions SET parked_at = NULL WHERE session_id = ?',
+  ).run(sessionId);
 }
 
 export function unarchiveSession(sessionId: string): boolean {

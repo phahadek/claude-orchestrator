@@ -82,6 +82,11 @@ export interface Session {
   // this column — sendOrResume treats NULL as fail-closed, same as
   // 'operator'.
   archive_kind: 'machine_park' | 'operator' | null;
+  // Occupancy marker for a session left idle and resumable by a machine
+  // path whose process was reclaimed or died without a result — see
+  // schema.ts's parked_at migration comment. NULL means "not parked".
+  // Cleared by SessionManager.sendOrResume on successful resume.
+  parked_at: number | null;
 }
 
 export type NewSession = Omit<
@@ -92,6 +97,7 @@ export type NewSession = Omit<
   | 'worktree_path'
   | 'archived'
   | 'archive_kind'
+  | 'parked_at'
   | 'favorited'
   | 'project_id'
   | 'session_type'
@@ -124,6 +130,7 @@ export type NewSession = Omit<
   pr_url?: string | null;
   worktree_path?: string | null;
   archived?: number;
+  parked_at?: number | null;
   favorited?: number;
   project_id?: string | null;
   session_type?: SessionType;

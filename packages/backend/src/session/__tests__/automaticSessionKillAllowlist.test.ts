@@ -158,13 +158,16 @@ describe('automatic session-kill allow-list guard', () => {
       'utf8',
     );
     // _runPass0 must not call _errorSession (the only helper that writes a
-    // terminal status in this module) — isolate its body and check.
+    // terminal status in this module) — isolate its body and check. It
+    // drains the row out of occupancy via setSessionParkedAt instead of
+    // archiveSession, since process absence alone must never archive (hide)
+    // the row — see the parked_at occupancy marker in schema.ts.
     const pass0Body = content.slice(
       content.indexOf('function _runPass0'),
       content.indexOf('function _runPass1'),
     );
     expect(pass0Body.includes('_errorSession')).toBe(false);
-    expect(pass0Body.includes('archiveSession')).toBe(true);
+    expect(pass0Body.includes('setSessionParkedAt')).toBe(true);
   });
 
   it('StuckSessionMonitor.ts never calls sessionManager.kill — hard-stop and park escalation must surface to the operator instead', () => {

@@ -260,9 +260,10 @@ export function isOperatorConcludedSession(
 }
 
 /**
- * True for a session row left non-terminal (often status='idle') by
- * StuckSessionMonitor.escalateHardStop's machine-park archival — writing a
- * terminal status there would violate the invariant that a session is only
+ * True for a session row left non-terminal (often status='running') by the
+ * OS-process-liveness reconciler's dead-process archival (see
+ * sessionLivenessReconciler.ts's runLivenessSweep) — writing a terminal
+ * status there would violate the invariant that a session is only
  * terminalized by its own lifecycle completing or by an operator, so it
  * discriminates via archive_kind instead. This is the single shared
  * definition of that discrimination; a bare `status === 'idle'` check
@@ -271,10 +272,32 @@ export function isOperatorConcludedSession(
  * operator-archived (or legacy NULL, fail-closed) row that must stay
  * terminal — see SessionManager._doSendOrResume's inline comment for the
  * full rationale, now consuming this predicate.
+ *
+ * Every other machine path that drains a session out of the live
+ * population without concluding it (an idle session whose process was
+ * reclaimed or died without a result) now uses parked_at (see
+ * isParkedIdle below) instead of this archive_kind, so it stays
+ * archived = 0 and visible/unarchived in operator-facing session lists.
  */
 export function isMachineParkedIdle(session: {
   archived: number;
   archive_kind: string | null;
 }): boolean {
   return session.archived === 1 && session.archive_kind === 'machine_park';
+}
+
+/**
+ * True for a session left idle and resumable by a machine path whose
+ * process was reclaimed or died without a result — the occupancy marker
+ * set in place of a machine_park archival (see schema.ts's parked_at
+ * migration comment and AgentSession.surfaceUnresolvedToOperator/
+ * reclaimProcess, StuckSessionMonitor.escalateHardStop,
+ * SessionManager.terminateSessionForRevokedCredential,
+ * bootIdleReconciliation's Pass 0). Unlike isMachineParkedIdle, a parked
+ * session stays archived = 0 — it is never hidden from operator-facing
+ * session lists or excluded from dedup/ownership checks, only from
+ * occupancy counts (countLivePlanningSessions, listLive*SessionRows).
+ */
+export function isParkedIdle(session: { parked_at: number | null }): boolean {
+  return session.parked_at != null;
 }

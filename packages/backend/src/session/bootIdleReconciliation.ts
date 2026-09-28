@@ -6,7 +6,7 @@ import {
   recordPrAnchoredCompletingSignal,
   setSessionLastErrorDetail,
   setSessionPauseReason,
-  archiveSession,
+  setSessionParkedAt,
   updateSessionStatus,
 } from '../db/queries';
 import { logger } from '../logger';
@@ -33,9 +33,9 @@ import { logger } from '../logger';
  *   A backend restart wiping the process tree is still process absence, and
  *   per the operator ruling process absence is never grounds for a machine
  *   path to write a terminal status — a session whose OS process is gone can
- *   always be relaunched. So Pass 0 archives these rows (draining them from
- *   the live population non-terminally) and surfaces them via pause_reason
- *   instead of erroring them itself.
+ *   always be relaunched. So Pass 0 marks these rows parked (draining them
+ *   from occupancy counts non-terminally, without hiding them as archived)
+ *   and surfaces them via pause_reason instead of erroring them itself.
  *
  * Pass 1 — idle coding sessions with resolved PRs:
  *   idle + merged PR → done  (PR merged while server was down)
@@ -72,11 +72,11 @@ function _runPass0(isSessionLive: (sessionId: string) => boolean): void {
   if (rows.length === 0) return;
 
   logger.info(
-    `[BootIdleReconciliation] ${rows.length} session(s) at starting/running at boot and not live — process tree gone, archiving and surfacing to operator`,
+    `[BootIdleReconciliation] ${rows.length} session(s) at starting/running at boot and not live — process tree gone, parking and surfacing to operator`,
   );
 
   for (const row of rows) {
-    archiveSession(row.session_id, 'machine_park');
+    setSessionParkedAt(row.session_id, Date.now());
     setSessionPauseReason(row.session_id, 'orphaned_at_boot');
     try {
       setSessionLastErrorDetail(
@@ -87,7 +87,7 @@ function _runPass0(isSessionLive: (sessionId: string) => boolean): void {
       // Best-effort — DB may be unavailable or mocked without this function.
     }
     logger.info(
-      `[BootIdleReconciliation] ${row.session_id.slice(0, 8)} ${row.status}→archived (dead at boot)`,
+      `[BootIdleReconciliation] ${row.session_id.slice(0, 8)} ${row.status}→parked (dead at boot)`,
     );
   }
 }

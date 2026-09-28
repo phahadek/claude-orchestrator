@@ -209,7 +209,8 @@ describe('AgentSession terminal-kill classification', () => {
     expect(endSession).toHaveBeenCalledWith(false);
     expect(sm.markSessionErrored).not.toHaveBeenCalled();
     const row = getSession(sessionId);
-    expect(row?.archived).toBe(1);
+    expect(row?.archived).toBe(0);
+    expect(row?.parked_at).not.toBeNull();
     expect(row?.pause_reason).toBe('runner_killed_unexpected');
     expect(row?.last_error_detail).toBe('process killed unexpectedly');
   });

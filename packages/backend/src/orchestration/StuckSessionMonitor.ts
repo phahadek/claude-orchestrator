@@ -8,7 +8,7 @@ import {
   setPauseReason,
   setTaskPauseReason,
   setSessionPauseReason,
-  archiveSession,
+  setSessionParkedAt,
   insertPauseInterval,
   closePauseInterval,
   upsertStuckSessionTimer,
@@ -1102,11 +1102,13 @@ export class StuckSessionMonitor {
    * the session — terminalizing is an operator action only (see the
    * governing ruling in procedures.md). Reclaims the OS process (relieving
    * memory/concurrency pressure the same way escalateStuckAliveSubprocessPark
-   * does) and archives the row out of the live population
-   * (countLivePlanningSessions, hasNonTerminalPlanningSessionForTask,
-   * hasActiveSessionForTask all filter on archived = 0) without ever writing
-   * a terminal status — the task, if any, is left with no non-terminal
-   * session and can be re-dispatched or nudged by OrphanedTaskSweeper.
+   * does — reclaimSessionProcess's AgentSession.reclaimProcess already marks
+   * the row parked) and drains it out of occupancy counts
+   * (countLivePlanningSessions, listLive*SessionRows filter on
+   * parked_at IS NULL) without ever writing a terminal status or hiding it
+   * as archived — the task, if any, keeps this as its active session
+   * (dedup unaffected) and OrphanedTaskSweeper/the operator can still act on
+   * it via Needs Attention.
    */
   private escalateHardStop(
     sessionId: string,
@@ -1123,7 +1125,7 @@ export class StuckSessionMonitor {
       taskName,
     });
     this.sessionManager.reclaimSessionProcess(sessionId);
-    archiveSession(sessionId, 'machine_park');
+    setSessionParkedAt(sessionId, Date.now());
     setSessionPauseReason(sessionId, reason);
     recordEvent({
       event_type: 'stuck_session_surfaced_to_operator',

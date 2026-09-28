@@ -9,7 +9,7 @@ vi.mock('../../db/queries', () => ({
   recordPrAnchoredCompletingSignal: vi.fn(),
   setSessionLastErrorDetail: vi.fn(),
   setSessionPauseReason: vi.fn(),
-  archiveSession: vi.fn(),
+  setSessionParkedAt: vi.fn(),
 }));
 
 vi.mock('../../logger', () => ({
@@ -22,7 +22,7 @@ import {
   markSessionDone,
   updateSessionStatus,
   setSessionPauseReason,
-  archiveSession,
+  setSessionParkedAt,
 } from '../../db/queries';
 import { runBootIdleReconciliation } from '../bootIdleReconciliation';
 import type {
@@ -66,15 +66,18 @@ describe('runBootIdleReconciliation — Pass 0 (dead-at-boot)', () => {
   it('does nothing when there are no starting/running sessions at boot', () => {
     vi.mocked(getDeadSessionsAtBoot).mockReturnValue([]);
     runBootIdleReconciliation();
-    expect(archiveSession).not.toHaveBeenCalled();
+    expect(setSessionParkedAt).not.toHaveBeenCalled();
   });
 
-  it('archives and surfaces a dead session that is not live in SessionManager.sessions, without writing a terminal status', () => {
+  it('parks and surfaces a dead session that is not live in SessionManager.sessions, without writing a terminal status', () => {
     vi.mocked(getDeadSessionsAtBoot).mockReturnValue([
       makeDeadRow({ session_id: 'dead-1', status: 'starting' }),
     ]);
     runBootIdleReconciliation(() => false);
-    expect(archiveSession).toHaveBeenCalledWith('dead-1', 'machine_park');
+    expect(setSessionParkedAt).toHaveBeenCalledWith(
+      'dead-1',
+      expect.any(Number),
+    );
     expect(setSessionPauseReason).toHaveBeenCalledWith(
       'dead-1',
       'orphaned_at_boot',
@@ -88,7 +91,7 @@ describe('runBootIdleReconciliation — Pass 0 (dead-at-boot)', () => {
     ]);
     // Simulates a session resumeOrphanSessions() just respawned — live in memory.
     runBootIdleReconciliation((sessionId) => sessionId === 'resumed-session');
-    expect(archiveSession).not.toHaveBeenCalled();
+    expect(setSessionParkedAt).not.toHaveBeenCalled();
     expect(updateSessionStatus).not.toHaveBeenCalled();
   });
 
@@ -97,17 +100,23 @@ describe('runBootIdleReconciliation — Pass 0 (dead-at-boot)', () => {
       makeDeadRow({ session_id: 'dead-2', status: 'starting' }),
     ]);
     runBootIdleReconciliation();
-    expect(archiveSession).toHaveBeenCalledWith('dead-2', 'machine_park');
+    expect(setSessionParkedAt).toHaveBeenCalledWith(
+      'dead-2',
+      expect.any(Number),
+    );
   });
 
-  it('archives only the not-live rows out of a mixed batch', () => {
+  it('parks only the not-live rows out of a mixed batch', () => {
     vi.mocked(getDeadSessionsAtBoot).mockReturnValue([
       makeDeadRow({ session_id: 'live-1', status: 'running' }),
       makeDeadRow({ session_id: 'dead-3', status: 'starting' }),
     ]);
     runBootIdleReconciliation((sessionId) => sessionId === 'live-1');
-    expect(archiveSession).toHaveBeenCalledTimes(1);
-    expect(archiveSession).toHaveBeenCalledWith('dead-3', 'machine_park');
+    expect(setSessionParkedAt).toHaveBeenCalledTimes(1);
+    expect(setSessionParkedAt).toHaveBeenCalledWith(
+      'dead-3',
+      expect.any(Number),
+    );
   });
 });
 

@@ -56,7 +56,7 @@ import {
   getFailingTestIdsForRun,
   getUnexcusedFailingTestIdsForRun,
   setSessionLastErrorDetail,
-  archiveSession,
+  setSessionParkedAt,
   TERMINAL_SESSION_STATUSES,
 } from '../db/queries';
 import { groomSessionConcludedWithDecision } from '../orchestration/planningDecisionKinds';
@@ -1295,18 +1295,20 @@ The full task spec and all rules are in your system prompt. Begin implementing d
    * operator, without ever writing a terminal (killed/error) status —
    * terminalizing a session is an operator action only (see the governing
    * ruling in procedures.md this method exists to satisfy). Drains the
-   * session out of the live population non-terminally (archiveSession —
-   * excluded from countLivePlanningSessions, hasNonTerminalPlanningSessionForTask,
-   * hasActiveSessionForTask, etc., without asserting the session concluded)
-   * and records a pause reason + audit event so it is visible in Needs
-   * Attention. The task, if any, keeps whatever status it already has —
-   * OrphanedTaskSweeper now sees no non-terminal session for it and can act
-   * normally.
+   * session out of *occupancy* counts non-terminally (setSessionParkedAt —
+   * excluded from countLivePlanningSessions and listLive*SessionRows,
+   * without asserting the session concluded or hiding it as archived; it
+   * stays archived = 0, idle, and resumable — see the operator ruling that
+   * process/kill absence is never grounds to archive it) and records a
+   * pause reason + audit event so it is visible in Needs Attention. The
+   * task, if any, keeps whatever status it already has — OrphanedTaskSweeper
+   * still sees this as the task's active session (dedup unaffected) and
+   * sendOrResume can respawn it at any time.
    */
   private surfaceUnresolvedToOperator(reason: string, detail?: string): void {
     this.hasEnded = true;
     try {
-      archiveSession(this.sessionId, 'machine_park');
+      setSessionParkedAt(this.sessionId, Date.now());
     } catch {
       // Best-effort — DB may be unavailable or mocked without this function.
     }
@@ -3920,14 +3922,22 @@ The full task spec and all rules are in your system prompt. Begin implementing d
    * unlike endSession(), hasEnded is set unconditionally (not gated on a
    * terminal_completion_reason already being recorded), so run()'s
    * exit-handling never writes a terminal DB status once the process
-   * exits. The row is left exactly as it was (idle) for the existing
-   * resume machinery (sendOrResume/resumeSession) to reattach — see
-   * SessionManager.reclaimSessionProcess, used by StuckSessionMonitor's
+   * exits. The row is left exactly as it was (idle, archived = 0) for the
+   * existing resume machinery (sendOrResume/resumeSession) to reattach —
+   * see SessionManager.reclaimSessionProcess, used by StuckSessionMonitor's
    * alive-subprocess-park escalation to free the memory a lingering
-   * subprocess holds without killing a legitimately-idle session.
+   * subprocess holds without killing a legitimately-idle session. Marks the
+   * session parked (setSessionParkedAt) so occupancy counts stop counting a
+   * slot for it now that it has no live process, without hiding it as
+   * archived — sendOrResume clears the marker again on successful resume.
    */
   async reclaimProcess(): Promise<void> {
     this.hasEnded = true;
+    try {
+      setSessionParkedAt(this.sessionId, Date.now());
+    } catch {
+      // Best-effort — DB may be unavailable or mocked without this function.
+    }
     await this._closeAndVerifyProcess(false, null);
   }
 

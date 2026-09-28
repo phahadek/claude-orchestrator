@@ -87,6 +87,8 @@ import {
   applyPendingDone,
   getSessionsWithUnappliedPendingDone,
   archiveSession,
+  setSessionParkedAt,
+  clearSessionParkedAt,
   markSessionSuperseded,
   insertEvent,
   getSession,
@@ -4951,7 +4953,7 @@ export class SessionManager extends EventEmitter {
    * population — never grounds for this machine path to write a terminal
    * status itself; terminalizing a session is an operator action only.
    *
-   * Safe to call for a row that's already terminal or already archived
+   * Safe to call for a row that's already terminal or already parked
    * (idempotent — a credential can be revoked well after its session
    * concluded some other way).
    */
@@ -4961,7 +4963,7 @@ export class SessionManager extends EventEmitter {
   ): void {
     const row = getSession(sessionId);
     const reason = `credential_revoked_${surface}`;
-    archiveSession(sessionId, 'machine_park');
+    setSessionParkedAt(sessionId, Date.now());
     setSessionPauseReason(sessionId, reason);
 
     recordEvent({
@@ -5475,6 +5477,7 @@ export class SessionManager extends EventEmitter {
       const delivered = this.send(sessionId, text);
       if (delivered) {
         resetSessionPokeRetryCount(sessionId);
+        clearSessionParkedAt(sessionId);
         // Mirror the respawn path: ensure status reflects the resumed activity
         // so the UI doesn't keep rendering this session as idle. Terminal is
         // sticky — a done/error/killed row is never silently overwritten with
@@ -5757,6 +5760,7 @@ export class SessionManager extends EventEmitter {
       );
       if (!session || respawnDelivery === null) return null;
       resetSessionPokeRetryCount(sessionId);
+      clearSessionParkedAt(sessionId);
       const { combinedText, itemIds } = respawnDelivery;
 
       // Proactive ceiling-escalation: if the session's persisted context occupancy
@@ -6138,6 +6142,7 @@ export class SessionManager extends EventEmitter {
     );
     if (!session || respawnDelivery === null) return null;
     resetSessionPokeRetryCount(sessionId);
+    clearSessionParkedAt(sessionId);
     const { combinedText, itemIds } = respawnDelivery;
 
     // Register the pending text on the session so that if the resumed context

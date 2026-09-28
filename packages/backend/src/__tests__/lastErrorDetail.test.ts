@@ -66,7 +66,7 @@ vi.mock('../db/queries', () => ({
   setHeadSha: vi.fn(),
   setPauseReason: vi.fn(),
   setSessionPauseReason: vi.fn(),
-  archiveSession: vi.fn(),
+  setSessionParkedAt: vi.fn(),
   insertPauseInterval: vi.fn(),
   getSession: vi.fn(() => null),
   getSessionTags: vi.fn(() => []),
@@ -124,7 +124,7 @@ vi.mock('../session/sessionRecovery', () => ({
 import { AgentSession } from '../session/AgentSession';
 import {
   getEventsBySession,
-  archiveSession,
+  setSessionParkedAt,
   setSessionPauseReason,
   setSessionLastErrorDetail,
 } from '../db/queries';
@@ -231,7 +231,10 @@ describe('AgentSession error paths pass a concise detail to markSessionErrored',
     await runPromise;
 
     expect(sm.markSessionErrored).not.toHaveBeenCalled();
-    expect(archiveSession).toHaveBeenCalledWith('sess-err', 'machine_park');
+    expect(setSessionParkedAt).toHaveBeenCalledWith(
+      'sess-err',
+      expect.any(Number),
+    );
     expect(setSessionPauseReason).toHaveBeenCalledWith(
       'sess-err',
       'runner_killed_unexpected',
