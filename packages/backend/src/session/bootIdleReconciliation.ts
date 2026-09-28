@@ -76,7 +76,7 @@ function _runPass0(isSessionLive: (sessionId: string) => boolean): void {
   );
 
   for (const row of rows) {
-    setSessionParkedAt(row.session_id, Date.now());
+    setSessionParkedAt(row.session_id, Date.now(), 'surfaced');
     setSessionPauseReason(row.session_id, 'orphaned_at_boot');
     try {
       setSessionLastErrorDetail(

@@ -1125,7 +1125,7 @@ export class StuckSessionMonitor {
       taskName,
     });
     this.sessionManager.reclaimSessionProcess(sessionId);
-    setSessionParkedAt(sessionId, Date.now());
+    setSessionParkedAt(sessionId, Date.now(), 'surfaced');
     setSessionPauseReason(sessionId, reason);
     recordEvent({
       event_type: 'stuck_session_surfaced_to_operator',

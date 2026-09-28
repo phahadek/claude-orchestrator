@@ -77,6 +77,7 @@ describe('runBootIdleReconciliation — Pass 0 (dead-at-boot)', () => {
     expect(setSessionParkedAt).toHaveBeenCalledWith(
       'dead-1',
       expect.any(Number),
+      'surfaced',
     );
     expect(setSessionPauseReason).toHaveBeenCalledWith(
       'dead-1',
@@ -103,6 +104,7 @@ describe('runBootIdleReconciliation — Pass 0 (dead-at-boot)', () => {
     expect(setSessionParkedAt).toHaveBeenCalledWith(
       'dead-2',
       expect.any(Number),
+      'surfaced',
     );
   });
 
@@ -116,6 +118,7 @@ describe('runBootIdleReconciliation — Pass 0 (dead-at-boot)', () => {
     expect(setSessionParkedAt).toHaveBeenCalledWith(
       'dead-3',
       expect.any(Number),
+      'surfaced',
     );
   });
 });

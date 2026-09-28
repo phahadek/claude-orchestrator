@@ -1879,12 +1879,23 @@ export function archiveSession(
  * session lists and dedup/ownership checks keep treating it as a live,
  * active session; only the occupancy counts (countLivePlanningSessions,
  * listLive*SessionRows) exclude it, via `AND parked_at IS NULL`.
+ *
+ * `kind` discriminates the caller's shape — 'reclaimed' for
+ * AgentSession.reclaimProcess (a healthy session, only "no live process");
+ * 'surfaced' for the four operator-facing hard-stop paths
+ * (AgentSession.surfaceUnresolvedToOperator, StuckSessionMonitor.
+ * escalateHardStop, SessionManager.terminateSessionForRevokedCredential,
+ * bootIdleReconciliation's Pass 0). See sessionPredicates.
+ * isSurfacedParkedIdle, the sole consumer.
  */
-export function setSessionParkedAt(sessionId: string, parkedAt: number): void {
-  db.prepare('UPDATE sessions SET parked_at = ? WHERE session_id = ?').run(
-    parkedAt,
-    sessionId,
-  );
+export function setSessionParkedAt(
+  sessionId: string,
+  parkedAt: number,
+  kind: 'reclaimed' | 'surfaced',
+): void {
+  db.prepare(
+    'UPDATE sessions SET parked_at = ?, park_kind = ? WHERE session_id = ?',
+  ).run(parkedAt, kind, sessionId);
 }
 
 /**
@@ -1893,9 +1904,9 @@ export function setSessionParkedAt(sessionId: string, parkedAt: number): void {
  * while still live), so it counts against occupancy again.
  */
 export function clearSessionParkedAt(sessionId: string): void {
-  db.prepare('UPDATE sessions SET parked_at = NULL WHERE session_id = ?').run(
-    sessionId,
-  );
+  db.prepare(
+    'UPDATE sessions SET parked_at = NULL, park_kind = NULL WHERE session_id = ?',
+  ).run(sessionId);
 }
 
 export function unarchiveSession(sessionId: string): boolean {

@@ -158,6 +158,7 @@ describe('StuckSessionMonitor intra-tool heartbeat', () => {
     expect(queries.setSessionParkedAt).toHaveBeenCalledWith(
       'sess-2',
       expect.any(Number),
+      'surfaced',
     );
     expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
       'sess-2',
@@ -195,6 +196,7 @@ describe('StuckSessionMonitor intra-tool heartbeat', () => {
     expect(queries.setSessionParkedAt).toHaveBeenCalledWith(
       'sess-3',
       expect.any(Number),
+      'surfaced',
     );
   });
 

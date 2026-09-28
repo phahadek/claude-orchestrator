@@ -147,6 +147,8 @@ function makeSession(
   archived = 0,
   archiveKind: 'machine_park' | 'operator' | null = null,
   parkedAt: number | null = null,
+  parkKind: 'reclaimed' | 'surfaced' | null = null,
+  pauseReason: string | null = null,
 ) {
   const started_at = Date.now() - startedAtOffsetMs;
   return {
@@ -161,6 +163,8 @@ function makeSession(
     archived,
     archive_kind: archiveKind,
     parked_at: parkedAt,
+    park_kind: parkKind,
+    pause_reason: pauseReason,
   };
 }
 
@@ -1284,6 +1288,169 @@ describe('OrphanedTaskSweeper', () => {
     expect(enqueueFeedback).not.toHaveBeenCalled();
     expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
   });
+
+  // ── Reclaim-parked sessions (park_kind='reclaimed') ─────────────────────────
+  // A session parked by AgentSession.reclaimProcess alone — its own process
+  // was merely reclaimed while it stayed healthy (e.g. waiting on a
+  // test_request result) — must be treated exactly like a plain unparked
+  // idle session: grace window, awaiting-lane-result, capability and
+  // operator-decision exemptions and the idle nudge all still apply. Only a
+  // park set by one of the four operator-surfacing paths (park_kind
+  // 'surfaced', or legacy park_kind NULL) keeps falling straight through to
+  // revert/surface.
+
+  it('leaves a reclaim-parked session whose own test-lane run is still queued within the ceiling at In Progress (no revert)', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    const endedAt = Date.now() - 10 * 60 * 1000; // past grace, would revert if hard-stopped
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession(
+        'idle',
+        30 * 60 * 1000,
+        endedAt,
+        '/fake/worktree',
+        0,
+        null,
+        Date.now(),
+        'reclaimed',
+      ) as ReturnType<typeof getLatestCodeSessionByNotionTaskId>,
+    );
+    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue({
+      state: 'queued',
+      requested_at: Date.now() - 20 * 60 * 1000,
+      started_at: Date.now() - 20 * 60 * 1000,
+    } as ReturnType<typeof getLatestTestRequestRunForSession>);
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      enqueueFeedback,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(enqueueFeedback).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_reverted' }),
+    );
+  });
+
+  it('nudges (does not revert) a reclaim-parked session with no PR and no lane run, past the grace window', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    const endedAt = Date.now() - 10 * 60 * 1000; // past grace
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession(
+        'idle',
+        30 * 60 * 1000,
+        endedAt,
+        '/fake/worktree',
+        0,
+        null,
+        Date.now(),
+        'reclaimed',
+      ) as ReturnType<typeof getLatestCodeSessionByNotionTaskId>,
+    );
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      enqueueFeedback,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(enqueueFeedback).toHaveBeenCalledWith(
+      'sess-1',
+      'system:nudge',
+      expect.stringContaining('no PR was opened'),
+    );
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('still classifies a reclaim-parked session as reclaim-parked once its pause_reason is later overwritten by an unrelated value', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    // Ended just now — inside POST_CLEAN_EXIT_GRACE_MS, which only protects
+    // a session that is NOT hard-stopped-idle.
+    const endedAt = Date.now() - 5 * 1000;
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession(
+        'idle',
+        30 * 60 * 1000,
+        endedAt,
+        '/fake/worktree',
+        0,
+        null,
+        Date.now(),
+        'reclaimed',
+        'verdict_routing_failed',
+      ) as ReturnType<typeof getLatestCodeSessionByNotionTaskId>,
+    );
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      enqueueFeedback,
+    });
+
+    await sweeper.sweepOnce();
+
+    // Still classified as reclaim-parked (not hard-stopped) despite the
+    // unrelated pause_reason — the clean-exit grace window still applies.
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(enqueueFeedback).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['runner_killed_unexpected', 'surfaceUnresolvedToOperator'],
+    ['stuck_session_hard_stop', 'StuckSessionMonitor.escalateHardStop'],
+    ['credential_revoked_mcp', 'terminateSessionForRevokedCredential'],
+    ['orphaned_at_boot', "bootIdleReconciliation's Pass 0"],
+  ])(
+    'reverts a surfaced-parked session (pause_reason=%s, from %s) exactly as before — never nudged',
+    async (pauseReason) => {
+      const backend = makeBackend([makeTask('notion:abc')]);
+      const endedAt = Date.now() - 10 * 60 * 1000;
+      vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+        makeSession(
+          'idle',
+          30 * 60 * 1000,
+          endedAt,
+          '/fake/worktree',
+          0,
+          null,
+          Date.now(),
+          'surfaced',
+          pauseReason,
+        ) as ReturnType<typeof getLatestCodeSessionByNotionTaskId>,
+      );
+      const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
+
+      const sweeper = new OrphanedTaskSweeper(broadcast, {
+        listProjects: () => [
+          { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+        ],
+        resolveBackend: () => backend,
+        enqueueFeedback,
+      });
+
+      await sweeper.sweepOnce();
+
+      expect(enqueueFeedback).not.toHaveBeenCalled();
+      expect(backend.updateStatus).toHaveBeenCalledWith(
+        'notion:abc',
+        '🗂️ Ready',
+      );
+    },
+  );
 
   // ── Recency gate (AC1 / AC2) ──────────────────────────────────────────────
 

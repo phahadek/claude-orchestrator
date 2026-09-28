@@ -87,6 +87,12 @@ export interface Session {
   // schema.ts's parked_at migration comment. NULL means "not parked".
   // Cleared by SessionManager.sendOrResume on successful resume.
   parked_at: number | null;
+  // Discriminates parked_at's writers into a reclaim-park (healthy session,
+  // process merely reclaimed) vs an operator-surfaced hard-stop — see
+  // schema.ts's park_kind migration comment and
+  // sessionPredicates.isSurfacedParkedIdle. NULL for an unparked row or a
+  // legacy parked_at-set row predating this column (treated as 'surfaced').
+  park_kind: 'reclaimed' | 'surfaced' | null;
 }
 
 export type NewSession = Omit<
@@ -98,6 +104,7 @@ export type NewSession = Omit<
   | 'archived'
   | 'archive_kind'
   | 'parked_at'
+  | 'park_kind'
   | 'favorited'
   | 'project_id'
   | 'session_type'
@@ -131,6 +138,7 @@ export type NewSession = Omit<
   worktree_path?: string | null;
   archived?: number;
   parked_at?: number | null;
+  park_kind?: 'reclaimed' | 'surfaced' | null;
   favorited?: number;
   project_id?: string | null;
   session_type?: SessionType;

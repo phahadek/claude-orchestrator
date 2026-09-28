@@ -3594,6 +3594,28 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
   backfillParkedIdleFromMachinePark(target);
+
+  // park_kind: discriminates parked_at's five writers into two shapes —
+  // 'reclaimed' (AgentSession.reclaimProcess: only "no live process, don't
+  // count occupancy", the session is otherwise healthy and untouched) vs
+  // 'surfaced' (AgentSession.surfaceUnresolvedToOperator,
+  // StuckSessionMonitor.escalateHardStop,
+  // SessionManager.terminateSessionForRevokedCredential,
+  // bootIdleReconciliation's Pass 0: an operator-facing hard-stop, always
+  // paired with a pause_reason). OrphanedTaskSweeper's isHardStoppedIdle
+  // uses this (via isSurfacedParkedIdle) instead of parked_at alone, so a
+  // reclaim-parked session keeps the grace-window/awaiting-lane/nudge
+  // protections a plain idle session gets, while a surfaced park keeps
+  // today's revert/surface behavior. NULL for every unparked row, and for
+  // legacy rows parked before this column existed — those are treated as
+  // 'surfaced' (fail-closed = today's behavior) by isSurfacedParkedIdle
+  // rather than by a backfill write here. Cleared alongside parked_at by
+  // clearSessionParkedAt.
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN park_kind TEXT`);
+  } catch {
+    /* already exists */
+  }
 }
 
 /**

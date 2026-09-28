@@ -31,7 +31,7 @@ import {
 } from '../session/sessionLifecycle';
 import {
   isMachineParkedIdle,
-  isParkedIdle,
+  isSurfacedParkedIdle,
 } from '../session/sessionPredicates';
 import { isUsageAdmitted } from './usageAdmission';
 import { yieldToEventLoop } from '../utils/concurrency';
@@ -55,18 +55,23 @@ import { NotionApiError } from '../notion/types';
  * that's still worth retrying next tick.
  */
 /**
- * True for a session left idle by a hard-stop rather than a clean exit —
- * either flavor of it: isMachineParkedIdle (archived=1,
+ * True for a session left idle by an operator-facing hard-stop rather than
+ * a clean exit — either flavor of it: isMachineParkedIdle (archived=1,
  * archive_kind='machine_park', still produced by the OS-liveness
- * reconciler's dead-'running'-session archival) or isParkedIdle (parked_at
- * set, archived=0 — the marker every other machine path that reclaims or
- * loses a process now uses instead of archiving, see schema.ts's parked_at
- * migration comment). Neither is a clean idle exit, so neither earns the
- * grace-window/legitimate-park protections below — both fall straight
- * through to revert/surface.
+ * reconciler's dead-'running'-session archival) or isSurfacedParkedIdle
+ * (parked_at set with park_kind !== 'reclaimed', archived=0 — the marker
+ * the four operator-surfacing machine paths use instead of archiving, see
+ * schema.ts's park_kind migration comment). A plain reclaim-park
+ * (park_kind === 'reclaimed', set by AgentSession.reclaimProcess when a
+ * session's process is merely reclaimed while it's healthy — e.g. waiting
+ * on a test_request result) is deliberately excluded: it is treated exactly
+ * like an unparked idle session, earning the same grace-window/
+ * awaiting-lane-result/capability/operator-decision exemptions and idle
+ * nudge. Everything else here is not a clean idle exit, so it does not earn
+ * those protections and falls straight through to revert/surface.
  */
 function isHardStoppedIdle(session: Session): boolean {
-  return isMachineParkedIdle(session) || isParkedIdle(session);
+  return isMachineParkedIdle(session) || isSurfacedParkedIdle(session);
 }
 
 function isPermanentRevertFailure(err: unknown): boolean {

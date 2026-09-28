@@ -5024,7 +5024,7 @@ export class SessionManager extends EventEmitter {
   ): void {
     const row = getSession(sessionId);
     const reason = `credential_revoked_${surface}`;
-    setSessionParkedAt(sessionId, Date.now());
+    setSessionParkedAt(sessionId, Date.now(), 'surfaced');
     setSessionPauseReason(sessionId, reason);
 
     recordEvent({

@@ -301,3 +301,28 @@ export function isMachineParkedIdle(session: {
 export function isParkedIdle(session: { parked_at: number | null }): boolean {
   return session.parked_at != null;
 }
+
+/**
+ * True for a parked session whose park is an operator-facing hard-stop —
+ * one of the four surface paths (AgentSession.surfaceUnresolvedToOperator,
+ * StuckSessionMonitor.escalateHardStop,
+ * SessionManager.terminateSessionForRevokedCredential,
+ * bootIdleReconciliation's Pass 0) — as opposed to a plain reclaim-park
+ * (AgentSession.reclaimProcess: the session is otherwise healthy, only its
+ * OS process was reclaimed; see park_kind's schema.ts migration comment).
+ * A legacy row with parked_at set and park_kind NULL (parked before this
+ * column existed) is treated as surfaced — fail-closed, matching the
+ * pre-park_kind behavior of isParkedIdle. This is what OrphanedTaskSweeper's
+ * isHardStoppedIdle now consumes in place of the bare isParkedIdle arm, so a
+ * reclaim-parked session keeps the same grace-window/awaiting-lane-result/
+ * capability/operator-decision exemptions and idle nudge as a plain idle
+ * session, while a surfaced park keeps falling straight through to
+ * revert/surface.
+ */
+export function isSurfacedParkedIdle(session: {
+  parked_at: number | null;
+  park_kind: string | null;
+}): boolean {
+  if (session.parked_at == null) return false;
+  return session.park_kind !== 'reclaimed';
+}
