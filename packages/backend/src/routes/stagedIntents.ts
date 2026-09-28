@@ -207,6 +207,7 @@ import type { TestCommandResult } from '../session/test-runner';
 import { truncateForDelivery } from '../session/test-runner';
 import {
   admitTestRequest,
+  checkTestRequestHold,
   type TestRequestAdmission,
   type TestRequestAdmissionStatus,
   type TestRequestRunResult,
@@ -228,7 +229,11 @@ import {
   isRunFailureBreadthAttributable,
 } from '../db/queries';
 import { classifyTestRunOutcome } from '../orchestration/testRequestLane';
-import type { TestRequestPayload, TestRequestRunRow } from '../db/types';
+import type {
+  TestRequestFailureReason,
+  TestRequestPayload,
+  TestRequestRunRow,
+} from '../db/types';
 import { buildTestResultDigest } from '../session/testResultDigest';
 import {
   filterBaseAttributableFailuresForF2Gate,
@@ -6610,7 +6615,7 @@ export async function triggerTestRequestExecution(
   const output = superseded
     ? `[test.request] This run was withdrawn before it executed — a newer request (or a PR merge/close/push) superseded it. Nothing to act on here; the tree this ran against is no longer current.`
     : executionFailed
-      ? `[test.request] The test run could not be executed — the test runner process failed to start, so no test result exists. This is an infrastructure failure, not a test failure; it does not indicate your changes are broken. Retry the request.\n\n${truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP)}`
+      ? `[test.request] The test run could not be executed — the test runner process failed to start, so no test result exists. This is an infrastructure failure, not a test failure; it does not indicate your changes are broken. A further request against this same tree will be held for operator approval rather than auto-run again — re-staging will not change that.\n\n${truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP)}`
       : (filterResult &&
           filterResult.outcome !== 'unfiltered' &&
           renderBaseAttributableFilterDigest(filterResult, guardBlocked)) ||
@@ -6681,6 +6686,63 @@ async function declineTestRequestAutoGrant(
   );
 }
 
+/** Human-readable clause for a held test.request's annotation/tool-response text — see maybeAutoApproveTestRequest's hold branch. */
+function describeTestRequestFailure(
+  reason: TestRequestFailureReason | null,
+): string {
+  switch (reason) {
+    case 'timeout':
+      return 'timed out';
+    case 'oom_killed':
+      return 'was OOM-killed';
+    case 'teardown_failed':
+      return 'failed during teardown';
+    case 'tool_infra_failure':
+      return 'failed due to a toolchain/infrastructure mismatch';
+    case 'execution_failed':
+      return 'failed to execute — the test runner process never started';
+    default:
+      return 'crashed';
+  }
+}
+
+/**
+ * Finds an already-held test.request staged intent (state `staged`, carrying
+ * a `testRequestHeld` annotation) for this same session/project against the
+ * identical lane key — used to withdraw a further request against the same
+ * broken tree instead of stacking a second pending decision. `excludeId`
+ * omits the intent being staged right now from its own search.
+ */
+function findHeldTestRequestForLaneKey(
+  sessionId: string,
+  projectId: string,
+  contentHash: string,
+  runKind: 'scoped' | 'full',
+  baseSha: string | null,
+  excludeId: string,
+): StagedIntentRow | undefined {
+  return listStagedIntentsBySession(sessionId).find((row) => {
+    if (row.id === excludeId) return false;
+    if (row.kind !== 'test.request') return false;
+    if (row.state !== 'staged') return false;
+    if (row.project_id !== projectId) return false;
+    if (!row.annotation) return false;
+    let parsed: { testRequestHeld?: Record<string, unknown> };
+    try {
+      parsed = JSON.parse(row.annotation);
+    } catch {
+      return false;
+    }
+    const held = parsed.testRequestHeld;
+    return (
+      !!held &&
+      held.contentHash === contentHash &&
+      held.runKind === runKind &&
+      held.baseSha === baseSha
+    );
+  });
+}
+
 async function maybeAutoApproveTestRequest(
   intent: StagedIntent,
   sessionManager: SessionManager | undefined,
@@ -6714,6 +6776,68 @@ async function maybeAutoApproveTestRequest(
       'worktree content hash unavailable',
       sessionManager,
     );
+  }
+
+  const laneBaseSha: string | null = null;
+
+  // One held request per tree per session: a further test.request from this
+  // session against the identical lane key while one is already held stays
+  // withdrawn against that held intent rather than stacking a second pending
+  // decision — mirrors the `reused` withdraw below, but for a hold instead of
+  // an in-flight join.
+  const existingHeld = findHeldTestRequestForLaneKey(
+    intent.sessionId,
+    intent.projectId,
+    contentHash,
+    inputs.runKind,
+    laneBaseSha,
+    intent.id,
+  );
+  if (existingHeld) {
+    return withdrawIntent(
+      intent.id,
+      `duplicate of held test.request ${existingHeld.id} — awaiting operator approval`,
+      intent.sessionId,
+    );
+  }
+
+  // Decided before admission: a broken prior run on this exact tree (timeout,
+  // crash, OOM, spawn failure — anything the lane's settled-run guard refuses
+  // to replay) must not silently trigger another blind full-suite execution.
+  // Re-running is legitimate, but spending it belongs to the operator, not an
+  // unattended auto-grant loop — see checkTestRequestHold's own doc comment.
+  const holdCheck = checkTestRequestHold({
+    projectId: intent.projectId,
+    sessionId: intent.sessionId,
+    contentHash,
+    runKind: inputs.runKind,
+    baseSha: laneBaseSha,
+  });
+  if (holdCheck.held) {
+    const row = getStagedIntentRow(intent.id);
+    if (!row) return intent;
+    const message =
+      `test.request held for operator approval — the prior run (${holdCheck.priorRunId}) ` +
+      `on this tree ${describeTestRequestFailure(holdCheck.failureReason)} and left no ` +
+      `usable report, so it cannot be replayed. Re-staging will not change that; only an ` +
+      `operator approving or declining this request will.`;
+    setStagedIntentAnnotation(
+      intent.id,
+      JSON.stringify({
+        testRequestHeld: {
+          priorRunId: holdCheck.priorRunId,
+          failureReason: holdCheck.failureReason,
+          contentHash,
+          runKind: inputs.runKind,
+          baseSha: laneBaseSha,
+          message,
+        },
+      }),
+    );
+    const held = getStagedIntentRow(intent.id);
+    const heldIntent = held ? rowToApi(held) : intent;
+    broadcastIntentChange(heldIntent);
+    return heldIntent;
   }
 
   // Admitted synchronously, before this intent is even approved — reports

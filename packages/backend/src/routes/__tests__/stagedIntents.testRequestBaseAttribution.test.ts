@@ -52,6 +52,7 @@ vi.mock('../../session/analyzeGating', async (importOriginal) => {
 
 vi.mock('../../orchestration/testRequestLane', () => ({
   admitTestRequest: mockAdmitTestRequest,
+  checkTestRequestHold: () => ({ held: false }),
 }));
 
 vi.mock('../../db/queries', async (importOriginal) => {

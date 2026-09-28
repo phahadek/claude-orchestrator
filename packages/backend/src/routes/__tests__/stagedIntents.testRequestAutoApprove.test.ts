@@ -21,12 +21,14 @@ const {
   mockLoadOrchestratorConfig,
   mockComputeHash,
   mockAdmitTestRequest,
+  mockCheckTestRequestHold,
   mockGetTaskBackend,
 } = vi.hoisted(() => ({
   mockGetProjectById: vi.fn(),
   mockLoadOrchestratorConfig: vi.fn(),
   mockComputeHash: vi.fn(),
   mockAdmitTestRequest: vi.fn(),
+  mockCheckTestRequestHold: vi.fn(),
   mockGetTaskBackend: vi.fn(),
 }));
 
@@ -49,6 +51,7 @@ vi.mock('../../session/analyzeGating', async (importOriginal) => {
 
 vi.mock('../../orchestration/testRequestLane', () => ({
   admitTestRequest: mockAdmitTestRequest,
+  checkTestRequestHold: mockCheckTestRequestHold,
 }));
 
 vi.mock('../../tasks/TaskBackend', async (importOriginal) => {
@@ -62,6 +65,7 @@ import {
   stageIntent,
   routeStageTimeBlock,
   commitGroupIntents,
+  triggerTestRequestExecution,
 } from '../stagedIntents';
 import {
   insertSession,
@@ -85,10 +89,10 @@ function setUpSession(sessionId: string, withWorktree = true) {
   if (withWorktree) updateSessionWorktreePath(sessionId, '/tmp/wt');
 }
 
-function stageTestRequest(sessionId: string) {
+function stageTestRequest(sessionId: string, taskId = 'task-1') {
   return stageIntent(
     'test.request',
-    { taskId: 'task-1', reason: 'confirm the fix' },
+    { taskId, reason: 'confirm the fix' },
     'proj-1',
     null,
     sessionId,
@@ -126,6 +130,7 @@ beforeEach(() => {
   mockLoadOrchestratorConfig.mockReset();
   mockComputeHash.mockReset();
   mockAdmitTestRequest.mockReset();
+  mockCheckTestRequestHold.mockReset();
   mockGetTaskBackend.mockReset();
   db.prepare('DELETE FROM staged_intent').run();
   db.prepare('DELETE FROM staged_intent_group').run();
@@ -142,6 +147,7 @@ beforeEach(() => {
   });
   mockComputeHash.mockResolvedValue('hash-1');
   mockAdmitTestRequest.mockImplementation(() => stubFreshAdmission());
+  mockCheckTestRequestHold.mockReturnValue({ held: false });
   typedSetSetting('test_request_cycle_limit', 3);
 });
 
@@ -390,6 +396,123 @@ describe('test.request queue position + session-pending dedupe', () => {
       testRequestQueue: { runId: 'run-settled', unchangedReplay: true },
     });
     expect(getSessionTestRequestCycleCount('session-replay')).toBe(0);
+  });
+});
+
+describe('test.request held for operator approval (broken prior run on this tree)', () => {
+  it('stays staged, sets a testRequestHeld annotation, never admits, and does not charge the cycle counter', async () => {
+    mockCheckTestRequestHold.mockReturnValue({
+      held: true,
+      priorRunId: 'run-broke',
+      failureReason: 'timeout',
+    });
+    setUpSession('session-held');
+
+    const intent = stageTestRequest('session-held');
+    const checked = await routeStageTimeBlock(intent, undefined);
+
+    expect(checked.state).toBe('staged');
+    expect(mockAdmitTestRequest).not.toHaveBeenCalled();
+    expect(checked.annotation).toMatchObject({
+      testRequestHeld: {
+        priorRunId: 'run-broke',
+        failureReason: 'timeout',
+        contentHash: 'hash-1',
+        runKind: 'full',
+      },
+    });
+    expect(getSessionTestRequestCycleCount('session-held')).toBe(0);
+
+    const auditRow = db
+      .prepare(
+        "SELECT 1 FROM audit_log WHERE event_type = 'test_request_cycle_limit_crossed' AND actor_id = ?",
+      )
+      .get('session-held');
+    expect(auditRow).toBeUndefined();
+
+    const runsRow = db
+      .prepare('SELECT COUNT(*) AS n FROM test_request_runs')
+      .get() as { n: number };
+    expect(runsRow.n).toBe(0);
+  });
+
+  it('operator approval of a held intent (triggerTestRequestExecution, mirroring the approve route) executes one fresh run and delivers the result to the feedback inbox', async () => {
+    mockCheckTestRequestHold.mockReturnValue({
+      held: true,
+      priorRunId: 'run-broke',
+      failureReason: 'timeout',
+    });
+    setUpSession('session-held-approve');
+    const intent = stageTestRequest('session-held-approve');
+    const held = await routeStageTimeBlock(intent, undefined);
+    expect(held.state).toBe('staged');
+
+    mockAdmitTestRequest.mockImplementation(() =>
+      stubFreshAdmission('run-fresh'),
+    );
+    const approvedRow = transitionStagedIntent(intent.id, 'approved', {
+      annotation: null,
+    });
+    const sessionManager = makeSessionManager();
+    await triggerTestRequestExecution(
+      { ...intent, state: approvedRow.state, annotation: null },
+      sessionManager,
+    );
+
+    expect(mockAdmitTestRequest).toHaveBeenCalledTimes(1);
+    expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
+    const [deliveredSessionId, eventType, deliveredPayload] = (
+      sessionManager.enqueueFeedback as unknown as {
+        mock: { calls: [string, string, string][] };
+      }
+    ).mock.calls[0];
+    expect(deliveredSessionId).toBe('session-held-approve');
+    expect(eventType).toBe('test_request');
+    expect(JSON.parse(deliveredPayload)).toMatchObject({
+      intentId: intent.id,
+      passed: true,
+    });
+  });
+
+  it('a second request from the same session for the same held lane key is withdrawn against the held intent, not stacked as a second decision', async () => {
+    mockCheckTestRequestHold.mockReturnValue({
+      held: true,
+      priorRunId: 'run-broke',
+      failureReason: 'timeout',
+    });
+    setUpSession('session-held-dup');
+
+    const first = stageTestRequest('session-held-dup', 'task-1');
+    const checkedFirst = await routeStageTimeBlock(first, undefined);
+    expect(checkedFirst.state).toBe('staged');
+
+    // A different taskId (a distinct staged_intent row, per stageIntent's own
+    // per-task dedup) against the identical tree/content-hash — the scenario
+    // this hold-dedup covers, since an identical (taskId, payload) restage is
+    // already deduped upstream by stageIntent itself.
+    const second = stageTestRequest('session-held-dup', 'task-2');
+    const checkedSecond = await routeStageTimeBlock(second, undefined);
+
+    expect(checkedSecond.state).toBe('withdrawn');
+    expect(mockAdmitTestRequest).not.toHaveBeenCalled();
+
+    const stagedCount = db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM staged_intent WHERE session_id = 'session-held-dup' AND state = 'staged'",
+      )
+      .get() as { n: number };
+    expect(stagedCount.n).toBe(1);
+  });
+
+  it('a tree with no held prior run auto-approves as today (hold check returns held: false)', async () => {
+    mockCheckTestRequestHold.mockReturnValue({ held: false });
+    setUpSession('session-not-held');
+
+    const intent = stageTestRequest('session-not-held');
+    const checked = await routeStageTimeBlock(intent, undefined);
+
+    expect(checked.state).toBe('approved');
+    expect(mockAdmitTestRequest).toHaveBeenCalledTimes(1);
   });
 });
 

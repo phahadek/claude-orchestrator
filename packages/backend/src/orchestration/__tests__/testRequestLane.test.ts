@@ -77,6 +77,7 @@ import { logger } from '../../logger';
 import {
   runProjectTestRequest,
   admitTestRequest,
+  checkTestRequestHold,
   recoverInterruptedTestRequestRuns,
   setTestRequestLaneBroadcast,
   ingestTestRunResults,
@@ -263,6 +264,134 @@ function getRawRun(
     | { failed_command: string | null; failure_reason: string | null }
     | undefined;
 }
+
+/** Inserts a settled `failed` run with no structured_result and no test_run_results rows — the "broken" (report-less crash) shape. */
+function insertBrokenRun(
+  projectId: string,
+  contentHash: string,
+  failureReason:
+    | 'timeout'
+    | 'oom_killed'
+    | 'teardown_failed'
+    | 'tool_infra_failure'
+    | 'execution_failed'
+    | 'generic',
+): string {
+  const runId = `broken-${projectId}-${contentHash}-${failureReason}`;
+  insertTestRequestRun(runId, projectId, contentHash, null, Date.now());
+  completeTestRequestRun(runId, 'failed', 'boom', failureReason);
+  return runId;
+}
+
+describe('checkTestRequestHold', () => {
+  function holdParams(
+    overrides: Partial<Parameters<typeof checkTestRequestHold>[0]> = {},
+  ): Parameters<typeof checkTestRequestHold>[0] {
+    return {
+      projectId: 'proj-hold',
+      sessionId: null,
+      contentHash: 'hold-hash',
+      runKind: 'full',
+      baseSha: null,
+      ...overrides,
+    };
+  }
+
+  it.each([
+    'timeout',
+    'oom_killed',
+    'teardown_failed',
+    'tool_infra_failure',
+    'execution_failed',
+    'generic',
+  ] as const)(
+    'holds for a settled, report-less failed run with failure_reason %s',
+    (reason) => {
+      const runId = insertBrokenRun('proj-hold', 'hold-hash', reason);
+      const result = checkTestRequestHold(holdParams());
+      expect(result).toEqual({
+        held: true,
+        priorRunId: runId,
+        failureReason: reason,
+      });
+    },
+  );
+
+  it('does not hold when the settled failed run carries a structured_result (report-bearing failure) — that one still replays as unchangedReplay', () => {
+    const runId = 'report-bearing-fail';
+    insertTestRequestRun(runId, 'proj-hold', 'hold-hash', null, Date.now());
+    completeTestRequestRun(
+      runId,
+      'failed',
+      'boom',
+      'generic',
+      JSON.stringify({ suites: [] }),
+    );
+    expect(checkTestRequestHold(holdParams())).toEqual({ held: false });
+  });
+
+  it('does not hold when the only prior row for this lane key is superseded — it never executed', () => {
+    const runId = 'superseded-run';
+    insertTestRequestRun(runId, 'proj-hold', 'hold-hash', null, Date.now());
+    completeTestRequestRun(runId, 'failed', 'withdrawn', 'superseded');
+    expect(checkTestRequestHold(holdParams())).toEqual({ held: false });
+  });
+
+  it('does not hold for a request whose content_hash differs from the broken row (the tree changed)', () => {
+    insertBrokenRun('proj-hold', 'hold-hash', 'timeout');
+    expect(
+      checkTestRequestHold(holdParams({ contentHash: 'different-hash' })),
+    ).toEqual({ held: false });
+  });
+
+  it('does not hold when nothing has ever run for this lane key', () => {
+    expect(
+      checkTestRequestHold(holdParams({ contentHash: 'never-run-hash' })),
+    ).toEqual({ held: false });
+  });
+
+  it('does not hold when this session already has a pending request against the identical tree — admitTestRequest would reuse it rather than execute fresh', () => {
+    mockRunTestCommands.mockImplementation(() => new Promise(() => {}));
+    const admission = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-hold-pending',
+        contentHash: 'pending-hash',
+        sessionId: 'session-pending',
+      }),
+    );
+    admission.result.catch(() => {});
+
+    expect(
+      checkTestRequestHold({
+        projectId: 'proj-hold-pending',
+        sessionId: 'session-pending',
+        contentHash: 'pending-hash',
+        runKind: 'full',
+        baseSha: null,
+      }),
+    ).toEqual({ held: false });
+  });
+
+  it('does not hold when an in-flight (coalescing) run already exists for this exact key', () => {
+    mockRunTestCommands.mockImplementation(() => new Promise(() => {}));
+    const admission = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-hold-inflight',
+        contentHash: 'inflight-hash',
+      }),
+    );
+    admission.result.catch(() => {});
+
+    expect(
+      checkTestRequestHold(
+        holdParams({
+          projectId: 'proj-hold-inflight',
+          contentHash: 'inflight-hash',
+        }),
+      ),
+    ).toEqual({ held: false });
+  });
+});
 
 describe('runProjectTestRequest — coalescing', () => {
   it('two concurrent requests for the same (project, content-hash) share one execution; the joiner reports joined=true and the shared runId', async () => {

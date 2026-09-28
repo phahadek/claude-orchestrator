@@ -355,7 +355,7 @@ The backend refuses (naming why) unless the test clears the corpus and its file 
 
 Check \`mcp__orchestrator__testHealth_getFlakyHistory\` first for a test's prior flaky/base-failing history — it grounds your \`reason\` and tells you whether \`flaky_confirm\` is even worth calling.
 
-Retrying \`test_request\` against an unchanged tree is mechanically futile: the dedup path replays the same settled result without re-running the corpus check. \`flaky_confirm\` is a separate call, not deduped that way, so re-calling it (even periodically, against the same tree) always re-checks fresh corpus evidence. Prefer that over blind retries.
+Retrying \`test_request\` against an unchanged tree whose last run settled cleanly (pass or fail, with a usable report) is mechanically futile: the dedup path replays that same settled result without re-running the corpus check. But if the last run on this tree broke instead — timed out, crashed, was OOM-killed, or failed to spawn, leaving no usable report — retrying does not replay anything either: the request stays held for operator approval rather than auto-running again blindly. Re-staging will not change that; only an operator approving or declining the held request does. \`flaky_confirm\` is a separate call, not deduped that way, so re-calling it (even periodically, against the same tree) always re-checks fresh corpus evidence. Prefer that over blind retries.
 
 ---
 
