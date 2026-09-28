@@ -215,6 +215,44 @@ describe('StuckSessionMonitor — stuck_session_alive_subprocess park escalation
     },
   );
 
+  it('does not escalate a park whose session entered running 2s ago, even though last_event_at is 52 minutes old', async () => {
+    // getStuckAliveSubprocessParkRows folds the most recent transition into
+    // 'running' into latest_event_ts (max with last_event_at) at the query
+    // layer — a resumed session's process was just spawned and its first
+    // hook event can take up to ~10s to land, so raw last_event_at (still
+    // the previous turn's stale value) must not be read as 52 minutes of
+    // silence on the fresh process.
+    vi.mocked(getStuckAliveSubprocessParkRows).mockReturnValue([
+      makeRow({
+        parked_at: NOW - 52 * 60 * 1000,
+        latest_event_ts: NOW - 2000,
+      }),
+    ] as never);
+    const { monitor, sessionManager } = makeMonitor();
+
+    await (monitor as any).scanForStuckAliveSubprocessParks();
+
+    expect(sessionManager.markSessionErrored).not.toHaveBeenCalled();
+    expect(sessionManager.endSession).not.toHaveBeenCalled();
+    expect(sessionManager.reclaimSessionProcess).not.toHaveBeenCalled();
+  });
+
+  it('still escalates a park with no resume and silence past the bound (regression guard)', async () => {
+    vi.mocked(getStuckAliveSubprocessParkRows).mockReturnValue([
+      makeRow({
+        parked_at: NOW - BOUND_MS - 1000,
+        latest_event_ts: NOW - BOUND_MS - 1000,
+      }),
+    ] as never);
+    const { monitor, sessionManager } = makeMonitor();
+
+    await (monitor as any).scanForStuckAliveSubprocessParks();
+
+    expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith(
+      'sess-1',
+    );
+  });
+
   it('takes exactly one process snapshot per sweep and escalates only rows present in it, regardless of row count', async () => {
     vi.mocked(getStuckAliveSubprocessParkRows).mockReturnValue([
       makeRow({ session_id: 'sess-1' }),
