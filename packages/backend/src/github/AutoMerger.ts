@@ -242,9 +242,7 @@ export class AutoMerger {
           // picks this candidate back up.
           logger.warn(
             `[AutoMerger] conflictNudgeSweep: fixer relaunch for PR #${pr_number} (${repo}) did not spawn/resume (${
-              relaunched === null
-                ? 'refused'
-                : `outcome=${relaunched.outcome}`
+              relaunched === null ? 'refused' : `outcome=${relaunched.outcome}`
             })`,
           );
           continue;
