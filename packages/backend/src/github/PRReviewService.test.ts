@@ -24,6 +24,8 @@ vi.mock('../db/queries.js', () => ({
   getLatestFinishedTestRequestRunForSession: vi.fn().mockReturnValue(undefined),
   getAuthoritativeTestRunForPr: vi.fn().mockReturnValue(undefined),
   getTestRunSummary: vi.fn().mockReturnValue(undefined),
+  listTestRequestRunsForPrSession: vi.fn().mockReturnValue([]),
+  getUnexcusedFailingTestIdsForRun: vi.fn().mockReturnValue([]),
   markSessionSuperseded: vi.fn(),
   TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED: new Set([
     'done',
@@ -31,6 +33,12 @@ vi.mock('../db/queries.js', () => ({
     'killed',
     'superseded',
   ]),
+}));
+
+vi.mock('../session/test-runner.js', () => ({
+  isTestIdTouchedByChangedFiles: vi
+    .fn()
+    .mockReturnValue({ touched: false, confident: false }),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -54,6 +62,8 @@ import {
   extractListedMigrationPaths,
   overrideFilesPathsDimension,
   supersedeReviewSession,
+  collectGateChargedFailures,
+  buildGateChargedFailuresSection,
 } from './PRReviewService';
 import {
   getPRByNumber,
@@ -70,6 +80,8 @@ import {
   setPauseReason,
   getAuthoritativeTestRunForPr,
   getTestRunSummary,
+  listTestRequestRunsForPrSession,
+  getUnexcusedFailingTestIdsForRun,
   markSessionSuperseded,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
@@ -465,6 +477,72 @@ describe('PRReviewService.buildPrompt()', () => {
     expect(prompt).not.toContain('## Approved PR Intent');
     expect(prompt).toContain(
       'necessary downstream updates caused by the listed changes',
+    );
+  });
+
+  it('states there are no gate-charged failures when none are supplied', () => {
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const prompt = service.buildPrompt(mockPR, mockDiff, mockTaskBody);
+
+    expect(prompt).toContain('## Gate-Charged Test Failures');
+    expect(prompt).toContain('None.');
+  });
+
+  it('lists gate-charged failing test ids and tells the reviewer they are in scope', () => {
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const prompt = service.buildPrompt(
+      mockPR,
+      mockDiff,
+      mockTaskBody,
+      undefined,
+      undefined,
+      undefined,
+      [
+        {
+          test_id: 'src/foo.test.ts.bar works',
+          name: 'bar works',
+          failure_message: 'expected 2 to equal 3',
+          failure_trace_excerpt: null,
+        },
+      ],
+    );
+
+    expect(prompt).toContain('## Gate-Charged Test Failures');
+    expect(prompt).toContain('src/foo.test.ts.bar works');
+    expect(prompt).toContain('not scope creep the session chose on its own');
+  });
+
+  it('tells the reviewer a file addressing a gate-charged failure is in scope for the Files/paths dimension', () => {
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const prompt = service.buildPrompt(mockPR, mockDiff, mockTaskBody);
+
+    expect(prompt).toContain('## Gate-Charged Test Failures');
+    expect(prompt).toContain(
+      "address a failure listed under \"## Gate-Charged Test Failures\" above",
+    );
+    expect(prompt).toContain(
+      'must still be assessed on its merits, not waved through',
     );
   });
 
@@ -5012,6 +5090,99 @@ describe('overrideFilesPathsDimension()', () => {
     expect(dim.passed).toBe(false);
     expect(dim.notes).toMatch(/collides/);
     expect(result.verdict).toBe('needs_changes');
+  });
+});
+
+describe('collectGateChargedFailures()', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns [] when the session has no test_request_runs', () => {
+    vi.mocked(listTestRequestRunsForPrSession).mockReturnValue([]);
+
+    const result = collectGateChargedFailures('proj-1', 'session-1', null);
+
+    expect(result).toEqual([]);
+  });
+
+  it('collects unexcused failing tests across every run for the PR session/worktree', () => {
+    vi.mocked(listTestRequestRunsForPrSession).mockReturnValue([
+      { id: 'run-1' } as any,
+      { id: 'run-2' } as any,
+    ]);
+    vi.mocked(getUnexcusedFailingTestIdsForRun).mockImplementation(
+      (runId: string) =>
+        runId === 'run-1'
+          ? [
+              {
+                test_id: 'foo.test.ts.bar',
+                name: 'bar',
+                failure_message: null,
+                failure_trace_excerpt: null,
+              },
+            ]
+          : [
+              {
+                test_id: 'baz.test.ts.qux',
+                name: 'qux',
+                failure_message: null,
+                failure_trace_excerpt: null,
+              },
+            ],
+    );
+
+    const result = collectGateChargedFailures('proj-1', 'session-1', '/wt');
+
+    expect(result.map((f) => f.test_id).sort()).toEqual([
+      'baz.test.ts.qux',
+      'foo.test.ts.bar',
+    ]);
+  });
+
+  it('dedupes a test id that repeats across multiple runs', () => {
+    vi.mocked(listTestRequestRunsForPrSession).mockReturnValue([
+      { id: 'run-1' } as any,
+      { id: 'run-2' } as any,
+    ]);
+    vi.mocked(getUnexcusedFailingTestIdsForRun).mockReturnValue([
+      {
+        test_id: 'foo.test.ts.bar',
+        name: 'bar',
+        failure_message: null,
+        failure_trace_excerpt: null,
+      },
+    ]);
+
+    const result = collectGateChargedFailures('proj-1', 'session-1', '/wt');
+
+    expect(result).toHaveLength(1);
+  });
+});
+
+describe('buildGateChargedFailuresSection()', () => {
+  it('states there are no gate-charged failures for an empty list', () => {
+    const section = buildGateChargedFailuresSection([], []);
+
+    expect(section).toContain('## Gate-Charged Test Failures');
+    expect(section).toContain('None.');
+  });
+
+  it('lists each charged failure and instructs the reviewer to treat addressing files as in scope', () => {
+    const section = buildGateChargedFailuresSection(
+      [
+        {
+          test_id: 'src/foo.test.ts.bar works',
+          name: 'bar works',
+          failure_message: 'expected 2 to equal 3',
+          failure_trace_excerpt: null,
+        },
+      ],
+      ['src/foo.ts'],
+    );
+
+    expect(section).toContain('src/foo.test.ts.bar works');
+    expect(section).toContain('in scope for the Files/paths dimension');
   });
 });
 

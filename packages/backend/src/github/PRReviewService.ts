@@ -17,7 +17,11 @@ import {
   getMergedLocalBranchForTaskId,
   getAuthoritativeTestRunForPr,
   getTestRunSummary,
+  listTestRequestRunsForPrSession,
+  getUnexcusedFailingTestIdsForRun,
 } from '../db/queries';
+import type { FailingTestForRun } from '../db/queries';
+import { isTestIdTouchedByChangedFiles } from '../session/test-runner';
 import { supersedeReviewSession } from './reviewSessionSupersede';
 export { supersedeReviewSession } from './reviewSessionSupersede';
 import type {
@@ -431,7 +435,9 @@ export type WorkItem =
  * Guidance for the "Changed files vs Files/paths affected list" dimension
  * when reviewing against a Code task's task-body spec (the default rubric).
  */
-const DEFAULT_FILES_DIMENSION_GUIDANCE = `For the "Changed files vs Files/paths affected list" dimension: Pass if all changed files are either listed in the task OR are necessary downstream updates caused by the listed changes (e.g., updating call sites after a type change, adjusting tests for modified behavior, fixing imports). Fail only if the PR touches files unrelated to the task's intent.`;
+const DEFAULT_FILES_DIMENSION_GUIDANCE = `For the "Changed files vs Files/paths affected list" dimension: Pass if all changed files are either listed in the task, are necessary downstream updates caused by the listed changes (e.g., updating call sites after a type change, adjusting tests for modified behavior, fixing imports), OR address a failure listed under "## Gate-Charged Test Failures" above (the test file itself, or production source that test exercises) — that section lists the test ids the orchestrator's own gates charged to this PR/session, so a change addressing one of them is in scope even though the task never listed it. Fail only if the PR touches files unrelated to the task's intent and unrelated to any gate-charged failure.
+
+A production-code change made to address a gate-charged failure must still be assessed on its merits, not waved through: does it plausibly fix the named failure, and is everything else it touches justified by that fix? A speculative or unexplained production change tied to a charged failure is a finding under the other dimensions (correctness/risk), not a Files/paths scope failure.`;
 
 /**
  * The Ops rubric variant of DEFAULT_FILES_DIMENSION_GUIDANCE: an Ops
@@ -576,6 +582,79 @@ ${sourceLine}
 Run outcome: ${run.state}
 Finished at: ${finishedAt}
 ${commandLines}
+`;
+}
+
+/**
+ * The unexcused failing test ids the orchestrator's own gates charged to this
+ * PR/session — i.e. what a "please investigate the failures and push a fix"
+ * gate instruction (reviewUtils.ts's buildInstructionBlock) was actually
+ * about. Sourced from every test_request_runs row for this PR's session and
+ * worktree (listTestRequestRunsForPrSession, which also surfaces the PR
+ * pipeline's NULL-session pr_gate rows), filtered to each run's still-open
+ * failures (getUnexcusedFailingTestIdsForRun — excused_at IS NULL). Without
+ * this, the reviewer has no way to distinguish a fix the orchestrator itself
+ * demanded from a session's own unrelated scope creep, and fails both alike
+ * on the Files/paths dimension. Deduped by test_id across runs — a session
+ * often reruns test.request multiple times against the same failure.
+ */
+export function collectGateChargedFailures(
+  projectId: string,
+  sessionId: string,
+  worktreePath: string | null,
+): FailingTestForRun[] {
+  const runs = listTestRequestRunsForPrSession(
+    projectId,
+    sessionId,
+    worktreePath,
+  );
+  const byTestId = new Map<string, FailingTestForRun>();
+  for (const run of runs) {
+    for (const failure of getUnexcusedFailingTestIdsForRun(run.id)) {
+      if (!byTestId.has(failure.test_id)) byTestId.set(failure.test_id, failure);
+    }
+  }
+  return [...byTestId.values()];
+}
+
+/**
+ * Renders collectGateChargedFailures' result into the prompt section the
+ * files-dimension guidance below points at. For each charged failure, notes
+ * the diff-derived candidate file the reviewer can use to judge whether a
+ * changed file addresses it (isTestIdTouchedByChangedFiles' own mapping —
+ * "not confident" means the test id carries no resolvable file, so the
+ * reviewer must judge by test name/content instead of a path match).
+ */
+export function buildGateChargedFailuresSection(
+  failures: FailingTestForRun[],
+  changedFiles: string[],
+): string {
+  if (failures.length === 0) {
+    return `\n## Gate-Charged Test Failures
+None. The orchestrator's gates did not charge any unexcused failing test to this PR or session.
+`;
+  }
+  const lines = failures.map((f) => {
+    const { touched, confident } = isTestIdTouchedByChangedFiles(
+      f.test_id,
+      f.name,
+      changedFiles,
+    );
+    const mapping = !confident
+      ? 'file mapping not confident — judge by test name/content'
+      : touched
+        ? 'a changed file appears to address this test'
+        : 'no changed file appears to address this test';
+    return `- ${f.test_id} (${f.name}) — ${mapping}`;
+  });
+  return `\n## Gate-Charged Test Failures
+The orchestrator's own gates (the pre-PR test_request gate and/or the PR pipeline's
+full-suite run) required this session to fix the following failing tests before this PR
+could be created or merged — these are not scope creep the session chose on its own. A
+changed file that addresses one of these (the test file itself, or production source that
+test exercises) is in scope for the Files/paths dimension; judge it for correctness and
+risk under the other dimensions instead of failing it for location.
+${lines.join('\n')}
 `;
 }
 
@@ -769,6 +848,13 @@ export class PRReviewService {
           () => diffSource.fetchDiff(),
           sleep,
         );
+        const followUpGateChargedFailures = prRow.session_id
+          ? collectGateChargedFailures(
+              projectId,
+              prRow.session_id,
+              getSession(prRow.session_id)?.worktree_path ?? null,
+            )
+          : [];
         const followUp = [
           `The code session has pushed new commits to PR #${prNumber}.`,
           `Please re-review the updated diff against the same task spec.`,
@@ -781,6 +867,10 @@ export class PRReviewService {
           '```',
           diff,
           '```',
+          buildGateChargedFailuresSection(
+            followUpGateChargedFailures,
+            parseDiffFiles(diff),
+          ),
           REVIEW_JSON_SCHEMA_BLOCK,
         ].join('\n');
         const delivered = this.sessionManager.send(
@@ -901,17 +991,27 @@ export class PRReviewService {
       // session_id NULL) outranks the session's own scoped/partial run — see
       // getAuthoritativeTestRunForPr. Falls back to the session's own latest
       // finished run when no such full run exists.
+      const sessionWorktreePath = prRow.session_id
+        ? (getSession(prRow.session_id)?.worktree_path ?? null)
+        : null;
       const testRun = prRow.session_id
         ? getAuthoritativeTestRunForPr(
             projectId,
             prRow.session_id,
-            getSession(prRow.session_id)?.worktree_path ?? null,
+            sessionWorktreePath,
           )
         : undefined;
       const testRunSummary =
         testRun && !testRun.structured_result
           ? getTestRunSummary(testRun.id)
           : undefined;
+      const gateChargedFailures = prRow.session_id
+        ? collectGateChargedFailures(
+            projectId,
+            prRow.session_id,
+            sessionWorktreePath,
+          )
+        : [];
       const prompt = this.buildPrompt(
         prData,
         diffData,
@@ -919,6 +1019,7 @@ export class PRReviewService {
         prIntent,
         testRun,
         testRunSummary,
+        gateChargedFailures,
       );
 
       // Guard: determine whether the stored session is still resumable before
@@ -1473,6 +1574,17 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       testRun,
       testRunSummary,
     );
+    const gateChargedFailures = pr.session_id
+      ? collectGateChargedFailures(
+          projectId,
+          pr.session_id,
+          getSession(pr.session_id)?.worktree_path ?? null,
+        )
+      : [];
+    const gateChargedFailuresSection = buildGateChargedFailuresSection(
+      gateChargedFailures,
+      parseDiffFiles(diffData.diff),
+    );
 
     const followUp = [
       `The code session has pushed new commits to PR #${prNumber}.`,
@@ -1488,6 +1600,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       diffData.diff,
       '```',
       testRunEvidenceSection,
+      gateChargedFailuresSection,
       REVIEW_JSON_SCHEMA_BLOCK,
     ].join('\n');
 
@@ -2179,6 +2292,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     prIntent?: OpsPrIntentPayload | null,
     testRun?: TestRequestRunRow | null,
     testRunSummary?: TestRunSummaryRow,
+    gateChargedFailures: FailingTestForRun[] = [],
   ): string {
     const prIntentSection = prIntent
       ? `\n## Approved PR Intent (Ops)
@@ -2194,6 +2308,10 @@ Reason: ${prIntent.reason}
       testRun ?? undefined,
       testRunSummary,
     );
+    const gateChargedFailuresSection = buildGateChargedFailuresSection(
+      gateChargedFailures,
+      parseDiffFiles(diff.diff),
+    );
     return `You are a code reviewer. Compare the following GitHub PR against its task specification.
 
 ## PR Metadata
@@ -2206,6 +2324,7 @@ ${diff.diff}
 
 ## Task Specification
 ${taskBody}
+${gateChargedFailuresSection}
 ${prIntentSection}
 ${testRunSection}
 ## Your task
