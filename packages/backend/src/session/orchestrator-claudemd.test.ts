@@ -148,7 +148,9 @@ describe('buildOrchestratorClaudeMd', () => {
     expect(branchSection).toContain(
       'A session owns exactly one PR, opened from its assigned `feature/<task-name>` branch',
     );
-    expect(branchSection).toContain('never create another branch or open another PR');
+    expect(branchSection).toContain(
+      'never create another branch or open another PR',
+    );
     expect(branchSection).toContain('including to "split out" work');
   });
 
@@ -161,9 +163,7 @@ describe('buildOrchestratorClaudeMd', () => {
     expect(branchSection).toContain(
       'When review flags changes as unrelated to the task, remove them from your own branch with revert commits and push',
     );
-    expect(branchSection).toContain(
-      'do not move them to another branch or PR',
-    );
+    expect(branchSection).toContain('do not move them to another branch or PR');
   });
 
   it('local-only mode omits the new one-PR and unrelated-changes-removal rules', () => {
@@ -172,7 +172,9 @@ describe('buildOrchestratorClaudeMd', () => {
       gitMode: 'local-only',
     });
     expect(result).not.toContain('A session owns exactly one PR');
-    expect(result).not.toContain('never create another branch or open another PR');
+    expect(result).not.toContain(
+      'never create another branch or open another PR',
+    );
     expect(result).not.toContain(
       'When review flags changes as unrelated to the task, remove them',
     );
