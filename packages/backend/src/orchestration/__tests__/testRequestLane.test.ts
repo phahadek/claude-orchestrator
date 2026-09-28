@@ -85,6 +85,7 @@ import {
   computeTestPerfBaseline,
   __resetProjectSemaphoresForTest,
   withdrawQueuedRunsForWorktree,
+  getRunIngestionPromise,
 } from '../testRequestLane';
 import {
   Semaphore,
@@ -3508,6 +3509,82 @@ describe('structured_result acquisition', () => {
 });
 
 // ── ingestTestRunResults — per-test extraction from structured_result ──────
+
+describe('getRunIngestionPromise — tracks a completed run\'s own ingestion dispatch while committed rows are still in flight', () => {
+  it("stays pending — and the run's test_run_results rows stay unwritten — until the held-open dispatch is released, then resolves once the write commits", async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: false, output: 'boom' });
+    mockCollectStructuredTestResult.mockReturnValue({
+      format: 'junit-xml' as const,
+      suites: [
+        {
+          name: 'pytest',
+          tests: [
+            { id: 't-race', name: 'test race', outcome: 'failed', durationMs: 5 },
+          ],
+        },
+      ],
+      totals: { passed: 0, failed: 1, skipped: 0, errors: 0 },
+      durationMsTotal: 5,
+    });
+    mockLoadOrchestratorConfig.mockReturnValue({
+      test_report_glob: 'reports/*.xml',
+    });
+
+    let releaseIngestion: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseIngestion = resolve;
+    });
+    mockIngestOffMainThread.mockImplementationOnce(
+      async (_targetPath, _args, syncFallback: () => void) => {
+        await gate;
+        // This suite runs against a `:memory:` db, so production code's own
+        // ingestTestRunResultsOffMainThread would take its synchronous
+        // in-process fallback branch and call this directly — reproduce
+        // that so the write this test asserts on actually happens, just
+        // delayed behind `gate` rather than skipped outright.
+        syncFallback();
+        return { alreadyExtracted: false, processed: 1, commitCount: 1 };
+      },
+    );
+
+    const result = await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-ingestion-race' }),
+    );
+    expect(result.passed).toBe(false);
+
+    // The completion handler has already returned (runProjectTestRequest
+    // resolved) while its own fire-and-forget ingestion dispatch is still
+    // held open by the gate above — this is exactly the window in which a
+    // reader of getFailingTestIdsForRun(result.runId) would otherwise race
+    // an uncommitted write.
+    const pending = getRunIngestionPromise(result.runId!);
+    expect(pending).toBeDefined();
+    expect(getFailingTestIdsForRun(result.runId!)).toEqual([]);
+
+    releaseIngestion();
+    await pending;
+
+    const failing = getFailingTestIdsForRun(result.runId!);
+    expect(failing).toHaveLength(1);
+    expect(failing[0]).toMatchObject({ test_id: 't-race', name: 'test race' });
+
+    // The map-entry cleanup is chained off `pending` itself (a `.finally()`
+    // one microtask hop further out than `pending`'s own settlement), so
+    // give it a macrotask turn to run before asserting it ran.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(getRunIngestionPromise(result.runId!)).toBeUndefined();
+  });
+
+  it('is undefined for a run whose ingestion never had anything to write (a passing run with no structured_result path taken)', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    const result = await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-no-ingestion' }),
+    );
+
+    expect(getRunIngestionPromise(result.runId!)).toBeUndefined();
+  });
+});
 
 describe('ingestTestRunResults', () => {
   it('writes zero test_run_results rows for a run whose results are all passed', async () => {
