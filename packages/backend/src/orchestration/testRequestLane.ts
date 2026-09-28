@@ -735,6 +735,98 @@ export function admitTestRequest(
   };
 }
 
+/**
+ * What checkTestRequestHold reports: whether a test.request for this exact
+ * lane key (project, content-hash, run_kind, base_sha) should be held for
+ * operator approval rather than admitted for a fresh execution, because the
+ * most recent settled run against this same tree broke (timed out, crashed,
+ * OOM-killed, failed to spawn — anything the replay guard below refuses to
+ * hand back as a cached verdict) rather than genuinely failing with a report.
+ */
+export type TestRequestHoldCheck =
+  | { held: false }
+  | {
+      held: true;
+      /** The broken run this request would otherwise re-execute against. */
+      priorRunId: string;
+      failureReason: TestRequestFailureReason | null;
+    };
+
+/**
+ * Side-effect-free predicate a caller (maybeAutoApproveTestRequest) runs
+ * *before* calling admitTestRequest, so a held request never inserts a
+ * queued row or takes a semaphore slot. Mirrors admitTestRequest's own three
+ * layers just far enough to know whether this request would be satisfied
+ * without a fresh execution:
+ *
+ *  - A pending same-session request against the identical tree, or an
+ *    in-flight (coalescing) run for this exact key, is never held — it was
+ *    always going to join rather than execute fresh.
+ *  - Otherwise, a prior settled row exists for this lane key and the normal
+ *    getLatestTestRequestRun lookup (includeUnsettledCrashRows=false) would
+ *    not replay it — or it would, but its failure_reason is
+ *    'execution_failed' — the tree's last run broke rather than genuinely
+ *    passed/failed, and admission would otherwise proceed to a fresh
+ *    execution. See the module task history: re-running is legitimate here,
+ *    but spending another full-suite run on an unchanged tree is the
+ *    operator's call, not an unattended auto-grant's.
+ *  - A superseded row never executed and never triggers a hold; nor does a
+ *    report-bearing failed run, which replays as unchangedReplay today.
+ */
+export function checkTestRequestHold(params: {
+  projectId: string;
+  sessionId: string | null;
+  contentHash: string;
+  runKind: TestRunKind;
+  baseSha: string | null;
+}): TestRequestHoldCheck {
+  const { projectId, sessionId, contentHash, runKind, baseSha } = params;
+
+  const sKey = sessionId ? sessionKey(projectId, sessionId) : null;
+  if (sKey) {
+    const pending = pendingBySession.get(sKey);
+    if (
+      pending &&
+      pending.contentHash === contentHash &&
+      pending.runKind === runKind &&
+      pending.baseSha === baseSha
+    ) {
+      return { held: false };
+    }
+  }
+
+  const key = coalesceKey(projectId, contentHash, runKind, baseSha);
+  if (inFlightRuns.has(key)) return { held: false };
+
+  const withCrashRows = getLatestTestRequestRun(
+    projectId,
+    contentHash,
+    runKind,
+    baseSha,
+    true,
+  );
+  if (!withCrashRows || withCrashRows.failure_reason === 'superseded') {
+    return { held: false };
+  }
+
+  const wouldReplay = getLatestTestRequestRun(
+    projectId,
+    contentHash,
+    runKind,
+    baseSha,
+  );
+  const isBroken =
+    wouldReplay?.id !== withCrashRows.id ||
+    withCrashRows.failure_reason === 'execution_failed';
+  if (!isBroken) return { held: false };
+
+  return {
+    held: true,
+    priorRunId: withCrashRows.id,
+    failureReason: withCrashRows.failure_reason,
+  };
+}
+
 /** A caller-facing snapshot of an in-flight lane entry — see findQueuedOrRunningTestRequest. */
 export interface QueuedOrRunningTestRequest {
   runId: string;

@@ -52,6 +52,7 @@ vi.mock('../../session/autofix-runner', async (importOriginal) => {
 
 vi.mock('../../orchestration/testRequestLane', () => ({
   admitTestRequest: mockAdmitTestRequest,
+  checkTestRequestHold: () => ({ held: false }),
 }));
 
 import { db } from '../../db/db';
