@@ -1543,7 +1543,9 @@ describe('POST /api/prs/:prNumber/fix', () => {
       .query({ projectId: 'proj-1' });
 
     expect(res.status).toBe(200);
-    expect(vi.mocked(sessionManager.deliverOrSpawnFresh)).toHaveBeenCalledOnce();
+    expect(
+      vi.mocked(sessionManager.deliverOrSpawnFresh),
+    ).toHaveBeenCalledOnce();
     const [, message] = vi.mocked(sessionManager.deliverOrSpawnFresh).mock
       .calls[0];
     expect(message).toContain('Data integrity & parsing correctness');
@@ -1619,7 +1621,9 @@ describe('POST /api/prs/:prNumber/fix', () => {
       .query({ projectId: 'proj-1' });
 
     expect(res.status).toBe(422);
-    expect(vi.mocked(sessionManager.deliverOrSpawnFresh)).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(sessionManager.deliverOrSpawnFresh),
+    ).not.toHaveBeenCalled();
   });
 
   it('returns 422 when there is no review of either kind', async () => {
@@ -1634,7 +1638,9 @@ describe('POST /api/prs/:prNumber/fix', () => {
 
     expect(res.status).toBe(422);
     expect(res.body.error).toMatch(/Run a review/);
-    expect(vi.mocked(sessionManager.deliverOrSpawnFresh)).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(sessionManager.deliverOrSpawnFresh),
+    ).not.toHaveBeenCalled();
   });
 });
 
@@ -1685,7 +1691,9 @@ describe('POST /api/prs/:owner/:repoName/:prNumber/fix-conflicts', () => {
     ).post('/api/prs/owner/repo/42/fix-conflicts');
 
     expect(res.status).toBe(422);
-    expect(vi.mocked(sessionManager.deliverOrSpawnFresh)).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(sessionManager.deliverOrSpawnFresh),
+    ).not.toHaveBeenCalled();
   });
 });
 

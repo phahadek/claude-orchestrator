@@ -265,7 +265,9 @@ describe('relaunchFixerForPR() terminal (error), no worktree: never reopens — 
       ...BASE_SESSION_ROW,
       status: 'error',
     } as never);
-    vi.mocked(queries.getPRByNumber).mockReturnValue(PR_ROW_WITH_BRANCH as never);
+    vi.mocked(queries.getPRByNumber).mockReturnValue(
+      PR_ROW_WITH_BRANCH as never,
+    );
 
     const sm = new SessionManager();
     const result = await sm.relaunchFixerForPR(PR, 'gate failure feedback');
@@ -286,23 +288,21 @@ describe('relaunchFixerForPR() terminal (error), no worktree: never reopens — 
       SESSION_ID,
       'running',
     );
-    expect(queries.setPRSessionId).toHaveBeenCalledWith(
-      42,
-      'org/repo',
-      result,
-    );
+    expect(queries.setPRSessionId).toHaveBeenCalledWith(42, 'org/repo', result);
   });
 });
 
 describe('relaunchFixerForPR() terminal (killed), worktree present: still never reopens — spawns fresh', () => {
-  it('spawns a fresh session regardless of the dead session\'s surviving worktree', async () => {
+  it("spawns a fresh session regardless of the dead session's surviving worktree", async () => {
     vi.mocked(queries.getSession).mockReturnValue({
       ...BASE_SESSION_ROW,
       status: 'killed',
       worktree_path:
         '/tmp/test/.claude/worktrees/aaaabbbb-cccc-dddd-eeee-ffffffffffff',
     } as never);
-    vi.mocked(queries.getPRByNumber).mockReturnValue(PR_ROW_WITH_BRANCH as never);
+    vi.mocked(queries.getPRByNumber).mockReturnValue(
+      PR_ROW_WITH_BRANCH as never,
+    );
     vi.mocked(fs.existsSync).mockReturnValue(true);
 
     const sm = new SessionManager();
@@ -314,11 +314,7 @@ describe('relaunchFixerForPR() terminal (killed), worktree present: still never 
       SESSION_ID,
       'running',
     );
-    expect(queries.setPRSessionId).toHaveBeenCalledWith(
-      42,
-      'org/repo',
-      result,
-    );
+    expect(queries.setPRSessionId).toHaveBeenCalledWith(42, 'org/repo', result);
   });
 });
 
@@ -501,7 +497,9 @@ describe('relaunchFixerForPR() evicts a lingering in-memory session entry first'
       ...BASE_SESSION_ROW,
       status: 'error',
     } as never);
-    vi.mocked(queries.getPRByNumber).mockReturnValue(PR_ROW_WITH_BRANCH as never);
+    vi.mocked(queries.getPRByNumber).mockReturnValue(
+      PR_ROW_WITH_BRANCH as never,
+    );
 
     const sm = new SessionManager();
     const staleSendMessage = vi.fn();
