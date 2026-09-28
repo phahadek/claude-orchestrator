@@ -1346,13 +1346,19 @@ describe('SessionManager._doSendOrResume() — terminal status guard', () => {
     'utf-8',
   );
 
-  it('checks row.status against done, error, and killed before respawning', () => {
+  it('checks row.status against the wide TERMINAL_STATUSES set (done, error, killed, superseded) before respawning', () => {
     const doResumeIdx = source.indexOf('private async _doSendOrResume(');
     const shutdownIdx = source.indexOf('async shutdownAll');
     const block = source.slice(doResumeIdx, shutdownIdx);
-    expect(block).toMatch(/row\.status\s*===\s*'done'/);
-    expect(block).toMatch(/row\.status\s*===\s*'error'/);
-    expect(block).toMatch(/row\.status\s*===\s*'killed'/);
+    expect(block).toMatch(/TERMINAL_STATUSES\.has\(row\.status\)/);
+
+    const terminalStatusesDefMatch = source.match(
+      /const TERMINAL_STATUSES = new Set\(([^)]*)\)/,
+    );
+    expect(terminalStatusesDefMatch).not.toBeNull();
+    const terminalStatusesDef = terminalStatusesDefMatch![1];
+    expect(terminalStatusesDef).toMatch(/TERMINAL_SESSION_STATUSES/);
+    expect(terminalStatusesDef).toMatch(/'superseded'/);
   });
 
   it('logs a warning and returns early for terminal sessions', () => {
@@ -1364,7 +1370,7 @@ describe('SessionManager._doSendOrResume() — terminal status guard', () => {
       /logger\.warn[\s\S]*?terminal|terminal[\s\S]*?logger\.warn/,
     );
     // Guard must appear before any git worktree or process-spawn code
-    const guardIdx = block.indexOf("row.status === 'done'");
+    const guardIdx = block.indexOf('TERMINAL_STATUSES.has(row.status)');
     const worktreeIdx = block.indexOf('git worktree add');
     expect(guardIdx).toBeGreaterThan(-1);
     expect(worktreeIdx).toBeGreaterThan(guardIdx);
@@ -1376,10 +1382,16 @@ describe('SessionManager._doSendOrResume() — terminal status guard', () => {
     const block = source.slice(doResumeIdx, shutdownIdx);
     // Guard must NOT include 'idle' — idle→running re-entry must be permitted
     const guardMatch = block.match(
-      /if\s*\([^)]*row\.status\s*===\s*'done'[^)]*\)/,
+      /if\s*\([^)]*TERMINAL_STATUSES\.has\(row\.status\)[^)]*\)/,
     );
     expect(guardMatch).not.toBeNull();
     expect(guardMatch![0]).not.toContain('idle');
+
+    // The terminal set itself must not include 'idle'.
+    const terminalStatusesDefMatch = source.match(
+      /const TERMINAL_STATUSES = new Set\(([^)]*)\)/,
+    );
+    expect(terminalStatusesDefMatch![1]).not.toContain("'idle'");
   });
 });
 

@@ -5267,10 +5267,7 @@ export class SessionManager extends EventEmitter {
     const row = getSession(sessionId);
     if (!row) return;
 
-    const isDoneErrorKilled =
-      row.status === 'done' ||
-      row.status === 'error' ||
-      row.status === 'killed';
+    const isDoneErrorKilled = TERMINAL_STATUSES.has(row.status);
     // archived=1 is an explicit operator signal the session is done (see
     // archiveAndEndSession) — unlike done/error/killed, it is never eligible
     // for the attemptTerminalResume resend path below, even when the caller
@@ -5444,7 +5441,7 @@ export class SessionManager extends EventEmitter {
         // and that reopen is audited rather than folded into this status write.
         const row = getSession(sessionId);
         if (row && row.status !== 'running') {
-          const isTerminal = TERMINAL_SESSION_STATUSES.has(row.status);
+          const isTerminal = TERMINAL_STATUSES.has(row.status);
           if (isTerminal && !opts.allowTerminal) {
             logger.warn(
               `[SessionManager] sendOrResume: session ${sessionId.slice(0, 8)} is live but DB status is terminal (${row.status}) — not overwriting with running`,
@@ -5570,9 +5567,7 @@ export class SessionManager extends EventEmitter {
     // a dead session is exactly the case they exist to recover from.
     if (
       !opts.allowTerminal &&
-      (row.status === 'done' ||
-        row.status === 'error' ||
-        row.status === 'killed' ||
+      (TERMINAL_STATUSES.has(row.status) ||
         (row.archived === 1 && !isMachineParkedIdle(row)))
     ) {
       logger.warn(

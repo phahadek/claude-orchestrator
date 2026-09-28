@@ -9,6 +9,7 @@ import { db } from '../db/db.js';
 import {
   markSessionDone,
   markSessionIdle,
+  markSessionSuperseded,
   insertStagedIntent,
   getSessionsWithUnappliedPendingDone,
 } from '../db/queries';
@@ -49,6 +50,17 @@ function getRow(
     .get(sessionId) as
     | { status: string; ended_at: number | null; pr_url: string | null }
     | undefined;
+}
+
+function getTerminalReason(sessionId: string): string | null {
+  const row = db
+    .prepare(
+      'SELECT terminal_completion_reason FROM sessions WHERE session_id = ?',
+    )
+    .get(sessionId) as
+    | { terminal_completion_reason: string | null }
+    | undefined;
+  return row?.terminal_completion_reason ?? null;
 }
 
 function getAuditRows(
@@ -264,5 +276,61 @@ describe('markSessionIdle terminal guard', () => {
 
     const row = getRow('sess-done-pr');
     expect(row?.pr_url).toBe('https://github.com/o/r/pull/1');
+  });
+
+  it('leaves a superseded session superseded and does not change ended_at', () => {
+    insertSession('sess-superseded', 'running', { taskId: 'task-sup' });
+    const supersededAt = Date.now() - 30_000;
+    markSessionSuperseded(
+      'sess-superseded',
+      supersededAt,
+      'review_iteration_superseded',
+    );
+
+    const result = markSessionIdle('sess-superseded', Date.now(), null);
+
+    const row = getRow('sess-superseded');
+    expect(row?.status).toBe('superseded');
+    expect(row?.ended_at).toBe(supersededAt);
+    expect(result).toBe('superseded');
+  });
+
+  it('records a session_idle_write_skipped_terminal audit event for a superseded row', () => {
+    insertSession('sess-superseded-audit', 'running', {
+      taskId: 'task-sup-audit',
+    });
+    markSessionSuperseded(
+      'sess-superseded-audit',
+      Date.now(),
+      'review_session_cleared',
+    );
+
+    markSessionIdle('sess-superseded-audit', Date.now(), null);
+
+    const rows = getAuditRows('session_idle_write_skipped_terminal');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].actor_id).toBe('sess-superseded-audit');
+    expect(JSON.parse(rows[0].payload)).toMatchObject({
+      status_before: 'superseded',
+    });
+  });
+
+  it('does not reproduce the status=idle + non-null terminal_completion_reason corruption signature for a superseded row', () => {
+    insertSession('sess-superseded-reason', 'running', {
+      taskId: 'task-sup-reason',
+    });
+    markSessionSuperseded(
+      'sess-superseded-reason',
+      Date.now(),
+      'review_session_cleared',
+    );
+
+    markSessionIdle('sess-superseded-reason', Date.now(), null);
+
+    const row = getRow('sess-superseded-reason');
+    expect(row?.status).toBe('superseded');
+    expect(getTerminalReason('sess-superseded-reason')).toBe(
+      'review_session_cleared',
+    );
   });
 });

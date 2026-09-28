@@ -837,7 +837,10 @@ export function markSessionIdle(
         pending_done_ended_at: number | null;
       }
     | undefined;
-  if (current && TERMINAL_SESSION_STATUSES.has(current.status)) {
+  if (
+    current &&
+    TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED.has(current.status)
+  ) {
     recordEvent({
       event_type: 'session_idle_write_skipped_terminal',
       actor_type: 'system',
