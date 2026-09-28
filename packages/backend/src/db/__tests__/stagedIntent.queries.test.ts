@@ -669,7 +669,13 @@ describe('stageNoOpIfAbsent — atomic check-then-insert for a standalone planni
     stageNoOpIfAbsent(noOpRow({ id: 'noop-first' }));
 
     const insertedSecond = stageNoOpIfAbsent(
-      noOpRow({ id: 'noop-second', payload: JSON.stringify({ taskId: 't-1', reason: 'a different reason' }) }),
+      noOpRow({
+        id: 'noop-second',
+        payload: JSON.stringify({
+          taskId: 't-1',
+          reason: 'a different reason',
+        }),
+      }),
     );
 
     expect(insertedSecond).toBe(false);
