@@ -159,6 +159,8 @@ vi.mock('../../db/queries', () => ({
   incrementTaskCrashCount: vi.fn().mockReturnValue(1),
   getTerminalSessionsForTask: vi.fn().mockReturnValue([]),
   setSessionPauseReason: vi.fn(),
+  setSessionParkedAt: vi.fn(),
+  clearSessionParkedAt: vi.fn(),
   setSessionLastErrorDetail: vi.fn(),
   setTaskPauseReason: vi.fn(),
   enqueueFeedbackItem: vi.fn(),

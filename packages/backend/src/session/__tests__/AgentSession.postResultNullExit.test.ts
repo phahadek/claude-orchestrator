@@ -212,12 +212,17 @@ describe('AgentSession — null exit after a successful result event', () => {
     expect(sm.markSessionErrored).not.toHaveBeenCalled();
     const row = db
       .prepare(
-        'SELECT archived, pause_reason FROM sessions WHERE session_id = ?',
+        'SELECT archived, parked_at, pause_reason FROM sessions WHERE session_id = ?',
       )
       .get(sessionId) as
-      | { archived: number; pause_reason: string | null }
+      | {
+          archived: number;
+          parked_at: number | null;
+          pause_reason: string | null;
+        }
       | undefined;
-    expect(row?.archived).toBe(1);
+    expect(row?.archived).toBe(0);
+    expect(row?.parked_at).not.toBeNull();
     expect(row?.pause_reason).toBe('runner_killed_unexpected');
   });
 

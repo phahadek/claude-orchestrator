@@ -29,7 +29,10 @@ import {
   sessionDidWork,
   checkInteractiveOpsJournal,
 } from '../session/sessionLifecycle';
-import { isMachineParkedIdle } from '../session/sessionPredicates';
+import {
+  isMachineParkedIdle,
+  isParkedIdle,
+} from '../session/sessionPredicates';
 import { isUsageAdmitted } from './usageAdmission';
 import { yieldToEventLoop } from '../utils/concurrency';
 import {
@@ -51,6 +54,21 @@ import { NotionApiError } from '../notion/types';
  * Distinguishes this from a transient failure (network blip, rate limit)
  * that's still worth retrying next tick.
  */
+/**
+ * True for a session left idle by a hard-stop rather than a clean exit —
+ * either flavor of it: isMachineParkedIdle (archived=1,
+ * archive_kind='machine_park', still produced by the OS-liveness
+ * reconciler's dead-'running'-session archival) or isParkedIdle (parked_at
+ * set, archived=0 — the marker every other machine path that reclaims or
+ * loses a process now uses instead of archiving, see schema.ts's parked_at
+ * migration comment). Neither is a clean idle exit, so neither earns the
+ * grace-window/legitimate-park protections below — both fall straight
+ * through to revert/surface.
+ */
+function isHardStoppedIdle(session: Session): boolean {
+  return isMachineParkedIdle(session) || isParkedIdle(session);
+}
+
 function isPermanentRevertFailure(err: unknown): boolean {
   if (!(err instanceof NotionApiError)) return false;
   if (err.statusCode === 400 && /archived/i.test(err.message)) return true;
@@ -385,7 +403,7 @@ export class OrphanedTaskSweeper {
         // so it must not get this grace-window protection — fall through instead.
         if (
           latestSession.status === 'idle' &&
-          !isMachineParkedIdle(latestSession)
+          !isHardStoppedIdle(latestSession)
         ) {
           const endedAt = latestSession.ended_at ?? latestSession.started_at;
           if (Date.now() - endedAt < POST_CLEAN_EXIT_GRACE_MS) {
@@ -420,7 +438,7 @@ export class OrphanedTaskSweeper {
     // parked awaiting anything it actually asked for — exclude it here too.
     if (
       latestSession?.status === 'idle' &&
-      !isMachineParkedIdle(latestSession) &&
+      !isHardStoppedIdle(latestSession) &&
       isSessionAwaitingCapabilityDisposition(latestSession)
     ) {
       return;
@@ -434,7 +452,7 @@ export class OrphanedTaskSweeper {
     // indefinite — see isSessionAwaitingLaneResult's ceiling.
     if (
       latestSession?.status === 'idle' &&
-      !isMachineParkedIdle(latestSession) &&
+      !isHardStoppedIdle(latestSession) &&
       isSessionAwaitingLaneResult(latestSession)
     ) {
       return;
@@ -448,7 +466,7 @@ export class OrphanedTaskSweeper {
     // surface-to-operator path below instead of being protected forever.
     if (
       latestSession?.status === 'idle' &&
-      !isMachineParkedIdle(latestSession) &&
+      !isHardStoppedIdle(latestSession) &&
       isSessionAwaitingOperatorDecision(latestSession)
     ) {
       if (
@@ -584,8 +602,13 @@ export class OrphanedTaskSweeper {
     }
 
     // An idle session with no PR is a recoverable asset — nudge rather than revert.
-    // Exception: an archived idle session is no longer recoverable; fall through to revert.
-    if (latestSession?.status === 'idle' && !latestSession.archived) {
+    // Exception: an archived, or hard-stopped/parked, idle session is no
+    // longer recoverable via a nudge; fall through to revert.
+    if (
+      latestSession?.status === 'idle' &&
+      !latestSession.archived &&
+      !isHardStoppedIdle(latestSession)
+    ) {
       // Gate: check GitHub before sending the "no PR opened" nudge. Local git may be
       // dead/corrupt and miss a PR that's already open on GitHub.
       if (await this.checkAndBackfillGitHubPR(latestSession)) {

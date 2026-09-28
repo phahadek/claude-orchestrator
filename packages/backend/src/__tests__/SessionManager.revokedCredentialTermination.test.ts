@@ -3,10 +3,10 @@
  * revoked-credential handlers: a request presenting a credential this
  * backend knows it already revoked means an OS process is still alive and
  * calling in on a credential it can never refresh. SessionManager reclaims
- * it (rather than leaving it to retry/back off forever) by archiving the
- * session and recording a pause_reason naming the revocation — never by
- * writing a terminal status itself; terminalizing a session is an
- * operator-only action.
+ * it (rather than leaving it to retry/back off forever) by parking the
+ * session (setSessionParkedAt, leaving it archived = 0) and recording a
+ * pause_reason naming the revocation — never by writing a terminal status
+ * itself; terminalizing a session is an operator-only action.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mockDbQueries } from './helpers/mockDbQueries';
@@ -15,7 +15,7 @@ vi.mock('../db/queries', () =>
   mockDbQueries({
     getSession: vi.fn(),
     updateSessionStatus: vi.fn(),
-    archiveSession: vi.fn(),
+    setSessionParkedAt: vi.fn(),
     setSessionPauseReason: vi.fn(),
   }),
 );
@@ -66,7 +66,7 @@ beforeEach(() => {
 });
 
 describe('SessionManager — reclaims a session on a revoked stage credential', () => {
-  it('archives the row, records a pause_reason, and audits it — never writes a terminal status', () => {
+  it('parks the row, records a pause_reason, and audits it — never writes a terminal status or archives', () => {
     // Constructing SessionManager wires setRevokedStageCredentialHandler.
     new SessionManager();
 
@@ -89,9 +89,9 @@ describe('SessionManager — reclaims a session on a revoked stage credential', 
       'session_credential_revoked',
     );
     expect(queries.updateSessionStatus).not.toHaveBeenCalled();
-    expect(queries.archiveSession).toHaveBeenCalledWith(
+    expect(queries.setSessionParkedAt).toHaveBeenCalledWith(
       'live-but-revoked',
-      'machine_park',
+      expect.any(Number),
     );
     expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
       'live-but-revoked',
@@ -105,7 +105,7 @@ describe('SessionManager — reclaims a session on a revoked stage credential', 
     );
   });
 
-  it('is idempotent — still archives and sets pause_reason when the row is already terminal', () => {
+  it('is idempotent — still parks and sets pause_reason when the row is already terminal', () => {
     new SessionManager();
     vi.mocked(queries.getSession).mockReturnValue({
       session_id: 'already-killed',
@@ -125,9 +125,9 @@ describe('SessionManager — reclaims a session on a revoked stage credential', 
     requireSessionStageAuth(req, res, () => {});
 
     expect(queries.updateSessionStatus).not.toHaveBeenCalled();
-    expect(queries.archiveSession).toHaveBeenCalledWith(
+    expect(queries.setSessionParkedAt).toHaveBeenCalledWith(
       'already-killed',
-      'machine_park',
+      expect.any(Number),
     );
     expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
       'already-killed',
@@ -137,7 +137,7 @@ describe('SessionManager — reclaims a session on a revoked stage credential', 
 });
 
 describe('SessionManager — reclaims a session on a revoked route credential', () => {
-  it('archives the row and records a pause_reason', async () => {
+  it('parks the row and records a pause_reason', async () => {
     new SessionManager();
 
     const token = mintRouteCredential('live-but-revoked-route');
@@ -159,9 +159,9 @@ describe('SessionManager — reclaims a session on a revoked route credential', 
     expect((state.body as { code: string }).code).toBe(
       'session_credential_revoked',
     );
-    expect(queries.archiveSession).toHaveBeenCalledWith(
+    expect(queries.setSessionParkedAt).toHaveBeenCalledWith(
       'live-but-revoked-route',
-      'machine_park',
+      expect.any(Number),
     );
     expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
       'live-but-revoked-route',

@@ -3577,6 +3577,61 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // parked_at: the occupancy marker for a session left idle and resumable
+  // by a machine path whose process was reclaimed or died without a
+  // result — replaces archiveSession(id, 'machine_park') for that case (see
+  // the operator ruling: process/kill absence is never grounds to archive
+  // or terminalize a session). NULL for every session that isn't parked.
+  // Occupancy counts (countLivePlanningSessions, listLive*SessionRows) add
+  // `AND parked_at IS NULL`; dedup/ownership checks are untouched since a
+  // parked session stays archived = 0. Set by AgentSession.
+  // surfaceUnresolvedToOperator/reclaimProcess, StuckSessionMonitor.
+  // escalateHardStop, SessionManager.terminateSessionForRevokedCredential,
+  // and bootIdleReconciliation's Pass 0; cleared by SessionManager.
+  // sendOrResume on successful resume.
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN parked_at INTEGER`);
+  } catch {
+    /* already exists */
+  }
+  backfillParkedIdleFromMachinePark(target);
+}
+
+/**
+ * One-time backfill for the parked_at migration above: every existing
+ * non-terminal row previously drained out of the live population via
+ * archiveSession(id, 'machine_park') is unarchived and marked parked_at
+ * instead, so it stops being hidden from operator-facing session lists as
+ * archived while staying excluded from occupancy counts. parked_at is
+ * backdated to the row's own recorded 'archived' legacy-status-signal
+ * timestamp when one exists, falling back to this migration's run time.
+ */
+function backfillParkedIdleFromMachinePark(target: Database.Database): void {
+  const rows = target
+    .prepare(
+      `SELECT session_id FROM sessions
+       WHERE archived = 1 AND archive_kind = 'machine_park'
+         AND status NOT IN ('done', 'error', 'killed', 'superseded')`,
+    )
+    .all() as { session_id: string }[];
+  if (rows.length === 0) return;
+
+  const getLegacyArchivedSignalTs = target.prepare(
+    `SELECT recorded_at FROM completing_signal_ledger
+     WHERE session_id = ? AND signal_class = 'legacy_status_write' AND signal_value = 'archived'
+     ORDER BY recorded_at DESC LIMIT 1`,
+  );
+  const update = target.prepare(
+    `UPDATE sessions SET archived = 0, parked_at = ? WHERE session_id = ?`,
+  );
+  const now = Date.now();
+  for (const row of rows) {
+    const signal = getLegacyArchivedSignalTs.get(row.session_id) as
+      | { recorded_at: number }
+      | undefined;
+    update.run(signal?.recorded_at ?? now, row.session_id);
+  }
 }
 
 // ─── test_run_results → test_perf_baselines digest backfill ────────────────

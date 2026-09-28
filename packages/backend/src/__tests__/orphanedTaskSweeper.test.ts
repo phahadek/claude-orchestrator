@@ -146,6 +146,7 @@ function makeSession(
   worktreePath?: string | null,
   archived = 0,
   archiveKind: 'machine_park' | 'operator' | null = null,
+  parkedAt: number | null = null,
 ) {
   const started_at = Date.now() - startedAtOffsetMs;
   return {
@@ -159,6 +160,7 @@ function makeSession(
     worktree_path: worktreePath !== undefined ? worktreePath : '/fake/worktree',
     archived,
     archive_kind: archiveKind,
+    parked_at: parkedAt,
   };
 }
 
@@ -1212,6 +1214,74 @@ describe('OrphanedTaskSweeper', () => {
 
     await sweeper.sweepOnce();
 
+    expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
+  });
+
+  // ── Parked-idle sessions (archived=0, parked_at set) ────────────────────────
+  // The occupancy marker every machine path (AgentSession.
+  // surfaceUnresolvedToOperator/reclaimProcess, StuckSessionMonitor.
+  // escalateHardStop, SessionManager.terminateSessionForRevokedCredential,
+  // bootIdleReconciliation Pass 0) now sets in place of a machine_park
+  // archival — must be treated exactly like the legacy machine-parked-idle
+  // shape above: no clean-exit grace, no nudge, revert straight to Ready.
+
+  it('does not grant a parked-idle session the clean-exit grace window', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    const endedAt = Date.now() - 5 * 1000;
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession(
+        'idle',
+        30 * 60 * 1000,
+        endedAt,
+        '/fake/worktree',
+        0,
+        null,
+        Date.now(),
+      ) as ReturnType<typeof getLatestCodeSessionByNotionTaskId>,
+    );
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      enqueueFeedback,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(enqueueFeedback).not.toHaveBeenCalled();
+    expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
+  });
+
+  it('does not nudge a parked-idle session — reverts to Ready instead', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    const endedAt = Date.now() - 10 * 60 * 1000;
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession(
+        'idle',
+        30 * 60 * 1000,
+        endedAt,
+        '/fake/worktree',
+        0,
+        null,
+        Date.now(),
+      ) as ReturnType<typeof getLatestCodeSessionByNotionTaskId>,
+    );
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      enqueueFeedback,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(enqueueFeedback).not.toHaveBeenCalled();
     expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
   });
 

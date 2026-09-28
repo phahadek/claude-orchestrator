@@ -32,9 +32,15 @@ function makeMockSessionManager(): MockSessionManager {
 
 function getSessionRow(sessionId: string) {
   return db
-    .prepare('SELECT archived, pause_reason FROM sessions WHERE session_id = ?')
+    .prepare(
+      'SELECT archived, parked_at, pause_reason FROM sessions WHERE session_id = ?',
+    )
     .get(sessionId) as
-    | { archived: number; pause_reason: string | null }
+    | {
+        archived: number;
+        parked_at: number | null;
+        pause_reason: string | null;
+      }
     | undefined;
 }
 
@@ -318,7 +324,8 @@ describe('StuckSessionMonitor', () => {
     expect(sm.kill).not.toHaveBeenCalled();
     expect(sm.reclaimSessionProcess).toHaveBeenCalledWith(SESSION_ID);
     const row = getSessionRow(SESSION_ID);
-    expect(row?.archived).toBe(1);
+    expect(row?.archived).toBe(0);
+    expect(row?.parked_at).not.toBeNull();
     expect(row?.pause_reason).toBe('stuck_session_hard_stop_tool_use');
     expect(broadcast).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -365,7 +372,8 @@ describe('StuckSessionMonitor', () => {
     expect(sm.kill).not.toHaveBeenCalled();
     expect(sm.reclaimSessionProcess).toHaveBeenCalledWith(SESSION_ID);
     const row = getSessionRow(SESSION_ID);
-    expect(row?.archived).toBe(1);
+    expect(row?.archived).toBe(0);
+    expect(row?.parked_at).not.toBeNull();
     expect(row?.pause_reason).toBe('stuck_session_hard_stop_window_expired');
     expect(broadcast).toHaveBeenCalledWith(
       expect.objectContaining({

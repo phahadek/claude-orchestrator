@@ -13,7 +13,7 @@ vi.mock('../../db/queries.js', () => ({
   setPauseReason: vi.fn(),
   setTaskPauseReason: vi.fn(),
   setSessionPauseReason: vi.fn(),
-  archiveSession: vi.fn(),
+  setSessionParkedAt: vi.fn(),
   insertPauseInterval: vi.fn(),
   closePauseInterval: vi.fn(),
   upsertStuckSessionTimer: vi.fn(),
@@ -35,7 +35,7 @@ vi.mock('../../session/processLiveness', () => ({
   readLiveSessionProcessIds: vi.fn().mockReturnValue(new Set()),
 }));
 
-import { getSession, archiveSession } from '../../db/queries.js';
+import { getSession, setSessionParkedAt } from '../../db/queries.js';
 import { isSessionProcessAlive } from '../../session/processLiveness';
 import { StuckSessionMonitor } from '../StuckSessionMonitor.js';
 
@@ -109,7 +109,10 @@ describe('StuckSessionMonitor hard-stop window expiry', () => {
     expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith(
       'sess-silent',
     );
-    expect(archiveSession).toHaveBeenCalledWith('sess-silent', 'machine_park');
+    expect(setSessionParkedAt).toHaveBeenCalledWith(
+      'sess-silent',
+      expect.any(Number),
+    );
     expect(broadcast).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'stuck_session_killed',
@@ -127,7 +130,7 @@ describe('StuckSessionMonitor hard-stop window expiry', () => {
 
     expect(sessionManager.kill).not.toHaveBeenCalled();
     expect(sessionManager.reclaimSessionProcess).not.toHaveBeenCalled();
-    expect(archiveSession).not.toHaveBeenCalled();
+    expect(setSessionParkedAt).not.toHaveBeenCalled();
     expect(broadcast).not.toHaveBeenCalledWith(
       expect.objectContaining({ type: 'stuck_session_killed' }),
     );
@@ -150,7 +153,10 @@ describe('StuckSessionMonitor hard-stop window expiry', () => {
     expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith(
       'sess-crashed',
     );
-    expect(archiveSession).toHaveBeenCalledWith('sess-crashed', 'machine_park');
+    expect(setSessionParkedAt).toHaveBeenCalledWith(
+      'sess-crashed',
+      expect.any(Number),
+    );
   });
 
   it('is a no-op if the timer state was already cleared', () => {

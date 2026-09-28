@@ -18,6 +18,7 @@ import { db } from '../db.js';
 import {
   insertSession,
   archiveSession,
+  setSessionParkedAt,
   countLivePlanningSessions,
 } from '../queries.js';
 
@@ -30,6 +31,7 @@ function seedSession(opts: {
   sessionType: string;
   status: string;
   archived?: boolean;
+  parked?: boolean;
 }): void {
   insertSession({
     session_id: opts.sessionId,
@@ -42,6 +44,7 @@ function seedSession(opts: {
     task_name: null,
   } as never);
   if (opts.archived) archiveSession(opts.sessionId, 'operator');
+  if (opts.parked) setSessionParkedAt(opts.sessionId, Date.now());
 }
 
 describe('countLivePlanningSessions', () => {
@@ -116,6 +119,17 @@ describe('countLivePlanningSessions', () => {
       sessionId: 'done-groom',
       sessionType: 'groom',
       status: 'done',
+    });
+
+    expect(countLivePlanningSessions()).toBe(0);
+  });
+
+  it('does not count a parked (unarchived) idle planning session — parked_at excludes it from occupancy without hiding it as archived', () => {
+    seedSession({
+      sessionId: 'parked-idle',
+      sessionType: 'groom',
+      status: 'idle',
+      parked: true,
     });
 
     expect(countLivePlanningSessions()).toBe(0);

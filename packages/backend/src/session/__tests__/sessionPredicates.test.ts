@@ -5,6 +5,7 @@ import {
   isGateVerifySession,
   isInvestigateSession,
   isMachineParkedIdle,
+  isParkedIdle,
   isPlanningSession,
   isTaskTypeCompatibleWithSessionType,
   movesTargetInProgress,
@@ -294,6 +295,16 @@ describe('sessionPredicates', () => {
       expect(isMachineParkedIdle({ archived: 0, archive_kind: null })).toBe(
         false,
       );
+    });
+  });
+
+  describe('isParkedIdle', () => {
+    it('is true when parked_at is set', () => {
+      expect(isParkedIdle({ parked_at: Date.now() })).toBe(true);
+    });
+
+    it('is false when parked_at is null', () => {
+      expect(isParkedIdle({ parked_at: null })).toBe(false);
     });
   });
 });
