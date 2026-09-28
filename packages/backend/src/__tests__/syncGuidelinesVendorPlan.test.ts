@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -52,8 +52,34 @@ describe('sync-guidelines-load.mjs vendor plan', () => {
       'ops-load.mjs',
       'ops-journal-set.mjs',
       'groom-gate.mjs',
+      'read-session-record.mjs',
     ]) {
       expect(ids.some((id: string) => id.includes(retired))).toBe(false);
+    }
+  });
+
+  it('every script plan item points at an upstreamPath that exists in the repo', () => {
+    const output = execFileSync(
+      process.execPath,
+      [
+        resolve(repoRoot, 'scripts/sync-guidelines-load.mjs'),
+        '--json',
+        '--repo',
+        repoRoot,
+        '--config-dir',
+        resolve(repoRoot, '.non-existent-config-dir'),
+        '--claude-home',
+        resolve(repoRoot, '.non-existent-claude-home'),
+      ],
+      { cwd: repoRoot, encoding: 'utf8' },
+    );
+    const { plan } = JSON.parse(output);
+    const scriptItems = plan.filter(
+      (p: { kind: string }) => p.kind === 'script',
+    );
+    expect(scriptItems.length).toBeGreaterThan(0);
+    for (const item of scriptItems) {
+      expect(existsSync(item.upstreamPath)).toBe(true);
     }
   });
 
