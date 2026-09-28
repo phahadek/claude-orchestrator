@@ -100,7 +100,7 @@ describe('AgentSession.kill() after reclaimProcess()', () => {
     await session.reclaimProcess();
     expect(session.hasEnded).toBe(true);
 
-    await session.kill();
+    await session.kill({ reason: 'user_kill', errorDetail: 'killed by user request' });
 
     expect(markSessionErrored).toHaveBeenCalledWith(
       'sess-reclaimed',
@@ -130,7 +130,7 @@ describe('AgentSession.kill() after reclaimProcess()', () => {
     await session.reclaimProcess();
     expect(session.hasEnded).toBe(true);
 
-    await session.kill();
+    await session.kill({ reason: 'user_kill', errorDetail: 'killed by user request' });
 
     expect(updateSessionStatus).toHaveBeenCalledWith(
       'sess-reclaimed-nomgr',
@@ -152,6 +152,64 @@ describe('AgentSession.kill() after reclaimProcess()', () => {
     const notion = fakeNotionClient();
     const session = new AgentSession(
       'sess-already-killed',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+      undefined,
+      undefined,
+      'standard',
+      sessionManager,
+    );
+
+    await session.kill({ reason: 'user_kill', errorDetail: 'killed by user request' });
+
+    expect(markSessionErrored).not.toHaveBeenCalled();
+    expect(updateSessionStatus).not.toHaveBeenCalled();
+  });
+
+  it('suppressReap (in-place respawn kill) writes nothing at all — no markSessionErrored, no status update, no broadcast', async () => {
+    const row = fakeSessionRow({ status: 'running' });
+    vi.mocked(getSession).mockReturnValue(row);
+
+    const markSessionErrored = vi.fn();
+    const sessionManager = { markSessionErrored } as any;
+
+    const notion = fakeNotionClient();
+    const session = new AgentSession(
+      'sess-respawn',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+      undefined,
+      undefined,
+      'standard',
+      sessionManager,
+    );
+
+    const messages: ServerMessage[] = [];
+    session.on('message', (msg: ServerMessage) => messages.push(msg));
+
+    await session.kill({ suppressReap: true });
+
+    expect(markSessionErrored).not.toHaveBeenCalled();
+    expect(updateSessionStatus).not.toHaveBeenCalled();
+    expect(messages.find((m) => m.type === 'session_ended')).toBeUndefined();
+  });
+
+  it('a caller with no reason and no suppressReap writes nothing — kill() never invents a default reason', async () => {
+    const row = fakeSessionRow({ status: 'running' });
+    vi.mocked(getSession).mockReturnValue(row);
+
+    const markSessionErrored = vi.fn();
+    const sessionManager = { markSessionErrored } as any;
+
+    const notion = fakeNotionClient();
+    const session = new AgentSession(
+      'sess-no-reason',
       'https://notion.so/task',
       'https://notion.so/ctx',
       notion,

@@ -3971,46 +3971,54 @@ The full task spec and all rules are in your system prompt. Begin implementing d
    * its resumability) untouched. A manual kill() must still be able to
    * conclude that same session, so it reads the row's persisted status —
    * the actual terminal signal — instead of trusting the in-memory flag.
+   *
+   * There is no default `reason` — every caller that wants a terminal
+   * session_errored write must name the reason it actually has (e.g.
+   * 'user_kill' for the operator kill route); kill() never invents one.
+   * suppressReap (an in-place respawn: MCP-unreachable / capability-grant)
+   * is not a death at all — it skips every terminal write below, since the
+   * respawn's own audit event (session_mcp_unreachable_respawned or its
+   * capability-grant equivalent) is the durable record. Without this, the
+   * respawn produced a spurious running→killed→running flicker and a
+   * misleading last_error_detail = 'killed by user request' even though no
+   * operator kill occurred.
    */
-  async kill(opts?: { suppressReap?: boolean }): Promise<void> {
+  async kill(opts?: {
+    suppressReap?: boolean;
+    reason?: string;
+    errorDetail?: string;
+  }): Promise<void> {
     if (this.isKilling) return;
     this.isKilling = true;
     await this.runner.kill();
+    if (opts?.suppressReap) return;
+    if (!opts?.reason) return;
+
     const priorRow = getSession(this.sessionId);
     const alreadyConcluded = priorRow
       ? TERMINAL_SESSION_STATUSES.has(priorRow.status)
       : this.hasEnded;
-    if (!alreadyConcluded) {
-      if (opts) {
-        this.sessionManager?.markSessionErrored?.(
-          this.sessionId,
-          'killed',
-          'user_kill',
-          'killed by user request',
-          opts,
-        );
-      } else {
-        this.sessionManager?.markSessionErrored?.(
-          this.sessionId,
-          'killed',
-          'user_kill',
-          'killed by user request',
-        );
-      }
-      const rowAfter = getSession(this.sessionId);
-      const stillOpen = rowAfter
-        ? !TERMINAL_SESSION_STATUSES.has(rowAfter.status)
-        : !this.hasEnded;
-      if (stillOpen) {
-        // Fallback when sessionManager is absent (e.g. unit tests without a manager)
-        updateSessionStatus(this.sessionId, 'killed', Date.now());
-        this.broadcast({
-          type: 'session_ended',
-          sessionId: this.sessionId,
-          status: 'killed',
-          ...(this.taskId && { taskId: this.taskId }),
-        });
-      }
+    if (alreadyConcluded) return;
+
+    this.sessionManager?.markSessionErrored?.(
+      this.sessionId,
+      'killed',
+      opts.reason,
+      opts.errorDetail,
+    );
+    const rowAfter = getSession(this.sessionId);
+    const stillOpen = rowAfter
+      ? !TERMINAL_SESSION_STATUSES.has(rowAfter.status)
+      : !this.hasEnded;
+    if (stillOpen) {
+      // Fallback when sessionManager is absent (e.g. unit tests without a manager)
+      updateSessionStatus(this.sessionId, 'killed', Date.now());
+      this.broadcast({
+        type: 'session_ended',
+        sessionId: this.sessionId,
+        status: 'killed',
+        ...(this.taskId && { taskId: this.taskId }),
+      });
     }
   }
 
