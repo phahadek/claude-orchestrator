@@ -304,7 +304,12 @@ describe('flaky.confirm', () => {
       id: 'gate-run-1',
     } as never);
     vi.mocked(getFailingTestIdsForRun).mockReturnValue([
-      { test_id: TEST_ID, name: TEST_NAME, failure_message: null, failure_trace_excerpt: null },
+      {
+        test_id: TEST_ID,
+        name: TEST_NAME,
+        failure_message: null,
+        failure_trace_excerpt: null,
+      },
     ]);
     vi.mocked(evaluateTestFlakinessCorpus).mockReturnValue({
       testId: TEST_ID,
@@ -531,7 +536,7 @@ describe('flaky.confirm', () => {
     await close();
   });
 
-  it('refuses a testId that matches none of the targeted gate run\'s failing test ids, listing the known ids, and never reports a corpus/breadth shortfall', async () => {
+  it("refuses a testId that matches none of the targeted gate run's failing test ids, listing the known ids, and never reports a corpus/breadth shortfall", async () => {
     const session = fakeSession();
     const { client, close } = await connectedClient(() => session);
     const result = await client.callTool({
@@ -585,7 +590,12 @@ describe('flaky.confirm gate "test_request" (pre-PR)', () => {
     vi.mocked(evaluateTestFlakinessCorpus).mockClear();
     vi.mocked(getLatestTestRequestRunForSession).mockReturnValue(RUN);
     vi.mocked(getFailingTestIdsForRun).mockReturnValue([
-      { test_id: TEST_ID, name: TEST_NAME, failure_message: null, failure_trace_excerpt: null },
+      {
+        test_id: TEST_ID,
+        name: TEST_NAME,
+        failure_message: null,
+        failure_trace_excerpt: null,
+      },
     ]);
     vi.mocked(getProjectById).mockReturnValue({
       id: 'proj-1',
@@ -601,7 +611,7 @@ describe('flaky.confirm gate "test_request" (pre-PR)', () => {
     ]);
   });
 
-  it('refuses a testId that matches none of the run\'s failing test ids, listing the known ids, before touching the corpus', async () => {
+  it("refuses a testId that matches none of the run's failing test ids, listing the known ids, before touching the corpus", async () => {
     const session = fakeSession();
     const { client, close } = await connectedClient(() => session);
     const result = await client.callTool({
