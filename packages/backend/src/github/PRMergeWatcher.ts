@@ -53,12 +53,10 @@ import {
   type PauseSource,
 } from '../db/pauseReason';
 import type { AutoMerger } from './AutoMerger';
-import type { PRReviewService, PRReviewResult } from './PRReviewService';
 import type { ReviewOrchestrator } from './ReviewOrchestrator';
 import {
   formatCIFailureFeedback,
   shouldAutoReview,
-  formatReviewFeedback,
   truncateLog,
   CI_LOG_EXCERPT_CAP,
 } from './reviewUtils';
@@ -78,8 +76,6 @@ import {
   consumeAutofixSha,
   deleteAllAutofixShasForPR,
   setHeadSha,
-  setLastReviewedSha,
-  setPRReviewResult,
   setPendingPush,
   getLatestTestRequestRun,
   runHasExtractedReport,
@@ -113,8 +109,6 @@ export interface MergeCompletedPayload {
 }
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
-const PUSH_REVIEW_TIMEOUT_MS = 240_000;
-const PENDING_REREVIEW_TTL_MS = 5 * 60 * 1000;
 /**
  * Cadence for the escalated-open stale sweep — deliberately slower than the
  * 5-minute merge poll, since a stale escalated row is cosmetic-but-misleading
@@ -205,9 +199,7 @@ export class PRMergeWatcher extends EventEmitter {
    */
   private firstPollPending = true;
   private autoMerger: AutoMerger | undefined;
-  private prReviewService: PRReviewService | undefined;
   private reviewOrchestrator: ReviewOrchestrator | undefined;
-  private readonly pendingReReviews = new Map<string, number>();
   /**
    * PRs whose flake-recovery re-drive is currently in flight, keyed by
    * `${repo}#${prNumber}` (same shape as AutoMerger's own in-flight guard).
@@ -325,10 +317,6 @@ export class PRMergeWatcher extends EventEmitter {
 
   setAutoMerger(autoMerger: AutoMerger): void {
     this.autoMerger = autoMerger;
-  }
-
-  setPRReviewService(svc: PRReviewService): void {
-    this.prReviewService = svc;
   }
 
   setReviewOrchestrator(ro: ReviewOrchestrator): void {
@@ -526,7 +514,6 @@ export class PRMergeWatcher extends EventEmitter {
 
   async poll(signal?: AbortSignal): Promise<void> {
     if (isGitHubRateLimitActive(this.broadcast)) return;
-    this.sweepStalePendingReReviews();
     await this.sweepPendingPushDeadLetters();
     this.autoMerger?.clearStalePauses();
     const silentMerges = this.firstPollPending;
@@ -1966,13 +1953,6 @@ export class PRMergeWatcher extends EventEmitter {
       }
     }
 
-    if (this.pendingReReviews.has(sessionId)) {
-      logger.info(
-        `[PRMergeWatcher] handlePushDetected: already pending for session ${sessionId.slice(0, 8)}`,
-      );
-      return;
-    }
-
     if (
       parsePauseReason(prRow.pause_reason)?.reason === 'human_changes_requested'
     ) {
@@ -1986,59 +1966,22 @@ export class PRMergeWatcher extends EventEmitter {
       return;
     }
 
-    if (!prRow.review_session_id) {
-      // Gate-failure verdicts (autofix_failed / verify_failed) set review_session_id=NULL
-      // because the gate runs before any review session is spawned. A push arriving after
-      // a gate failure must trigger a fresh review directly — pending_push would be a
-      // dead letter since no initial review is coming to consume it.
-      const currentVerdict = parseVerdictFromResult(prRow.review_result);
-      const isAfterGateFailure =
-        currentVerdict === 'autofix_failed' ||
-        currentVerdict === 'verify_failed';
+    // Gate-failure verdicts (autofix_failed / verify_failed) used to set
+    // review_session_id=NULL unconditionally, on the premise that the gate
+    // always runs before any review session is spawned. That premise breaks
+    // from iteration 1 on: a PR can carry a gate-failure verdict while still
+    // holding the review_session_id from an earlier iteration. Both cases —
+    // with or without an established review session — take the same
+    // enqueue path below; only a PR with neither a review session nor a
+    // gate-failure verdict (the true "no review established yet" case)
+    // queues as pending_push instead.
+    const currentVerdict = parseVerdictFromResult(prRow.review_result);
+    const isAfterGateFailure =
+      currentVerdict === 'autofix_failed' || currentVerdict === 'verify_failed';
 
-      if (
-        isAfterGateFailure &&
-        this.reviewOrchestrator &&
-        !this.reviewOrchestrator.isReviewInFlight(prRow.pr_number, prRow.repo)
-      ) {
-        const maxIter = this.getMaxReviewIterations();
-        if (prRow.review_iteration >= maxIter) {
-          const message = `Review loop for PR #${prRow.pr_number} reached ${maxIter} iterations without approval. Manual intervention needed.`;
-          logger.warn(`[PRMergeWatcher] ${message}`);
-          setPauseReason(prRow.pr_number, prRow.repo, 'max_reviews');
-          this.broadcast({
-            type: 'review_escalated',
-            prNumber: prRow.pr_number,
-            repo: prRow.repo,
-            message,
-          });
-          return;
-        }
-        const project = getProjectByGithubRepo(prRow.repo);
-        const session = prRow.session_id
-          ? getSession(prRow.session_id)
-          : undefined;
-        // Mirrors StalledPRReconciler.reDriveIfPushDetected: a push after a
-        // gate failure lands on a tree the no-diff-autofix guard must not
-        // mistake for a retry of the tree that already failed — clear the
-        // stale pre_review_stage (and any terminal pause) before enqueueing
-        // so the gate actually re-runs against the new head.
-        clearTerminalPRFlags(prRow.pr_number, prRow.repo, 'head_sha_advance');
-        this.reviewOrchestrator.enqueueReview({
-          prNumber: prRow.pr_number,
-          repo: prRow.repo,
-          taskId: prRow.task_id ?? '',
-          taskUrl: session?.task_url ?? '',
-          contextUrl: project?.contextUrl ?? '',
-        });
-        logger.info(
-          `[PRMergeWatcher] handlePushDetected for PR #${prRow.pr_number}: post-gate-failure push — enqueued review directly`,
-        );
-        return;
-      }
-
-      // Initial review hasn't started yet (or orchestrator unavailable) — queue
-      // the push so it triggers re-review after the initial review is established.
+    if (!prRow.review_session_id && !isAfterGateFailure) {
+      // Initial review hasn't started yet — queue the push so it triggers
+      // re-review after the initial review is established.
       setPendingPush(prRow.pr_number, prRow.repo, 1);
       logger.info(
         `[PRMergeWatcher] handlePushDetected for PR #${prRow.pr_number} before review session established — queued as pending_push`,
@@ -2046,292 +1989,89 @@ export class PRMergeWatcher extends EventEmitter {
       return;
     }
 
-    if (!this.prReviewService || !this.reviewOrchestrator) {
+    if (!this.reviewOrchestrator) {
       logger.warn(
-        `[PRMergeWatcher] handlePushDetected: prReviewService or reviewOrchestrator not set — skipping re-review for PR #${prRow.pr_number}`,
+        `[PRMergeWatcher] handlePushDetected: reviewOrchestrator not set — skipping re-review for PR #${prRow.pr_number}`,
       );
       return;
     }
 
-    // Add to pendingReReviews synchronously (before first await) to prevent
-    // concurrent re-reviews for the same session.
-    this.pendingReReviews.set(sessionId, Date.now());
+    // Skip re-review when the only push since the last review was the autofix
+    // commit — the code at that SHA was already reviewed via the pipeline.
+    if (
+      headSha &&
+      this.reviewOrchestrator.consumeAutofixSha(
+        prRow.pr_number,
+        prRow.repo,
+        headSha,
+      )
+    ) {
+      logger.info(
+        `[PRMergeWatcher] handlePushDetected: autofix-only push for PR #${prRow.pr_number} — skipping re-review`,
+      );
+      return;
+    }
 
-    void (async () => {
-      try {
-        // Skip re-review when the only push since the last review was the autofix
-        // commit — the code at that SHA was already reviewed in executeReview().
-        if (
-          headSha &&
-          this.reviewOrchestrator!.consumeAutofixSha(
-            prRow.pr_number,
-            prRow.repo,
-            headSha,
-          )
-        ) {
-          logger.info(
-            `[PRMergeWatcher] handlePushDetected: autofix-only push for PR #${prRow.pr_number} — skipping re-review`,
-          );
-          return;
-        }
+    const maxIter = this.getMaxReviewIterations();
 
-        const maxIter = this.getMaxReviewIterations();
+    // Escalation cap reached — emit review_escalated before bailing out.
+    if (prRow.review_iteration >= maxIter) {
+      const message = `Review loop for PR #${prRow.pr_number} reached ${maxIter} iterations without approval. Manual intervention needed.`;
+      logger.warn(`[PRMergeWatcher] ${message}`);
+      setPauseReason(prRow.pr_number, prRow.repo, 'max_reviews');
+      this.broadcast({
+        type: 'review_escalated',
+        prNumber: prRow.pr_number,
+        repo: prRow.repo,
+        message,
+      });
+      return;
+    }
 
-        // Escalation cap reached — emit review_escalated before bailing out.
-        if (prRow.review_iteration >= maxIter) {
-          const message = `Review loop for PR #${prRow.pr_number} reached ${maxIter} iterations without approval. Manual intervention needed.`;
-          logger.warn(`[PRMergeWatcher] ${message}`);
-          setPauseReason(prRow.pr_number, prRow.repo, 'max_reviews');
-          this.broadcast({
-            type: 'review_escalated',
-            prNumber: prRow.pr_number,
-            repo: prRow.repo,
-            message,
-          });
-          return;
-        }
-
-        const autoReviewOk = shouldAutoReview(
-          {
-            reviewIteration: prRow.review_iteration,
-            headSha,
-            lastReviewedSha: prRow.last_reviewed_sha,
-          },
-          maxIter,
-        );
-        logger.info(
-          `[PRMergeWatcher] shouldAutoReview: iter=${prRow.review_iteration}/${maxIter} head=${headSha?.slice(0, 7)} lastReviewed=${prRow.last_reviewed_sha?.slice(0, 7)} → ${autoReviewOk}`,
-        );
-        if (!autoReviewOk) {
-          return;
-        }
-
-        const iteration = prRow.review_iteration + 1;
-
-        // Run autofix + pollution-check on every push, same as first review.
-        await this.reviewOrchestrator!.runAutofixPipeline(
-          prRow.pr_number,
-          prRow.repo,
-          prRow.task_id,
-        );
-
-        // Run orchestrator tests for the new SHA so F2 can gate on the fresh result.
+    // Gate-failure retries don't have an established review session, so the
+    // head≠last_reviewed_sha guard is meaningless for them (they were never
+    // "reviewed" at any SHA) — skip shouldAutoReview in that case and go
+    // straight to enqueueing against the new head.
+    if (!isAfterGateFailure) {
+      const autoReviewOk = shouldAutoReview(
         {
-          const pushProject = getProjectByGithubRepo(prRow.repo);
-          if (pushProject && headSha) {
-            const pushConfig = loadOrchestratorConfig(pushProject.projectDir);
-            if (pushConfig.test.length > 0) {
-              const pushSession = getSession(prRow.session_id!);
-              const worktreePath = pushSession?.worktree_path ?? '';
-              if (worktreePath) {
-                await this.reviewOrchestrator!.runTestPipeline(
-                  prRow.pr_number,
-                  prRow.repo,
-                  headSha,
-                  worktreePath,
-                  pushConfig.test,
-                  pushConfig.test_timeout_sec,
-                  pushConfig.test_max_rss_mb,
-                  pushConfig.test_fail_fast,
-                );
-              }
-            }
-          }
-        }
-
-        try {
-          let result: PRReviewResult;
-          try {
-            // Build a resettable timeout so a large-model escalation (which restarts
-            // the review session on a 1M-context model) doesn't cause a false timeout.
-            const reviewSessionId = prRow.review_session_id ?? null;
-            let reviewTimeoutHandle: ReturnType<typeof setTimeout> | undefined;
-            let escalationListener: ((msg: ServerMessage) => void) | undefined;
-
-            const timeoutPromise = new Promise<never>((_, reject) => {
-              const arm = () => {
-                clearTimeout(reviewTimeoutHandle);
-                reviewTimeoutHandle = setTimeout(
-                  () => reject(new Error('Re-review timed out')),
-                  PUSH_REVIEW_TIMEOUT_MS,
-                );
-              };
-              arm();
-
-              if (reviewSessionId) {
-                escalationListener = (msg: ServerMessage) => {
-                  if (
-                    msg.type === 'large_model_escalation_started' &&
-                    msg.sessionId === reviewSessionId
-                  ) {
-                    logger.info(
-                      `[PRMergeWatcher] review session ${reviewSessionId.slice(0, 8)} escalated to 1M model — resetting re-review timeout`,
-                    );
-                    arm();
-                  }
-                };
-                this.sessions.on('message', escalationListener);
-              }
-            });
-
-            try {
-              const reviewProject = getProjectByGithubRepo(prRow.repo);
-              if (!reviewProject) {
-                logger.warn(
-                  `[PRMergeWatcher] no project for repo ${prRow.repo} — skipping push re-review`,
-                );
-                return;
-              }
-              result = await Promise.race([
-                this.prReviewService!.reReviewPR(
-                  prRow.pr_number,
-                  prRow.repo,
-                  reviewProject.id,
-                  reviewProject.contextUrl,
-                ),
-                timeoutPromise,
-              ]);
-            } finally {
-              clearTimeout(reviewTimeoutHandle);
-              if (escalationListener) {
-                this.sessions.off('message', escalationListener);
-              }
-            }
-          } catch (e) {
-            const summary = e instanceof Error ? e.message : String(e);
-            logger.error(
-              `[PRMergeWatcher] re-review failed for PR #${prRow.pr_number}:`,
-              e,
-            );
-            setPauseReason(prRow.pr_number, prRow.repo, 'review_failed');
-            const failMessage = `Re-review for PR #${prRow.pr_number} failed: ${summary}`;
-            this.broadcast({
-              type: 'review_failed',
-              prNumber: prRow.pr_number,
-              repo: prRow.repo,
-              message: failMessage,
-            });
-            setPRReviewResult(
-              prRow.pr_number,
-              prRow.repo,
-              JSON.stringify({ verdict: 'error', summary, dimensions: [] }),
-            );
-            this.broadcast({
-              type: 'review_verdict',
-              prNumber: prRow.pr_number,
-              repo: prRow.repo,
-              verdict: 'error',
-              summary,
-              iteration,
-            });
-            return;
-          }
-
-          setLastReviewedSha(prRow.pr_number, prRow.repo, headSha);
-          if (result.verdict === 'approved') {
-            clearTerminalPRFlags(prRow.pr_number, prRow.repo, 'review_verdict');
-            // Re-approval on a push doesn't mean the depth review's earlier
-            // finding was fixed — it means conformance still matches spec.
-            // The depth pass must actually re-run on the new commit so a
-            // depth_review_pending / depth_review_escalation hold is
-            // discharged by a fresh verdict, never just by this conformance
-            // re-approval (see ReviewOrchestrator.dispatchDepthReview's
-            // "session's next push re-triggers conformance + depth review"
-            // comment, which this call site fulfills).
-            const depthProject = getProjectByGithubRepo(prRow.repo);
-            if (depthProject && this.reviewOrchestrator) {
-              const depthSession = getSession(sessionId);
-              this.reviewOrchestrator
-                .runDepthReviewAfterPushApproval(
-                  {
-                    prNumber: prRow.pr_number,
-                    repo: prRow.repo,
-                    taskId: prRow.task_id ?? '',
-                    taskUrl: depthSession?.task_url ?? '',
-                    contextUrl: depthProject.contextUrl,
-                  },
-                  depthProject.id,
-                )
-                .catch((e) => {
-                  logger.warn(
-                    `[PRMergeWatcher] post-push depth review dispatch failed for PR #${prRow.pr_number} (${prRow.repo}): ${e}`,
-                  );
-                });
-            }
-          }
-          this.broadcast({
-            type: 'review_verdict',
-            prNumber: prRow.pr_number,
-            repo: prRow.repo,
-            verdict: result.verdict,
-            summary: result.summary,
-            iteration,
-          });
-
-          if (result.verdict === 'needs_changes') {
-            try {
-              await this.sessions.sendOrResume(
-                sessionId,
-                formatReviewFeedback(result, iteration, {
-                  conflicted: prRow.merge_state === 'dirty',
-                  baseBranch: prRow.base_branch ?? undefined,
-                }),
-              );
-            } catch (e) {
-              logger.warn(
-                `[PRMergeWatcher] Failed to deliver review feedback to session ${sessionId}:`,
-                e,
-              );
-            }
-          } else if (result.verdict === 'incomplete') {
-            const message = `Review for PR #${prRow.pr_number} returned an incomplete verdict — the reviewer could not assess the PR. Manual intervention needed.`;
-            logger.warn(`[PRMergeWatcher] ${message}`);
-            this.broadcast({
-              type: 'review_incomplete',
-              prNumber: prRow.pr_number,
-              repo: prRow.repo,
-              message,
-            });
-            // Notify the implementing session so it knows to push a clearer version.
-            try {
-              await this.sessions.sendOrResume(
-                sessionId,
-                formatReviewFeedback(result, iteration, {
-                  conflicted: prRow.merge_state === 'dirty',
-                  baseBranch: prRow.base_branch ?? undefined,
-                }),
-              );
-            } catch (e) {
-              logger.warn(
-                `[PRMergeWatcher] Failed to deliver incomplete review feedback to session ${sessionId}:`,
-                e,
-              );
-            }
-          }
-        } finally {
-          this.pendingReReviews.delete(sessionId);
-        }
-      } catch (e) {
-        logger.error(
-          `[PRMergeWatcher] handlePushDetected unexpected error for session ${sessionId.slice(0, 8)}:`,
-          e,
-        );
-      } finally {
-        this.pendingReReviews.delete(sessionId);
-      }
-    })();
-  }
-
-  private sweepStalePendingReReviews(): void {
-    const now = Date.now();
-    for (const [sid, addedAt] of this.pendingReReviews) {
-      if (now - addedAt > PENDING_REREVIEW_TTL_MS) {
-        logger.warn(
-          `[PRMergeWatcher] sweeping stale pendingReReview for session ${sid.slice(0, 8)} (age ${Math.round((now - addedAt) / 1000)}s)`,
-        );
-        this.pendingReReviews.delete(sid);
+          reviewIteration: prRow.review_iteration,
+          headSha,
+          lastReviewedSha: prRow.last_reviewed_sha,
+        },
+        maxIter,
+      );
+      logger.info(
+        `[PRMergeWatcher] shouldAutoReview: iter=${prRow.review_iteration}/${maxIter} head=${headSha?.slice(0, 7)} lastReviewed=${prRow.last_reviewed_sha?.slice(0, 7)} → ${autoReviewOk}`,
+      );
+      if (!autoReviewOk) {
+        return;
       }
     }
+
+    const project = getProjectByGithubRepo(prRow.repo);
+    const session = prRow.session_id
+      ? getSession(prRow.session_id)
+      : undefined;
+
+    // Mirrors StalledPRReconciler.reDriveIfPushDetected: a push lands on a
+    // tree the no-diff-autofix guard must not mistake for a retry of a tree
+    // that already failed — clear the stale pre_review_stage (and any
+    // terminal pause) before enqueueing so the gate actually re-runs against
+    // the new head.
+    clearTerminalPRFlags(prRow.pr_number, prRow.repo, 'head_sha_advance');
+    this.reviewOrchestrator.enqueueReview({
+      prNumber: prRow.pr_number,
+      repo: prRow.repo,
+      taskId: prRow.task_id ?? '',
+      taskUrl: session?.task_url ?? '',
+      contextUrl: project?.contextUrl ?? '',
+      headSha,
+      pushTriggered: true,
+    });
+    logger.info(
+      `[PRMergeWatcher] handlePushDetected for PR #${prRow.pr_number}: enqueued review for head ${headSha?.slice(0, 7)}`,
+    );
   }
 
   /**
@@ -2352,7 +2092,6 @@ export class PRMergeWatcher extends EventEmitter {
       if (!pr.pending_push) continue;
       if (this.reviewOrchestrator.isReviewInFlight(pr.pr_number, pr.repo))
         continue;
-      if (pr.session_id && this.pendingReReviews.has(pr.session_id)) continue;
 
       const maxIter = this.getMaxReviewIterations();
       const autoReviewOk = shouldAutoReview(
@@ -2375,6 +2114,8 @@ export class PRMergeWatcher extends EventEmitter {
         taskId: pr.task_id ?? '',
         taskUrl: session?.task_url ?? '',
         contextUrl: project?.contextUrl ?? '',
+        headSha: pr.head_sha,
+        pushTriggered: true,
       });
       logger.info(
         `[PRMergeWatcher] sweepPendingPushDeadLetters: consumed pending_push for PR #${pr.pr_number} — review enqueued`,

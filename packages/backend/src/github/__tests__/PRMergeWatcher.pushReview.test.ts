@@ -63,11 +63,15 @@ vi.mock('../../db/pauseReason', () => ({
 import { PRMergeWatcher } from '../PRMergeWatcher';
 import type { GitHubClient } from '../GitHubClient';
 import type { SessionManager } from '../../session/SessionManager';
-import type { PRReviewService, PRReviewResult } from '../PRReviewService';
 import type { ReviewOrchestrator } from '../ReviewOrchestrator';
 import { getProjectByGithubRepo } from '../../config';
-import { loadOrchestratorConfig } from '../../session/orchestrator-config';
-import { getSession } from '../../db/queries';
+import {
+  getSession,
+  setPendingPush,
+  setPauseReason,
+  clearTerminalPRFlags,
+} from '../../db/queries';
+import { shouldAutoReview } from '../reviewUtils';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -96,27 +100,11 @@ function makeSessionManager(): SessionManager {
   return ee;
 }
 
-function makeReviewService(): PRReviewService {
-  return {
-    reReviewPR: vi.fn().mockResolvedValue({
-      verdict: 'needs_changes',
-      summary: 'Please fix',
-      dimensions: [],
-      prNumber: PR_NUMBER,
-      repo: REPO,
-      reviewedAt: new Date().toISOString(),
-    } as PRReviewResult),
-  } as unknown as PRReviewService;
-}
-
 function makeReviewOrchestrator(): ReviewOrchestrator {
   return {
-    runAutofixPipeline: vi.fn().mockResolvedValue(undefined),
-    runTestPipeline: vi.fn().mockResolvedValue(undefined),
     consumeAutofixSha: vi.fn().mockReturnValue(false),
     isReviewInFlight: vi.fn().mockReturnValue(false),
     enqueueReview: vi.fn(),
-    runDepthReviewAfterPushApproval: vi.fn().mockResolvedValue(undefined),
   } as unknown as ReviewOrchestrator;
 }
 
@@ -149,130 +137,15 @@ function makeProject() {
   } as any;
 }
 
+function verdictResult(verdict: string) {
+  return JSON.stringify({ verdict, summary: 'x', dimensions: [] });
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-describe('PRMergeWatcher push re-review — project id forwarding', () => {
+describe('PRMergeWatcher.handlePushDetected — routes through ReviewOrchestrator.enqueueReview', () => {
   let github: GitHubClient;
   let sessions: SessionManager;
-  let reviewService: PRReviewService;
-  let reviewOrchestrator: ReviewOrchestrator;
-  let watcher: PRMergeWatcher;
-  let broadcast: ReturnType<typeof vi.fn>;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    github = makeGithubClient();
-    sessions = makeSessionManager();
-    reviewService = makeReviewService();
-    reviewOrchestrator = makeReviewOrchestrator();
-    broadcast = vi.fn();
-
-    watcher = new PRMergeWatcher(github, sessions, undefined, broadcast);
-    watcher.setPRReviewService(reviewService);
-    watcher.setReviewOrchestrator(reviewOrchestrator);
-
-    vi.mocked(getProjectByGithubRepo).mockReturnValue(makeProject());
-  });
-
-  it('calls reReviewPR with resolved project.id and project.contextUrl', async () => {
-    const project = makeProject();
-    vi.mocked(getProjectByGithubRepo).mockReturnValue(project);
-
-    await watcher.handlePushDetected(makePRRow());
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    expect(reviewService.reReviewPR).toHaveBeenCalledWith(
-      PR_NUMBER,
-      REPO,
-      project.id,
-      project.contextUrl,
-    );
-  });
-
-  it('returns before the test pipeline promise settles, and invokes it exactly once for the new head SHA', async () => {
-    const project = makeProject();
-    vi.mocked(getProjectByGithubRepo).mockReturnValue(project);
-    vi.mocked(loadOrchestratorConfig).mockReturnValue({
-      test: ['npm test'],
-      test_timeout_sec: 300,
-      test_max_rss_mb: 0,
-      test_fail_fast: true,
-    } as any);
-    vi.mocked(getSession).mockReturnValue({
-      worktree_path: '/wt/session',
-    } as any);
-
-    let resolveTestPipeline!: () => void;
-    const testPipelineSettled = new Promise<void>((resolve) => {
-      resolveTestPipeline = resolve;
-    });
-    const events: string[] = [];
-    vi.mocked(reviewOrchestrator.runTestPipeline).mockImplementation(
-      async () => {
-        await testPipelineSettled;
-        events.push('test-pipeline-settled');
-      },
-    );
-
-    await watcher.handlePushDetected(makePRRow());
-    events.push('handlePushDetected-resolved');
-
-    // handlePushDetected already resolved while the test pipeline promise is
-    // still pending — it's fire-and-forget, never awaited by the caller.
-    expect(events).toEqual(['handlePushDetected-resolved']);
-
-    resolveTestPipeline();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    expect(events).toEqual([
-      'handlePushDetected-resolved',
-      'test-pipeline-settled',
-    ]);
-    expect(reviewOrchestrator.runTestPipeline).toHaveBeenCalledTimes(1);
-    expect(reviewOrchestrator.runTestPipeline).toHaveBeenCalledWith(
-      PR_NUMBER,
-      REPO,
-      HEAD_SHA,
-      '/wt/session',
-      ['npm test'],
-      300,
-      0,
-      true,
-    );
-  });
-
-  it('does NOT call reReviewPR when no project resolves for the repo', async () => {
-    // First call (line ~770) returns project for test pipeline check,
-    // second call (line ~828) returns undefined to simulate the broken state.
-    vi.mocked(getProjectByGithubRepo)
-      .mockReturnValueOnce(makeProject()) // test pipeline check
-      .mockReturnValueOnce(undefined); // project guard before reReviewPR
-
-    await watcher.handlePushDetected(makePRRow());
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    expect(reviewService.reReviewPR).not.toHaveBeenCalled();
-  });
-
-  it('does NOT call reReviewPR with empty string when project is missing', async () => {
-    vi.mocked(getProjectByGithubRepo).mockReturnValue(undefined);
-
-    await watcher.handlePushDetected(makePRRow());
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    const reReviewCalls = vi.mocked(reviewService.reReviewPR).mock.calls;
-    const emptyIdCalls = reReviewCalls.filter(
-      ([, , projectId]) => projectId === '',
-    );
-    expect(emptyIdCalls).toHaveLength(0);
-    expect(reviewService.reReviewPR).not.toHaveBeenCalled();
-  });
-});
-
-describe('PRMergeWatcher push re-review — re-triggers a fresh depth-review pass on re-approval', () => {
-  let github: GitHubClient;
-  let sessions: SessionManager;
-  let reviewService: PRReviewService;
   let reviewOrchestrator: ReviewOrchestrator;
   let watcher: PRMergeWatcher;
   let broadcast: ReturnType<typeof vi.fn>;
@@ -288,101 +161,123 @@ describe('PRMergeWatcher push re-review — re-triggers a fresh depth-review pas
     watcher.setReviewOrchestrator(reviewOrchestrator);
 
     vi.mocked(getProjectByGithubRepo).mockReturnValue(makeProject());
+    vi.mocked(getSession).mockReturnValue({ task_url: 'https://task' } as any);
   });
 
-  it('dispatches a fresh depth-review pass — not just a bare pause-flag clear — when the push re-review re-approves', async () => {
-    reviewService = {
-      reReviewPR: vi.fn().mockResolvedValue({
-        verdict: 'approved',
-        summary: 'Looks good now.',
-        dimensions: [],
-        prNumber: PR_NUMBER,
-        repo: REPO,
-        reviewedAt: new Date().toISOString(),
-      } as PRReviewResult),
-    } as unknown as PRReviewService;
-    watcher.setPRReviewService(reviewService);
+  it('enqueues exactly one review job for a push to a PR with an established review session', async () => {
+    const project = makeProject();
+    vi.mocked(getProjectByGithubRepo).mockReturnValue(project);
 
     await watcher.handlePushDetected(
-      makePRRow({
-        // A finding was previously routed to the session and the hold is
-        // still armed — this is the exact scenario the bug describes: the
-        // session addressed it and pushed, conformance re-approves, and the
-        // depth finding must be re-verified, not silently discarded.
-        pause_reason: 'depth_review_pending',
+      makePRRow({ review_result: verdictResult('needs_changes') }),
+    );
+
+    expect(reviewOrchestrator.enqueueReview).toHaveBeenCalledTimes(1);
+    expect(reviewOrchestrator.enqueueReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prNumber: PR_NUMBER,
+        repo: REPO,
+        taskId: 'task-1',
+        headSha: HEAD_SHA,
+        pushTriggered: true,
       }),
     );
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    expect(
-      reviewOrchestrator.runDepthReviewAfterPushApproval,
-    ).toHaveBeenCalledTimes(1);
-    const [job, projectId] = vi.mocked(
-      reviewOrchestrator.runDepthReviewAfterPushApproval,
-    ).mock.calls[0];
-    expect(job).toMatchObject({ prNumber: PR_NUMBER, repo: REPO });
-    expect(projectId).toBe(makeProject().id);
   });
 
-  it('does not dispatch a depth-review pass when the push re-review still returns needs_changes', async () => {
-    reviewService = {
-      reReviewPR: vi.fn().mockResolvedValue({
-        verdict: 'needs_changes',
-        summary: 'Please fix',
-        dimensions: [],
-        prNumber: PR_NUMBER,
-        repo: REPO,
-        reviewedAt: new Date().toISOString(),
-      } as PRReviewResult),
-    } as unknown as PRReviewService;
-    watcher.setPRReviewService(reviewService);
-
-    await watcher.handlePushDetected(
-      makePRRow({ pause_reason: 'depth_review_pending' }),
-    );
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    expect(
-      reviewOrchestrator.runDepthReviewAfterPushApproval,
-    ).not.toHaveBeenCalled();
-  });
-});
-
-describe('PRMergeWatcher push re-review — post-gate-failure push clears stale pre_review_stage', () => {
-  let github: GitHubClient;
-  let sessions: SessionManager;
-  let reviewOrchestrator: ReviewOrchestrator;
-  let watcher: PRMergeWatcher;
-  let broadcast: ReturnType<typeof vi.fn>;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    github = makeGithubClient();
-    sessions = makeSessionManager();
-    reviewOrchestrator = makeReviewOrchestrator();
-    broadcast = vi.fn();
-
-    watcher = new PRMergeWatcher(github, sessions, undefined, broadcast);
-    watcher.setReviewOrchestrator(reviewOrchestrator);
-
-    vi.mocked(getProjectByGithubRepo).mockReturnValue(makeProject());
-  });
-
-  it('clears terminal PR flags via head_sha_advance before enqueueing the review', async () => {
-    const { clearTerminalPRFlags } = await import('../../db/queries');
-
+  it('still enqueues a re-review when review_session_id is null but the stored verdict is verify_failed', async () => {
     await watcher.handlePushDetected(
       makePRRow({
         review_session_id: null,
-        pre_review_stage: 'blocked_verify',
-        review_result: JSON.stringify({
-          verdict: 'verify_failed',
-          summary: 'verify failed',
-          dimensions: [],
-        }),
+        review_result: verdictResult('verify_failed'),
       }),
     );
-    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(reviewOrchestrator.enqueueReview).toHaveBeenCalledTimes(1);
+    expect(reviewOrchestrator.enqueueReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prNumber: PR_NUMBER,
+        repo: REPO,
+        pushTriggered: true,
+      }),
+    );
+  });
+
+  it('still enqueues a re-review when review_session_id is null but the stored verdict is autofix_failed', async () => {
+    await watcher.handlePushDetected(
+      makePRRow({
+        review_session_id: null,
+        review_result: verdictResult('autofix_failed'),
+      }),
+    );
+
+    expect(reviewOrchestrator.enqueueReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not enqueue and instead marks pending_push when no review session exists and there is no gate-failure verdict', async () => {
+    await watcher.handlePushDetected(
+      makePRRow({ review_session_id: null, review_result: null }),
+    );
+
+    expect(reviewOrchestrator.enqueueReview).not.toHaveBeenCalled();
+    expect(setPendingPush).toHaveBeenCalledWith(PR_NUMBER, REPO, 1);
+  });
+
+  it('does not enqueue when the push is an autofix-only commit', async () => {
+    vi.mocked(reviewOrchestrator.consumeAutofixSha).mockReturnValue(true);
+
+    await watcher.handlePushDetected(
+      makePRRow({ review_result: verdictResult('needs_changes') }),
+    );
+
+    expect(reviewOrchestrator.consumeAutofixSha).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      HEAD_SHA,
+    );
+    expect(reviewOrchestrator.enqueueReview).not.toHaveBeenCalled();
+  });
+
+  it('escalates to max_reviews pause and broadcasts review_escalated when review_iteration has reached the cap, without enqueueing', async () => {
+    // typedGetSetting is mocked to return 5 — getMaxReviewIterations reads it.
+    await watcher.handlePushDetected(
+      makePRRow({
+        review_iteration: 5,
+        review_result: verdictResult('needs_changes'),
+      }),
+    );
+
+    expect(setPauseReason).toHaveBeenCalledWith(PR_NUMBER, REPO, 'max_reviews');
+    expect(broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'review_escalated',
+        prNumber: PR_NUMBER,
+        repo: REPO,
+      }),
+    );
+    expect(reviewOrchestrator.enqueueReview).not.toHaveBeenCalled();
+  });
+
+  it('skips enqueue when shouldAutoReview says the head is already reviewed at this SHA (non-gate-failure case)', async () => {
+    vi.mocked(shouldAutoReview).mockReturnValueOnce(false);
+
+    await watcher.handlePushDetected(
+      makePRRow({
+        review_result: verdictResult('needs_changes'),
+        last_reviewed_sha: HEAD_SHA,
+      }),
+    );
+
+    expect(shouldAutoReview).toHaveBeenCalled();
+    expect(reviewOrchestrator.enqueueReview).not.toHaveBeenCalled();
+  });
+
+  it('clears terminal PR flags via head_sha_advance before enqueueing the review', async () => {
+    await watcher.handlePushDetected(
+      makePRRow({
+        review_session_id: null,
+        review_result: verdictResult('verify_failed'),
+      }),
+    );
 
     expect(clearTerminalPRFlags).toHaveBeenCalledWith(
       PR_NUMBER,
@@ -391,10 +286,28 @@ describe('PRMergeWatcher push re-review — post-gate-failure push clears stale 
     );
     expect(reviewOrchestrator.enqueueReview).toHaveBeenCalledTimes(1);
 
-    const clearOrder =
-      vi.mocked(clearTerminalPRFlags).mock.invocationCallOrder[0];
+    const clearOrder = vi.mocked(clearTerminalPRFlags).mock
+      .invocationCallOrder[0];
     const enqueueOrder = vi.mocked(reviewOrchestrator.enqueueReview).mock
       .invocationCallOrder[0];
     expect(clearOrder).toBeLessThan(enqueueOrder);
+  });
+
+  it('warns and returns without enqueueing when no reviewOrchestrator has been set', async () => {
+    const bareWatcher = new PRMergeWatcher(
+      makeGithubClient(),
+      makeSessionManager(),
+      undefined,
+      vi.fn(),
+    );
+
+    await expect(
+      bareWatcher.handlePushDetected(
+        makePRRow({ review_result: verdictResult('needs_changes') }),
+      ),
+    ).resolves.toBeUndefined();
+
+    // No reviewOrchestrator was set on bareWatcher, so nothing to assert
+    // against it — the call simply must not throw.
   });
 });

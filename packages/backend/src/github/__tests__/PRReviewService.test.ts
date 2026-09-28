@@ -16,6 +16,7 @@ vi.mock('../../db/queries', () => ({
   getSession: vi.fn(),
   getPRIntentForPR: vi.fn().mockReturnValue(null),
   setPauseReason: vi.fn(),
+  clearTerminalPRFlags: vi.fn(),
 }));
 vi.mock('../../tasks/TaskWriteCommands', () => ({
   getCachedType: vi.fn().mockReturnValue('💻 Code'),

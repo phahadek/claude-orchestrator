@@ -73,7 +73,6 @@ import { PRMergeWatcher } from '../github/PRMergeWatcher.js';
 import { setHeadSha } from '../db/queries.js';
 import type { GitHubClient } from '../github/GitHubClient.js';
 import type { SessionManager } from '../session/SessionManager.js';
-import type { PRReviewService } from '../github/PRReviewService.js';
 import type { ReviewOrchestrator } from '../github/ReviewOrchestrator.js';
 import type { PullRequestRow } from '../db/types.js';
 
@@ -120,100 +119,12 @@ function makePRRow(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
 describe('PRMergeWatcher — approved verdict clears terminal flags', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('calls clearTerminalPRFlags when review verdict is approved', async () => {
-    const github = {
-      fetchPR: vi.fn().mockResolvedValue({ headSha: 'head-sha-1' }),
-      deleteBranch: vi.fn().mockResolvedValue(undefined),
-    } as unknown as GitHubClient;
-
-    const sessions = {
-      markSessionErrored: vi.fn(),
-      endSession: vi.fn(),
-      markForBranchDeletion: vi.fn(),
-      sendOrResume: vi.fn().mockResolvedValue(undefined),
-      on: vi.fn(),
-      off: vi.fn(),
-    } as unknown as SessionManager;
-
-    const prReviewService = {
-      reReviewPR: vi.fn().mockResolvedValue({
-        verdict: 'approved',
-        summary: 'Looks good',
-        dimensions: [],
-        prNumber: 42,
-        repo: 'owner/repo',
-        reviewedAt: new Date().toISOString(),
-      }),
-    } as unknown as PRReviewService;
-
-    const reviewOrchestrator = {
-      consumeAutofixSha: vi.fn().mockReturnValue(false),
-      runAutofixPipeline: vi.fn().mockResolvedValue(undefined),
-      runTestPipeline: vi.fn().mockResolvedValue(undefined),
-      isReviewInFlight: vi.fn().mockReturnValue(false),
-      runDepthReviewAfterPushApproval: vi.fn().mockResolvedValue(undefined),
-    } as unknown as ReviewOrchestrator;
-
-    const watcher = new PRMergeWatcher(github, sessions, undefined, vi.fn());
-    watcher.setPRReviewService(prReviewService);
-    watcher.setReviewOrchestrator(reviewOrchestrator);
-
-    const pr = makePRRow();
-    await watcher.handlePushDetected(pr);
-
-    // Wait for the void async IIFE inside handlePushDetected to complete
-    await new Promise((r) => setTimeout(r, 50));
-
-    expect(mockClearTerminalPRFlags).toHaveBeenCalledWith(
-      42,
-      'owner/repo',
-      'review_verdict',
-    );
-  });
-
-  it('does not call clearTerminalPRFlags when review verdict is needs_changes', async () => {
-    const github = {
-      fetchPR: vi.fn().mockResolvedValue({ headSha: 'head-sha-1' }),
-    } as unknown as GitHubClient;
-
-    const sessions = {
-      markSessionErrored: vi.fn(),
-      endSession: vi.fn(),
-      sendOrResume: vi.fn().mockResolvedValue(undefined),
-      on: vi.fn(),
-      off: vi.fn(),
-    } as unknown as SessionManager;
-
-    const prReviewService = {
-      reReviewPR: vi.fn().mockResolvedValue({
-        verdict: 'needs_changes',
-        summary: 'Please fix X',
-        dimensions: [],
-        prNumber: 42,
-        repo: 'owner/repo',
-        reviewedAt: new Date().toISOString(),
-      }),
-    } as unknown as PRReviewService;
-
-    const reviewOrchestrator = {
-      consumeAutofixSha: vi.fn().mockReturnValue(false),
-      runAutofixPipeline: vi.fn().mockResolvedValue(undefined),
-      runTestPipeline: vi.fn().mockResolvedValue(undefined),
-      isReviewInFlight: vi.fn().mockReturnValue(false),
-      runDepthReviewAfterPushApproval: vi.fn().mockResolvedValue(undefined),
-    } as unknown as ReviewOrchestrator;
-
-    const watcher = new PRMergeWatcher(github, sessions, undefined, vi.fn());
-    watcher.setPRReviewService(prReviewService);
-    watcher.setReviewOrchestrator(reviewOrchestrator);
-
-    const pr = makePRRow();
-    await watcher.handlePushDetected(pr);
-
-    await new Promise((r) => setTimeout(r, 50));
-
-    expect(mockClearTerminalPRFlags).not.toHaveBeenCalled();
-  });
+  // Clearing terminal flags with reason 'review_verdict' on an approved
+  // verdict now happens inside PRReviewService.handleApprovedVerdict (see
+  // that class's tests), not synchronously inside PRMergeWatcher — a push
+  // only decides whether to enqueue a review job via
+  // ReviewOrchestrator.enqueueReview; it no longer awaits or sees the
+  // resulting verdict at all.
 
   it('clears reconcile_exhausted via head_sha_advance as soon as a new push is confirmed, before the verdict is known', async () => {
     const github = {
@@ -232,30 +143,13 @@ describe('PRMergeWatcher — approved verdict clears terminal flags', () => {
       off: vi.fn(),
     } as unknown as SessionManager;
 
-    const prReviewService = {
-      // Verdict is needs_changes — the old code would NOT have cleared the
-      // cap here at all, but the fix (a real push happened) should still
-      // un-stick the escalation regardless of verdict.
-      reReviewPR: vi.fn().mockResolvedValue({
-        verdict: 'needs_changes',
-        summary: 'Still missing X',
-        dimensions: [],
-        prNumber: 42,
-        repo: 'owner/repo',
-        reviewedAt: new Date().toISOString(),
-      }),
-    } as unknown as PRReviewService;
-
     const reviewOrchestrator = {
       consumeAutofixSha: vi.fn().mockReturnValue(false),
-      runAutofixPipeline: vi.fn().mockResolvedValue(undefined),
-      runTestPipeline: vi.fn().mockResolvedValue(undefined),
       isReviewInFlight: vi.fn().mockReturnValue(false),
-      runDepthReviewAfterPushApproval: vi.fn().mockResolvedValue(undefined),
+      enqueueReview: vi.fn(),
     } as unknown as ReviewOrchestrator;
 
     const watcher = new PRMergeWatcher(github, sessions, undefined, vi.fn());
-    watcher.setPRReviewService(prReviewService);
     watcher.setReviewOrchestrator(reviewOrchestrator);
 
     const pr = makePRRow({

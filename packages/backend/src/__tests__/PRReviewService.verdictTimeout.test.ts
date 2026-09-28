@@ -29,6 +29,7 @@ vi.mock('../db/queries.js', () => ({
   getSession: vi.fn().mockReturnValue(undefined),
   getPRIntentForPR: vi.fn().mockReturnValue(null),
   setPauseReason: vi.fn(),
+  clearTerminalPRFlags: vi.fn(),
   getLatestTestRequestRunForSession: vi.fn().mockReturnValue(undefined),
   getAuthoritativeTestRunForPr: vi.fn().mockReturnValue(undefined),
   getTestRunSummary: vi.fn().mockReturnValue(undefined),

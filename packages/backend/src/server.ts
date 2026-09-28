@@ -361,7 +361,6 @@ const autoMerger = new AutoMerger(
   sessionManager,
 );
 prMergeWatcher.setAutoMerger(autoMerger);
-prMergeWatcher.setPRReviewService(prReviewService);
 prMergeWatcher.setReviewOrchestrator(reviewOrchestrator);
 // Gate consumes the merge-completion signal; PRMergeWatcher stays unaware of gate state.
 registerGateMergeConsumer(prMergeWatcher);
