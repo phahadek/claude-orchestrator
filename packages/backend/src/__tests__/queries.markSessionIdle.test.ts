@@ -54,8 +54,12 @@ function getRow(
 
 function getTerminalReason(sessionId: string): string | null {
   const row = db
-    .prepare('SELECT terminal_completion_reason FROM sessions WHERE session_id = ?')
-    .get(sessionId) as { terminal_completion_reason: string | null } | undefined;
+    .prepare(
+      'SELECT terminal_completion_reason FROM sessions WHERE session_id = ?',
+    )
+    .get(sessionId) as
+    | { terminal_completion_reason: string | null }
+    | undefined;
   return row?.terminal_completion_reason ?? null;
 }
 
