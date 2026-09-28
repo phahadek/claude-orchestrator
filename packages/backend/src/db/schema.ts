@@ -3565,11 +3565,9 @@ export function runMigrations(target: Database.Database): void {
   // reuse path — a request satisfied by a same-hash, different-run_kind run
   // whose commands already cover it, rather than by an execution of its
   // own. Holds the id of the covering run whose verdict was copied.
-  // Distinguishes such a row from a genuine execution — unlike
-  // mirrorTestRequestRunAsKind's copy, which is indistinguishable from one
-  // and already misleads concurrency analysis — so execution-shaped reads
-  // (duration baselines, flip-rate/breadth corpus, concurrency stats) can
-  // filter it out. NULL for every genuinely executed row.
+  // Distinguishes such a row from a genuine execution so execution-shaped
+  // reads (duration baselines, flip-rate/breadth corpus, concurrency stats)
+  // can filter it out. NULL for every genuinely executed row.
   try {
     target.exec(
       `ALTER TABLE test_request_runs ADD COLUMN coverage_source_run_id TEXT`,

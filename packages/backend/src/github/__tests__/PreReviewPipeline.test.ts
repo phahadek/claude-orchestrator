@@ -20,7 +20,6 @@ const mockUpdateTestRequestRunState = vi.fn();
 const mockAddAutofixSha = vi.fn();
 const mockGetAnalyzeContentCacheResult = vi.fn().mockReturnValue(undefined);
 const mockInsertAnalyzeContentCacheResult = vi.fn();
-const mockMirrorTestRequestRunAsKind = vi.fn();
 
 vi.mock('../../db/queries', () => ({
   getPRByNumber: (...args: unknown[]) => mockGetPRByNumber(...args),
@@ -47,8 +46,6 @@ vi.mock('../../db/queries', () => ({
   insertAnalyzeContentCacheResult: (...args: unknown[]) =>
     mockInsertAnalyzeContentCacheResult(...args),
   addAutofixSha: (...args: unknown[]) => mockAddAutofixSha(...args),
-  mirrorTestRequestRunAsKind: (...args: unknown[]) =>
-    mockMirrorTestRequestRunAsKind(...args),
 }));
 
 const mockComputeTriggerContentHash = vi.fn().mockResolvedValue(null);
@@ -1769,7 +1766,6 @@ describe('PreReviewPipeline — cross-kind verify/tests reuse now lives in the l
         commands: ['uv run task test-static', 'uv run task test'],
       }),
     );
-    expect(mockMirrorTestRequestRunAsKind).not.toHaveBeenCalled();
   });
 
   it('tests stage still executes fresh (polimarket-shaped drift: test: carries a command verify: lacks)', async () => {
@@ -1804,7 +1800,6 @@ describe('PreReviewPipeline — cross-kind verify/tests reuse now lives in the l
         ],
       }),
     );
-    expect(mockMirrorTestRequestRunAsKind).not.toHaveBeenCalled();
   });
 
   it('a failed verify at H blocks the pipeline before the tests stage — unchanged from today', async () => {
@@ -1836,7 +1831,6 @@ describe('PreReviewPipeline — cross-kind verify/tests reuse now lives in the l
         commands: ['uv run task test-static', 'uv run task test'],
       }),
     );
-    expect(mockMirrorTestRequestRunAsKind).not.toHaveBeenCalled();
   });
 
   it('verify stage hands its full, unfiltered command set to the lane even when a passed same-hash full run exists', async () => {
