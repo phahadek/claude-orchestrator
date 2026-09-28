@@ -163,6 +163,30 @@ function getStmtGetSession(): Database.Statement {
   return _stmtGetSession;
 }
 
+/**
+ * Canonical-PR write guard: a newly observed PR URL only replaces
+ * sessions.pr_url when the row it currently points at is no longer open —
+ * mirrors the "oldest open wins" resolution rule (getPRByNotionTaskId /
+ * getPRBySessionId) so a session's already-open canonical PR can never be
+ * displaced by a second PR the session opened later, only superseded once
+ * the stored one is merged/closed. A null/undefined prUrl (nothing newly
+ * observed) always resolves to null — the caller's COALESCE(@pr_url,
+ * pr_url) already preserves the existing value in that case.
+ */
+function resolveGuardedSessionPrUrl(
+  sessionId: string,
+  prUrl: string | null,
+): string | null {
+  if (!prUrl) return null;
+  const current = getStmtGetSession().get({ session_id: sessionId }) as
+    | { pr_url: string | null }
+    | undefined;
+  if (!current?.pr_url || current.pr_url === prUrl) return prUrl;
+  const stored = getPRByUrl(current.pr_url);
+  if (stored && stored.state === 'open') return null;
+  return prUrl;
+}
+
 export function insertSession(s: NewSession): void {
   _stmtInsertSession ??= db.prepare<NewSession>(`
     INSERT INTO sessions
@@ -637,7 +661,7 @@ export function markSessionDone(
   getStmtMarkSessionDone().run({
     session_id: sessionId,
     ended_at: endedAt,
-    pr_url: prUrl ?? null,
+    pr_url: resolveGuardedSessionPrUrl(sessionId, prUrl ?? null),
     terminalized_at: endedAt,
   });
   if (callSite) {
@@ -701,7 +725,7 @@ export function applyPendingDone(sessionId: string): boolean {
   getStmtMarkSessionDone().run({
     session_id: sessionId,
     ended_at: current.pending_done_ended_at,
-    pr_url: current.pending_done_pr_url,
+    pr_url: resolveGuardedSessionPrUrl(sessionId, current.pending_done_pr_url),
     // The genuine terminal instant is now (the drain), not the original
     // deferral time preserved in ended_at for backwards compatibility.
     terminalized_at: terminalizedAt,
@@ -890,7 +914,7 @@ export function markSessionIdle(
   _stmtMarkSessionIdle.run({
     session_id: sessionId,
     ended_at: endedAt,
-    pr_url: prUrl ?? null,
+    pr_url: resolveGuardedSessionPrUrl(sessionId, prUrl ?? null),
   });
   if (current && current.status !== 'idle') {
     recordEvent({
@@ -3647,14 +3671,41 @@ export function setPendingPush(
   ).run({ pr_number: prNumber, repo, pending_push: value });
 }
 
+/**
+ * Canonical-PR resolution order, shared by getPRByTaskId and
+ * getPRBySessionId: the oldest open row wins (lowest id among state='open'
+ * rows); only when no row is open does the highest-id (most recent
+ * terminal) row win. Never "newest wins" outright — a closed/merged PR
+ * opened later must never displace a still-open earlier one.
+ */
+const PR_CANONICAL_ORDER_BY = `
+  ORDER BY
+    CASE WHEN state = 'open' THEN 0 ELSE 1 END ASC,
+    CASE WHEN state = 'open' THEN id END ASC,
+    CASE WHEN state != 'open' THEN id END DESC
+`;
+
 export function getPRBySessionId(sessionId: string): PullRequestRow | null {
   return db
     .prepare<{ session_id: string }>(
       `
-    SELECT * FROM pull_requests WHERE session_id = @session_id LIMIT 1
+    SELECT * FROM pull_requests WHERE session_id = @session_id
+    ${PR_CANONICAL_ORDER_BY}
+    LIMIT 1
   `,
     )
     .get({ session_id: sessionId }) as PullRequestRow | null;
+}
+
+/** Direct pr_url lookup — used by the canonical-PR write guard (resolveGuardedSessionPrUrl). */
+export function getPRByUrl(prUrl: string): PullRequestRow | null {
+  return db
+    .prepare<{ pr_url: string }>(
+      `
+    SELECT * FROM pull_requests WHERE pr_url = @pr_url
+  `,
+    )
+    .get({ pr_url: prUrl }) as PullRequestRow | null;
 }
 
 /**
@@ -3681,7 +3732,9 @@ function getPRByTaskId(taskId: string): PullRequestRow | null {
   return db
     .prepare<{ task_id: string }>(
       `
-    SELECT * FROM pull_requests WHERE task_id = @task_id ORDER BY pr_number DESC LIMIT 1
+    SELECT * FROM pull_requests WHERE task_id = @task_id
+    ${PR_CANONICAL_ORDER_BY}
+    LIMIT 1
   `,
     )
     .get({ task_id: taskId }) as PullRequestRow | null;
