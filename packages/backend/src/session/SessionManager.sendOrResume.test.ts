@@ -168,6 +168,15 @@ describe('SessionManager.sendOrResume — null sentinel on non-resumable session
     expect(result).toBeNull();
   });
 
+  it('returns null when session status is "superseded"', async () => {
+    vi.mocked(getSession).mockReturnValue({ status: 'superseded' } as any);
+
+    const sm = new SessionManager();
+    const result = await sm.sendOrResume('superseded-session-id', 'hello');
+
+    expect(result).toBeNull();
+  });
+
   it('does NOT return null for a live in-memory session (returns sessionId directly)', async () => {
     const sm = new SessionManager();
     // Simulate a live session in the in-memory map by injecting a stub
@@ -357,5 +366,51 @@ describe('SessionManager.sendOrResume — null sentinel on non-resumable session
         detail: expect.stringContaining('idle'),
       }),
     );
+  });
+
+  it('enqueues the operator text and broadcasts session_action_failed with reason terminal_session for a superseded row — a refusal is a deferral, not a discard', async () => {
+    vi.mocked(getSession).mockReturnValue({ status: 'superseded' } as any);
+
+    const sm = new SessionManager();
+    const emitSpy = vi.spyOn(sm, 'emit');
+
+    const result = await sm.sendOrResume(
+      'superseded-refusal-id',
+      'operator poke text',
+    );
+
+    expect(result).toBeNull();
+    const items = await listUndeliveredInboxItems('superseded-refusal-id');
+    expect(items).toHaveLength(1);
+    expect(items[0].payload).toBe('operator poke text');
+    expect(items[0].source).toBe('operator:message');
+    expect(items[0].delivered_at).toBeNull();
+    expect(items[0].dropped_at).toBeNull();
+
+    expect(emitSpy).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        type: 'session_action_failed',
+        reason: 'terminal_session',
+        detail: expect.stringContaining('superseded'),
+      }),
+    );
+  });
+
+  it('resumes a superseded row when allowTerminal is set — relaunchFixerForPR opt-out is preserved', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      status: 'superseded',
+      project_id: 'missing-project',
+    } as any);
+
+    const sm = new SessionManager();
+    const result = await sm.sendOrResume('superseded-allow-id', 'hello', {
+      allowTerminal: true,
+    });
+
+    // getProjectById is mocked to return null, so the respawn path returns
+    // early with the sessionId — the point is that the terminal guard did
+    // not fire and reject it first.
+    expect(result).toBe('superseded-allow-id');
   });
 });
