@@ -92,6 +92,7 @@ describe('SessionManager — reclaims a session on a revoked stage credential', 
     expect(queries.setSessionParkedAt).toHaveBeenCalledWith(
       'live-but-revoked',
       expect.any(Number),
+      'surfaced',
     );
     expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
       'live-but-revoked',
@@ -128,6 +129,7 @@ describe('SessionManager — reclaims a session on a revoked stage credential', 
     expect(queries.setSessionParkedAt).toHaveBeenCalledWith(
       'already-killed',
       expect.any(Number),
+      'surfaced',
     );
     expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
       'already-killed',
@@ -162,6 +164,7 @@ describe('SessionManager — reclaims a session on a revoked route credential', 
     expect(queries.setSessionParkedAt).toHaveBeenCalledWith(
       'live-but-revoked-route',
       expect.any(Number),
+      'surfaced',
     );
     expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
       'live-but-revoked-route',

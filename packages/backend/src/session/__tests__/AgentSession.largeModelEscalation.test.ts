@@ -790,6 +790,7 @@ describe('AgentSession — escalation deadlock watchdog + bounded retry', () => 
     expect(queries.setSessionParkedAt).toHaveBeenCalledWith(
       'test-session-overflow',
       expect.any(Number),
+      'surfaced',
     );
     expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
       'test-session-overflow',

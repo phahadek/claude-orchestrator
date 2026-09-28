@@ -44,7 +44,7 @@ function seedSession(opts: {
     task_name: null,
   } as never);
   if (opts.archived) archiveSession(opts.sessionId, 'operator');
-  if (opts.parked) setSessionParkedAt(opts.sessionId, Date.now());
+  if (opts.parked) setSessionParkedAt(opts.sessionId, Date.now(), 'reclaimed');
 }
 
 describe('countLivePlanningSessions', () => {

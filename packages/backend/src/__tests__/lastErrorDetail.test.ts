@@ -234,6 +234,7 @@ describe('AgentSession error paths pass a concise detail to markSessionErrored',
     expect(setSessionParkedAt).toHaveBeenCalledWith(
       'sess-err',
       expect.any(Number),
+      'surfaced',
     );
     expect(setSessionPauseReason).toHaveBeenCalledWith(
       'sess-err',

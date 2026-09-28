@@ -6,6 +6,7 @@ import {
   isInvestigateSession,
   isMachineParkedIdle,
   isParkedIdle,
+  isSurfacedParkedIdle,
   isPlanningSession,
   isTaskTypeCompatibleWithSessionType,
   movesTargetInProgress,
@@ -305,6 +306,41 @@ describe('sessionPredicates', () => {
 
     it('is false when parked_at is null', () => {
       expect(isParkedIdle({ parked_at: null })).toBe(false);
+    });
+  });
+
+  describe('isSurfacedParkedIdle', () => {
+    it('is false when parked_at is null, regardless of park_kind', () => {
+      expect(isSurfacedParkedIdle({ parked_at: null, park_kind: null })).toBe(
+        false,
+      );
+      expect(
+        isSurfacedParkedIdle({ parked_at: null, park_kind: 'surfaced' }),
+      ).toBe(false);
+    });
+
+    it('is false for a reclaim-parked row (park_kind=reclaimed)', () => {
+      expect(
+        isSurfacedParkedIdle({
+          parked_at: Date.now(),
+          park_kind: 'reclaimed',
+        }),
+      ).toBe(false);
+    });
+
+    it('is true for a surfaced-parked row (park_kind=surfaced)', () => {
+      expect(
+        isSurfacedParkedIdle({
+          parked_at: Date.now(),
+          park_kind: 'surfaced',
+        }),
+      ).toBe(true);
+    });
+
+    it('is true (fail-closed) for a legacy parked_at row with no park_kind', () => {
+      expect(
+        isSurfacedParkedIdle({ parked_at: Date.now(), park_kind: null }),
+      ).toBe(true);
     });
   });
 });

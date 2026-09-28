@@ -1308,7 +1308,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
   private surfaceUnresolvedToOperator(reason: string, detail?: string): void {
     this.hasEnded = true;
     try {
-      setSessionParkedAt(this.sessionId, Date.now());
+      setSessionParkedAt(this.sessionId, Date.now(), 'surfaced');
     } catch {
       // Best-effort — DB may be unavailable or mocked without this function.
     }
@@ -3934,7 +3934,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
   async reclaimProcess(): Promise<void> {
     this.hasEnded = true;
     try {
-      setSessionParkedAt(this.sessionId, Date.now());
+      setSessionParkedAt(this.sessionId, Date.now(), 'reclaimed');
     } catch {
       // Best-effort — DB may be unavailable or mocked without this function.
     }

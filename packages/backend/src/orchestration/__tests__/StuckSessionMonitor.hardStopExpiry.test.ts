@@ -112,6 +112,7 @@ describe('StuckSessionMonitor hard-stop window expiry', () => {
     expect(setSessionParkedAt).toHaveBeenCalledWith(
       'sess-silent',
       expect.any(Number),
+      'surfaced',
     );
     expect(broadcast).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -156,6 +157,7 @@ describe('StuckSessionMonitor hard-stop window expiry', () => {
     expect(setSessionParkedAt).toHaveBeenCalledWith(
       'sess-crashed',
       expect.any(Number),
+      'surfaced',
     );
   });
 
