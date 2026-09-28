@@ -539,7 +539,7 @@ describe('PRReviewService.buildPrompt()', () => {
 
     expect(prompt).toContain('## Gate-Charged Test Failures');
     expect(prompt).toContain(
-      "address a failure listed under \"## Gate-Charged Test Failures\" above",
+      'address a failure listed under "## Gate-Charged Test Failures" above',
     );
     expect(prompt).toContain(
       'must still be assessed on its merits, not waved through',

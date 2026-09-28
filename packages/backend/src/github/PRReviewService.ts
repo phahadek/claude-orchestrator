@@ -611,7 +611,8 @@ export function collectGateChargedFailures(
   const byTestId = new Map<string, FailingTestForRun>();
   for (const run of runs) {
     for (const failure of getUnexcusedFailingTestIdsForRun(run.id)) {
-      if (!byTestId.has(failure.test_id)) byTestId.set(failure.test_id, failure);
+      if (!byTestId.has(failure.test_id))
+        byTestId.set(failure.test_id, failure);
     }
   }
   return [...byTestId.values()];
