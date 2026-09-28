@@ -34,6 +34,9 @@ vi.mock('../db/queries.js', () => ({
   getMergedLocalBranchForTaskId: vi.fn().mockReturnValue(undefined),
   getLatestTestRequestRunForSession: vi.fn().mockReturnValue(undefined),
   getAuthoritativeTestRunForPr: vi.fn().mockReturnValue(undefined),
+  getTestRunSummary: vi.fn().mockReturnValue(undefined),
+  listTestRequestRunsForPrSession: vi.fn().mockReturnValue([]),
+  getUnexcusedFailingTestIdsForRun: vi.fn().mockReturnValue([]),
   markSessionSuperseded: vi.fn(),
   TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED: new Set([
     'done',
@@ -41,6 +44,12 @@ vi.mock('../db/queries.js', () => ({
     'killed',
     'superseded',
   ]),
+}));
+
+vi.mock('../session/test-runner.js', () => ({
+  isTestIdTouchedByChangedFiles: vi
+    .fn()
+    .mockReturnValue({ touched: false, confident: false }),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({

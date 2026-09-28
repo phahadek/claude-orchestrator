@@ -31,6 +31,15 @@ vi.mock('../db/queries.js', () => ({
   setPauseReason: vi.fn(),
   getLatestTestRequestRunForSession: vi.fn().mockReturnValue(undefined),
   getAuthoritativeTestRunForPr: vi.fn().mockReturnValue(undefined),
+  getTestRunSummary: vi.fn().mockReturnValue(undefined),
+  listTestRequestRunsForPrSession: vi.fn().mockReturnValue([]),
+  getUnexcusedFailingTestIdsForRun: vi.fn().mockReturnValue([]),
+}));
+
+vi.mock('../session/test-runner.js', () => ({
+  isTestIdTouchedByChangedFiles: vi
+    .fn()
+    .mockReturnValue({ touched: false, confident: false }),
 }));
 
 vi.mock('../tasks/TaskWriteCommands.js', () => ({
