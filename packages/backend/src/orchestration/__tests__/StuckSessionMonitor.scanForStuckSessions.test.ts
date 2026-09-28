@@ -147,6 +147,39 @@ describe('StuckSessionMonitor.scanForStuckSessions — local-only submission', (
     );
   });
 
+  it('does not mark idle a session mid-resume (getStuckResultSessionRows already excludes it)', async () => {
+    // getStuckResultSessionRows excludes a session whose most recent
+    // idle->running transition is newer than its newest result event — the
+    // --resume process was just spawned and hasn't emitted its first hook
+    // event yet. Nothing for the monitor to act on: this asserts the
+    // no-row case leaves markSessionIdle untouched.
+    vi.mocked(getStuckResultSessionRows).mockReturnValue([]);
+
+    const { monitor } = makeMonitor(true);
+    await monitor.scanForStuckSessions();
+
+    expect(markSessionIdle).not.toHaveBeenCalled();
+    expect(markSessionDone).not.toHaveBeenCalled();
+  });
+
+  it('marks idle a running session whose newest event is a result with no later resume (regression guard)', async () => {
+    vi.mocked(getStuckResultSessionRows).mockReturnValue([baseRow] as never);
+    vi.mocked(getProjectRowById).mockReturnValue({
+      git_mode: 'github',
+      base_branch: 'dev',
+    } as never);
+
+    const { monitor } = makeMonitor(true);
+    await monitor.scanForStuckSessions();
+
+    expect(markSessionIdle).toHaveBeenCalledWith(
+      'sess-1',
+      baseRow.last_ts,
+      null,
+      'stuck_session_alive_subprocess',
+    );
+  });
+
   it('routes the dead-process, no-PR, local-only path through recoverSession with scope periodic', async () => {
     // session_type outside the operator-conclusion gate (e.g. review) — this
     // test exercises the recoverSession routing/scope plumbing, not the

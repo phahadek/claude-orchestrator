@@ -1006,10 +1006,31 @@ export interface StuckResultSessionRow {
  * Matches production storage: result events are persisted with event_type='system'
  * and payload.type='result' (i.e. eventKind(row) === 'result'), NOT event_type='result'.
  * If minAgeMs is provided, only returns sessions older than that threshold.
+ *
+ * Excludes a session mid-resume: if the most recent session_status_changed
+ * audit row transitioning this session into 'running' is newer than its
+ * newest result event, the --resume process was just spawned and simply
+ * hasn't emitted its first hook event yet (that can take ~10s) — it is not
+ * a stuck subprocess from the *previous* turn's result. Without this guard,
+ * scanForStuckSessions re-parks the freshly-spawned process as
+ * stuck_session_alive_subprocess, and the alive-park escalation can then
+ * reclaim it mid-delivery of the very result it's meant to be resuming to
+ * send. The correlated subquery is backed by idx_audit_log_actor_event_ts
+ * (actor_id, event_type, ts) — one indexed lookup per candidate row, no
+ * additional per-row query in the scan loop.
  */
 export function getStuckResultSessionRows(
   minAgeMs?: number,
 ): StuckResultSessionRow[] {
+  const notMidResumeClause = `
+    AND NOT EXISTS (
+      SELECT 1 FROM audit_log al
+      WHERE al.actor_id = s.session_id
+        AND al.event_type = 'session_status_changed'
+        AND json_extract(al.payload, '$.to') = 'running'
+        AND al.ts > e.timestamp
+    )
+  `;
   if (minAgeMs !== undefined) {
     return db
       .prepare(
@@ -1024,6 +1045,7 @@ export function getStuckResultSessionRows(
         AND e.event_type = 'system'
         AND json_extract(e.payload, '$.type') = 'result'
         AND s.started_at < (unixepoch('now') - @min_age_seconds) * 1000
+        ${notMidResumeClause}
     `,
       )
       .all({
@@ -1042,6 +1064,7 @@ export function getStuckResultSessionRows(
       AND e.id = (SELECT MAX(id) FROM session_events WHERE session_id = s.session_id)
       AND e.event_type = 'system'
       AND json_extract(e.payload, '$.type') = 'result'
+      ${notMidResumeClause}
   `,
     )
     .all() as StuckResultSessionRow[];
@@ -1057,11 +1080,14 @@ export interface StuckAliveSubprocessParkRow {
   /** audit_log.ts of the session_status_changed row that parked this session via stuck_session_alive_subprocess. */
   parked_at: number;
   /**
-   * MAX(session_events.timestamp) for this session right now; null if it
-   * somehow has no events. Escalation is bounded by silence since this
-   * timestamp, not by sessions.ended_at (which for a resumed session still
-   * carries its original clean-exit instant) or by parked_at (the resume's
-   * own hook events land within ~1s of the park itself).
+   * max(MAX(session_events.timestamp), <instant this session last entered
+   * 'running'>) for this session right now; null if neither exists.
+   * Escalation is bounded by silence since this timestamp, not by
+   * sessions.ended_at (which for a resumed session still carries its
+   * original clean-exit instant) or by parked_at alone (a resume's own hook
+   * events can land up to ~10s after the process is spawned — folding in
+   * the running-transition instant covers that gap even when no event has
+   * landed yet).
    */
   latest_event_ts: number | null;
 }
@@ -1075,6 +1101,12 @@ export interface StuckAliveSubprocessParkRow {
  * call_site (rather than merely "status is idle") is what excludes the
  * legitimately long-lived stuck_session_open_pr park, per the cascade check in
  * the task: a session idle for a PR-review reason must never be escalated here.
+ *
+ * latest_event_ts folds in the most recent transition into 'running' for
+ * this session (backed by idx_audit_log_actor_event_ts) alongside
+ * s.last_event_at, so a park sitting on a freshly-resumed process whose
+ * first hook event hasn't landed yet is never mistaken for a session that's
+ * been silent since its last result.
  */
 export function getStuckAliveSubprocessParkRows(): StuckAliveSubprocessParkRow[] {
   return db
@@ -1082,7 +1114,23 @@ export function getStuckAliveSubprocessParkRows(): StuckAliveSubprocessParkRow[]
       `
     SELECT s.session_id, s.task_id, s.project_id, s.pr_url, s.worktree_path,
            s.session_type, al.ts AS parked_at,
-           s.last_event_at AS latest_event_ts
+           CASE
+             WHEN s.last_event_at IS NULL AND (
+               SELECT MAX(al2.ts) FROM audit_log al2
+               WHERE al2.actor_id = s.session_id
+                 AND al2.event_type = 'session_status_changed'
+                 AND json_extract(al2.payload, '$.to') = 'running'
+             ) IS NULL THEN NULL
+             ELSE MAX(
+               COALESCE(s.last_event_at, 0),
+               COALESCE((
+                 SELECT MAX(al2.ts) FROM audit_log al2
+                 WHERE al2.actor_id = s.session_id
+                   AND al2.event_type = 'session_status_changed'
+                   AND json_extract(al2.payload, '$.to') = 'running'
+               ), 0)
+             )
+           END AS latest_event_ts
     FROM sessions s
     JOIN audit_log al ON al.actor_id = s.session_id
       AND al.event_type = 'session_status_changed'
