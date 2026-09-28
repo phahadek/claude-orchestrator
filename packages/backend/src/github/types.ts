@@ -163,6 +163,15 @@ export interface ReviewJob {
   projectId?: string;
   /** Head SHA at enqueue time (read from pull_requests.head_sha) — used to admit/coalesce duplicate jobs. */
   headSha?: string | null;
+  /**
+   * True when this job was enqueued from PRMergeWatcher.handlePushDetected —
+   * a re-review triggered by a push to a PR that already has (or is
+   * recovering from a gate failure on) an established review, as opposed to
+   * the PR's very first review dispatched from onPrOpened. Read by
+   * executeReview to decide whether to increment review_iteration once this
+   * job actually reaches a review dispatch (pipeline gates passed).
+   */
+  pushTriggered?: boolean;
 }
 
 export interface ParsedDispositionItem {

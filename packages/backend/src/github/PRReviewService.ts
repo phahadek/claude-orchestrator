@@ -6,13 +6,13 @@ import {
   setReviewSessionId,
   clearReviewSessionId,
   updatePRDraftStatus,
-  incrementReviewIteration,
   setLastReviewedSha,
   setLocalBranchReviewResult,
   getLocalBranchById,
   getSession,
   getPRIntentForPR,
   setPauseReason,
+  clearTerminalPRFlags,
   getMergedPRForTask,
   getMergedLocalBranchForTaskId,
   getAuthoritativeTestRunForPr,
@@ -39,7 +39,6 @@ import { getCachedType } from '../tasks/TaskWriteCommands';
 import { recordEvent } from '../audit/AuditLog';
 import type { GitHubClient } from './GitHubClient';
 import type { DiffSource } from './DiffSource';
-import { GitHubDiffSource } from './DiffSource';
 import { parseDiffFiles } from './GitHubClient';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
@@ -849,13 +848,27 @@ export class PRReviewService {
           () => diffSource.fetchDiff(),
           sleep,
         );
+        const followUpWorktreePath = prRow.session_id
+          ? (getSession(prRow.session_id)?.worktree_path ?? null)
+          : null;
         const followUpGateChargedFailures = prRow.session_id
           ? collectGateChargedFailures(
               projectId,
               prRow.session_id,
-              getSession(prRow.session_id)?.worktree_path ?? null,
+              followUpWorktreePath,
             )
           : [];
+        const followUpTestRun = prRow.session_id
+          ? getAuthoritativeTestRunForPr(
+              projectId,
+              prRow.session_id,
+              followUpWorktreePath,
+            )
+          : undefined;
+        const followUpTestRunSummary =
+          followUpTestRun && !followUpTestRun.structured_result
+            ? getTestRunSummary(followUpTestRun.id)
+            : undefined;
         const followUp = [
           `The code session has pushed new commits to PR #${prNumber}.`,
           `Please re-review the updated diff against the same task spec.`,
@@ -868,6 +881,7 @@ export class PRReviewService {
           '```',
           diff,
           '```',
+          buildTestRunEvidenceSection(followUpTestRun, followUpTestRunSummary),
           buildGateChargedFailuresSection(
             followUpGateChargedFailures,
             parseDiffFiles(diff),
@@ -1310,6 +1324,12 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
   ): Promise<boolean> {
     let draftTransitioned = false;
     const resolvedProjectId = projectId || this.defaultProjectId;
+    // Clear review-sourced pause reasons, pre_review_stage, and (when
+    // trusted) reconcile_exhausted now that this PR has an approved verdict
+    // — an approval reached after an earlier failed/paused cycle (e.g. a
+    // push-triggered re-review) must not leave those terminal flags stale.
+    // Depth-review holds are preserved (see clearReviewVerdictPauseReasons).
+    clearTerminalPRFlags(prNumber, repo, 'review_verdict');
     try {
       await this.github.markPRReady(repo, prNumber);
       updatePRDraftStatus(prNumber, repo, 0);
@@ -1412,255 +1432,6 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       this.autoMerger.attempt(prNumber, repo);
     }
     return draftTransitioned;
-  }
-
-  /**
-   * Send a re-review follow-up to the existing review session for the given PR.
-   * Uses sendOrResume() so it works even if the review session has exited.
-   * Falls back to a fresh reviewPR() if no review_session_id is set on the PR row.
-   * Increments review_iteration in the DB.
-   */
-  async reReviewPR(
-    prNumber: number,
-    repo: string,
-    projectId: string = this.defaultProjectId,
-    projectContextUrl: string = this.defaultProjectContextUrl,
-  ): Promise<PRReviewResult> {
-    const pr = getPRByNumber(prNumber, repo);
-    if (pr && (pr.state === 'merged' || pr.state === 'closed')) {
-      logger.info(
-        `[PRReviewService] reReviewPR PR #${prNumber}: state=${pr.state} — skipping re-review`,
-      );
-      recordEvent({
-        event_type: 're_review_skipped_pr_terminal',
-        actor_type: 'system',
-        actor_id: null,
-        task_id: pr.task_id ?? null,
-        payload: { pr_number: prNumber, repo, state: pr.state },
-      });
-      const stored = this.storedResultOrNull(prNumber, repo, pr);
-      return (
-        stored ?? {
-          prNumber,
-          repo,
-          verdict: 'incomplete',
-          dimensions: [],
-          summary: `PR is ${pr.state} — re-review skipped.`,
-          reviewedAt: new Date().toISOString(),
-        }
-      );
-    }
-    if (!pr?.review_session_id) {
-      // No paired review session — fall back to fresh review
-      const diffSource = new GitHubDiffSource(this.github, repo, prNumber);
-      return this.reviewPR(
-        { type: 'pr', prNumber, repo },
-        diffSource,
-        projectId,
-        projectContextUrl,
-      );
-    }
-
-    const prData = await this.github.fetchPR(repo, prNumber);
-
-    // Dedup guard: skip if the head SHA hasn't changed since the last review.
-    // Dedup key: (prNumber, repo, headSha). This is a secondary defence — the
-    // primary protection is that reviewPR() Case 3 now sets last_reviewed_sha
-    // before awaiting the verdict, so shouldAutoReview() in server.ts already
-    // blocks same-SHA re-reviews via push_detected.
-    if (prData.headSha && prData.headSha === pr.last_reviewed_sha) {
-      logger.info(
-        `[PRReviewService] reReviewPR PR #${prNumber}: headSha ${prData.headSha} matches last_reviewed_sha — skipping duplicate re-review`,
-      );
-      const stored = (() => {
-        try {
-          return pr.review_result
-            ? (JSON.parse(pr.review_result) as Partial<PRReviewResult>)
-            : null;
-        } catch {
-          return null;
-        }
-      })();
-      return {
-        prNumber,
-        repo,
-        verdict: (stored?.verdict as PRReviewResult['verdict']) ?? 'incomplete',
-        dimensions: (stored?.dimensions as ReviewDimension[]) ?? [],
-        summary: stored?.summary ?? '(no new commits — re-review skipped)',
-        reviewedAt: new Date().toISOString(),
-      };
-    }
-
-    // The target review session's status must be checked before attempting
-    // to reach it: sendOrResume() will happily reopen a terminal (done/
-    // error/killed) session via --resume, which is exactly the "resurrect a
-    // finished session to deliver a bogus verdict" failure mode this guards
-    // against. A terminal session with a changed head gets a fresh review
-    // session instead of a follow-up.
-    const existingSession = getSession(pr.review_session_id);
-    const isSessionTerminal =
-      !existingSession ||
-      ['done', 'error', 'killed'].includes(existingSession.status);
-    if (isSessionTerminal) {
-      logger.warn(
-        `[PRReviewService] reReviewPR PR #${prNumber}: review session ${pr.review_session_id} is terminal ` +
-          `(${existingSession ? `status=${existingSession.status}` : 'no DB row'}) — launching fresh review session instead of a follow-up.`,
-      );
-      supersedeReviewSession(
-        this.sessionManager,
-        prNumber,
-        repo,
-        'review_session_cleared',
-      );
-      clearReviewSessionId(prNumber, repo);
-      const diffSource = new GitHubDiffSource(this.github, repo, prNumber);
-      return this.reviewPR(
-        { type: 'pr', prNumber, repo },
-        diffSource,
-        projectId,
-        projectContextUrl,
-      );
-    }
-
-    const branches =
-      prData.baseBranch && prData.headBranch
-        ? { base: prData.baseBranch, head: prData.headBranch }
-        : undefined;
-    // Re-review uses the FULL PR diff (compare endpoint), not just the
-    // incremental delta, so the diff always reflects total churn across the
-    // lifetime of the PR.
-    const diffData = await this.github.fetchDiff(prNumber, repo, branches);
-
-    // Surface the prior incomplete reason so the reviewer knows what to focus on.
-    const priorResult = (() => {
-      try {
-        return pr.review_result
-          ? (JSON.parse(pr.review_result) as Partial<PRReviewResult>)
-          : null;
-      } catch {
-        return null;
-      }
-    })();
-    const priorIncompleteLines: string[] = [];
-    if (priorResult?.verdict === 'incomplete') {
-      priorIncompleteLines.push('');
-      priorIncompleteLines.push('### Prior Review Context');
-      priorIncompleteLines.push(
-        `The previous review returned an **incomplete** verdict: "${priorResult.summary ?? ''}"`,
-      );
-      for (const d of (priorResult.dimensions ?? []).filter(
-        (d) => !(d as ReviewDimension).passed,
-      )) {
-        priorIncompleteLines.push(
-          `- **${(d as ReviewDimension).name}**: ${(d as ReviewDimension).notes}`,
-        );
-      }
-      priorIncompleteLines.push(
-        'When reviewing the new commits, focus on whether these dimensions are now assessable.',
-      );
-    }
-
-    const testRun = pr.session_id
-      ? getAuthoritativeTestRunForPr(
-          projectId,
-          pr.session_id,
-          getSession(pr.session_id)?.worktree_path ?? null,
-        )
-      : undefined;
-    const testRunSummary =
-      testRun && !testRun.structured_result
-        ? getTestRunSummary(testRun.id)
-        : undefined;
-    const testRunEvidenceSection = buildTestRunEvidenceSection(
-      testRun,
-      testRunSummary,
-    );
-    const gateChargedFailures = pr.session_id
-      ? collectGateChargedFailures(
-          projectId,
-          pr.session_id,
-          getSession(pr.session_id)?.worktree_path ?? null,
-        )
-      : [];
-    const gateChargedFailuresSection = buildGateChargedFailuresSection(
-      gateChargedFailures,
-      parseDiffFiles(diffData.diff),
-    );
-
-    const followUp = [
-      `The code session has pushed new commits to PR #${prNumber}.`,
-      `Please re-review the updated diff against the same task spec.`,
-      ...priorIncompleteLines,
-      ``,
-      `### Updated PR Metadata`,
-      `Title: ${prData.title}`,
-      `Description: ${prData.body ?? '(none)'}`,
-      ``,
-      `### Updated Diff`,
-      '```',
-      diffData.diff,
-      '```',
-      testRunEvidenceSection,
-      gateChargedFailuresSection,
-      REVIEW_JSON_SCHEMA_BLOCK,
-    ].join('\n');
-
-    // Increment iteration before sending so the DB reflects the new iteration
-    incrementReviewIteration(prNumber, repo);
-
-    // Send to the existing review session (resumes via --resume if it has exited)
-    const resumedSessionId = await this.sessionManager.sendOrResume(
-      pr.review_session_id,
-      followUp,
-    );
-    if (resumedSessionId == null) {
-      throw new Error(
-        `reReviewPR: review session ${pr.review_session_id} is terminal or missing — cannot re-review PR #${prNumber}`,
-      );
-    }
-    if (resumedSessionId !== pr.review_session_id) {
-      setReviewSessionId(prNumber, repo, resumedSessionId);
-    }
-
-    const aiResult = await this.waitForVerdict(
-      resumedSessionId,
-      prNumber,
-      repo,
-    );
-    const taskBodyForMigrationCheck = await this.fetchTaskBodyBestEffort(
-      projectId,
-      pr.task_id,
-    );
-    const finalResult = await this.applyMigrationReservationOverride(
-      await this.applyMigrationRenumberOverride(
-        this.applyBaselineEscalationFloor(aiResult, diffData.diff),
-        diffData.diff,
-        taskBodyForMigrationCheck,
-        repo,
-        prData.baseBranch,
-      ),
-      diffData.diff,
-      taskBodyForMigrationCheck,
-      pr.task_id,
-    );
-    const { result: persistedResult4, suppressed: suppressed4 } =
-      this.persistVerdict(
-        prNumber,
-        repo,
-        prData.headSha ?? null,
-        finalResult,
-        pr.task_id,
-      );
-    if (!suppressed4 && persistedResult4.verdict === 'approved') {
-      await this.handleApprovedVerdict(
-        prNumber,
-        repo,
-        pr.task_id,
-        projectId,
-        persistedResult4.manualItemsForHuman,
-      );
-    }
-    return persistedResult4;
   }
 
   /**

@@ -32,6 +32,7 @@ import {
   hasDispositionReplyBeenPosted,
   recordDispositionReply,
   getTestRequestRunById,
+  incrementReviewIteration,
 } from '../db/queries';
 import { syncToOrigin } from './PRFileReverter';
 import type {
@@ -1484,6 +1485,15 @@ export class ReviewOrchestrator {
       sessionId: prRow?.review_session_id ?? '',
     });
 
+    // A push-triggered re-review (job.pushTriggered) counts as a new review
+    // iteration once it actually reaches this point — the pre-review
+    // pipeline gates (autofix/verify/analyze/tests) already passed, so this
+    // is not a gate-failure retry of the same head. The PR's very first
+    // review (onPrOpened, pushTriggered unset) stays at iteration 0.
+    const reviewIteration = job.pushTriggered
+      ? incrementReviewIteration(job.prNumber, job.repo)
+      : 0;
+
     const diffSource = this.github
       ? new GitHubDiffSource(this.github, job.repo, job.prNumber)
       : {
@@ -1584,7 +1594,7 @@ export class ReviewOrchestrator {
         await this.sessionManager.enqueueFeedback(
           prRow.session_id,
           'ai-reviewer',
-          formatReviewFeedback(result, 0, {
+          formatReviewFeedback(result, reviewIteration, {
             conflicted: prRow?.merge_state === 'dirty',
             baseBranch: prRow?.base_branch ?? undefined,
           }),
@@ -1622,7 +1632,7 @@ export class ReviewOrchestrator {
         await this.sessionManager.enqueueFeedback(
           prRow.session_id,
           'ai-reviewer',
-          formatReviewFeedback(result, 0, {
+          formatReviewFeedback(result, reviewIteration, {
             conflicted: prRow?.merge_state === 'dirty',
             baseBranch: prRow?.base_branch ?? undefined,
           }),

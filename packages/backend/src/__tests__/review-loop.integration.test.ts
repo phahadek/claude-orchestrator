@@ -1,15 +1,30 @@
 /**
  * Integration test: re-review / re-fix orchestration loop
  *
- * Tests the full lifecycle:
+ * Wires a REAL PRMergeWatcher together with a REAL ReviewOrchestrator (and a
+ * minimally-mocked PRReviewService) and exercises the full push-review loop
+ * end to end:
+ *
  *   push_detected (before review session) → pending_push queued
- *   → initial review completes → pending_push triggers re-review
- *   → needs_changes → feedback sent to code session
- *   → another push → another re-review → iteration counter increments
- *   → escalation fires at configured cap
+ *   → initial review dispatches via ReviewOrchestrator.onPrOpened → needs_changes
+ *     → feedback delivered to the coding session
+ *   → a subsequent push (PRMergeWatcher.handlePushDetected) enqueues a
+ *     re-review via the real ReviewOrchestrator, which drains it through
+ *     executeReview → review_iteration increments once per push that reaches
+ *     an actual review dispatch
+ *   → escalation fires at the configured cap, no further review dispatched
+ *   → an autofix-only push does not increment the iteration counter or
+ *     dispatch a review
+ *
+ * PRMergeWatcher.handlePushDetected itself decides only whether/how to call
+ * ReviewOrchestrator.enqueueReview — all of autofix/verify/analyze/tests/
+ * review dispatch happens inside ReviewOrchestrator.executeReview via
+ * PreReviewPipeline.run, so the pre-review gates below are mocked to pass
+ * quickly (mirroring ReviewOrchestrator.test.ts's own convention) rather than
+ * re-tested here.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mockDbQueries } from './helpers/mockDbQueries';
 import { EventEmitter } from 'events';
 
@@ -34,6 +49,9 @@ vi.mock('../db/queries.js', () =>
     getAllPendingReviewSyncs: vi.fn().mockReturnValue([]),
     insertPendingReviewSync: vi.fn(),
     deletePendingReviewSync: vi.fn(),
+    consumeAutofixSha: vi.fn().mockReturnValue(false),
+    clearTerminalPRFlags: vi.fn(),
+    setPreReviewStage: vi.fn(),
   }),
 );
 
@@ -73,11 +91,20 @@ vi.mock('../orchestration/memoryAdmission.js', () => ({
 
 vi.mock('../orchestration/verifyRunner.js', () => ({
   runVerifyAsGate: vi.fn().mockResolvedValue({ passed: true }),
+  tailOfLog: vi.fn().mockReturnValue(''),
+}));
+
+vi.mock('../orchestration/baseAttributableFilter.js', () => ({
+  filterVerifyFailureByBaseHealth: vi.fn().mockResolvedValue(null),
+  renderBaseAttributableFilterDigest: vi.fn().mockReturnValue('digest'),
+  filterBaseAttributableFailures: vi.fn(),
+  applyF2GateMaskingGuards: vi.fn(),
 }));
 
 vi.mock('../session/autofix-runner.js', () => ({
   loadAutofixCommands: vi.fn().mockReturnValue([]),
   runAutofix: vi.fn().mockResolvedValue({ success: true, summary: 'clean' }),
+  getChangedFiles: vi.fn().mockReturnValue([]),
 }));
 
 vi.mock('../session/filePollutionCheck.js', () => ({
@@ -87,6 +114,7 @@ vi.mock('../session/filePollutionCheck.js', () => ({
 }));
 
 vi.mock('../session/orchestrator-config.js', () => ({
+  resolvePreGrantCapabilities: vi.fn(() => []),
   loadOrchestratorConfig: vi.fn().mockReturnValue({
     verify: [],
     autofix: [],
@@ -106,18 +134,14 @@ vi.mock('../audit/AuditLog.js', () => ({ recordEvent: vi.fn() }));
 // ── Imports after mocks ────────────────────────────────────────────────────────
 
 import { ReviewOrchestrator } from '../github/ReviewOrchestrator.js';
-import { PRReviewService } from '../github/PRReviewService.js';
-import {
-  shouldAutoReview,
-  formatReviewFeedback,
-} from '../github/reviewUtils.js';
+import { PRMergeWatcher } from '../github/PRMergeWatcher.js';
 import * as queries from '../db/queries.js';
 import type { PullRequestRow } from '../db/types.js';
 import type { GitHubClient } from '../github/GitHubClient.js';
-import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend.js';
-import type { PRReviewResult } from '../github/PRReviewService.js';
-import { runVerifyAsGate } from '../orchestration/verifyRunner.js';
-import { loadAutofixCommands, runAutofix } from '../session/autofix-runner.js';
+import type {
+  PRReviewService,
+  PRReviewResult,
+} from '../github/PRReviewService.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -127,6 +151,7 @@ const CODE_SESSION_ID = 'code-session-uuid';
 const REVIEW_SESSION_ID = 'review-session-uuid';
 const HEAD_SHA = 'abc123';
 const NEW_SHA = 'def456';
+const NEWER_SHA = 'ghi789';
 
 function makePRRow(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
   return {
@@ -158,7 +183,7 @@ function makePRRow(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
     pending_push: 0,
     pause_reason: null,
     ...overrides,
-  };
+  } as PullRequestRow;
 }
 
 function makeNeedsChangesResult(): PRReviewResult {
@@ -172,65 +197,27 @@ function makeNeedsChangesResult(): PRReviewResult {
   };
 }
 
-function makeApprovedResult(): PRReviewResult {
-  return {
-    prNumber: PR_NUMBER,
-    repo: REPO,
-    verdict: 'approved',
-    dimensions: [],
-    summary: 'Looks good',
-    reviewedAt: new Date().toISOString(),
-  };
-}
-
-/** Serialise a verdict into the format that PRReviewService.waitForVerdict() expects. */
-function makeVerdictEventPayload(
-  sessionId: string,
-  verdict: PRReviewResult,
-): object {
-  return {
-    type: 'session_event',
-    sessionId,
-    eventType: 'text',
-    content: JSON.stringify({
-      type: 'assistant',
-      message: {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              verdict: verdict.verdict,
-              dimensions: verdict.dimensions ?? [],
-              summary: verdict.summary,
-            }),
-          },
-        ],
-      },
-    }),
-  };
-}
-
 // ── Mock SessionManager ───────────────────────────────────────────────────────
 
 /**
  * Minimal SessionManager mock that extends EventEmitter and exposes the
- * methods that ReviewOrchestrator and PRReviewService call.
+ * methods that ReviewOrchestrator, PreReviewPipeline, and PRMergeWatcher call.
  */
 class MockSessionManager extends EventEmitter {
   send = vi.fn();
-  sendOrResume = vi.fn();
+  sendOrResume = vi.fn().mockResolvedValue(CODE_SESSION_ID);
   enqueueFeedback = vi.fn().mockResolvedValue(undefined);
   isAlive = vi.fn().mockReturnValue(false);
   endSession = vi.fn();
   start = vi.fn();
 }
 
-// ── Mock GitHub and task backends ─────────────────────────────────────────────
+// ── Mock GitHub client ─────────────────────────────────────────────────────────
 
-function makeMockGitHub(): GitHubClient {
+function makeMockGitHub(headSha: string = HEAD_SHA): GitHubClient {
   return {
     listOpenPRs: vi.fn().mockResolvedValue([]),
-    fetchPR: vi.fn().mockResolvedValue({ headSha: NEW_SHA }),
+    fetchPR: vi.fn().mockResolvedValue({ headSha, number: PR_NUMBER }),
     fetchDiff: vi
       .fn()
       .mockResolvedValue({ diff: 'diff --git a/foo.ts b/foo.ts' }),
@@ -243,813 +230,259 @@ function makeMockGitHub(): GitHubClient {
     markPRReady: vi.fn().mockResolvedValue(undefined),
     mergePR: vi.fn(),
     getPRState: vi.fn(),
+    categorizeMergeability: vi.fn(),
+    listOpenPRStates: vi.fn(),
   } as unknown as GitHubClient;
 }
 
-function makeMockTaskBackend(): TaskTrackerBackend {
+/** A minimal PRReviewService double — only reviewPR is exercised by the real
+ * ReviewOrchestrator.executeReview path; reReviewPR no longer exists on the
+ * real class and must not be referenced here. */
+function makeMockReviewService(): PRReviewService {
   return {
-    type: 'yaml',
-    fetchTaskPage: vi.fn().mockResolvedValue('# Task\nDo something'),
-    updateStatus: vi.fn().mockResolvedValue(undefined),
-    fetchTasks: vi.fn().mockResolvedValue([]),
-    createTask: vi.fn(),
-    updateTask: vi.fn(),
-    fetchTaskTitle: vi.fn().mockResolvedValue('Test Task'),
-  } as unknown as TaskTrackerBackend;
+    reviewPR: vi.fn().mockResolvedValue(makeNeedsChangesResult()),
+  } as unknown as PRReviewService;
 }
 
-// ── Re-review loop handler (mirrors server.ts push_detected handler) ──────────
+// ── Harness ───────────────────────────────────────────────────────────────────
 
-const DEFAULT_MAX_REVIEW_ITERATIONS = 3;
+// Every ReviewOrchestrator constructed via makeHarness() below — torn down
+// in the shared afterEach so its stall-detector interval and pendingSyncs
+// bookkeeping don't outlive the test that created it.
+const harnessOrchestrators: ReviewOrchestrator[] = [];
 
-/**
- * Sets up a push_detected listener on the given sessionManager, mirroring the
- * logic in server.ts. Returns a Set<string> (pendingReReviews) so tests can
- * inspect in-flight re-review state.
- */
-function wirePushDetectedHandler(
-  sessionManager: MockSessionManager,
-  prReviewService: PRReviewService,
-  githubClient: GitHubClient,
-  getMaxIter: () => number = () => DEFAULT_MAX_REVIEW_ITERATIONS,
-): Set<string> {
-  const pendingReReviews = new Set<string>();
-
-  sessionManager.on(
-    'push_detected',
-    ({ sessionId: codingSessionId }: { sessionId: string }) => {
-      if (pendingReReviews.has(codingSessionId)) return;
-
-      const prRow = vi.mocked(queries.getPRBySessionId)(codingSessionId);
-      if (!prRow || prRow.state !== 'open') return;
-
-      if (!prRow.review_session_id) {
-        vi.mocked(queries.setPendingPush)(prRow.pr_number, prRow.repo, 1);
-        return;
-      }
-
-      pendingReReviews.add(codingSessionId);
-
-      void (async () => {
-        // Fetch fresh PR state
-        let headSha = prRow.head_sha;
-        try {
-          const freshPR = await githubClient.fetchPR(
-            prRow.repo,
-            prRow.pr_number,
-          );
-          headSha = freshPR.headSha;
-          if (headSha !== prRow.head_sha) {
-            vi.mocked(queries.setHeadSha)(prRow.pr_number, prRow.repo, headSha);
-          }
-        } catch {
-          // swallow — continue with stale sha
-        }
-
-        const maxIter = getMaxIter();
-
-        // Escalation check (emits review_escalated) — must happen before shouldAutoReview
-        if (prRow.review_iteration >= maxIter) {
-          const message = `Review loop for PR #${prRow.pr_number} reached ${maxIter} iterations without approval. Manual intervention needed.`;
-          sessionManager.emit('message', {
-            type: 'review_escalated',
-            prNumber: prRow.pr_number,
-            repo: prRow.repo,
-            message,
-          });
-          pendingReReviews.delete(codingSessionId);
-          return;
-        }
-
-        if (
-          !shouldAutoReview(
-            {
-              reviewIteration: prRow.review_iteration,
-              headSha,
-              lastReviewedSha: prRow.last_reviewed_sha,
-            },
-            maxIter,
-          )
-        ) {
-          pendingReReviews.delete(codingSessionId);
-          return;
-        }
-
-        const iteration = prRow.review_iteration + 1;
-        try {
-          let result: PRReviewResult;
-          try {
-            result = await prReviewService.reReviewPR(
-              prRow.pr_number,
-              prRow.repo,
-            );
-          } catch (e) {
-            const summary = e instanceof Error ? e.message : String(e);
-            vi.mocked(queries.setPRReviewResult)(
-              prRow.pr_number,
-              prRow.repo,
-              JSON.stringify({ verdict: 'error', summary, dimensions: [] }),
-            );
-            sessionManager.emit('message', {
-              type: 'review_verdict',
-              prNumber: prRow.pr_number,
-              repo: prRow.repo,
-              verdict: 'error',
-              summary,
-              iteration,
-            });
-            return;
-          }
-
-          vi.mocked(queries.setLastReviewedSha)(
-            prRow.pr_number,
-            prRow.repo,
-            headSha,
-          );
-          sessionManager.emit('message', {
-            type: 'review_verdict',
-            prNumber: prRow.pr_number,
-            repo: prRow.repo,
-            verdict: result.verdict,
-            summary: result.summary,
-            iteration,
-          });
-
-          if (result.verdict === 'needs_changes') {
-            await sessionManager.sendOrResume(
-              codingSessionId,
-              formatReviewFeedback(result, iteration),
-            );
-          }
-        } finally {
-          pendingReReviews.delete(codingSessionId);
-        }
-      })();
-    },
+function makeHarness(headSha: string = HEAD_SHA) {
+  const sessionManager = new MockSessionManager();
+  const github = makeMockGitHub(headSha);
+  const reviewService = makeMockReviewService();
+  const orchestrator = new ReviewOrchestrator(
+    reviewService,
+    sessionManager as unknown as InstanceType<
+      typeof import('../session/SessionManager.js').SessionManager
+    >,
+    true,
+    github,
   );
-
-  return pendingReReviews;
+  harnessOrchestrators.push(orchestrator);
+  const broadcast = vi.fn();
+  const watcher = new PRMergeWatcher(
+    github,
+    sessionManager as unknown as InstanceType<
+      typeof import('../session/SessionManager.js').SessionManager
+    >,
+    undefined,
+    broadcast,
+  );
+  watcher.setReviewOrchestrator(orchestrator);
+  return {
+    sessionManager,
+    github,
+    reviewService,
+    orchestrator,
+    watcher,
+    broadcast,
+  };
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // clearAllMocks() resets call history but not a mockReturnValue set by an
+  // earlier test (e.g. the autofix-only-push test below) — re-arm the
+  // non-autofix-only default explicitly so it can't leak into later tests.
+  vi.mocked(queries.consumeAutofixSha).mockReturnValue(false);
 });
 
-// ── 1. Push before review session → pending_push queued ───────────────────────
+afterEach(() => {
+  // Release every real ReviewOrchestrator's stall-detector interval so it
+  // doesn't outlive this test file's own run.
+  for (const orchestrator of harnessOrchestrators.splice(0)) {
+    orchestrator.destroy();
+  }
+});
 
-describe('push_detected before review_session_id is set', () => {
-  it('queues pending_push when review session not yet established', () => {
-    const sessionManager = new MockSessionManager();
-    const github = makeMockGitHub();
-    const taskBackend = makeMockTaskBackend();
-    const reviewService = new PRReviewService(
-      github,
-      taskBackend,
-      sessionManager as unknown as InstanceType<
-        typeof import('../session/SessionManager.js').SessionManager
-      >,
-    );
-    wirePushDetectedHandler(sessionManager, reviewService, github);
+// ── 1. Push before review session → pending_push queued, no review job ────────
 
-    const prRow = makePRRow({ review_session_id: null });
-    vi.mocked(queries.getPRBySessionId).mockReturnValue(prRow);
+describe('push before a review session is established', () => {
+  it('queues pending_push and does not enqueue a review job', async () => {
+    const { watcher, orchestrator } = makeHarness();
+    const enqueueSpy = vi.spyOn(orchestrator, 'enqueueReview');
 
-    sessionManager.emit('push_detected', { sessionId: CODE_SESSION_ID });
+    const prRow = makePRRow({ review_session_id: null, review_result: null });
+    await watcher.handlePushDetected(prRow);
 
     expect(vi.mocked(queries.setPendingPush)).toHaveBeenCalledWith(
       PR_NUMBER,
       REPO,
       1,
     );
-  });
-
-  it('does NOT attempt re-review when review session is not set', () => {
-    const sessionManager = new MockSessionManager();
-    const github = makeMockGitHub();
-    const taskBackend = makeMockTaskBackend();
-    const reviewService = new PRReviewService(
-      github,
-      taskBackend,
-      sessionManager as unknown as InstanceType<
-        typeof import('../session/SessionManager.js').SessionManager
-      >,
-    );
-    wirePushDetectedHandler(sessionManager, reviewService, github);
-
-    const prRow = makePRRow({ review_session_id: null });
-    vi.mocked(queries.getPRBySessionId).mockReturnValue(prRow);
-
-    sessionManager.emit('push_detected', { sessionId: CODE_SESSION_ID });
-
-    // reReviewPR should not have been called (no fetchDiff)
-    expect(vi.mocked(github.fetchDiff)).not.toHaveBeenCalled();
+    expect(enqueueSpy).not.toHaveBeenCalled();
   });
 });
 
-// ── 2. Initial review completes → pending_push triggers re-review ─────────────
+// ── 2. Initial review dispatches via ReviewOrchestrator, needs_changes ────────
 
-describe('ReviewOrchestrator.executeReview → pending_push → re-review', () => {
-  it('emits push_detected after initial review when pending_push is set', async () => {
-    const sessionManager = new MockSessionManager();
-    const github = makeMockGitHub();
-    const taskBackend = makeMockTaskBackend();
-    const reviewService = new PRReviewService(
-      github,
-      taskBackend,
-      sessionManager as unknown as InstanceType<
-        typeof import('../session/SessionManager.js').SessionManager
-      >,
-    );
+describe('initial review dispatch via ReviewOrchestrator.onPrOpened', () => {
+  it('reaches needs_changes and delivers feedback to the coding session at iteration 0', async () => {
+    const { sessionManager, reviewService, orchestrator } = makeHarness();
 
-    const _orchestrator = new ReviewOrchestrator(
-      reviewService,
-      sessionManager as unknown as InstanceType<
-        typeof import('../session/SessionManager.js').SessionManager
-      >,
-      true,
-    );
+    const prRow = makePRRow({ review_session_id: null });
+    vi.mocked(queries.getPRByNumber).mockReturnValue(prRow);
 
-    // Spy on emit to capture push_detected
-    const emittedEvents: Array<{ event: string; payload: unknown }> = [];
-    const origEmit = sessionManager.emit.bind(sessionManager);
-    sessionManager.emit = vi
-      .fn()
-      .mockImplementation((event: string, ...args: unknown[]) => {
-        emittedEvents.push({ event, payload: args[0] });
-        return origEmit(event, ...args);
-      });
-
-    // DB state: PR row with pending_push=1 (push arrived during review)
-    const prRowBeforeReview = makePRRow({
-      review_session_id: null,
-      pending_push: 0,
-    });
-    const prRowAfterReview = makePRRow({
-      review_session_id: REVIEW_SESSION_ID,
-      pending_push: 1,
-      session_id: CODE_SESSION_ID,
-    });
-
-    vi.mocked(queries.getPRByNumber)
-      .mockReturnValueOnce(prRowBeforeReview) // iteration cap check in executeReview
-      .mockReturnValueOnce(prRowAfterReview) // feedback routing (needs_changes check)
-      .mockReturnValue(prRowAfterReview); // post-review pending_push check
-
-    // Mock reviewPR to resolve immediately with needs_changes
-    const reviewSpy = vi
-      .spyOn(reviewService, 'reviewPR')
-      .mockResolvedValue(makeNeedsChangesResult());
-
-    // Trigger the initial review
     sessionManager.emit('pr_opened', {
       prNumber: PR_NUMBER,
       repo: REPO,
       taskId: 'notion-task-id',
+      taskUrl: 'https://notion.so/task',
       contextUrl: '',
     });
 
-    // Wait for async review to complete
     await vi.waitFor(() => {
-      expect(reviewSpy).toHaveBeenCalled();
+      expect(vi.mocked(reviewService.reviewPR)).toHaveBeenCalled();
     });
-
-    // Give async chain time to process pending_push
     await new Promise((r) => setTimeout(r, 10));
 
-    const pushDetectedEvent = emittedEvents.find(
-      (e) => e.event === 'push_detected',
-    );
-    expect(pushDetectedEvent).toBeDefined();
-    expect(pushDetectedEvent?.payload).toMatchObject({
-      sessionId: CODE_SESSION_ID,
-    });
-  });
-});
-
-// ── 3. Re-review with needs_changes → feedback to code session ─────────────────
-
-describe('re-review needs_changes → feedback sent to code session', () => {
-  it('calls sendOrResume with formatted feedback when verdict is needs_changes', async () => {
-    const sessionManager = new MockSessionManager();
-    const github = makeMockGitHub();
-    const taskBackend = makeMockTaskBackend();
-    const reviewService = new PRReviewService(
-      github,
-      taskBackend,
-      sessionManager as unknown as InstanceType<
-        typeof import('../session/SessionManager.js').SessionManager
-      >,
-    );
-
-    wirePushDetectedHandler(sessionManager, reviewService, github);
-
-    const prRow = makePRRow({
-      review_session_id: REVIEW_SESSION_ID,
-      last_reviewed_sha: 'old-sha',
-      head_sha: HEAD_SHA,
-      review_iteration: 0,
-    });
-    vi.mocked(queries.getPRBySessionId).mockReturnValue(prRow);
-    vi.mocked(queries.getPRByNumber).mockReturnValue(prRow);
-
-    // Mock fetchPR to return a new SHA so shouldAutoReview passes
-    vi.mocked(github.fetchPR).mockResolvedValue({
-      headSha: NEW_SHA,
-    } as ReturnType<typeof github.fetchPR> extends Promise<infer T>
-      ? T
-      : never);
-
-    // Mock reReviewPR to resolve with needs_changes
-    const reReviewSpy = vi
-      .spyOn(reviewService, 'reReviewPR')
-      .mockResolvedValue(makeNeedsChangesResult());
-
-    sessionManager.sendOrResume = vi.fn().mockResolvedValue(CODE_SESSION_ID);
-
-    sessionManager.emit('push_detected', { sessionId: CODE_SESSION_ID });
-
-    await vi.waitFor(() => {
-      expect(reReviewSpy).toHaveBeenCalled();
-    });
-
-    await new Promise((r) => setTimeout(r, 10));
-
-    expect(sessionManager.sendOrResume).toHaveBeenCalledWith(
+    expect(vi.mocked(queries.incrementReviewIteration)).not.toHaveBeenCalled();
+    expect(sessionManager.enqueueFeedback).toHaveBeenCalledWith(
       CODE_SESSION_ID,
-      expect.stringContaining('Review Feedback'),
+      'ai-reviewer',
+      expect.stringContaining('Iteration 0'),
+      expect.anything(),
     );
+    void orchestrator;
   });
 });
 
-// ── 4. Iteration counter increments correctly ─────────────────────────────────
+// ── 3. A subsequent push enqueues a re-review through the real orchestrator ───
 
-describe('review iteration counter', () => {
-  it('increments review_iteration after each reReviewPR call', async () => {
-    const sessionManager = new MockSessionManager();
-    const github = makeMockGitHub();
-    const taskBackend = makeMockTaskBackend();
-    const reviewService = new PRReviewService(
-      github,
-      taskBackend,
-      sessionManager as unknown as InstanceType<
-        typeof import('../session/SessionManager.js').SessionManager
-      >,
-    );
-
-    // Mock the internal sendOrResume on sessionManager so that waitForVerdict gets a verdict
-    sessionManager.sendOrResume = vi
-      .fn()
-      .mockImplementation(async (sessionId: string) => {
-        // Emit verdict after a tick
-        setTimeout(() => {
-          sessionManager.emit(
-            'message',
-            makeVerdictEventPayload(sessionId, makeNeedsChangesResult()),
-          );
-        }, 0);
-        return sessionId;
-      });
+describe('subsequent push enqueues and drains a re-review through the real ReviewOrchestrator', () => {
+  it('increments review_iteration exactly once and delivers feedback threaded with the new iteration', async () => {
+    const { sessionManager, reviewService, watcher, github } =
+      makeHarness(NEW_SHA);
 
     const prRow = makePRRow({
       review_session_id: REVIEW_SESSION_ID,
       review_iteration: 0,
-      last_reviewed_sha: 'old-sha',
+      last_reviewed_sha: HEAD_SHA,
       head_sha: HEAD_SHA,
     });
     vi.mocked(queries.getPRByNumber).mockReturnValue(prRow);
-    // reReviewPR treats a terminal/missing review session as "resurrect a
-    // dead session" and routes to a fresh reviewPR() instead of the
-    // increment-and-follow-up path under test — the review session here is
-    // still live, so getSession() must reflect that (see PRReviewService's
-    // isSessionTerminal guard).
-    vi.mocked(queries.getSession).mockReturnValue({
-      status: 'idle',
-    } as ReturnType<typeof queries.getSession>);
+    vi.mocked(queries.incrementReviewIteration).mockReturnValue(1);
+    vi.mocked(reviewService.reviewPR).mockResolvedValue(
+      makeNeedsChangesResult(),
+    );
 
-    await reviewService.reReviewPR(PR_NUMBER, REPO);
+    await watcher.handlePushDetected(prRow);
 
+    await vi.waitFor(() => {
+      expect(vi.mocked(reviewService.reviewPR)).toHaveBeenCalled();
+    });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(vi.mocked(queries.incrementReviewIteration)).toHaveBeenCalledTimes(
+      1,
+    );
     expect(vi.mocked(queries.incrementReviewIteration)).toHaveBeenCalledWith(
       PR_NUMBER,
       REPO,
     );
-    expect(vi.mocked(queries.incrementReviewIteration)).toHaveBeenCalledTimes(
-      1,
+    expect(sessionManager.enqueueFeedback).toHaveBeenCalledWith(
+      CODE_SESSION_ID,
+      'ai-reviewer',
+      expect.stringContaining('Iteration 1'),
+      expect.anything(),
     );
-  });
-
-  it('emits review_verdict with correct iteration number on push_detected re-review', async () => {
-    const sessionManager = new MockSessionManager();
-    const github = makeMockGitHub();
-    const taskBackend = makeMockTaskBackend();
-    const reviewService = new PRReviewService(
-      github,
-      taskBackend,
-      sessionManager as unknown as InstanceType<
-        typeof import('../session/SessionManager.js').SessionManager
-      >,
-    );
-    wirePushDetectedHandler(sessionManager, reviewService, github);
-
-    const prRow = makePRRow({
-      review_session_id: REVIEW_SESSION_ID,
-      review_iteration: 1,
-      last_reviewed_sha: 'old-sha',
-      head_sha: HEAD_SHA,
-    });
-    vi.mocked(queries.getPRBySessionId).mockReturnValue(prRow);
-    vi.mocked(queries.getPRByNumber).mockReturnValue(prRow);
-    vi.mocked(github.fetchPR).mockResolvedValue({
-      headSha: NEW_SHA,
-    } as ReturnType<typeof github.fetchPR> extends Promise<infer T>
-      ? T
-      : never);
-
-    const reReviewSpy = vi
-      .spyOn(reviewService, 'reReviewPR')
-      .mockResolvedValue(makeApprovedResult());
-    sessionManager.sendOrResume = vi.fn().mockResolvedValue(CODE_SESSION_ID);
-
-    const messages: object[] = [];
-    sessionManager.on('message', (msg: object) => messages.push(msg));
-
-    sessionManager.emit('push_detected', { sessionId: CODE_SESSION_ID });
-
-    await vi.waitFor(() => expect(reReviewSpy).toHaveBeenCalled());
-    await new Promise((r) => setTimeout(r, 10));
-
-    const verdictMsg = messages.find(
-      (m: object) => (m as { type: string }).type === 'review_verdict',
-    );
-    expect(verdictMsg).toMatchObject({ type: 'review_verdict', iteration: 2 });
+    expect(vi.mocked(github.fetchPR)).toHaveBeenCalled();
   });
 });
 
-// ── 5. Escalation fires at configured cap ────────────────────────────────────
+// ── 4. Escalation at the configured cap ────────────────────────────────────────
 
-describe('escalation at review iteration cap', () => {
-  it('emits review_escalated when review_iteration >= maxIterations', async () => {
-    const sessionManager = new MockSessionManager();
-    const github = makeMockGitHub();
-    const taskBackend = makeMockTaskBackend();
-    const reviewService = new PRReviewService(
-      github,
-      taskBackend,
-      sessionManager as unknown as InstanceType<
-        typeof import('../session/SessionManager.js').SessionManager
-      >,
-    );
-    const MAX_ITER = 3;
-    wirePushDetectedHandler(
-      sessionManager,
-      reviewService,
-      github,
-      () => MAX_ITER,
-    );
-
-    // review_iteration is at cap — should escalate
-    const prRow = makePRRow({
-      review_session_id: REVIEW_SESSION_ID,
-      review_iteration: MAX_ITER,
-      last_reviewed_sha: 'old-sha',
-      head_sha: HEAD_SHA,
-    });
-    vi.mocked(queries.getPRBySessionId).mockReturnValue(prRow);
-    vi.mocked(github.fetchPR).mockResolvedValue({
-      headSha: NEW_SHA,
-    } as ReturnType<typeof github.fetchPR> extends Promise<infer T>
-      ? T
-      : never);
-
-    const messages: object[] = [];
-    sessionManager.on('message', (msg: object) => messages.push(msg));
-
-    const reReviewSpy = vi.spyOn(reviewService, 'reReviewPR');
-
-    sessionManager.emit('push_detected', { sessionId: CODE_SESSION_ID });
-
-    await new Promise((r) => setTimeout(r, 20));
-
-    const escalated = messages.find(
-      (m) => (m as { type: string }).type === 'review_escalated',
-    );
-    expect(escalated).toBeDefined();
-    expect(escalated).toMatchObject({
-      type: 'review_escalated',
-      prNumber: PR_NUMBER,
-      repo: REPO,
-    });
-
-    // No re-review should be attempted
-    expect(reReviewSpy).not.toHaveBeenCalled();
-  });
-
-  it('does not attempt re-review when at iteration cap', async () => {
-    const sessionManager = new MockSessionManager();
-    const github = makeMockGitHub();
-    const taskBackend = makeMockTaskBackend();
-    const reviewService = new PRReviewService(
-      github,
-      taskBackend,
-      sessionManager as unknown as InstanceType<
-        typeof import('../session/SessionManager.js').SessionManager
-      >,
-    );
-    wirePushDetectedHandler(sessionManager, reviewService, github, () => 2);
+describe('escalation at the review-iteration cap', () => {
+  it('sets pause_reason max_reviews, broadcasts review_escalated, and does not enqueue a further review job', async () => {
+    vi.mocked(queries.getSetting).mockReturnValue('2');
+    const { watcher, orchestrator, broadcast } = makeHarness();
+    const enqueueSpy = vi.spyOn(orchestrator, 'enqueueReview');
 
     const prRow = makePRRow({
       review_session_id: REVIEW_SESSION_ID,
       review_iteration: 2,
+      last_reviewed_sha: 'old-sha',
+      head_sha: HEAD_SHA,
     });
-    vi.mocked(queries.getPRBySessionId).mockReturnValue(prRow);
-    vi.mocked(github.fetchPR).mockResolvedValue({
-      headSha: NEW_SHA,
-    } as ReturnType<typeof github.fetchPR> extends Promise<infer T>
-      ? T
-      : never);
+    vi.mocked(queries.getPRByNumber).mockReturnValue(prRow);
 
-    const reReviewSpy = vi.spyOn(reviewService, 'reReviewPR');
+    await watcher.handlePushDetected(prRow);
 
-    sessionManager.emit('push_detected', { sessionId: CODE_SESSION_ID });
-
-    await new Promise((r) => setTimeout(r, 20));
-
-    expect(reReviewSpy).not.toHaveBeenCalled();
+    expect(vi.mocked(queries.setPauseReason)).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'max_reviews',
+    );
+    expect(broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'review_escalated',
+        prNumber: PR_NUMBER,
+        repo: REPO,
+      }),
+    );
+    expect(enqueueSpy).not.toHaveBeenCalled();
   });
+});
 
-  it('ReviewOrchestrator emits review_escalated at cap for pr_opened path', async () => {
-    const sessionManager = new MockSessionManager();
-    const github = makeMockGitHub();
-    const taskBackend = makeMockTaskBackend();
-    const reviewService = new PRReviewService(
-      github,
-      taskBackend,
-      sessionManager as unknown as InstanceType<
-        typeof import('../session/SessionManager.js').SessionManager
-      >,
-    );
+// ── 5. Autofix-only push ───────────────────────────────────────────────────────
 
-    const orchestrator = new ReviewOrchestrator(
-      reviewService,
-      sessionManager as unknown as InstanceType<
-        typeof import('../session/SessionManager.js').SessionManager
-      >,
-      true,
-    );
-    void orchestrator; // used implicitly via sessionManager event listeners
+describe('autofix-only push', () => {
+  it('does not increment review_iteration or dispatch a review', async () => {
+    vi.mocked(queries.consumeAutofixSha).mockReturnValue(true);
+    const { watcher, orchestrator, reviewService } = makeHarness(NEW_SHA);
+    const enqueueSpy = vi.spyOn(orchestrator, 'enqueueReview');
 
-    // PR is already at the iteration cap
     const prRow = makePRRow({
-      review_iteration: 3,
       review_session_id: REVIEW_SESSION_ID,
+      review_iteration: 0,
+      last_reviewed_sha: HEAD_SHA,
+      head_sha: HEAD_SHA,
     });
     vi.mocked(queries.getPRByNumber).mockReturnValue(prRow);
-    vi.mocked(queries.getSetting).mockReturnValue(null); // use default cap of 3
 
-    const messages: object[] = [];
-    sessionManager.on('message', (msg: object) => messages.push(msg));
+    await watcher.handlePushDetected(prRow);
+    await new Promise((r) => setTimeout(r, 10));
 
-    sessionManager.emit('pr_opened', {
-      prNumber: PR_NUMBER,
-      repo: REPO,
-      taskId: 'task-id',
-      contextUrl: '',
-    });
-
-    await new Promise((r) => setTimeout(r, 20));
-
-    const escalated = messages.find(
-      (m) => (m as { type: string }).type === 'review_escalated',
-    );
-    expect(escalated).toBeDefined();
-    expect(escalated).toMatchObject({
-      type: 'review_escalated',
-      prNumber: PR_NUMBER,
-      repo: REPO,
-    });
-  });
-});
-
-// ── 6. shouldAutoReview pure function checks ──────────────────────────────────
-
-describe('shouldAutoReview', () => {
-  it('returns false when iteration >= cap', () => {
-    expect(
-      shouldAutoReview(
-        { reviewIteration: 3, headSha: 'abc', lastReviewedSha: 'old' },
-        3,
-      ),
-    ).toBe(false);
-  });
-
-  it('returns false when headSha equals lastReviewedSha (no new commits)', () => {
-    expect(
-      shouldAutoReview(
-        { reviewIteration: 0, headSha: 'same', lastReviewedSha: 'same' },
-        3,
-      ),
-    ).toBe(false);
-  });
-
-  it('returns false when headSha is null', () => {
-    expect(
-      shouldAutoReview(
-        { reviewIteration: 0, headSha: null, lastReviewedSha: 'old' },
-        3,
-      ),
-    ).toBe(false);
-  });
-
-  it('returns true when new commits exist and under cap', () => {
-    expect(
-      shouldAutoReview(
-        { reviewIteration: 1, headSha: 'new', lastReviewedSha: 'old' },
-        3,
-      ),
-    ).toBe(true);
-  });
-
-  it('returns true when lastReviewedSha is null (first review)', () => {
-    expect(
-      shouldAutoReview(
-        { reviewIteration: 0, headSha: 'abc', lastReviewedSha: null },
-        3,
-      ),
-    ).toBe(true);
-  });
-});
-
-// ── 7. Gate failure routing — implementing session receives feedback ──────────
-
-describe('ReviewOrchestrator gate failures route feedback to implementing session', () => {
-  function makeOrchestrator(sessionManager: MockSessionManager) {
-    const github = makeMockGitHub();
-    const taskBackend = makeMockTaskBackend();
-    const reviewService = new PRReviewService(
-      github,
-      taskBackend,
-      sessionManager as unknown as InstanceType<
-        typeof import('../session/SessionManager.js').SessionManager
-      >,
-    );
-    return new ReviewOrchestrator(
-      reviewService,
-      sessionManager as unknown as InstanceType<
-        typeof import('../session/SessionManager.js').SessionManager
-      >,
-      true,
-    );
-  }
-
-  it('implementing session receives feedback message on verify failure', async () => {
-    const sessionManager = new MockSessionManager();
-    makeOrchestrator(sessionManager);
-
-    const prRow = makePRRow({ review_session_id: null });
-    vi.mocked(queries.getPRByNumber).mockReturnValue(prRow);
-    vi.mocked(queries.getSession).mockReturnValue({
-      worktree_path: '/fake/worktree',
-    } as any);
-    vi.mocked(runVerifyAsGate).mockResolvedValue({
-      passed: false,
-      failedCommand: 'npm run build',
-      truncatedOutput: 'tsc: error TS2345',
-    });
-
-    sessionManager.sendOrResume = vi.fn().mockResolvedValue(CODE_SESSION_ID);
-
-    sessionManager.emit('pr_opened', {
-      prNumber: PR_NUMBER,
-      repo: REPO,
-      taskId: 'task-id',
-      contextUrl: '',
-    });
-
-    await new Promise((r) => setTimeout(r, 30));
-
-    expect(sessionManager.sendOrResume).toHaveBeenCalledWith(
-      CODE_SESSION_ID,
-      expect.stringContaining('verify gate'),
-    );
-  });
-
-  it('verify failure: setPRReviewResult called with verify_failed verdict', async () => {
-    const sessionManager = new MockSessionManager();
-    makeOrchestrator(sessionManager);
-
-    const prRow = makePRRow({ review_session_id: null });
-    vi.mocked(queries.getPRByNumber).mockReturnValue(prRow);
-    vi.mocked(queries.getSession).mockReturnValue({
-      worktree_path: '/fake/worktree',
-    } as any);
-    vi.mocked(runVerifyAsGate).mockResolvedValue({
-      passed: false,
-      failedCommand: 'npm run build',
-    });
-
-    sessionManager.emit('pr_opened', {
-      prNumber: PR_NUMBER,
-      repo: REPO,
-      taskId: 'task-id',
-      contextUrl: '',
-    });
-
-    await new Promise((r) => setTimeout(r, 30));
-
-    expect(vi.mocked(queries.setPRReviewResult)).toHaveBeenCalledWith(
-      PR_NUMBER,
-      REPO,
-      expect.stringContaining('"verify_failed"'),
-    );
-  });
-
-  it('implementing session receives feedback message on autofix failure', async () => {
-    const sessionManager = new MockSessionManager();
-    makeOrchestrator(sessionManager);
-
-    const prRow = makePRRow({ review_session_id: null });
-    vi.mocked(queries.getPRByNumber).mockReturnValue(prRow);
-    vi.mocked(queries.getSession).mockReturnValue({
-      worktree_path: '/fake/worktree',
-    } as any);
-    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
-    vi.mocked(runAutofix).mockResolvedValue({
-      success: false,
-      summary: 'git commit failed (exit 1)',
-    });
-
-    sessionManager.sendOrResume = vi.fn().mockResolvedValue(CODE_SESSION_ID);
-
-    sessionManager.emit('pr_opened', {
-      prNumber: PR_NUMBER,
-      repo: REPO,
-      taskId: 'task-id',
-      contextUrl: '',
-    });
-
-    await new Promise((r) => setTimeout(r, 30));
-
-    expect(sessionManager.sendOrResume).toHaveBeenCalledWith(
-      CODE_SESSION_ID,
-      expect.stringContaining('Autofix Gate Failure'),
-    );
-  });
-
-  it('autofix failure: setPRReviewResult called with autofix_failed verdict', async () => {
-    const sessionManager = new MockSessionManager();
-    makeOrchestrator(sessionManager);
-
-    const prRow = makePRRow({ review_session_id: null });
-    vi.mocked(queries.getPRByNumber).mockReturnValue(prRow);
-    vi.mocked(queries.getSession).mockReturnValue({
-      worktree_path: '/fake/worktree',
-    } as any);
-    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
-    vi.mocked(runAutofix).mockResolvedValue({
-      success: false,
-      summary: 'git commit failed (exit 1)',
-    });
-
-    sessionManager.emit('pr_opened', {
-      prNumber: PR_NUMBER,
-      repo: REPO,
-      taskId: 'task-id',
-      contextUrl: '',
-    });
-
-    await new Promise((r) => setTimeout(r, 30));
-
-    expect(vi.mocked(queries.setPRReviewResult)).toHaveBeenCalledWith(
-      PR_NUMBER,
-      REPO,
-      expect.stringContaining('"autofix_failed"'),
-    );
-  });
-
-  it('gate failures do not increment review_iteration', async () => {
-    const sessionManager = new MockSessionManager();
-    makeOrchestrator(sessionManager);
-
-    const prRow = makePRRow({ review_session_id: null });
-    vi.mocked(queries.getPRByNumber).mockReturnValue(prRow);
-    vi.mocked(queries.getSession).mockReturnValue({
-      worktree_path: '/fake/worktree',
-    } as any);
-    vi.mocked(runVerifyAsGate).mockResolvedValue({
-      passed: false,
-      failedCommand: 'npm run build',
-    });
-
-    sessionManager.emit('pr_opened', {
-      prNumber: PR_NUMBER,
-      repo: REPO,
-      taskId: 'task-id',
-      contextUrl: '',
-    });
-
-    await new Promise((r) => setTimeout(r, 30));
-
+    expect(enqueueSpy).not.toHaveBeenCalled();
     expect(vi.mocked(queries.incrementReviewIteration)).not.toHaveBeenCalled();
+    expect(vi.mocked(reviewService.reviewPR)).not.toHaveBeenCalled();
+  });
+});
+
+// ── 6. Gate failure after no established review session still enqueues ────────
+
+describe('push after a gate-failure verdict with no established review session', () => {
+  it('enqueues a re-review (the dropped !review_session_id precondition this change fixes)', async () => {
+    const { watcher, orchestrator } = makeHarness(NEWER_SHA);
+    const enqueueSpy = vi.spyOn(orchestrator, 'enqueueReview');
+
+    const prRow = makePRRow({
+      review_session_id: null,
+      review_result: JSON.stringify({
+        verdict: 'verify_failed',
+        summary: 'verify failed',
+        dimensions: [],
+      }),
+    });
+    vi.mocked(queries.getPRByNumber).mockReturnValue(prRow);
+
+    await watcher.handlePushDetected(prRow);
+
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+    expect(enqueueSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prNumber: PR_NUMBER,
+        repo: REPO,
+        pushTriggered: true,
+      }),
+    );
+    expect(vi.mocked(queries.setPendingPush)).not.toHaveBeenCalled();
   });
 });
