@@ -668,9 +668,7 @@ describe('StagedIntentPanel', () => {
       render(<StagedIntentPanel intent={makeOperatorNoOpIntent()} />);
 
       expect(screen.getByRole('button', { name: /^approve$/i })).toBeTruthy();
-      expect(
-        screen.queryByTestId('staged-intent-acknowledge'),
-      ).toBeNull();
+      expect(screen.queryByTestId('staged-intent-acknowledge')).toBeNull();
       expect(screen.queryByRole('button', { name: /commit/i })).toBeNull();
     });
 
@@ -700,7 +698,9 @@ describe('StagedIntentPanel', () => {
       expect(rejectButton).toHaveProperty('disabled', true);
 
       fireEvent.change(
-        screen.getByPlaceholderText(/what should the session revise|why is this being declined/i),
+        screen.getByPlaceholderText(
+          /what should the session revise|why is this being declined/i,
+        ),
         { target: { value: 'that PR never merged — keep going' } },
       );
       fireEvent.click(rejectButton);

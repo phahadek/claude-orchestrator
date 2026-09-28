@@ -7736,7 +7736,10 @@ async function applyOperatorApprovedNoOp(
     actor_id: null,
     project_id: committedIntent.projectId,
     task_id: taskId,
-    payload: { intentId: committedIntent.id, disposition: 'operator_approved_no_op' },
+    payload: {
+      intentId: committedIntent.id,
+      disposition: 'operator_approved_no_op',
+    },
   });
 
   await applyResolvedNoOp(

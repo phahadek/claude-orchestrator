@@ -1275,7 +1275,8 @@ export function StagedIntentPanel({
   // 2026-09-27 operator ruling requires an explicit Approve/Reject for this
   // case (see routes/stagedIntents.ts's isOperatorNoOpCandidate), unlike a
   // groom/design/split/docs informational no-op, which stays Acknowledge-only.
-  const isOperatorNoOp = intent.kind === 'planning.noOp' && !!intent.noOpOperatorApprovable;
+  const isOperatorNoOp =
+    intent.kind === 'planning.noOp' && !!intent.noOpOperatorApprovable;
   // Derived from the shared backend/frontend set rather than restated here —
   // ops.prIntent and review.dispute are terminal-on-approve too (the backend
   // rejects apply for every kind in this set); see

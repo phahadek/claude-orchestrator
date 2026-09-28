@@ -238,7 +238,10 @@ describe('operator disposition of a standard/ops session standalone planning.noO
 
     const rejected = await agent
       .post(`/api/staged-intents/${intent.id}/reject`)
-      .send({ outcome: 'decline', reason: 'that PR never merged — keep going' });
+      .send({
+        outcome: 'decline',
+        reason: 'that PR never merged — keep going',
+      });
 
     expect(rejected.status).toBe(200);
     expect(updateStatus).not.toHaveBeenCalled();

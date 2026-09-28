@@ -187,7 +187,13 @@ describe('StuckSessionMonitor.scanForStuckSessions() — idle+open-PR path', () 
   });
 
   it('falls through to done + recoverSession when session has no PR URL — a session type outside the operator-conclusion gate (e.g. review)', async () => {
-    insertStuckSession('sess-no-pr', 'proj-1', 10 * 60 * 1000, undefined, 'review');
+    insertStuckSession(
+      'sess-no-pr',
+      'proj-1',
+      10 * 60 * 1000,
+      undefined,
+      'review',
+    );
 
     vi.mocked(queries.getPRBySessionId).mockReturnValue(null);
 
@@ -207,7 +213,13 @@ describe('StuckSessionMonitor.scanForStuckSessions() — idle+open-PR path', () 
 
   it('falls through to done when PR exists but is not open (merged)', async () => {
     const prUrl = 'https://github.com/owner/repo/pull/99';
-    insertStuckSession('sess-merged-pr', 'proj-1', 10 * 60 * 1000, prUrl, 'review');
+    insertStuckSession(
+      'sess-merged-pr',
+      'proj-1',
+      10 * 60 * 1000,
+      prUrl,
+      'review',
+    );
 
     vi.mocked(queries.getPRBySessionId).mockReturnValue({
       ...makeOpenPrRow('sess-merged-pr', prUrl),
@@ -230,7 +242,13 @@ describe('StuckSessionMonitor.scanForStuckSessions() — idle+open-PR path', () 
 
   it('falls through to done when pr_url is set but no PR row exists in DB', async () => {
     const prUrl = 'https://github.com/owner/repo/pull/99';
-    insertStuckSession('sess-orphan-pr', 'proj-1', 10 * 60 * 1000, prUrl, 'review');
+    insertStuckSession(
+      'sess-orphan-pr',
+      'proj-1',
+      10 * 60 * 1000,
+      prUrl,
+      'review',
+    );
 
     // getPRBySessionId returns null (no pull_requests row)
     vi.mocked(queries.getPRBySessionId).mockReturnValue(null);
