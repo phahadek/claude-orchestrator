@@ -274,21 +274,29 @@ describe('relaunchFixerForPR() terminal (error), no worktree: never reopens — 
 
     expect(typeof result).toBe('string');
     expect(result).not.toBe(SESSION_ID);
-    const addCalls = vi
-      .mocked(exec)
-      .mock.calls.map((c) => c[0] as string)
-      .filter((c) => c.includes('worktree add'));
-    expect(addCalls.length).toBeGreaterThan(0);
-    // Fresh worktree checks out the PR's own branch — a new local branch
-    // tracking origin/<head_branch>, never a newly-derived name.
-    expect(addCalls[0]).toContain(`-b "${PR_HEAD_BRANCH}"`);
-    expect(addCalls[0]).toContain(`origin/${PR_HEAD_BRANCH}`);
     // The original terminal row is never written back to 'running'.
     expect(queries.updateSessionStatus).not.toHaveBeenCalledWith(
       SESSION_ID,
       'running',
     );
     expect(queries.setPRSessionId).toHaveBeenCalledWith(42, 'org/repo', result);
+
+    // spawnFreshSessionForTask's start() returns as soon as its synchronous
+    // setup completes — the actual worktree creation runs in completeStart's
+    // fire-and-forget background chain (same fire-and-forget shape as every
+    // other start() dispatch), so the worktree add call must be awaited for
+    // rather than asserted on immediately.
+    await vi.waitFor(() => {
+      const addCalls = vi
+        .mocked(exec)
+        .mock.calls.map((c) => c[0] as string)
+        .filter((c) => c.includes('worktree add'));
+      expect(addCalls.length).toBeGreaterThan(0);
+      // Fresh worktree checks out the PR's own branch — a new local branch
+      // tracking origin/<head_branch>, never a newly-derived name.
+      expect(addCalls[0]).toContain(`-b "${PR_HEAD_BRANCH}"`);
+      expect(addCalls[0]).toContain(`origin/${PR_HEAD_BRANCH}`);
+    });
   });
 });
 
