@@ -37,6 +37,7 @@ import {
   nextRunnableGateItems,
   nextPendingGateItems,
   appendGateItemEvent,
+  attachFailFollowonSource,
   defaultAncestrySourceForProject,
   isFollowupTaskDone,
   proposeGateItemReclassification,
@@ -627,13 +628,11 @@ export async function routeVerificationResult(
         unattended,
       });
       const now = new Date().toISOString();
-      gateStore.addSource(
+      attachFailFollowonSource(
         item.id,
-        {
-          sourceTaskId: followup.taskId,
-          sourceTaskTitle: followup.taskTitle,
-        },
+        followup.taskId,
         now,
+        followup.taskTitle,
       );
       gateStore.advanceState(item.id, 'open', 'fail', now);
     }

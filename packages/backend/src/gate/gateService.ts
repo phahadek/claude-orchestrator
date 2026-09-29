@@ -504,6 +504,43 @@ function getAncestryMemoEntry(
 }
 
 /**
+ * Attaches a fail event's follow-on task as a gate-item source so the
+ * reconciler's fail -> open auto-reopen can fire once it deploys. Idempotent:
+ * gate_item_source has no uniqueness constraint, so dedup on normalized id.
+ */
+export function attachFailFollowonSource(
+  itemId: string,
+  followonTaskId: string,
+  at: string,
+  title?: string,
+): boolean {
+  const item = gateStore.getItem(itemId);
+  if (!item) return false;
+  const normalized = normalizeTaskId(followonTaskId);
+  if (item.sources.some((s) => normalizeTaskId(s.sourceTaskId) === normalized))
+    return false;
+  let cachedTitle: string | undefined;
+  if (title === undefined) {
+    try {
+      const raw = getTaskCache(normalized)?.raw_json;
+      const parsed = raw ? (JSON.parse(raw) as { title?: unknown }) : undefined;
+      if (typeof parsed?.title === 'string' && parsed.title) {
+        cachedTitle = parsed.title;
+      }
+    } catch {
+      cachedTitle = undefined;
+    }
+  }
+  const sourceTaskTitle = title ?? cachedTitle ?? followonTaskId;
+  gateStore.addSource(
+    itemId,
+    { sourceTaskId: followonTaskId, sourceTaskTitle },
+    at,
+  );
+  return true;
+}
+
+/**
  * Bound on simultaneous in-flight `git merge-base` spawns per tick — high
  * enough that the ancestry checks (see isSourceCovered) no longer serialize
  * one-at-a-time behind each other's I/O wait, low enough to not fork-bomb a
@@ -541,6 +578,17 @@ export async function reconcileGateRunnability(
     )
     .map((item) => gateStore.getItem(item.id))
     .filter((item): item is GateItem => item !== undefined);
+
+  for (const item of candidates) {
+    if (item.state !== 'fail') continue;
+    const lastFail = [...item.events]
+      .reverse()
+      .find((e) => e.disposition === 'fail');
+    if (!lastFail?.filedFollowon) continue;
+    if (attachFailFollowonSource(item.id, lastFail.filedFollowon, now)) {
+      item.sources = gateStore.getItem(item.id)?.sources ?? item.sources;
+    }
+  }
 
   const memoEntry = getAncestryMemoEntry(options.project, deploySha);
   const ancestryCache = new Map<string, Promise<boolean>>();
@@ -1076,6 +1124,10 @@ export function appendGateItemEvent(
       gateItemId,
       `gate_item resolved to ${nextState} via direct disposition`,
     );
+  }
+
+  if (event.disposition === 'fail' && event.filedFollowon) {
+    attachFailFollowonSource(gateItemId, event.filedFollowon, now);
   }
 
   if (event.disposition === 'not-yet-triggerable') {

@@ -1181,6 +1181,77 @@ describe('appendGateItemEvent', () => {
   });
 });
 
+describe('fail filedFollowon attaches as a gate-item source', () => {
+  const followSources = (id: string) =>
+    getGateItem(id)!.sources.filter((s) => s.sourceTaskId.includes('fix-x'));
+
+  it('adds the follow-on as an unmerged source on a fail event and leaves state fail', () => {
+    const item = makeItem();
+    appendGateItemEvent(item.id, {
+      disposition: 'fail',
+      filedFollowon: 'fix-x',
+    });
+    const got = getGateItem(item.id)!;
+    expect(got.state).toBe('fail');
+    expect(followSources(item.id)).toHaveLength(1);
+    expect(followSources(item.id)[0].mergeCommit).toBeUndefined();
+  });
+
+  it('does not duplicate the source for a repeat fail, raw or notion:-prefixed', () => {
+    const item = makeItem();
+    appendGateItemEvent(item.id, { disposition: 'fail', filedFollowon: 'fix-x' });
+    appendGateItemEvent(item.id, { disposition: 'fail', filedFollowon: 'fix-x' });
+    appendGateItemEvent(item.id, {
+      disposition: 'fail',
+      filedFollowon: 'notion:fix-x',
+    });
+    expect(followSources(item.id)).toHaveLength(1);
+  });
+
+  it('does not attach for pass / noted / log-only events', () => {
+    const item = makeItem();
+    appendGateItemEvent(item.id, { disposition: 'noted', filedFollowon: 'fix-x' });
+    appendGateItemEvent(item.id, { filedFollowon: 'fix-x' });
+    appendGateItemEvent(item.id, { disposition: 'pass', filedFollowon: 'fix-x' });
+    expect(followSources(item.id)).toHaveLength(0);
+  });
+
+  it('reopens fail -> open -> runnable once the follow-on merge commit is deployed, and not before', async () => {
+    const item = makeItem();
+    mergeSource(item.id, 'sha1', new Date(1).toISOString());
+    appendGateItemEvent(item.id, { disposition: 'fail', filedFollowon: 'fix-x' });
+    expect(getGateItem(item.id)!.state).toBe('fail');
+
+    await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    expect(getGateItem(item.id)!.state).toBe('fail');
+
+    mergeSource(item.id, 'sha2', new Date(2).toISOString(), 'fix-x');
+    await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    expect(getGateItem(item.id)!.state).toBe('fail');
+
+    const result = await reconcileGateRunnability('sha2', {
+      ancestrySource: orderedAncestry,
+    });
+    expect(result.reopened).toEqual([item.id]);
+    const after = getGateItem(item.id)!;
+    expect(after.state).toBe('runnable');
+    expect(after.events.some((e) => e.disposition === 'reopened')).toBe(true);
+  });
+
+  it('backfills an unattached filedFollowon on reconcile, idempotently', async () => {
+    const item = makeItem();
+    appendGateItemEvent(item.id, { disposition: 'fail', filedFollowon: 'fix-x' });
+    db.prepare(
+      `DELETE FROM gate_item_source WHERE gate_item_id = ? AND source_task_id LIKE '%fix-x'`,
+    ).run(item.id);
+    expect(followSources(item.id)).toHaveLength(0);
+
+    await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    expect(followSources(item.id)).toHaveLength(1);
+  });
+});
+
 describe('appendGateItemEvent — not-yet-triggerable pending lifecycle', () => {
   it('parks a Read-Only item to pending with a 3h-out next_attempt_at on the first result', () => {
     const item = makeItem({ classification: 'Read-Only' });
