@@ -688,6 +688,30 @@ describe('runGateReconcilerTick', () => {
     });
   });
 
+  it('verifier fail path ends with exactly one source row for the follow-up (filer title kept) and state open', async () => {
+    const item = await makeRunnableItem({ classification: 'Read-Only' });
+    const followupFiler: FollowupFixTaskFiler = {
+      fileFollowupFixTask: vi.fn(async () => ({
+        taskId: 'notion:followup-2',
+        taskTitle: 'Filer title',
+      })),
+    };
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify: async () => ({ disposition: 'fail' as const }) },
+      followupFiler,
+    });
+
+    const updated = getItem(item.id)!;
+    expect(updated.state).toBe('open');
+    const rows = updated.sources.filter(
+      (s) => s.sourceTaskId === 'notion:followup-2',
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].sourceTaskTitle).toBe('Filer title');
+    expect(updated.sources).toHaveLength(2);
+  });
+
   it('needs-setup leaves the item runnable and the dispatcher skips it on the next pull', async () => {
     const item = await makeRunnableItem({ classification: 'Read-Only' });
     expect(getItem(item.id)?.events ?? []).toHaveLength(0);
