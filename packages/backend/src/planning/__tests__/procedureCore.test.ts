@@ -100,10 +100,10 @@ describe('procedureCore', () => {
       'groom' | 'design' | 'ops' | 'split',
       { principles: number; steps: number }
     > = {
-      groom: { principles: 15, steps: 8 },
-      design: { principles: 25, steps: 7 },
-      ops: { principles: 21, steps: 5 },
-      split: { principles: 6, steps: 4 },
+      groom: { principles: 16, steps: 8 },
+      design: { principles: 26, steps: 7 },
+      ops: { principles: 22, steps: 5 },
+      split: { principles: 7, steps: 4 },
     };
     for (const skill of Object.keys(expected) as Array<keyof typeof expected>) {
       expect(principlesFor(skill).length, `${skill} principlesFor`).toBe(
