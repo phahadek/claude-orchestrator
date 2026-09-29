@@ -14,6 +14,7 @@ import {
   getSkippedForBudgetHistory,
   hasActiveCapabilityRequestForSession,
   findLiveGenuineGateVerifyIntentForItem,
+  isStructurallyUnresolvableSource,
 } from '../db/queries';
 import type { GateItemListOrder, GateItemVerifySession } from '../db/queries';
 import { backfillGateBody, type GateBackfillResult } from './gateBackfill';
@@ -416,7 +417,14 @@ async function isSourceCovered(
   if (type !== null && type !== '💻 Code') {
     return getCachedStatus(source.sourceTaskId) === 'Done';
   }
-  if (!source.mergeCommit) return false;
+  if (!source.mergeCommit) {
+    // A Code task deliberately closed with nothing to ship (no PR, committed
+    // planning.noOp, Done) has no commit to wait for, so it is live.
+    return (
+      getCachedStatus(source.sourceTaskId) === 'Done' &&
+      isStructurallyUnresolvableSource(source.sourceTaskId)
+    );
+  }
   // Memoized per mergeCommit — deploySha is fixed for the whole call (the
   // ancestryCache/memoResults pair is scoped to one project+deploySha, see
   // reconcileGateRunnability), so ancestry between two fixed shas can't

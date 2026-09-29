@@ -563,6 +563,97 @@ describe('reconcileGateRunnability', () => {
     expect(getGateItem(item.id)?.state).toBe('open');
   });
 
+  describe('Code source closed as a planning.noOp', () => {
+    function seedCodeSource(
+      id: string,
+      status: string,
+      opts: { noOp?: boolean; pr?: boolean } = {},
+    ) {
+      upsertTaskCache(id, JSON.stringify({ type: '💻 Code', status }));
+      if (opts.noOp) {
+        db.prepare(
+          `INSERT INTO staged_intent (id, kind, payload, payload_hash, task_id, project_id, state, created_at, updated_at)
+           VALUES (?, 'planning.noOp', '{}', 'h', ?, 'polimarket-analyser', 'committed', 0, 0)`,
+        ).run(`intent-${id}`, id);
+      }
+      if (opts.pr) {
+        const now = new Date(0).toISOString();
+        db.prepare(
+          `INSERT INTO pull_requests (pr_number, pr_url, task_id, repo, state, created_at, updated_at, synced_at)
+           VALUES (1, ?, ?, 'o/r', 'merged', ?, ?, ?)`,
+        ).run(`https://github.com/o/r/pull/${id}`, id, now, now, now);
+      }
+    }
+
+    beforeEach(() => {
+      db.prepare('DELETE FROM staged_intent').run();
+      db.prepare('DELETE FROM pull_requests').run();
+    });
+
+    const sourcesOf = (...ids: string[]) =>
+      ids.map((sourceTaskId) => ({ sourceTaskId, sourceTaskTitle: 't' }));
+
+    it('marks runnable an item whose only source is Done + noOp with no PR', async () => {
+      const item = makeItem({ sources: sourcesOf('notion:noop-1') });
+      seedCodeSource('notion:noop-1', '✅ Done', { noOp: true });
+      const result = await reconcileGateRunnability('sha1', {
+        ancestrySource: orderedAncestry,
+      });
+      expect(result.markedRunnable).toEqual([item.id]);
+      expect(getGateItem(item.id)?.state).toBe('runnable');
+    });
+
+    it('stays open when the source is Deferred + noOp', async () => {
+      const item = makeItem({ sources: sourcesOf('notion:noop-2') });
+      seedCodeSource('notion:noop-2', '⏭️ Deferred', { noOp: true });
+      const result = await reconcileGateRunnability('sha1', {
+        ancestrySource: orderedAncestry,
+      });
+      expect(result.markedRunnable).toEqual([]);
+      expect(getGateItem(item.id)?.state).toBe('open');
+    });
+
+    it('stays open when a PR row exists but merge_commit is null (dropped webhook)', async () => {
+      const item = makeItem({ sources: sourcesOf('notion:noop-3') });
+      seedCodeSource('notion:noop-3', '✅ Done', { noOp: true, pr: true });
+      const result = await reconcileGateRunnability('sha1', {
+        ancestrySource: orderedAncestry,
+      });
+      expect(result.markedRunnable).toEqual([]);
+      expect(getGateItem(item.id)?.state).toBe('open');
+    });
+
+    it('stays open when Done with no PR row and no committed noOp', async () => {
+      const item = makeItem({ sources: sourcesOf('notion:noop-4') });
+      seedCodeSource('notion:noop-4', '✅ Done');
+      const result = await reconcileGateRunnability('sha1', {
+        ancestrySource: orderedAncestry,
+      });
+      expect(result.markedRunnable).toEqual([]);
+      expect(getGateItem(item.id)?.state).toBe('open');
+    });
+
+    it('becomes runnable mixed with a deployed source, and stays open if that source is undeployed', async () => {
+      const item = makeItem({
+        sources: sourcesOf('notion:noop-5', 'notion:deployed-5'),
+      });
+      seedCodeSource('notion:noop-5', '✅ Done', { noOp: true });
+      upsertTaskCache('notion:deployed-5', JSON.stringify({ type: '💻 Code' }));
+      setSourceMergeCommit(item.id, 'notion:deployed-5', 'sha9');
+
+      const before = await reconcileGateRunnability('sha1', {
+        ancestrySource: orderedAncestry,
+      });
+      expect(before.markedRunnable).toEqual([]);
+      expect(getGateItem(item.id)?.state).toBe('open');
+
+      const after = await reconcileGateRunnability('sha9', {
+        ancestrySource: orderedAncestry,
+      });
+      expect(after.markedRunnable).toEqual([item.id]);
+    });
+  });
+
   it('marks runnable a Code source whose merge commit is an ancestor of the deployed sha', async () => {
     const item = makeItem({
       sources: [
