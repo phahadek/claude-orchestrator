@@ -455,7 +455,14 @@ async function isItemCovered(
   memoResults: Map<string, boolean>,
 ): Promise<boolean> {
   if (item.sources.length === 0) return true;
-  for (const source of item.sources) {
+  // A ⏭️ Deferred source is retracted/superseded and will never be Done or
+  // merge; ignore it. If nothing else remains the item stays open (an
+  // all-Deferred item is an operator discard candidate, not auto-verifiable).
+  const liveSources = item.sources.filter(
+    (s) => getCachedStatus(s.sourceTaskId) !== 'Deferred',
+  );
+  if (liveSources.length === 0) return false;
+  for (const source of liveSources) {
     if (
       !(await isSourceCovered(
         source,
