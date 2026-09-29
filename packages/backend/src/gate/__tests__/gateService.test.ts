@@ -659,6 +659,71 @@ describe('reconcileGateRunnability', () => {
     });
   });
 
+  describe('Deferred sources', () => {
+    const src = (...ids: string[]) =>
+      ids.map((sourceTaskId) => ({ sourceTaskId, sourceTaskTitle: 't' }));
+    const cache = (id: string, type: string, status?: string) =>
+      upsertTaskCache(id, JSON.stringify({ type, status }));
+    const run = (sha: string) =>
+      reconcileGateRunnability(sha, { ancestrySource: orderedAncestry });
+
+    it('marks runnable a deployed Code source plus a Deferred source', async () => {
+      const item = makeItem({ sources: src('notion:d-code', 'notion:d-dead') });
+      cache('notion:d-code', '💻 Code');
+      cache('notion:d-dead', '💻 Code', '⏭️ Deferred');
+      setSourceMergeCommit(item.id, 'notion:d-code', 'sha1');
+      const result = await run('sha1');
+      expect(result.markedRunnable).toEqual([item.id]);
+    });
+
+    it('marks runnable a Done non-Code source plus a Deferred source', async () => {
+      const item = makeItem({ sources: src('notion:d-doc', 'notion:d-dead') });
+      cache('notion:d-doc', '📝 Docs', '✅ Done');
+      cache('notion:d-dead', '💻 Code', '⏭️ Deferred');
+      const result = await run('sha1');
+      expect(result.markedRunnable).toEqual([item.id]);
+    });
+
+    it('stays open for an undeployed Code source plus a Deferred source', async () => {
+      const item = makeItem({ sources: src('notion:d-code', 'notion:d-dead') });
+      cache('notion:d-code', '💻 Code');
+      cache('notion:d-dead', '📝 Docs', '⏭️ Deferred');
+      setSourceMergeCommit(item.id, 'notion:d-code', 'sha9');
+      const result = await run('sha1');
+      expect(result.markedRunnable).toEqual([]);
+      expect(getGateItem(item.id)?.state).toBe('open');
+    });
+
+    it('stays open when every source is Deferred', async () => {
+      const item = makeItem({ sources: src('notion:d-a', 'notion:d-b') });
+      cache('notion:d-a', '💻 Code', '⏭️ Deferred');
+      cache('notion:d-b', '📝 Docs', '⏭️ Deferred');
+      const result = await run('sha1');
+      expect(result.markedRunnable).toEqual([]);
+      expect(getGateItem(item.id)?.state).toBe('open');
+    });
+
+    it('a Deferred source neither triggers nor blocks a fail auto-reopen', async () => {
+      const item = makeItem({ sources: src('notion:d-code', 'notion:d-dead') });
+      cache('notion:d-code', '💻 Code');
+      cache('notion:d-dead', '💻 Code', '⏭️ Deferred');
+      mergeSource(item.id, 'sha1', new Date(1).toISOString(), 'notion:d-code');
+      await run('sha1');
+      appendGateItemEvent(item.id, {
+        disposition: 'fail',
+        evidence: { minDeployedCommitAtFail: 'sha1' },
+      });
+      expect((await run('sha1')).reopened).toEqual([]);
+      expect(getGateItem(item.id)?.state).toBe('fail');
+
+      // Deferred source "merging" is irrelevant; a live source advancing is what reopens.
+      setSourceMergeCommit(item.id, 'notion:d-code', 'sha2');
+      setMinDeployedCommit(item.id, 'sha2', new Date(2).toISOString());
+      expect((await run('sha1')).reopened).toEqual([]);
+      expect((await run('sha2')).reopened).toEqual([item.id]);
+    });
+  });
+
   it('marks runnable a Code source whose merge commit is an ancestor of the deployed sha', async () => {
     const item = makeItem({
       sources: [
