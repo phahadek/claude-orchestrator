@@ -455,7 +455,12 @@ describe('reconcileGateRunnability', () => {
     expect(getGateItem(item.id)?.state).toBe('fail');
 
     // The follow-up fix source merges and pushes min_deployed_commit forward...
-    mergeSource(item.id, 'sha2', new Date(2).toISOString(), 'notion:followup-1');
+    mergeSource(
+      item.id,
+      'sha2',
+      new Date(2).toISOString(),
+      'notion:followup-1',
+    );
     // ...and once sha2 deploys, the item auto-reopens straight through to runnable.
     const advanced = await reconcileGateRunnability('sha2', {
       ancestrySource: orderedAncestry,
