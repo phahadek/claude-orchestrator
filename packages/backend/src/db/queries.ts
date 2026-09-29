@@ -13172,25 +13172,21 @@ export function hasOpenGroomGroupForTask(taskId: string): boolean {
   );
 }
 
-let _stmtFindOpenGroupOwnerSessions: Database.Statement | null = null;
+let _stmtFindGroupOwnerSessions: Database.Statement | null = null;
 
 /**
- * Every distinct session_id currently holding a live (open-state) member of
- * `groupId` — used at stage time to reject a session staging into a groupId
- * some other session already opened, so two sessions can never merge their
- * proposals into one group by coincidence of a shared free-text id.
+ * Every distinct session_id that has EVER staged a member of groupId, in any state.
+ * A groupId belongs to the first session that staged into it; a finished group's name
+ * is never free for another session.
  */
-export function findOpenGroupOwnerSessions(groupId: string): string[] {
-  _stmtFindOpenGroupOwnerSessions ??= db.prepare<unknown[]>(
+export function findGroupOwnerSessions(groupId: string): string[] {
+  _stmtFindGroupOwnerSessions ??= db.prepare<unknown[]>(
     `SELECT DISTINCT session_id FROM staged_intent
-     WHERE group_id = ?
-       AND session_id IS NOT NULL
-       AND state IN (${OPEN_DECISION_GROUP_STATES.map(() => '?').join(', ')})`,
+     WHERE group_id = ? AND session_id IS NOT NULL`,
   );
-  const rows = _stmtFindOpenGroupOwnerSessions.all(
-    groupId,
-    ...OPEN_DECISION_GROUP_STATES,
-  ) as { session_id: string }[];
+  const rows = _stmtFindGroupOwnerSessions.all(groupId) as {
+    session_id: string;
+  }[];
   return rows.map((r) => r.session_id);
 }
 

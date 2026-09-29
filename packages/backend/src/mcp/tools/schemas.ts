@@ -120,7 +120,12 @@ const groomProposalSchema = z.object({
 
 /** The intent envelope fields shared by every stage-proposal tool, alongside its kind-specific payload. */
 export const intentEnvelopeShape = {
-  groupId: z.string().optional(),
+  groupId: z
+    .string()
+    .optional()
+    .describe(
+      'Group id unique to your own session (e.g. include your session id) — never a task-id prefix or other shared name; a groupId belongs to the first session that staged into it, in any state.',
+    ),
   decisionProposal: z.string().optional(),
   /**
    * The file:line / arch-page-section / API-result evidence a

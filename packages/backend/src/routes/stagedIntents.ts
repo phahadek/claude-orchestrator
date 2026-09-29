@@ -93,7 +93,7 @@ import {
   setStagedIntentGroup,
   clearStagedIntentGroup,
   findOpenGroupForTask,
-  findOpenGroupOwnerSessions,
+  findGroupOwnerSessions,
   getSession,
   getGrantedCapabilities,
   hasActiveCapabilityRequestForSession,
@@ -1550,8 +1550,10 @@ class TaskGroupMismatchError extends Error {
 class GroupOwnedByAnotherSessionError extends Error {
   constructor(groupId: string, ownerSessionId: string) {
     super(
-      `[stagedIntents] groupId "${groupId}" already has a live member staged by session "${ownerSessionId}" ` +
-        '— a different session cannot stage into it. Choose a new groupId.',
+      `[stagedIntents] groupId "${groupId}" belongs to session "${ownerSessionId}", which staged into it ` +
+        '— group ids are owned per session in any state (even once every member is committed, rejected, superseded or withdrawn), ' +
+        'so a different session cannot stage into it. Retry with a groupId unique to your own session, ' +
+        'for example one containing your own session id.',
     );
     this.name = 'GroupOwnedByAnotherSessionError';
   }
@@ -1603,7 +1605,7 @@ function assertTaskGroupConsistency(
   if (!groupId) return;
 
   if (sessionId && !explicitSupersedes) {
-    const owners = findOpenGroupOwnerSessions(groupId);
+    const owners = findGroupOwnerSessions(groupId);
     const foreignOwner = owners.find((owner) => owner !== sessionId);
     if (foreignOwner) {
       throw new GroupOwnedByAnotherSessionError(groupId, foreignOwner);
