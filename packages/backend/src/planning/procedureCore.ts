@@ -1130,6 +1130,18 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'whose session never opens a group for that task at all (e.g. a pass that ' +
       'ends in `planning.noOp`).',
   },
+  {
+    id: 'group-id-unique-per-session',
+    title: 'Choose a groupId unique to your own session',
+    appliesTo: ['groom', 'design', 'ops', 'split'],
+    text:
+      'A `groupId` belongs to the first session that staged into it, in every ' +
+      'state — including after all its members are committed, rejected, ' +
+      'superseded or withdrawn. DO choose a `groupId` unique to this session, ' +
+      'e.g. one containing your own session id. DO NOT derive it from a ' +
+      'task-id prefix or any other name another session could also pick: ' +
+      'staging into a groupId another session owns is rejected at stage time.',
+  },
 ] as const;
 
 /**
