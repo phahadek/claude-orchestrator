@@ -620,6 +620,15 @@ export async function routeVerificationResult(
       };
     } else {
       const followup = await followupFiler.fileFollowupFixTask(item, result);
+      const now = new Date().toISOString();
+      // Attached first, with the filer's title, so appendGateItemEvent's own
+      // attach of the same follow-on dedups instead of using the id fallback.
+      attachFailFollowonSource(
+        item.id,
+        followup.taskId,
+        now,
+        followup.taskTitle,
+      );
       appendGateItemEvent(item.id, {
         disposition: 'fail',
         evidence: failEvidence(item, result.evidence),
@@ -627,13 +636,6 @@ export async function routeVerificationResult(
         deploySha: deploySha ?? undefined,
         unattended,
       });
-      const now = new Date().toISOString();
-      attachFailFollowonSource(
-        item.id,
-        followup.taskId,
-        now,
-        followup.taskTitle,
-      );
       gateStore.advanceState(item.id, 'open', 'fail', now);
     }
   } else if (result.disposition === 'deferred') {

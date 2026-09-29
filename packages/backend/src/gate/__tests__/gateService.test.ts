@@ -455,7 +455,7 @@ describe('reconcileGateRunnability', () => {
     expect(getGateItem(item.id)?.state).toBe('fail');
 
     // The follow-up fix source merges and pushes min_deployed_commit forward...
-    setMinDeployedCommit(item.id, 'sha2', new Date(2).toISOString());
+    mergeSource(item.id, 'sha2', new Date(2).toISOString(), 'notion:followup-1');
     // ...and once sha2 deploys, the item auto-reopens straight through to runnable.
     const advanced = await reconcileGateRunnability('sha2', {
       ancestrySource: orderedAncestry,
@@ -1199,8 +1199,14 @@ describe('fail filedFollowon attaches as a gate-item source', () => {
 
   it('does not duplicate the source for a repeat fail, raw or notion:-prefixed', () => {
     const item = makeItem();
-    appendGateItemEvent(item.id, { disposition: 'fail', filedFollowon: 'fix-x' });
-    appendGateItemEvent(item.id, { disposition: 'fail', filedFollowon: 'fix-x' });
+    appendGateItemEvent(item.id, {
+      disposition: 'fail',
+      filedFollowon: 'fix-x',
+    });
+    appendGateItemEvent(item.id, {
+      disposition: 'fail',
+      filedFollowon: 'fix-x',
+    });
     appendGateItemEvent(item.id, {
       disposition: 'fail',
       filedFollowon: 'notion:fix-x',
@@ -1210,16 +1216,25 @@ describe('fail filedFollowon attaches as a gate-item source', () => {
 
   it('does not attach for pass / noted / log-only events', () => {
     const item = makeItem();
-    appendGateItemEvent(item.id, { disposition: 'noted', filedFollowon: 'fix-x' });
+    appendGateItemEvent(item.id, {
+      disposition: 'noted',
+      filedFollowon: 'fix-x',
+    });
     appendGateItemEvent(item.id, { filedFollowon: 'fix-x' });
-    appendGateItemEvent(item.id, { disposition: 'pass', filedFollowon: 'fix-x' });
+    appendGateItemEvent(item.id, {
+      disposition: 'pass',
+      filedFollowon: 'fix-x',
+    });
     expect(followSources(item.id)).toHaveLength(0);
   });
 
   it('reopens fail -> open -> runnable once the follow-on merge commit is deployed, and not before', async () => {
     const item = makeItem();
     mergeSource(item.id, 'sha1', new Date(1).toISOString());
-    appendGateItemEvent(item.id, { disposition: 'fail', filedFollowon: 'fix-x' });
+    appendGateItemEvent(item.id, {
+      disposition: 'fail',
+      filedFollowon: 'fix-x',
+    });
     expect(getGateItem(item.id)!.state).toBe('fail');
 
     await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
@@ -1240,7 +1255,10 @@ describe('fail filedFollowon attaches as a gate-item source', () => {
 
   it('backfills an unattached filedFollowon on reconcile, idempotently', async () => {
     const item = makeItem();
-    appendGateItemEvent(item.id, { disposition: 'fail', filedFollowon: 'fix-x' });
+    appendGateItemEvent(item.id, {
+      disposition: 'fail',
+      filedFollowon: 'fix-x',
+    });
     db.prepare(
       `DELETE FROM gate_item_source WHERE gate_item_id = ? AND source_task_id LIKE '%fix-x'`,
     ).run(item.id);
