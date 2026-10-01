@@ -1994,6 +1994,7 @@ describe('ReviewOrchestrator — iteration cap escalation', () => {
       'coding-session-id',
       'ai-reviewer',
       expect.any(String),
+      expect.anything(),
     );
   });
 
@@ -2019,7 +2020,7 @@ describe('ReviewOrchestrator — iteration cap escalation', () => {
     // Simulates the operator-facing re-review route's resetReviewIteration
     // call: the counter is back at 0 (as if just reset), so the automatic
     // dispatcher should run this one normally...
-    vi.mocked(getPRByNumber).mockReturnValueOnce({
+    vi.mocked(getPRByNumber).mockReturnValue({
       ...basePRRow,
       review_iteration: 0,
     } as any);

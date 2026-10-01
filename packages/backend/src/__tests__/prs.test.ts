@@ -20,6 +20,7 @@ vi.mock('../db/queries.js', () => ({
   setPRReviewResult: vi.fn(),
   updatePRDraftStatus: vi.fn(),
   getSessionsByProject: vi.fn().mockReturnValue([]),
+  getSession: vi.fn().mockReturnValue(undefined),
   markSessionDone: vi.fn(),
   clearTerminalPRFlags: vi.fn(),
   lookupSessionByBranch: vi.fn().mockReturnValue(null),

@@ -733,7 +733,7 @@ describe('TaskDetail', () => {
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        '/api/prs/42/review?projectId=proj-1',
+        '/api/prs/owner/repo/42/re-review',
         { method: 'POST', headers: {} },
       );
     });
