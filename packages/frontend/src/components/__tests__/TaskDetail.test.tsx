@@ -933,6 +933,7 @@ describe('TaskDetail', () => {
           onClose={vi.fn()}
         />,
       );
+      fireEvent.click(screen.getByTestId('stage-chip-pr'));
     }
 
     it('renders when PR is open, verdict not approved, not dirty', () => {
