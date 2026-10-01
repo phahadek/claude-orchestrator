@@ -921,6 +921,66 @@ describe('TaskDetail', () => {
     vi.unstubAllGlobals();
   });
 
+  describe('Approve button', () => {
+    function renderApprove(
+      prOverrides: Partial<NonNullable<TaskView['pr']>>,
+      review: TaskView['review'],
+    ) {
+      render(
+        <TaskDetail
+          task={makeTask({ pr: makePr(prOverrides), review })}
+          send={vi.fn()}
+          onClose={vi.fn()}
+        />,
+      );
+    }
+
+    it('renders when PR is open, verdict not approved, not dirty', () => {
+      renderApprove({}, makeReview({ verdict: 'needs_changes' }));
+      expect(screen.getByText('Approve')).toBeTruthy();
+    });
+
+    it('is absent when verdict is approved', () => {
+      renderApprove({}, makeReview({ verdict: 'approved' }));
+      expect(screen.queryByText('Approve')).toBeNull();
+    });
+
+    it('is absent when mergeState is dirty', () => {
+      renderApprove({ mergeState: 'dirty' }, null);
+      expect(screen.queryByText('Approve')).toBeNull();
+    });
+
+    it('is absent when PR is merged or closed', () => {
+      renderApprove({ state: 'merged' }, null);
+      expect(screen.queryByText('Approve')).toBeNull();
+    });
+
+    it('is absent when PR is closed', () => {
+      renderApprove({ state: 'closed' }, null);
+      expect(screen.queryByText('Approve')).toBeNull();
+    });
+
+    it('POSTs only the approve route', async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue({ ok: true, json: async () => ({}) });
+      vi.stubGlobal('fetch', fetchMock);
+      renderApprove({}, null);
+      fireEvent.click(screen.getByText('Approve'));
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledWith(
+          '/api/prs/owner/repo/42/approve',
+          { method: 'POST', headers: {} },
+        );
+      });
+      const posts = fetchMock.mock.calls.filter(
+        (c) => (c[1] as { method?: string } | undefined)?.method === 'POST',
+      );
+      expect(posts).toHaveLength(1);
+      vi.unstubAllGlobals();
+    });
+  });
+
   // ── Token aggregation display ──
 
   it('displays aggregated token count badge when totalTokens > 0', () => {
