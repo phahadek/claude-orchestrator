@@ -303,10 +303,9 @@ export class PlanningOrchestrator {
     // is only reached from the turn-boundary result event or session_ended),
     // so skipInFlightGuard is safe even though the session's DB status may
     // still read 'running' — its normal resting state while parked alive.
-    this.markTerminal(sessionId, 'planning_approved', {
+    return this.markTerminal(sessionId, 'planning_approved', {
       skipInFlightGuard: true,
     });
-    return true;
   }
 
   /**
@@ -514,6 +513,19 @@ export class PlanningOrchestrator {
     if (blockedMembers.length > 0 && !blockedBudgetExhausted) {
       return false;
     }
+    if (blockedBudgetExhausted) {
+      // Nudge budget spent: stay idle (resumable for operator pushback) and
+      // surface the pause rather than writing done over blocked members.
+      const blockedRow = getSession(sessionId);
+      if (blockedRow) {
+        this.surfaceBlockedMembersPauseReason(
+          sessionId,
+          blockedRow,
+          'planning_no_pending_dispositions',
+        );
+      }
+      return false;
+    }
 
     // An investigate-dispatched session (task_id `report-batch:<batchId>`)
     // is a one-shot batch with no resume purpose once concluded (mirrors
@@ -532,8 +544,7 @@ export class PlanningOrchestrator {
     const stagedNothingNew =
       investigateSession || countable.length <= priorCount;
     const reachedTerminal =
-      blockedBudgetExhausted ||
-      (!stillPending && stagedNothingNew && !owesGatedArtifacts);
+      !stillPending && stagedNothingNew && !owesGatedArtifacts;
 
     if (!reachedTerminal) {
       this.stagedCountAtResume.set(sessionId, countable.length);
@@ -581,8 +592,7 @@ export class PlanningOrchestrator {
           );
         }
       }
-      this.markTerminal(sessionId, 'planning_no_pending_dispositions');
-      return true;
+      return this.markTerminal(sessionId, 'planning_no_pending_dispositions');
     }
 
     // Terminal with nothing that counts as a staged decision — the backstop
@@ -671,17 +681,36 @@ export class PlanningOrchestrator {
         'Planning session reached terminal with no staged decision, ops journal transition, or explicit no-op — twice, after one self-correct nudge.',
       );
     }
-    this.markTerminal(sessionId, 'planning_no_pending_dispositions');
-    return true;
+    return this.markTerminal(sessionId, 'planning_no_pending_dispositions');
   }
 
+  /**
+   * Returns false (writing nothing) when the session still holds a
+   * non-noOp intent that is staged/needs_revision/pending_verification and
+   * the reason is not an explicit operator end — so the operator can still
+   * push back on in-flight work, since a terminal row cannot be resumed.
+   */
   private markTerminal(
     sessionId: string,
     reason: string,
     opts?: { skipInFlightGuard?: boolean },
-  ): void {
+  ): boolean {
     const row = getSession(sessionId);
-    if (!row) return;
+    if (!row) return false;
+
+    if (reason !== 'planning_operator_end' && row.status !== 'done') {
+      const live = listStagedIntentsBySession(sessionId).some(
+        (i) =>
+          i.kind !== NO_OP_INTENT_KIND &&
+          (i.state === 'staged' ||
+            i.state === 'needs_revision' ||
+            i.state === 'pending_verification'),
+      );
+      if (live) {
+        this.surfaceBlockedMembersPauseReason(sessionId, row, reason);
+        return false;
+      }
+    }
 
     // needs_revision/pending_verification are transient states meant to be
     // resolved by this same session — a group's own group-commit guard now
@@ -728,7 +757,7 @@ export class PlanningOrchestrator {
       // planning-concurrency slot forever — endSession on an already-exited
       // session is already a no-op.
       this.sessionManager.endSession(sessionId);
-      return;
+      return true;
     }
     if (opts) {
       markSessionDone(sessionId, Date.now(), null, reason, opts);
@@ -818,6 +847,7 @@ export class PlanningOrchestrator {
     ) {
       this.completeOpsTask(sessionId, row);
     }
+    return true;
   }
 
   /**
@@ -1100,7 +1130,10 @@ export class PlanningOrchestrator {
     if (!isGroupFullyDisposed(intent)) return;
 
     const stillPending = listStagedIntentsBySession(sessionId).some(
-      (i) => i.state === 'staged',
+      (i) =>
+        i.state === 'staged' ||
+        i.state === 'needs_revision' ||
+        i.state === 'pending_verification',
     );
     if (stillPending) return;
 
@@ -1384,10 +1417,9 @@ export class PlanningOrchestrator {
       );
       return false;
     }
-    this.markTerminal(sessionId, 'planning_no_pending_dispositions', {
+    return this.markTerminal(sessionId, 'planning_no_pending_dispositions', {
       skipInFlightGuard: true,
     });
-    return true;
   }
 
   /**
@@ -1440,10 +1472,13 @@ export class PlanningOrchestrator {
         );
         continue;
       }
-      this.markTerminal(row.session_id, 'planning_idle_sweep_terminal', {
-        skipInFlightGuard: true,
-      });
-      terminalizedIds.push(row.session_id);
+      if (
+        this.markTerminal(row.session_id, 'planning_idle_sweep_terminal', {
+          skipInFlightGuard: true,
+        })
+      ) {
+        terminalizedIds.push(row.session_id);
+      }
     }
 
     if (terminalizedIds.length > 0) {

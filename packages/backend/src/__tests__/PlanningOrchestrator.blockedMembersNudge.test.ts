@@ -157,10 +157,11 @@ describe('PlanningOrchestrator.checkTerminal — resumable blocked-members nudge
     expect(getTaskPauseReason(TASK_ID)).toBeNull();
 
     // Turn 2 (the nudge's own re-turn): same blocked set, still unresolved —
-    // budget exhausted, so this forces terminal and the existing escalation
-    // path (surfaceBlockedMembersPauseReason, via markTerminal) fires.
-    expect(orchestrator.checkTerminal(SESSION_ID)).toBe(true);
-    expect(sessionManager.endSession).toHaveBeenCalledWith(SESSION_ID);
+    // budget exhausted, so the pause is surfaced but the session stays
+    // non-terminal so the operator can still push back.
+    expect(orchestrator.checkTerminal(SESSION_ID)).toBe(false);
+    expect(sessionManager.endSession).not.toHaveBeenCalled();
+    expect(getSession(SESSION_ID)?.status).toBe('running');
     // Still bounded: no second nudge.
     expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
 
