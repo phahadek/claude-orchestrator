@@ -313,13 +313,15 @@ export function PRPanel({
   }, [reviewStartedEvent]);
 
   const handleReview = async (prNumber: number) => {
-    if (!activeProjectId) return;
+    const item = prs.find((p) => p.type === 'pr' && p.prNumber === prNumber);
+    if (!item || item.type !== 'pr') return;
+    const [owner, repoName] = item.repo.split('/');
     setReviewInFlight((prev) => new Set(prev).add(prNumber));
     setError(prNumber, null);
     startElapsed(prNumber);
     try {
       const res = await authedFetch(
-        `/api/prs/${prNumber}/review?projectId=${encodeURIComponent(activeProjectId)}`,
+        `/api/prs/${owner}/${repoName}/${prNumber}/re-review`,
         { method: 'POST' },
       );
       if (res.status === 504) {

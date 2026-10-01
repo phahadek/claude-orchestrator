@@ -11,7 +11,7 @@ import {
   getTaskTitleFromCache,
   upsertPullRequest,
   deletePR,
-  resetReviewIteration,
+  getSession,
   setPRReviewResult,
   updatePRDraftStatus,
   getSessionsByProject,
@@ -23,7 +23,7 @@ import {
 import { parsePauseReason, parsePauseReasonSet } from '../db/pauseReason';
 import { recordEvent } from '../audit/AuditLog';
 import { GitHubApiError } from '../github/types';
-import type { MergeabilityCategory } from '../github/types';
+import type { MergeabilityCategory, ReviewJob } from '../github/types';
 import type { GitHubClient } from '../github/GitHubClient';
 import type { PRReviewService } from '../github/PRReviewService';
 import type { PRReviewResult } from '../github/PRReviewService';
@@ -80,6 +80,7 @@ export function extractNotionTaskFromBody(
 }
 
 interface ReviewOrchestratorLike {
+  enqueueReview?(job: ReviewJob): boolean;
   runAutofixPipeline(
     prNumber: number,
     repo: string,
@@ -340,103 +341,6 @@ export function createPrsRouter(
         };
       });
       res.json(items);
-    }),
-  );
-
-  // ── POST /api/prs/:prNumber/review ──────────────────────────────────────────
-  router.post(
-    '/prs/:prNumber/review',
-    asyncHandler(async (req: Request, res: Response) => {
-      const prNumber = parseInt(String(req.params.prNumber), 10);
-      const projectId =
-        typeof req.query.projectId === 'string' ? req.query.projectId : '';
-      if (!projectId) {
-        res.status(400).json({ error: 'projectId query param is required' });
-        return;
-      }
-      const project = getProjectById(projectId);
-      if (!project?.githubRepo) {
-        res.status(422).json({ error: 'Project has no githubRepo configured' });
-        return;
-      }
-      const repo = project.githubRepo;
-      let prRow = getPRByNumber(prNumber, repo);
-      if (!prRow) {
-        // On-demand sync: PR may not have been synced yet (e.g. just created).
-        // Fetch the specific PR from GitHub and upsert before retrying.
-        try {
-          const pr = await github.fetchPR(repo, prNumber);
-          const now = new Date().toISOString();
-          const sessionMatch = lookupSessionByBranch(pr.headBranch);
-          upsertPullRequest({
-            pr_number: pr.id,
-            pr_url: pr.url,
-            task_id: sessionMatch?.task_id ?? null,
-            session_id: sessionMatch?.session_id ?? null,
-            repo,
-            title: pr.title,
-            body: pr.body ?? null,
-            head_branch: pr.headBranch,
-            base_branch: pr.baseBranch,
-            state: pr.state,
-            draft: pr.draft ? 1 : 0,
-            review_result: null,
-            review_at: null,
-            created_at: pr.createdAt,
-            updated_at: pr.updatedAt,
-            synced_at: now,
-            review_iteration: 0,
-            review_session_id: null,
-            head_sha: pr.headSha,
-            last_reviewed_sha: null,
-            node_id: pr.nodeId,
-            merge_state: pr.mergeableState,
-            merge_state_checked_at: now,
-            conflict_nudge_sha: null,
-          });
-          if (sessionMatch) {
-            logger.info(
-              `[prs] on-demand sync PR #${prNumber}: linked session ${sessionMatch.session_id.slice(0, 8)} via head_branch "${pr.headBranch}"`,
-            );
-          }
-          prRow = getPRByNumber(prNumber, repo);
-        } catch {
-          // GitHub fetch failed — fall through to 404
-        }
-      }
-      if (!prRow) {
-        res.status(404).json({ error: `PR #${prNumber} not found` });
-        return;
-      }
-      const contextUrl = project.contextUrl;
-      try {
-        const result = await Promise.race([
-          prReviewService.reviewPR(
-            { type: 'pr', prNumber, repo },
-            new GitHubDiffSource(github, repo, prNumber),
-            projectId,
-            contextUrl,
-          ),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error('Review timed out')), 120_000),
-          ),
-        ]);
-        setPRReviewResult(prNumber, repo, JSON.stringify(result));
-        _broadcast({
-          type: 'pr_review_complete',
-          prNumber,
-          repo,
-          verdict: result.verdict,
-          summary: result.summary,
-        });
-        res.json(result);
-      } catch (err) {
-        if (err instanceof Error && err.message === 'Review timed out') {
-          res.status(504).json({ error: 'Review timed out' });
-          return;
-        }
-        res.status(500).json({ error: (err as Error).message });
-      }
     }),
   );
 
@@ -785,9 +689,6 @@ export function createPrsRouter(
         return;
       }
 
-      // Reset iteration counter so the orchestrator won't block on the cap
-      resetReviewIteration(prNumber, repo);
-
       const project = getProjectByGithubRepo(repo);
       if (!project) {
         res
@@ -795,71 +696,29 @@ export function createPrsRouter(
           .json({ error: `No project configured for repo ${repo}` });
         return;
       }
-      try {
-        const result = await Promise.race([
-          prReviewService.reviewPR(
-            { type: 'pr', prNumber, repo },
-            new GitHubDiffSource(github, repo, prNumber),
-            project.id,
-            project.contextUrl,
-          ),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error('Review timed out')), 120_000),
-          ),
-        ]);
-        setPRReviewResult(prNumber, repo, JSON.stringify(result));
-        _broadcast({
-          type: 'pr_review_complete',
-          prNumber,
-          repo,
-          verdict: result.verdict,
-          summary: result.summary,
-        });
-
-        // Route feedback to the implementing session the same way the
-        // automatic review path does (ReviewOrchestrator.executeReview) —
-        // this route is the operator's manual escape hatch, reached
-        // precisely when the automatic path is stuck, so its verdict must
-        // not be silently dropped. resetReviewIteration above stays
-        // unconditional: it only forgives the iteration count going into
-        // this one operator-triggered review, it does not exempt anything
-        // downstream — incrementReviewIteration still fires inside
-        // reviewPR() on every call (manual or automatic), and the cap in
-        // ReviewOrchestrator.executeReview is checked fresh against the
-        // live counter on every subsequent automatic dispatch, so a
-        // needs_changes verdict routed from here re-enters the same
-        // bounded fix-and-re-review loop as normal.
-        let feedbackRouted = false;
-        if (
-          result.verdict === 'needs_changes' ||
-          result.verdict === 'incomplete'
-        ) {
-          const freshPrRow = getPRByNumber(prNumber, repo);
-          if (freshPrRow?.session_id) {
-            await sessionManager.enqueueFeedback(
-              freshPrRow.session_id,
-              'ai-reviewer',
-              formatReviewFeedback(result, 0, {
-                conflicted: freshPrRow.merge_state === 'dirty',
-                baseBranch: freshPrRow.base_branch ?? undefined,
-              }),
-            );
-            feedbackRouted = true;
-          } else {
-            logger.warn(
-              `[prs] re-review: PR #${prNumber} (${repo}) has no resolvable implementing session — feedback not routed`,
-            );
-          }
-        }
-
-        res.json({ ...result, feedbackRouted });
-      } catch (err) {
-        if (err instanceof Error && err.message === 'Review timed out') {
-          res.status(504).json({ error: 'Review timed out' });
-          return;
-        }
-        res.status(500).json({ error: (err as Error).message });
+      if (!reviewOrchestrator?.enqueueReview) {
+        res.status(503).json({ error: 'Review orchestrator unavailable' });
+        return;
       }
+      const session = prRow.session_id
+        ? getSession(prRow.session_id)
+        : undefined;
+      const queued = reviewOrchestrator.enqueueReview({
+        prNumber,
+        repo,
+        taskId: prRow.task_id ?? '',
+        taskUrl: session?.task_url ?? '',
+        contextUrl: project.contextUrl ?? '',
+        projectId: project.id,
+        operatorRequested: true,
+      });
+      if (!queued) {
+        res.status(409).json({
+          error: `Review for PR #${prNumber} could not be queued (no task, PR not open, or already queued)`,
+        });
+        return;
+      }
+      res.status(202).json({ queued: true });
     }),
   );
 

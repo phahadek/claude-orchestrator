@@ -1443,7 +1443,11 @@ export class ReviewOrchestrator {
       return;
     }
     const maxIterations = getMaxReviewIterations();
-    if (prRow && prRow.review_iteration >= maxIterations) {
+    if (
+      prRow &&
+      !job.operatorRequested &&
+      prRow.review_iteration >= maxIterations
+    ) {
       const message = `Review loop for PR #${job.prNumber} reached ${maxIterations} iterations without approval. Manual intervention needed.`;
       logger.warn(`[ReviewOrchestrator] ${message}`);
       setPauseReason(job.prNumber, job.repo, 'max_reviews');

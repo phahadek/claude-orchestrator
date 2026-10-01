@@ -172,6 +172,12 @@ export interface ReviewJob {
    * job actually reaches a review dispatch (pipeline gates passed).
    */
   pushTriggered?: boolean;
+  /**
+   * True when an operator explicitly requested this review from the
+   * dashboard. executeReview skips only the max_review_iterations cap return
+   * for it; the stored review_iteration counter is neither reset nor bumped.
+   */
+  operatorRequested?: boolean;
 }
 
 export interface ParsedDispositionItem {
