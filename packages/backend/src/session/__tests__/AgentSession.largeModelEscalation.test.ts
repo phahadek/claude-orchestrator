@@ -904,14 +904,14 @@ describe('AgentSession — escalation deadlock watchdog + bounded retry', () => 
   });
 });
 
-describe("AgentSession — overflow escalation window", () => {
-  it("is pending until the escalated process emits its first event, and delivers inbox text to it", async () => {
+describe('AgentSession — overflow escalation window', () => {
+  it('is pending until the escalated process emits its first event, and delivers inbox text to it', async () => {
     mockRuntimeSettings.large_task_model = LARGE_MODEL;
     vi.mocked(queries.listUndeliveredInboxItems).mockReturnValue([
-      { id: 7, source: "operator:message", payload: "inbox-in-flight" },
+      { id: 7, source: 'operator:message', payload: 'inbox-in-flight' },
     ] as never);
 
-    const session = makeSession("standard");
+    const session = makeSession('standard');
     expect(session.isOverflowEscalationPending).toBe(false);
     await session.run();
 
@@ -919,26 +919,26 @@ describe("AgentSession — overflow escalation window", () => {
     expect(runCalls[1].options.model).toBe(LARGE_MODEL);
     expect(session.isOverflowEscalationPending).toBe(false);
     expect(mockSendMessage).toHaveBeenCalledTimes(1);
-    expect(mockSendMessage.mock.calls[0][0]).toContain("inbox-in-flight");
+    expect(mockSendMessage.mock.calls[0][0]).toContain('inbox-in-flight');
     expect(queries.markInboxItemsDelivered).toHaveBeenCalledWith([7]);
   });
 
-  it("persists the large model when the escalated process emits an assistant event", async () => {
+  it('persists the large model when the escalated process emits an assistant event', async () => {
     mockRuntimeSettings.large_task_model = LARGE_MODEL;
-    const session = makeSession("standard");
+    const session = makeSession('standard');
     await session.run();
     runCalls[1].onEvent({
-      type: "assistant",
-      message: { id: "m1", model: "claude-opus-4-7", content: [] },
+      type: 'assistant',
+      message: { id: 'm1', model: 'claude-opus-4-7', content: [] },
     });
     expect(queries.setSessionModel).toHaveBeenCalledWith(
-      "test-session-overflow",
+      'test-session-overflow',
       LARGE_MODEL,
     );
   });
 
-  it("does not spawn when large_task_model is empty", async () => {
-    const session = makeSession("standard");
+  it('does not spawn when large_task_model is empty', async () => {
+    const session = makeSession('standard');
     await session.run();
     expect(runCalls).toHaveLength(1);
   });

@@ -3387,7 +3387,9 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     const items = listUndeliveredInboxItems(this.sessionId);
     if (items.length === 0) return '';
     markInboxItemsDelivered(items.map((item) => item.id));
-    return items.map((item) => `[${item.source}]\n${item.payload}`).join('\n\n');
+    return items
+      .map((item) => `[${item.source}]\n${item.payload}`)
+      .join('\n\n');
   }
 
   private sendEscalationNudge(nudge: string): void {
