@@ -487,7 +487,8 @@ export class PreReviewPipeline {
               continue;
             }
             if (followed.state === 'passed' || followed.state === 'failed') {
-              const toolInfra = followed.failure_reason === 'tool_infra_failure';
+              const toolInfra =
+                followed.failure_reason === 'tool_infra_failure';
               outcome = outcomeFromRun(followed, {
                 passed: followed.state === 'passed',
                 failedCommand: followed.failed_command ?? undefined,
