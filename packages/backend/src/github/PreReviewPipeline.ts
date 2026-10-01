@@ -62,7 +62,11 @@ import type { SessionManager } from '../session/SessionManager';
 import type { GitHubClient } from './GitHubClient';
 import type { ReviewJob, FlakeRecoveryOutcome } from './types';
 import type { ProjectConfig } from '../config';
-import type { PauseReason, StructuredTestResult } from '../db/types';
+import type {
+  PauseReason,
+  StructuredTestResult,
+  TestRequestRunRow,
+} from '../db/types';
 import { parsePauseReason } from '../db/pauseReason';
 
 interface GateFailureDetail {
@@ -74,6 +78,8 @@ interface GateFailureDetail {
   isToolInfraFailure?: boolean;
   toolFailureReason?: string;
   isTimeoutInfraFailure?: boolean;
+  /** Stage ended with no verdict (PR merged/closed, or admission budget spent): no failure event, pause, or nudge. */
+  stopWithoutVerdict?: boolean;
   /**
    * Present only for a worker_crash gate failure — the size-capped message
    * (matched signature lines + node id, never raw/tail output; see
@@ -367,13 +373,57 @@ export class PreReviewPipeline {
         // A superseded result means this run was withdrawn before it ever
         // executed (a newer request, or a PR merge/close/push, superseded it
         // on the same worktree — see testRequestLane.ts's supersession).
-        // That's never a verify failure: re-hash the (by definition
-        // since-moved) tree and re-admit once more, mirroring
-        // buildTestsStage's own retry — never report a gate failure for a
-        // run that never produced a verdict.
-        for (let attempt = 0; attempt < 2; attempt++) {
+        // That's never a verdict and never a timeout: follow it to a real
+        // one — the superseding run's result, a re-hash + re-admit for
+        // head_moved, or stop with no pause when the PR is merged/closed.
+        const MAX_VERIFY_ADMISSIONS = 6;
+        const outcomeFromRun = (
+          run: TestRequestRunRow | undefined,
+          base: {
+            passed: boolean;
+            failedCommand?: string;
+            output: string;
+            isToolInfraFailure?: boolean;
+            toolFailureReason?: string;
+          },
+        ): NormalizedVerifyOutcome => {
+          let structuredResult: StructuredTestResult | null = null;
+          if (run?.structured_result) {
+            try {
+              structuredResult = JSON.parse(
+                run.structured_result,
+              ) as StructuredTestResult;
+            } catch {
+              structuredResult = null;
+            }
+          }
+          const isWorkerCrash = run?.failure_reason === 'worker_crash';
+          return {
+            passed: base.passed,
+            failedCommand: base.failedCommand,
+            truncatedOutput: tailOfLog(base.output),
+            isToolInfraFailure: base.isToolInfraFailure,
+            toolFailureReason: base.toolFailureReason,
+            isTimeoutInfraFailure: run?.failure_reason === 'timeout',
+            isWorkerCrash,
+            crashMessage:
+              isWorkerCrash && run
+                ? buildWorkerCrashMessage(
+                    detectCrashSignature(
+                      run.output,
+                      config.test_crash_signatures ?? [],
+                    ) ?? { matchedLines: [] },
+                  )
+                : undefined,
+            structuredResult,
+          };
+        };
+
+        let admissions = 0;
+        while (admissions < MAX_VERIFY_ADMISSIONS) {
           contentHash = await computeWholeTreeContentHash(ctx.worktreePath);
           if (!contentHash) break;
+          admissions++;
 
           // Cross-kind reuse now lives entirely in admitTestRequest's own
           // coverage-reuse layer (testRequestLane.ts): a passed run of any
@@ -399,53 +449,66 @@ export class PreReviewPipeline {
             env: buildScopedEnv(ctx.worktreePath, config.cache_env),
             expectedToolVersions: config.expected_tool_versions,
           });
-          if (laneResult.superseded) {
-            logger.info(
-              `[PreReviewPipeline] verify run for PR #${ctx.prNumber} was superseded — re-hashing and re-admitting once`,
-            );
-            continue;
+          if (!laneResult.superseded) {
+            outcome = outcomeFromRun(getTestRequestRunById(laneResult.runId), {
+              passed: laneResult.passed,
+              failedCommand: laneResult.failedCommand,
+              output: laneResult.output,
+              isToolInfraFailure: laneResult.isToolInfraFailure,
+              toolFailureReason: laneResult.toolFailureReason,
+            });
+            break;
           }
-          const run = getTestRequestRunById(laneResult.runId);
-          let structuredResult: StructuredTestResult | null = null;
-          if (run?.structured_result) {
-            try {
-              structuredResult = JSON.parse(
-                run.structured_result,
-              ) as StructuredTestResult;
-            } catch {
-              structuredResult = null;
+
+          logger.info(
+            `[PreReviewPipeline] verify run for PR #${ctx.prNumber} was superseded by ${laneResult.supersededBy ?? 'unknown'} — following`,
+          );
+          const visited = new Set<string>();
+          let by = laneResult.supersededBy;
+          while (by) {
+            if (by === 'pr_merged' || by === 'pr_closed') {
+              logger.info(
+                `[PreReviewPipeline] PR #${ctx.prNumber}: verify superseded by ${by} — stopping without a verdict`,
+              );
+              return {
+                summary: `verify superseded by ${by}`,
+                stopWithoutVerdict: true,
+              };
             }
+            if (by === 'head_moved' || visited.has(by)) break;
+            visited.add(by);
+            const followed = getTestRequestRunById(by);
+            if (!followed) break;
+            if (
+              followed.state === 'failed' &&
+              followed.failure_reason === 'superseded'
+            ) {
+              by = followed.superseded_by ?? undefined;
+              continue;
+            }
+            if (followed.state === 'passed' || followed.state === 'failed') {
+              const toolInfra = followed.failure_reason === 'tool_infra_failure';
+              outcome = outcomeFromRun(followed, {
+                passed: followed.state === 'passed',
+                failedCommand: followed.failed_command ?? undefined,
+                output: followed.output,
+                isToolInfraFailure: toolInfra,
+                toolFailureReason: toolInfra
+                  ? tailOfLog(followed.output)
+                  : undefined,
+              });
+            }
+            break;
           }
-          const isWorkerCrash = run?.failure_reason === 'worker_crash';
-          outcome = {
-            passed: laneResult.passed,
-            failedCommand: laneResult.failedCommand,
-            truncatedOutput: tailOfLog(laneResult.output),
-            isToolInfraFailure: laneResult.isToolInfraFailure,
-            toolFailureReason: laneResult.toolFailureReason,
-            isTimeoutInfraFailure: run?.failure_reason === 'timeout',
-            isWorkerCrash,
-            crashMessage:
-              isWorkerCrash && run
-                ? buildWorkerCrashMessage(
-                    detectCrashSignature(
-                      run.output,
-                      config.test_crash_signatures ?? [],
-                    ) ?? { matchedLines: [] },
-                  )
-                : undefined,
-            structuredResult,
-          };
-          break;
+          if (outcome) break;
         }
         if (!outcome && contentHash) {
-          // Both attempts were superseded — extremely unlikely (would need
-          // back-to-back withdrawals), but never silently pass a gate stage
-          // with no verdict. Treat as a transient infra hiccup rather than a
-          // verify failure.
+          logger.warn(
+            `[PreReviewPipeline] PR #${ctx.prNumber}: verify admission budget (${MAX_VERIFY_ADMISSIONS}) exhausted while every run was superseded — next pipeline trigger re-runs verify`,
+          );
           return {
-            summary: 'verify run was repeatedly superseded — will retry',
-            isTimeoutInfraFailure: true,
+            summary: 'verify admission budget exhausted',
+            stopWithoutVerdict: true,
           };
         }
         if (!outcome) {
@@ -1300,6 +1363,12 @@ export class PreReviewPipeline {
 
       if (stage.mode === 'gate') {
         const failure = await stage.run(ctx);
+        if (failure?.stopWithoutVerdict) {
+          logger.info(
+            `[PreReviewPipeline] PR #${job.prNumber}: gate stage=${stage.id} ended without a verdict (${failure.summary})`,
+          );
+          return { passed: false };
+        }
         if (failure !== null) {
           logger.info(
             `[PreReviewPipeline] PR #${job.prNumber}: gate stage=${stage.id} FAILED`,

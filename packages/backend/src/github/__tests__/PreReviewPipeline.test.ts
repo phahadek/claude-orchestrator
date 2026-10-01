@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
@@ -1329,6 +1329,206 @@ describe('PreReviewPipeline — verify gate worker_crash classification', () => 
       expect.anything(),
     );
     expect(sm.sendOrResume).not.toHaveBeenCalled();
+  });
+});
+
+describe('PreReviewPipeline — verify gate superseded-run handling', () => {
+  function lane(result: Record<string, unknown>) {
+    return {
+      runId: 'run-x',
+      status: 'running',
+      position: 0,
+      queueDepth: 0,
+      reused: false,
+      unchangedReplay: false,
+      result: Promise.resolve(result),
+    };
+  }
+  const superseded = (by: string) =>
+    lane({ passed: false, output: '', superseded: true, supersededBy: by });
+  const runRow = (over: Record<string, unknown>) => ({
+    state: 'passed',
+    failure_reason: null,
+    output: '',
+    structured_result: null,
+    superseded_by: null,
+    failed_command: null,
+    ...over,
+  });
+
+  beforeEach(() => {
+    mockLoadOrchestratorConfig.mockReturnValue({
+      verify: ['npm run verify'],
+      autofix: [],
+      analyze: [],
+      test: [],
+      test_timeout_sec: 300,
+      test_max_rss_mb: 0,
+      test_fail_fast: true,
+      analyze_timeout_sec: 300,
+      analyze_max_rss_mb: 0,
+      analyze_fail_fast: true,
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    });
+    mockGetTestRequestRunById.mockReset();
+    mockGetTestRequestRunById.mockReturnValue(undefined);
+    mockAdmitTestRequest.mockReset();
+  });
+
+  afterEach(() => {
+    mockAdmitTestRequest.mockReset();
+    mockLaneResult({ passed: true, output: '' });
+  });
+
+  const expectNoTimeoutPause = () => {
+    expect(mockSetPauseReason).not.toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'gate_timeout_infra_failure',
+      expect.anything(),
+    );
+  };
+
+  it('uses a passed superseding run as the verify verdict', async () => {
+    mockAdmitTestRequest.mockReturnValue(superseded('run-new'));
+    mockGetTestRequestRunById.mockImplementation((id: string) =>
+      id === 'run-new' ? runRow({ state: 'passed' }) : undefined,
+    );
+    const result = await new PreReviewPipeline(makeSessionManager()).run(
+      makeJob(),
+      makeProject(),
+    );
+    expect(result.passed).toBe(true);
+    expect(mockAdmitTestRequest).toHaveBeenCalledTimes(1);
+    expectNoTimeoutPause();
+  });
+
+  it('fails verify with the failed command of a failed superseding run', async () => {
+    mockAdmitTestRequest.mockReturnValue(superseded('run-new'));
+    mockGetTestRequestRunById.mockImplementation((id: string) =>
+      id === 'run-new'
+        ? runRow({
+            state: 'failed',
+            failure_reason: 'generic',
+            failed_command: 'npm run verify',
+            output: 'boom',
+          })
+        : undefined,
+    );
+    const sm = makeSessionManager();
+    const result = await new PreReviewPipeline(sm).run(
+      makeJob(),
+      makeProject(),
+    );
+    expect(result.passed).toBe(false);
+    expect(sm.emit).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        type: 'pipeline_stage_failed',
+        stage: 'verify',
+        failedCommand: 'npm run verify',
+      }),
+    );
+    expectNoTimeoutPause();
+  });
+
+  it('follows a chain of superseded runs to a passed verdict', async () => {
+    mockAdmitTestRequest.mockReturnValue(superseded('run-a'));
+    mockGetTestRequestRunById.mockImplementation((id: string) => {
+      if (id === 'run-a')
+        return runRow({
+          state: 'failed',
+          failure_reason: 'superseded',
+          superseded_by: 'run-b',
+        });
+      if (id === 'run-b') return runRow({ state: 'passed' });
+      return undefined;
+    });
+    const result = await new PreReviewPipeline(makeSessionManager()).run(
+      makeJob(),
+      makeProject(),
+    );
+    expect(result.passed).toBe(true);
+    expectNoTimeoutPause();
+  });
+
+  it('re-admits against the current tree on head_moved', async () => {
+    mockAdmitTestRequest
+      .mockReturnValueOnce(superseded('head_moved'))
+      .mockReturnValueOnce(lane({ passed: true, output: '' }));
+    const result = await new PreReviewPipeline(makeSessionManager()).run(
+      makeJob(),
+      makeProject(),
+    );
+    expect(result.passed).toBe(true);
+    expect(mockAdmitTestRequest).toHaveBeenCalledTimes(2);
+    expectNoTimeoutPause();
+  });
+
+  it('does not pause or fail on repeated supersession, and stops after the admission budget', async () => {
+    mockAdmitTestRequest.mockReturnValue(superseded('head_moved'));
+    const sm = makeSessionManager();
+    const result = await new PreReviewPipeline(sm).run(
+      makeJob(),
+      makeProject(),
+    );
+    expect(result.passed).toBe(false);
+    expect(mockAdmitTestRequest).toHaveBeenCalledTimes(6);
+    expectNoTimeoutPause();
+    expect(mockSetPauseReason).not.toHaveBeenCalled();
+    expect(sm.sendOrResume).not.toHaveBeenCalled();
+    expect(sm.emit).not.toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({ type: 'pipeline_stage_failed' }),
+    );
+  });
+
+  it.each(['pr_merged', 'pr_closed'])(
+    'ends the stage with no pause or failure event when superseded by %s',
+    async (marker) => {
+      mockAdmitTestRequest.mockReturnValue(superseded(marker));
+      const sm = makeSessionManager();
+      const result = await new PreReviewPipeline(sm).run(
+        makeJob(),
+        makeProject(),
+      );
+      expect(result.passed).toBe(false);
+      expect(mockAdmitTestRequest).toHaveBeenCalledTimes(1);
+      expect(mockSetPauseReason).not.toHaveBeenCalled();
+      expect(sm.sendOrResume).not.toHaveBeenCalled();
+      expect(sm.emit).not.toHaveBeenCalledWith(
+        'message',
+        expect.objectContaining({ type: 'pipeline_stage_failed' }),
+      );
+    },
+  );
+
+  it('still pauses gate_timeout_infra_failure when the followed run timed out', async () => {
+    mockAdmitTestRequest.mockReturnValue(superseded('run-new'));
+    mockGetTestRequestRunById.mockImplementation((id: string) =>
+      id === 'run-new'
+        ? runRow({
+            state: 'failed',
+            failure_reason: 'timeout',
+            failed_command: 'npm run verify',
+            output: 'hung',
+          })
+        : undefined,
+    );
+    const result = await new PreReviewPipeline(makeSessionManager()).run(
+      makeJob(),
+      makeProject(),
+    );
+    expect(result.passed).toBe(false);
+    expect(mockSetPauseReason).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'gate_timeout_infra_failure',
+      expect.anything(),
+    );
   });
 });
 
