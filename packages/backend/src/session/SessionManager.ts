@@ -5565,6 +5565,22 @@ export class SessionManager extends EventEmitter {
     // silently dropped — falling through to the respawn path below instead
     // delivers it via a fresh --resume process.
     const liveSession = this.sessions.get(sessionId);
+    // Context-overflow escalation in flight: the owning AgentSession is about
+    // to (or just did) spawn on large_task_model. Respawning here would start a
+    // second --resume on the stored 200k model and its teardown would remove
+    // the worktree under the escalated process. Persist the text so the
+    // escalated process picks it up from the inbox instead.
+    if (
+      liveSession &&
+      !liveSession.hasEnded &&
+      liveSession.isOverflowEscalationPending
+    ) {
+      if (opts.persistTextOnDefer !== false) {
+        enqueueFeedbackItem(sessionId, 'operator:message', text);
+      }
+      liveSession.noteInboxDuringEscalation();
+      return sessionId;
+    }
     if (liveSession && !liveSession.hasEnded) {
       const delivered = this.send(sessionId, text);
       if (delivered) {
