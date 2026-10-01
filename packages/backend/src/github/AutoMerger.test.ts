@@ -831,8 +831,8 @@ describe('AutoMerger.attempt() — failure modes', () => {
       new GitHubApiError(405, 'Base branch was modified'),
     );
     vi.mocked(github.categorizeMergeability).mockResolvedValueOnce({
-      category: 'conflict',
-      mergeState: 'dirty',
+      category: 'behind',
+      mergeState: 'behind',
       rawMergeableState: 'behind',
       failingChecks: [],
       headSha: 'sha-abc',
@@ -2134,8 +2134,8 @@ describe('AutoMerger.attemptMerge() — 405 still-draft retry', () => {
       new GitHubApiError(405, 'Base branch was modified'),
     );
     vi.mocked(github.categorizeMergeability).mockResolvedValueOnce({
-      category: 'conflict',
-      mergeState: 'dirty',
+      category: 'behind',
+      mergeState: 'behind',
       rawMergeableState: 'behind',
       failingChecks: [],
       headSha: 'sha-abc',
@@ -2454,8 +2454,8 @@ describe('AutoMerger conflict nudge', () => {
       new GitHubApiError(405, 'Base branch was modified'),
     );
     vi.mocked(github.categorizeMergeability).mockResolvedValueOnce({
-      category: 'conflict',
-      mergeState: 'dirty',
+      category: 'behind',
+      mergeState: 'behind',
       rawMergeableState: 'behind',
       failingChecks: [],
       headSha: 'sha-abc',

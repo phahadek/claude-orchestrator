@@ -109,6 +109,7 @@ export interface MergeCompletedPayload {
 }
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const BEHIND_RECHECK_DELAY_MS = 60_000;
 /**
  * Cadence for the escalated-open stale sweep — deliberately slower than the
  * 5-minute merge poll, since a stale escalated row is cosmetic-but-misleading
@@ -785,6 +786,59 @@ export class PRMergeWatcher extends EventEmitter {
     return `${pr.pr_number}:${pr.repo}`;
   }
 
+  private readonly behindRechecks = new Set<string>();
+
+  private scheduleBehindRecheck(
+    pr: PullRequestRow,
+    ciCheckNames: string[],
+  ): void {
+    const key = this.prKey(pr);
+    if (this.behindRechecks.has(key)) return;
+    this.behindRechecks.add(key);
+    const timer = setTimeout(() => {
+      this.behindRechecks.delete(key);
+      void this.runBehindRecheck(pr.pr_number, pr.repo, ciCheckNames).catch(
+        (err: unknown) =>
+          logger.warn(
+            `[PRMergeWatcher] behind re-check failed for PR #${pr.pr_number}: ${(err as Error).message}`,
+          ),
+      );
+    }, BEHIND_RECHECK_DELAY_MS);
+    timer.unref?.();
+  }
+
+  private async runBehindRecheck(
+    prNumber: number,
+    repo: string,
+    ciCheckNames: string[],
+  ): Promise<void> {
+    const before = getPRByNumber(prNumber, repo);
+    if (!before || before.state !== 'open') return;
+    let category: MergeabilityCategory;
+    try {
+      category = await this.github.categorizeMergeability(
+        prNumber,
+        repo,
+        ciCheckNames,
+      );
+    } catch (err) {
+      if (err instanceof GitHubRateLimitError) {
+        this.handleRateLimit(err);
+        return;
+      }
+      throw err;
+    }
+    const fresh = getPRByNumber(prNumber, repo);
+    if (!fresh || fresh.state !== 'open') return;
+    if (category.category === 'clean') {
+      this.autoMerger?.attempt(prNumber, repo);
+    } else if (category.category === 'conflict') {
+      if (!isTerminalMergePause(fresh.pause_reason)) {
+        await sendConflictNudge(this.sessions, fresh, 'conflict');
+      }
+    }
+  }
+
   /**
    * Records that this PR's F2 gate has no settled full-run verdict for its
    * current content hash. Emits the pr_f2_verdict_pending audit row and an
@@ -1201,6 +1255,21 @@ export class PRMergeWatcher extends EventEmitter {
       await sendConflictNudge(this.sessions, pr, 'conflict');
     }
 
+    // Behind is not a conflict: notify once per transition, re-check shortly.
+    if (
+      !terminalPause &&
+      category.category === 'behind' &&
+      pr.merge_state !== 'behind'
+    ) {
+      logger.info(
+        `[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} is behind base`,
+      );
+      await sendConflictNudge(this.sessions, pr, 'behind', {
+        replaceConflictNudge: true,
+      });
+      this.scheduleBehindRecheck(pr, ciCheckNames);
+    }
+
     // Only update + broadcast if something actually changed.
     if (!stateChanged && !failingChecksChanged) {
       if (!terminalPause) this.tryCIFailingRecovery(pr, category);
@@ -1357,7 +1426,11 @@ export class PRMergeWatcher extends EventEmitter {
       return;
     // Trigger recovery for any non-CI-failing, non-conflict category.
     // AutoMerger will re-categorize and bounce back if not actually mergeable.
-    if (category.category === 'ci_failed' || category.category === 'conflict')
+    if (
+      category.category === 'ci_failed' ||
+      category.category === 'conflict' ||
+      category.category === 'behind'
+    )
       return;
     setPauseReason(pr.pr_number, pr.repo, null);
     logger.info(
