@@ -1554,8 +1554,8 @@ export function getLiveGateVerifySessions(): LiveGateVerifySession[] {
  *
  * This intentionally does not count the same population as
  * SessionManager.getLivePlanningSessionCount(), which tracks only sessions
- * with a live in-memory process (that map entry is removed the moment a
- * session goes idle, see cleanupWorktree) — a narrower, in-process
+ * with an in-memory map entry (an idle planning session keeps its entry
+ * until its row reaches a terminal status) — a narrower, in-process
  * concurrency guard used by DispatchTriggerEvaluator to decide whether to
  * spawn another session right now. This DB-backed count instead answers
  * "how much of the planning pool's capacity is currently spoken for",

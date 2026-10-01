@@ -180,6 +180,7 @@ vi.mock('../audit/AuditLog', () => ({
 }));
 
 import { SessionManager } from '../session/SessionManager';
+import * as queries from '../db/queries';
 
 const TASK_URL =
   'https://www.notion.so/Test-Task-abc123def456789012345678901234ab';
@@ -294,38 +295,63 @@ describe('SessionManager.start() — shared planning concurrency cap', () => {
 });
 
 describe("SessionManager.endSession() — releasing a terminal planning session's slot", () => {
-  it('with the cap (2) full of terminal-but-unreaped sessions, ending them frees the slot for a new launch', async () => {
-    const sm = new SessionManager();
-    const sessions = sm as unknown as {
-      sessions: Map<string, { sessionType: string; endSession: () => void }>;
-    };
-    const ids = ['term-1', 'term-2'];
-    for (const id of ids) {
-      // Models a session PlanningOrchestrator.markTerminal has already
-      // written 'done' for, but whose subprocess hasn't exited yet — the
-      // exact leak this task fixes. endSession() here stands in for the
-      // real clean-exit -> cleanupWorktree chain that deletes the map entry.
-      sessions.sessions.set(id, {
-        sessionType: 'groom',
-        endSession: () => sessions.sessions.delete(id),
-      });
-    }
-
-    await expect(
-      sm.start(TASK_URL, CTX_URL, {
-        sessionType: 'design',
-        projectId: PROJECT_ID,
-        taskKind: 'milestone',
-      }),
-    ).rejects.toThrow(/Max concurrent planning sessions/);
-
-    for (const id of ids) sm.endSession(id);
-
-    const id = await sm.start(TASK_URL, CTX_URL, {
-      sessionType: 'design',
+  function seedSettledGroom(sm: SessionManager, id: string): void {
+    (sm as unknown as { sessions: Map<string, unknown> }).sessions.set(id, {
+      sessionType: 'groom',
+      endSession: vi.fn().mockResolvedValue(undefined),
+    });
+  }
+  const startGroom = (sm: SessionManager) =>
+    sm.start(TASK_URL, CTX_URL, {
+      sessionType: 'groom',
       projectId: PROJECT_ID,
       taskKind: 'milestone',
     });
-    expect(typeof id).toBe('string');
+
+  it('with the cap (2) full of terminal-but-unreaped sessions, ending them frees the slot for a new launch', async () => {
+    const sm = new SessionManager();
+    const ids = ['term-1', 'term-2'];
+    for (const id of ids) seedSettledGroom(sm, id);
+    vi.mocked(queries.getSession).mockImplementation(
+      (id: string) => ({ session_id: id, status: 'done' }) as never,
+    );
+
+    await expect(startGroom(sm)).rejects.toThrow(
+      /Max concurrent planning sessions/,
+    );
+
+    for (const id of ids) sm.endSession(id);
+
+    expect(typeof (await startGroom(sm))).toBe('string');
+  });
+
+  it('an idle groom left in the map still holds its slot at the cap', async () => {
+    const sm = new SessionManager();
+    seedSettledGroom(sm, 'idle-1');
+    seedSettledGroom(sm, 'idle-2');
+    vi.mocked(queries.getSession).mockImplementation(
+      (id: string) => ({ session_id: id, status: 'idle' }) as never,
+    );
+
+    await expect(startGroom(sm)).rejects.toThrow(
+      /Max concurrent planning sessions/,
+    );
+  });
+
+  it('endSession on a non-terminal row keeps the map entry', () => {
+    const sm = new SessionManager();
+    seedSettledGroom(sm, 'idle-1');
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'idle-1',
+      status: 'idle',
+    } as never);
+
+    sm.endSession('idle-1');
+
+    expect(
+      (sm as unknown as { sessions: Map<string, unknown> }).sessions.has(
+        'idle-1',
+      ),
+    ).toBe(true);
   });
 });

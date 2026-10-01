@@ -4298,9 +4298,10 @@ export class SessionManager extends EventEmitter {
    *
    * This is a narrower population than the DB-backed
    * queries.countLivePlanningSessions(): it only counts sessions with a live
-   * in-memory process (this.sessions/pendingStarts), so an idle session —
-   * archived or not — is never counted here, since going idle removes the
-   * entry from `this.sessions` (see cleanupWorktree). That is intentional:
+   * in-memory process (this.sessions/pendingStarts), so a session
+   * with no map entry is never counted here. An idle planning session
+   * remains in `this.sessions` (and is counted) until its row reaches a
+   * terminal status and endSession/reconcileSessionsMap drops it. That is intentional:
    * this counter answers "would spawning one more exceed the concurrency
    * cap right now", not "how much of the pool's capacity is spoken for" —
    * the latter is what the gate reconciler budgets against via
@@ -5091,6 +5092,14 @@ export class SessionManager extends EventEmitter {
           `[SessionManager] endSession escalation failed for ${sessionId.slice(0, 8)}: ${(err as Error).message}`,
         );
       });
+      // Terminal row: release the concurrency slot and credentials now
+      // rather than waiting for reconcileSessionsMap.
+      this.evictDeadSessionEntry(sessionId);
+      const revocationReason = row
+        ? `terminal_status:${row.status}`
+        : 'missing_db_row';
+      revokeStageCredential(sessionId, revocationReason);
+      revokeRouteCredential(sessionId, revocationReason);
       return;
     }
     // Absent from the in-memory map does not mean the process exited — it
