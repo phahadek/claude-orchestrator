@@ -209,7 +209,11 @@ export class AutoMerger {
         continue;
       }
 
-      if (category.category !== 'conflict' && category.category !== 'blocked')
+      if (
+        category.category !== 'conflict' &&
+        category.category !== 'behind' &&
+        category.category !== 'blocked'
+      )
         continue;
 
       // The DB row may predate a push the session already made (webhook/poll
@@ -265,8 +269,7 @@ export class AutoMerger {
       }
 
       const cause: ConflictNudgeCause =
-        category.category === 'conflict' &&
-        category.rawMergeableState === 'behind'
+        category.category === 'behind'
           ? 'behind'
           : category.category === 'blocked'
             ? 'blocked'
@@ -747,6 +750,7 @@ export class AutoMerger {
           );
           return;
         }
+        case 'behind':
         case 'conflict':
           // Existing merge-conflict handling owns this case (see PRMergeWatcher
           // and the /merge route) — agent gets a rebase message; we don't pause.
@@ -1033,16 +1037,16 @@ export class AutoMerger {
         } catch {
           category = null;
         }
-        if (category?.category === 'conflict') {
-          if (category.rawMergeableState === 'behind') {
-            // "Base branch was modified" race — pause and notify the code session.
-            // clearStalePauses() will retry automatically after the configured delay.
-            if (this.sessions) {
-              await sendConflictNudge(this.sessions, pr, 'behind');
-            }
-            await this.pauseWithReason(pr, 'auto_merge_failed');
-            return;
+        if (category?.category === 'behind') {
+          // "Base branch was modified" race — pause and notify the code session.
+          // clearStalePauses() will retry automatically after the configured delay.
+          if (this.sessions) {
+            await sendConflictNudge(this.sessions, pr, 'behind');
           }
+          await this.pauseWithReason(pr, 'auto_merge_failed');
+          return;
+        }
+        if (category?.category === 'conflict') {
           logger.info(
             `[AutoMerger] PR #${pr.pr_number}: merge failed — conflict, leaving to existing handling`,
           );

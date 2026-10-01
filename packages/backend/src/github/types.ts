@@ -95,14 +95,21 @@ export interface FailingCheck {
  * combined with check-run conclusions for blocked/unstable PRs.
  *
  * - `clean`     — PR is mergeable.
- * - `conflict`  — merge conflicts (mergeable_state 'dirty' or 'behind'); needs rebase.
+ * - `conflict`  — merge conflicts (mergeable_state 'dirty'); needs rebase.
+ * - `behind`    — head is behind base (mergeable_state 'behind'); not a conflict.
  * - `ci_failed` — required CI checks are failing (mergeable_state 'unstable', or
  *                 'blocked' with failing check-runs).
  * - `blocked`   — blocked by branch protection (missing required reviews, etc.)
  *                 with no failing checks.
  * - `unknown`   — GitHub is still computing, or returned a state we don't recognize.
  */
-type MergeCategory = 'clean' | 'conflict' | 'ci_failed' | 'blocked' | 'unknown';
+type MergeCategory =
+  | 'clean'
+  | 'conflict'
+  | 'behind'
+  | 'ci_failed'
+  | 'blocked'
+  | 'unknown';
 
 export interface MergeabilityCategory {
   category: MergeCategory;

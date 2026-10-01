@@ -56,12 +56,15 @@ export async function sendConflictNudge(
   sessions: SessionManager,
   pr: PullRequestRow,
   cause: ConflictNudgeCause,
+  opts: { replaceConflictNudge?: boolean } = {},
 ): Promise<void> {
   if (!pr.session_id || !pr.head_sha) return;
-  if (pr.head_sha === pr.conflict_nudge_sha) return;
+  const replace = opts.replaceConflictNudge === true;
+  if (!replace && pr.head_sha === pr.conflict_nudge_sha) return;
 
   // Record before send so a crash mid-delivery doesn't re-nudge for same SHA.
-  setConflictNudgeSha(pr.pr_number, pr.repo, pr.head_sha);
+  // A replacing nudge leaves the SHA alone so a later real conflict still nudges.
+  if (!replace) setConflictNudgeSha(pr.pr_number, pr.repo, pr.head_sha);
 
   const message = buildNudgeMessage(pr, cause);
   try {

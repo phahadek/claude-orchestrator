@@ -756,6 +756,111 @@ describe('PRMergeWatcher dirty-transition sendOrResume', () => {
     expect(vi.mocked(sessions.sendOrResume)).not.toHaveBeenCalled();
   });
 
+  describe('behind', () => {
+    const behindValue = {
+      category: 'behind' as never,
+      mergeState: 'behind',
+      rawMergeableState: 'behind',
+      failingChecks: [],
+    };
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    async function pollBehind(prOverrides: Partial<PullRequestRow> = {}) {
+      const pr = makePRRow({
+        merge_state: 'clean',
+        session_id: 'coding-session',
+        head_sha: 'sha-abc',
+        conflict_nudge_sha: null,
+        ...prOverrides,
+      });
+      vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+      vi.mocked(getPRByNumber).mockReturnValue(pr);
+      const github = makeMockGitHub();
+      mockCategorize(github, behindValue);
+      const sessions = makeMockSessions();
+      const autoMerger = makeMockAutoMerger();
+      const watcher = new PRMergeWatcher(
+        github,
+        sessions,
+        makeMockNotion(),
+        () => {},
+      );
+      watcher.setAutoMerger(autoMerger);
+      await watcher.poll();
+      return { github, sessions, autoMerger };
+    }
+
+    it('sends the base-branch-modified message, not conflict instructions, and does not write dirty', async () => {
+      const { sessions } = await pollBehind();
+      const sent = vi.mocked(sessions.sendOrResume).mock.calls[0][1] as string;
+      expect(sent).not.toContain('Rebase');
+      expect(sessions.sendOrResume).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(updateMergeState)).toHaveBeenCalledWith(
+        42,
+        'owner/repo',
+        0,
+        'behind',
+        null,
+      );
+      expect(vi.mocked(updateMergeState)).not.toHaveBeenCalledWith(
+        42,
+        'owner/repo',
+        expect.anything(),
+        'dirty',
+        expect.anything(),
+      );
+    });
+
+    it('still sends behind after a conflict nudge for the same head', async () => {
+      const { sessions } = await pollBehind({ conflict_nudge_sha: 'sha-abc' });
+      expect(sessions.sendOrResume).toHaveBeenCalledTimes(1);
+    });
+
+    it('re-checks after 60s and calls AutoMerger.attempt when clean', async () => {
+      const { github, autoMerger } = await pollBehind();
+      vi.mocked(github.categorizeMergeability).mockResolvedValue({
+        category: 'clean',
+        mergeState: 'clean',
+        rawMergeableState: 'clean',
+        failingChecks: [],
+        headSha: 'sha-abc',
+      });
+      await vi.advanceTimersByTimeAsync(59_000);
+      expect(autoMerger.attempt).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(autoMerger.attempt).toHaveBeenCalledWith(42, 'owner/repo');
+    });
+
+    it('re-check still behind sends no conflict nudge', async () => {
+      const { sessions, autoMerger } = await pollBehind();
+      await vi.advanceTimersByTimeAsync(61_000);
+      expect(sessions.sendOrResume).toHaveBeenCalledTimes(1);
+      expect(autoMerger.attempt).not.toHaveBeenCalled();
+    });
+
+    it('re-check returning conflict runs the conflict nudge', async () => {
+      const { github, sessions } = await pollBehind();
+      vi.mocked(github.categorizeMergeability).mockResolvedValue({
+        category: 'conflict',
+        mergeState: 'dirty',
+        rawMergeableState: 'dirty',
+        failingChecks: [],
+        headSha: 'sha-abc',
+      });
+      await vi.advanceTimersByTimeAsync(61_000);
+      expect(sessions.sendOrResume).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(sessions.sendOrResume).mock.calls[1][1]).toContain(
+        'Rebase',
+      );
+    });
+  });
+
   it('does NOT call sendOrResume when PR has no session_id', async () => {
     const pr = makePRRow({ merge_state: 'clean', session_id: null });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr]);

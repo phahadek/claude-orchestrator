@@ -776,10 +776,19 @@ export class GitHubClient {
     const rawMergeableState = data.mergeable_state ?? null;
     const headSha = data.head?.sha ?? null;
 
-    if (rawMergeableState === 'dirty' || rawMergeableState === 'behind') {
+    if (rawMergeableState === 'dirty') {
       return {
         category: 'conflict',
         mergeState: 'dirty',
+        rawMergeableState,
+        failingChecks: [],
+        headSha,
+      };
+    }
+    if (rawMergeableState === 'behind') {
+      return {
+        category: 'behind',
+        mergeState: 'behind',
         rawMergeableState,
         failingChecks: [],
         headSha,

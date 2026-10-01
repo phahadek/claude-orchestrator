@@ -528,12 +528,12 @@ describe('GitHubClient.categorizeMergeability()', () => {
     expect(result.mergeState).toBe('dirty');
   });
 
-  it('categorizes behind as conflict (needs rebase)', async () => {
+  it('categorizes behind as behind (not a conflict)', async () => {
     mockPRThenChecks({ mergeable_state: 'behind' });
     const client = new GitHubClient();
     const result = await client.categorizeMergeability(42, 'owner/repo');
-    expect(result.category).toBe('conflict');
-    expect(result.mergeState).toBe('dirty');
+    expect(result.category).toBe('behind');
+    expect(result.mergeState).toBe('behind');
   });
 
   it('categorizes unstable as ci_failed and includes failing-check names', async () => {
