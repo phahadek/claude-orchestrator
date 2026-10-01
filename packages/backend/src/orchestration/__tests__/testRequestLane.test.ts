@@ -2989,6 +2989,167 @@ describe('admitTestRequest — coverage reuse', () => {
   });
 });
 
+describe('admitTestRequest — per-command partial coverage', () => {
+  const FULL = ['task test-static', 'uv run task test', 'npx vitest run'];
+  const VERIFY = [...FULL, 'uv run pyright'];
+
+  async function seedFull(
+    project: string,
+    hash: string,
+    opts: { baseSha?: string | null; state?: 'passed' | 'failed' } = {},
+  ) {
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: opts.state !== 'failed',
+      output: 'full out',
+      failedCommand: opts.state === 'failed' ? FULL[1] : undefined,
+    });
+    const r = await admitTestRequest(
+      baseSpec({
+        projectId: project,
+        contentHash: hash,
+        commands: FULL,
+        runKind: 'full',
+        baseSha: opts.baseSha ?? null,
+      }),
+    ).result;
+    mockRunTestCommands.mockClear();
+    return r;
+  }
+
+  it('executes only the missing command and records full list plus reuse note', async () => {
+    const full = await seedFull('p-part-1', 'h-part-1');
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: true,
+      output: 'pyright ok',
+    });
+    const res = await admitTestRequest(
+      baseSpec({
+        projectId: 'p-part-1',
+        contentHash: 'h-part-1',
+        commands: VERIFY,
+        runKind: 'verify',
+        failFast: true,
+      }),
+    ).result;
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    expect(mockRunTestCommands.mock.calls[0][1]).toEqual(['uv run pyright']);
+    expect(mockRunTestCommands.mock.calls[0][4]).toMatchObject({
+      failFast: true,
+    });
+    expect(res.passed).toBe(true);
+    const row = db
+      .prepare(`SELECT * FROM test_request_runs WHERE id = ?`)
+      .get(res.runId) as {
+      state: string;
+      commands: string;
+      output: string;
+      coverage_source_run_id: string | null;
+    };
+    expect(row.state).toBe('passed');
+    expect(JSON.parse(row.commands)).toEqual(VERIFY);
+    expect(row.coverage_source_run_id).toBeNull();
+    expect(row.output).toContain(full.runId);
+    expect(row.output).toContain('uv run task test');
+    expect(row.output).toContain('executed: uv run pyright');
+  });
+
+  it('a failing missing command fails the row with that failed_command', async () => {
+    await seedFull('p-part-2', 'h-part-2');
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: false,
+      output: 'pyright bad',
+      failedCommand: 'uv run pyright',
+    });
+    const res = await admitTestRequest(
+      baseSpec({
+        projectId: 'p-part-2',
+        contentHash: 'h-part-2',
+        commands: VERIFY,
+        runKind: 'verify',
+      }),
+    ).result;
+    expect(res.passed).toBe(false);
+    const row = db
+      .prepare(`SELECT state, failed_command FROM test_request_runs WHERE id = ?`)
+      .get(res.runId) as { state: string; failed_command: string };
+    expect(row.state).toBe('failed');
+    expect(row.failed_command).toBe('uv run pyright');
+  });
+
+  it('all commands on one passed run still write a coverage row without spawning', async () => {
+    const full = await seedFull('p-part-3', 'h-part-3');
+    const res = await admitTestRequest(
+      baseSpec({
+        projectId: 'p-part-3',
+        contentHash: 'h-part-3',
+        commands: FULL,
+        runKind: 'verify',
+      }),
+    ).result;
+    expect(mockRunTestCommands).not.toHaveBeenCalled();
+    const row = db
+      .prepare(
+        `SELECT coverage_source_run_id FROM test_request_runs WHERE id = ?`,
+      )
+      .get(res.runId) as { coverage_source_run_id: string };
+    expect(row.coverage_source_run_id).toBe(full.runId);
+  });
+
+  it('a failed same-hash run covers nothing', async () => {
+    await seedFull('p-part-4', 'h-part-4', { state: 'failed' });
+    mockRunTestCommands.mockResolvedValueOnce({ passed: true, output: 'ok' });
+    await admitTestRequest(
+      baseSpec({
+        projectId: 'p-part-4',
+        contentHash: 'h-part-4',
+        commands: VERIFY,
+        runKind: 'verify',
+      }),
+    ).result;
+    expect(mockRunTestCommands.mock.calls[0][1]).toEqual(VERIFY);
+  });
+
+  it('a passed run with a different base_sha covers nothing', async () => {
+    await seedFull('p-part-5', 'h-part-5', { baseSha: 'base-a' });
+    mockRunTestCommands.mockResolvedValueOnce({ passed: true, output: 'ok' });
+    await admitTestRequest(
+      baseSpec({
+        projectId: 'p-part-5',
+        contentHash: 'h-part-5',
+        commands: VERIFY,
+        runKind: 'verify',
+        baseSha: 'base-b',
+      }),
+    ).result;
+    expect(mockRunTestCommands.mock.calls[0][1]).toEqual(VERIFY);
+  });
+
+  it('a settled same-run_kind row replays before the partial path', async () => {
+    await seedFull('p-part-6', 'h-part-6');
+    mockRunTestCommands.mockResolvedValueOnce({ passed: true, output: 'ok' });
+    const first = await admitTestRequest(
+      baseSpec({
+        projectId: 'p-part-6',
+        contentHash: 'h-part-6',
+        commands: VERIFY,
+        runKind: 'verify',
+      }),
+    ).result;
+    mockRunTestCommands.mockClear();
+    const again = admitTestRequest(
+      baseSpec({
+        projectId: 'p-part-6',
+        contentHash: 'h-part-6',
+        commands: VERIFY,
+        runKind: 'verify',
+      }),
+    );
+    expect(again.unchangedReplay).toBe(true);
+    expect((await again.result).runId).toBe(first.runId);
+    expect(mockRunTestCommands).not.toHaveBeenCalled();
+  });
+});
+
 describe('Semaphore.withdraw', () => {
   it('withdraws a queued waiter (rejecting its acquire promise with LaneRunWithdrawnError) and leaves a running id untouched', async () => {
     const sem = new Semaphore(1);

@@ -553,6 +553,38 @@ function findCoveringSettledRun(
   });
 }
 
+/**
+ * Per-command coverage: splits `commands` into those a passed same-hash run
+ * (any run_kind, never a coverage row — enforced by the query) already ran,
+ * and those it did not. Same base_sha rule as findCoveringSettledRun.
+ */
+function splitCommandsByCoverage(
+  projectId: string,
+  contentHash: string,
+  commands: string[],
+  baseSha: string | null,
+): { uncovered: string[]; sources: TestRequestRunRow[] } {
+  const candidates = listSettledPassedTestRequestRunsForCoverage(
+    projectId,
+    contentHash,
+  )
+    .filter(
+      (r) => baseSha === null || r.base_sha === null || r.base_sha === baseSha,
+    )
+    .map((r) => ({
+      row: r,
+      have: new Set((parseCommands(r.commands) ?? []).map((c) => c.trim())),
+    }));
+  const uncovered: string[] = [];
+  const sources = new Map<string, TestRequestRunRow>();
+  for (const cmd of commands) {
+    const hit = candidates.find((c) => c.have.has(cmd.trim()));
+    if (hit) sources.set(hit.row.id, hit.row);
+    else uncovered.push(cmd);
+  }
+  return { uncovered, sources: [...sources.values()] };
+}
+
 /** Builds the result a coverage hit (in-flight join or settled reuse) resolves with, from the covering run's verdict. */
 function buildCoverageResult(
   runId: string,
@@ -890,6 +922,27 @@ export function admitTestRequest(
     };
   }
 
+  // Partial coverage: some (not all) requested commands were already run by
+  // passed same-hash runs — execute only the rest. The row still records the
+  // full requested list; the output notes which commands were reused.
+  let execSpec = spec;
+  let outputPrefix = '';
+  if (spec.coverageCommands === undefined) {
+    const split = splitCommandsByCoverage(
+      spec.projectId,
+      spec.contentHash,
+      spec.commands,
+      baseSha,
+    );
+    if (split.sources.length > 0 && split.uncovered.length > 0) {
+      const reused = spec.commands.filter((c) => !split.uncovered.includes(c));
+      execSpec = { ...spec, commands: split.uncovered };
+      outputPrefix =
+        `[testRequestLane] reused from passed run(s) ${split.sources.map((s) => s.id).join(', ')}: ${reused.join('; ')}\n` +
+        `[testRequestLane] executed: ${split.uncovered.join('; ')}\n`;
+    }
+  }
+
   const requestedAt = Date.now();
   const runId = randomUUID();
   // Durably recorded as 'queued' before the semaphore permit is even
@@ -937,10 +990,12 @@ export function admitTestRequest(
   const initialAdmission = admission();
 
   const promise = executeTestRequestRun(
-    spec,
+    execSpec,
     runId,
     requestedAt,
     permitPromise,
+    spec.commands,
+    outputPrefix,
   ).finally(() => {
     if (inFlightRuns.get(key)?.runId === runId) inFlightRuns.delete(key);
     if (sKey && pendingBySession.get(sKey)?.runId === runId)
@@ -1118,6 +1173,8 @@ async function executeTestRequestRun(
   runId: string,
   requestedAt: number,
   permitPromise: Promise<() => void>,
+  recordedCommands: string[] = spec.commands,
+  outputPrefix = '',
 ): Promise<
   TestCommandResult & {
     runId: string;
@@ -1271,10 +1328,13 @@ async function executeTestRequestRun(
     // their own dependencies shares nothing with the checkout and must not
     // pay this lock. See checkoutInstallLock.ts.
     const checkoutDir = getProjectRowById(spec.projectId)?.project_dir;
-    const result =
+    const rawResult =
       checkoutDir && sharesCheckoutNodeModules(spec.worktreePath)
         ? await withCheckoutTestRunLock(checkoutDir, runCommands)
         : await runCommands();
+    const result = outputPrefix
+      ? { ...rawResult, output: outputPrefix + rawResult.output }
+      : rawResult;
     const oomKilled = result.oomKilled ?? false;
     let structuredResult: StructuredTestResult | null = null;
     if (testReportGlob) {
@@ -1366,7 +1426,7 @@ async function executeTestRequestRun(
       worktree_path: spec.worktreePath,
       superseded_by: null,
       failed_command: result.passed ? null : (result.failedCommand ?? null),
-      commands: JSON.stringify(spec.commands),
+      commands: JSON.stringify(recordedCommands),
       coverage_source_run_id: null,
     });
     runIngestionPromises.set(runId, ingestionPromise);
