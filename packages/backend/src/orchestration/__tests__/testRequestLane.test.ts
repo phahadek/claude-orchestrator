@@ -3070,7 +3070,9 @@ describe('admitTestRequest — per-command partial coverage', () => {
     ).result;
     expect(res.passed).toBe(false);
     const row = db
-      .prepare(`SELECT state, failed_command FROM test_request_runs WHERE id = ?`)
+      .prepare(
+        `SELECT state, failed_command FROM test_request_runs WHERE id = ?`,
+      )
       .get(res.runId) as { state: string; failed_command: string };
     expect(row.state).toBe('failed');
     expect(row.failed_command).toBe('uv run pyright');
