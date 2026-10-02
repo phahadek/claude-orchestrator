@@ -181,14 +181,14 @@ describe('classifyStalledPR after head move (#1926 shape)', () => {
 
     const before = getPRByNumber(pr, REPO)!;
     before.review_result = JSON.stringify({ verdict: 'approved' });
-    expect(classifyStalledPR(before, 'idle')?.kind).toBe(
+    expect(classifyStalledPR(before, null, 'idle')?.kind).toBe(
       'conflict_dead_session',
     );
 
     setHeadSha(pr, REPO, 'shaB');
     const after = getPRByNumber(pr, REPO)!;
     after.review_result = JSON.stringify({ verdict: 'approved' });
-    expect(classifyStalledPR(after, 'idle')?.kind).not.toBe(
+    expect(classifyStalledPR(after, null, 'idle')?.kind).not.toBe(
       'conflict_dead_session',
     );
   });
