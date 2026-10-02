@@ -307,7 +307,7 @@ export function expandAutofixCommand(
  * paths under the worktree are made repo-relative first; a match must not be
  * preceded by `/` (so src/a.py does not match tests/src/a.py).
  */
-export function changedFilesMentioned(
+function changedFilesMentioned(
   output: string,
   changedFiles: string[],
   worktreePath: string,
