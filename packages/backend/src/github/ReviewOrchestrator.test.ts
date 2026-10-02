@@ -5823,10 +5823,9 @@ describe('ReviewOrchestrator — enqueueReview and isReviewInFlight', () => {
     const orch = new ReviewOrchestrator(rs, sm as any, true);
     sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
 
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(orch.isReviewInFlight(1, 'owner/repo')).toBe(true);
+    await vi.waitFor(() =>
+      expect(orch.isReviewInFlight(1, 'owner/repo')).toBe(true),
+    );
     holdReview();
   });
 
