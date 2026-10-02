@@ -945,7 +945,7 @@ describe('AgentSession — overflow escalation window', () => {
 
   it('is pending at the escalated spawn and until its first event', async () => {
     mockRuntimeSettings.large_task_model = LARGE_MODEL;
-    let session!: AgentSession;
+    const holder: { session?: AgentSession } = {};
     const observed: Record<string, boolean> = {};
     const endedBeforeFirstEvent: boolean[] = [];
     const messages: ServerMessage[] = [];
@@ -970,16 +970,18 @@ describe('AgentSession — overflow escalation window', () => {
                 duration_ms: 100,
                 usage: { input_tokens: 0, output_tokens: 0 },
               });
-              observed.afterOverflow = session.isOverflowEscalationPending;
+              observed.afterOverflow = holder.session!.isOverflowEscalationPending;
               return Promise.resolve(1);
             }
-            observed.atEscalatedSpawn = session.isOverflowEscalationPending;
+            observed.atEscalatedSpawn =
+              holder.session!.isOverflowEscalationPending;
             endedBeforeFirstEvent.push(
-              session.hasEnded ||
+              holder.session!.hasEnded ||
                 messages.some((m) => m.type === 'session_ended'),
             );
             onEvent({ type: 'system', subtype: 'init' });
-            observed.afterFirstEvent = session.isOverflowEscalationPending;
+            observed.afterFirstEvent =
+              holder.session!.isOverflowEscalationPending;
             return Promise.resolve(0);
           },
         ),
@@ -988,7 +990,8 @@ describe('AgentSession — overflow escalation window', () => {
       kill: vi.fn().mockResolvedValue(undefined),
       hasSpawnError: false,
     }));
-    session = makeSession('standard');
+    const session = makeSession('standard');
+    holder.session = session;
     session.on('message', (m: ServerMessage) => messages.push(m));
     await session.run();
     expect(observed).toEqual({
