@@ -47,6 +47,7 @@ function insertPR(headSha: string | null, mergeState: string | null): number {
     updated_at: NOW,
     synced_at: NOW,
     head_sha: headSha,
+    node_id: null,
     mergeable: mergeState === 'dirty' ? 0 : null,
     merge_state: mergeState,
     merge_state_checked_at: mergeState ? NOW : null,
@@ -73,6 +74,7 @@ function reupsert(prNumber: number, headSha: string | null): void {
     updated_at: NOW,
     synced_at: NOW,
     head_sha: headSha,
+    node_id: null,
   });
 }
 
