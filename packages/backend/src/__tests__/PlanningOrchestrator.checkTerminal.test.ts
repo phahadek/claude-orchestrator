@@ -215,4 +215,31 @@ describe('PlanningOrchestrator.checkTerminal', () => {
     expect(orchestrator.checkTerminal(SESSION_ID)).toBe(true);
     expect(sessionManager.endSession).toHaveBeenCalledWith(SESSION_ID);
   });
+
+  it('never writes done while a blocked intent exists, even after the nudge budget is exhausted', () => {
+    seedSession();
+    const sessionManager = makeSessionManager();
+    const orchestrator = new PlanningOrchestrator(sessionManager);
+    stageIntent({ state: 'pending_verification' });
+    stageIntent({ state: 'staged' });
+
+    for (let i = 0; i < 3; i++) {
+      expect(orchestrator.checkTerminal(SESSION_ID)).toBe(false);
+    }
+    expect(sessionManager.endSession).not.toHaveBeenCalled();
+    expect(applyPendingDone(SESSION_ID)).toBe(false);
+    expect(getSession(SESSION_ID)?.status).toBe('running');
+  });
+
+  it('planning_operator_end still terminalizes with staged and blocked members outstanding', () => {
+    seedSession();
+    const sessionManager = makeSessionManager();
+    const orchestrator = new PlanningOrchestrator(sessionManager);
+    stageIntent({ state: 'staged' });
+    stageIntent({ state: 'needs_revision' });
+
+    orchestrator.endSession(SESSION_ID);
+    applyPendingDone(SESSION_ID);
+    expect(getSession(SESSION_ID)?.status).toBe('done');
+  });
 });
