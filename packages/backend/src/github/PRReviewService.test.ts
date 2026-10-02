@@ -512,7 +512,6 @@ describe('PRReviewService.buildPrompt()', () => {
       mockTaskBody,
       undefined,
       undefined,
-      undefined,
       [
         {
           test_id: 'src/foo.test.ts.bar works',

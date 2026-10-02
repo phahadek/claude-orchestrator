@@ -94,7 +94,7 @@ import {
 import { emitTaskUpdated } from '../routes/tasks';
 import { logger } from '../logger';
 import { buildTestResultDigestFromOutcomes } from '../session/testResultDigest';
-import { getRunTestOutcomes } from '../orchestration/runTestOutcomes';
+import { readRunTestOutcomes } from '../orchestration/runTestOutcomes';
 
 /**
  * Emitted by PRMergeWatcher.handleMerged once a merge commit has been
@@ -1069,7 +1069,7 @@ export class PRMergeWatcher extends EventEmitter {
                     )
                   : null;
               const digest = buildTestResultDigestFromOutcomes(
-                await getRunTestOutcomes(testResult.id),
+                readRunTestOutcomes(testResult),
               );
               setPauseReason(
                 pr.pr_number,
@@ -1125,7 +1125,7 @@ export class PRMergeWatcher extends EventEmitter {
       // test_run_summaries row exists for the run — that row (not the
       // cleared column) is what proves acquisition actually succeeded.
       const reportOutcomes = testResult
-        ? await getRunTestOutcomes(testResult.id)
+        ? readRunTestOutcomes(testResult)
         : null;
       const reportAcquired =
         reportOutcomes !== null &&

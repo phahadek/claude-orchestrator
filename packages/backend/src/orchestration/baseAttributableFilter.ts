@@ -33,6 +33,7 @@ import { typedGetSetting } from '../config/settings';
 import { isTestIdTouchedByChangedFiles } from '../session/test-runner';
 import {
   getRunTestOutcomes,
+  getRunTestOutcomesForRun,
   outcomesFromStructuredResult,
 } from './runTestOutcomes';
 
@@ -114,8 +115,9 @@ export async function filterBaseAttributableFailures(
   }
 
   // The accessor awaits this run's in-flight ingestion dispatch, so a
-  // just-completed run never reads back an empty failing set.
-  const sessionFailing = (await getRunTestOutcomes(run.id)).failingTests;
+  // just-completed run never reads back an empty failing set. Reads off the
+  // row already in hand — no extra db/queries round trip to re-fetch it.
+  const sessionFailing = (await getRunTestOutcomesForRun(run)).failingTests;
   if (sessionFailing.length === 0) {
     // No per-test breakdown for the session's own run — nothing to
     // attribute granularly against, so leave it charged as a raw failure.

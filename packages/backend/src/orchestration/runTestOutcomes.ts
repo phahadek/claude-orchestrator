@@ -160,25 +160,39 @@ export function readRunTestOutcomes(run: TestRequestRunRow): RunTestOutcomes {
   return { ...NONE, parseFailed };
 }
 
+async function awaitPendingIngestion(runId: string): Promise<void> {
+  const pending = getRunIngestionPromise(runId);
+  if (!pending) return;
+  try {
+    await pending;
+  } catch (err) {
+    logger.warn(
+      `[runTestOutcomes] ingestion failed for run ${runId} — reading a possibly-incomplete outcome set: ${err instanceof Error ? err.message : err}`,
+    );
+  }
+}
+
 /**
- * Awaits `runId`'s own pending ingestion (the fire-and-forget worker dispatch
+ * Awaits `run`'s own pending ingestion (the fire-and-forget worker dispatch
  * in testRequestLane.ts writes test_run_results after the run settles), then
- * reads its per-test outcomes. Never throws on an ingestion failure — the
- * read just reflects whatever was durably written.
+ * reads its per-test outcomes from the row the caller already holds — no
+ * extra db/queries round trip to re-fetch the run itself.
+ */
+export async function getRunTestOutcomesForRun(
+  run: TestRequestRunRow,
+): Promise<RunTestOutcomes> {
+  await awaitPendingIngestion(run.id);
+  return readRunTestOutcomes(run);
+}
+
+/**
+ * Same as getRunTestOutcomesForRun, but for a caller that only has the run's
+ * id (e.g. a persisted reference with no row fetched yet).
  */
 export async function getRunTestOutcomes(
   runId: string,
 ): Promise<RunTestOutcomes> {
-  const pending = getRunIngestionPromise(runId);
-  if (pending) {
-    try {
-      await pending;
-    } catch (err) {
-      logger.warn(
-        `[runTestOutcomes] ingestion failed for run ${runId} — reading a possibly-incomplete outcome set: ${err instanceof Error ? err.message : err}`,
-      );
-    }
-  }
+  await awaitPendingIngestion(runId);
   const run = getTestRequestRunById(runId);
   if (!run) return NONE;
   return readRunTestOutcomes(run);
