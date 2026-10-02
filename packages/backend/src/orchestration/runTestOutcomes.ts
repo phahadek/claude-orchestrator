@@ -48,7 +48,7 @@ export function getRunIngestionPromise(
   return runIngestionPromises.get(runId);
 }
 
-export type RunTestOutcomesSource = 'structured' | 'extracted' | 'none';
+type RunTestOutcomesSource = 'structured' | 'extracted' | 'none';
 
 export interface RunTestOutcomes {
   source: RunTestOutcomesSource;
