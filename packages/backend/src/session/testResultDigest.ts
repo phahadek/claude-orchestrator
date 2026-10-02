@@ -12,6 +12,57 @@ export interface TestResultDigestOptions {
 }
 
 /**
+ * Same digest as buildTestResultDigest, rendered from a run-outcome accessor
+ * result (orchestration/runTestOutcomes.ts) so it still works after the
+ * run's structured_result has been cleared. Returns null when the run has no
+ * recorded tests.
+ */
+export function buildTestResultDigestFromOutcomes(
+  outcomes: {
+    failingTests: { test_id: string; name: string }[];
+    totals: {
+      passed: number;
+      failed: number;
+      skipped: number;
+      errors: number;
+      total: number;
+    };
+  },
+  opts: TestResultDigestOptions = {},
+): string | null {
+  const { totals, failingTests } = outcomes;
+  if (totals.total === 0) return null;
+
+  const failedCount = Math.max(
+    totals.failed + totals.errors,
+    failingTests.length,
+  );
+  const otherCount = totals.total - totals.passed - failedCount;
+  const maxShown = opts.maxFailuresShown ?? DEFAULT_MAX_FAILURES_SHOWN;
+  const shown = failingTests.slice(0, maxShown);
+  const elidedCount = failingTests.length - shown.length;
+
+  const lines: string[] = [
+    `**Test results:** ${totals.passed} passed, ${failedCount} failed` +
+      (otherCount > 0 ? `, ${otherCount} other` : '') +
+      ` (${totals.total} total)`,
+  ];
+  if (shown.length > 0) {
+    lines.push('', '**Failing tests:**');
+    for (const t of shown) {
+      lines.push(`- \`${t.test_id}\` — ${t.name}`);
+    }
+    if (elidedCount > 0) {
+      lines.push(
+        '',
+        `_...${elidedCount} more failing test${elidedCount === 1 ? '' : 's'} elided._`,
+      );
+    }
+  }
+  return lines.join('\n');
+}
+
+/**
  * Renders a run's structured_result (junit-xml normalized JSON, see
  * StructuredTestResult) into a bounded, session-facing digest: pass/fail/
  * other counts plus failing test ids/names, capped with an elision note —

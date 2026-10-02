@@ -36,6 +36,21 @@ const {
 }));
 vi.mock('../../db/queries', () => ({
   getFailingTestIdsForRun: mockGetFailingTestIdsForRun,
+  // The real run-outcome accessor reads these: a run whose structured_result
+  // is already cleared (null) with a durable extracted summary.
+  getTestRequestRunById: (id: string) => ({
+    id,
+    structured_result: null,
+  }),
+  getTestRunSummary: (id: string) => ({
+    test_request_run_id: id,
+    passed_count: 0,
+    failed_count: 1,
+    skipped_count: 0,
+    error_count: 0,
+    total_count: 1,
+    incomplete: 0,
+  }),
   getFlaggedFlakyTestIds: mockGetFlaggedFlakyTestIds,
   listTestRequestRunsForSession: mockListTestRequestRunsForSession,
   computeTestFailureBreadthFlag: mockComputeTestFailureBreadthFlag,
@@ -63,21 +78,10 @@ vi.mock('../../session/test-runner', () => ({
   isTestIdTouchedByChangedFiles: mockIsTestIdTouchedByChangedFiles,
 }));
 
-// filterBaseAttributableFailures awaits this run's own in-flight ingestion
-// dispatch (see testRequestLane.ts's runIngestionPromises) before reading
-// test_run_results — mocked directly (rather than pulling in the real, much
-// heavier testRequestLane module, which itself imports the db/queries
-// module this file already mocks wholesale above) so tests can control
-// exactly when that dispatch is "still pending" vs. "already settled".
-const { mockGetRunIngestionPromise } = vi.hoisted(() => ({
-  mockGetRunIngestionPromise: vi.fn(
-    (_runId: string) => undefined as Promise<void> | undefined,
-  ),
-}));
-vi.mock('../testRequestLane', () => ({
-  getRunIngestionPromise: mockGetRunIngestionPromise,
-}));
-
+// The filter reads failing tests through the real run-outcome accessor, which
+// awaits this run's own in-flight ingestion dispatch (tracked via
+// trackRunIngestion) before reading test_run_results.
+import { trackRunIngestion } from '../runTestOutcomes';
 import {
   filterBaseAttributableFailures,
   filterVerifyFailureByBaseHealth,
@@ -138,8 +142,6 @@ beforeEach(() => {
     confident: true,
   });
   mockMarkTestResultExcused.mockReset();
-  mockGetRunIngestionPromise.mockReset();
-  mockGetRunIngestionPromise.mockReturnValue(undefined);
 });
 
 describe('baseAttributableFilter.ts source', () => {
@@ -355,9 +357,7 @@ describe("filterBaseAttributableFailures — ingestion-ordering race (test_reque
     }).then(() => {
       order.push('ingestion-committed');
     });
-    mockGetRunIngestionPromise.mockImplementation((runId: string) =>
-      runId === 'run-session-1' ? pendingIngestion : undefined,
-    );
+    trackRunIngestion('run-session-1', pendingIngestion);
     stubBreadthFlags(new Set(['suite.testA']));
     mockGetFailingTestIdsForRun.mockImplementation(() => {
       order.push('read-failing-set');
@@ -385,7 +385,6 @@ describe("filterBaseAttributableFailures — ingestion-ordering race (test_reque
   });
 
   it('reads the failing set immediately, with no wait, when no ingestion dispatch is tracked for this run (already settled, or never dispatched)', async () => {
-    mockGetRunIngestionPromise.mockReturnValue(undefined);
     stubBreadthFlags(new Set());
     mockGetFailingTestIdsForRun.mockReturnValue([
       { test_id: 'suite.testC', name: 'testC' },
@@ -403,7 +402,8 @@ describe("filterBaseAttributableFailures — ingestion-ordering race (test_reque
 
   it('logs a warning naming the run id, but still proceeds to filter against whatever committed, when the tracked ingestion dispatch rejects', async () => {
     const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
-    mockGetRunIngestionPromise.mockReturnValue(
+    trackRunIngestion(
+      'run-ingestion-failed',
       Promise.reject(new Error('worker crashed')),
     );
     stubBreadthFlags(new Set());
@@ -487,6 +487,7 @@ describe('filterVerifyFailureByBaseHealth', () => {
   it('returns null when the structured report has no failing tests', async () => {
     const result = await filterVerifyFailureByBaseHealth(
       PROJECT,
+      null,
       makeStructuredResult([], 10),
     );
     expect(result).toBeNull();
@@ -502,7 +503,7 @@ describe('filterVerifyFailureByBaseHealth', () => {
       6686,
     );
 
-    const result = await filterVerifyFailureByBaseHealth(PROJECT, sr);
+    const result = await filterVerifyFailureByBaseHealth(PROJECT, null, sr);
 
     expect(result?.outcome).toBe('filtered_pass');
     expect(result?.passed).toBe(true);
@@ -519,12 +520,34 @@ describe('filterVerifyFailureByBaseHealth', () => {
       { id: 't2', name: 'b' },
     ]);
 
-    const result = await filterVerifyFailureByBaseHealth(PROJECT, sr);
+    const result = await filterVerifyFailureByBaseHealth(PROJECT, null, sr);
 
     expect(result?.outcome).toBe('filtered_partial');
     expect(result?.passed).toBe(false);
     expect(result?.excludedTests.map((t) => t.test_id)).toEqual(['t1']);
     expect(result?.remainingTests.map((t) => t.test_id)).toEqual(['t2']);
+  });
+
+  it('replayed run with structured_result NULL and failing test_run_results rows yields the same filtered outcome as the fresh run', async () => {
+    stubBreadthFlags(new Set(['t1']));
+    const failing = [
+      { test_id: 't1', name: 'a' },
+      { test_id: 't2', name: 'b' },
+    ];
+    mockGetFailingTestIdsForRun.mockReturnValue(failing);
+    const sr = makeStructuredResult(failing.map((f) => ({ id: f.test_id, name: f.name })));
+
+    const fresh = await filterVerifyFailureByBaseHealth(PROJECT, null, sr);
+    const replayed = await filterVerifyFailureByBaseHealth(
+      PROJECT,
+      'run-replayed',
+      null,
+    );
+
+    expect(replayed).toEqual(fresh);
+    expect(replayed?.outcome).toBe('filtered_partial');
+    expect(replayed?.excludedTests.map((t) => t.test_id)).toEqual(['t1']);
+    expect(mockGetFailingTestIdsForRun).toHaveBeenCalledWith('run-replayed');
   });
 });
 
@@ -613,9 +636,7 @@ describe('filterBaseAttributableFailuresForF2Gate — the shared PreReviewPipeli
     }).then(() => {
       order.push('ingestion-committed');
     });
-    mockGetRunIngestionPromise.mockImplementation((runId: string) =>
-      runId === 'run-session-1' ? pendingIngestion : undefined,
-    );
+    trackRunIngestion('run-session-1', pendingIngestion);
     stubBreadthFlags(new Set(['suite.testA']));
     mockGetFailingTestIdsForRun.mockImplementation(() => {
       order.push('read-failing-set');

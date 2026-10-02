@@ -6,10 +6,9 @@ import { GITHUB_REPO, runtimeSettings, getProjectById } from '../config';
 import { getCorporateMode } from '../config/corporateMode';
 import type {
   GateItemClassification,
-  StructuredTestResult,
   TestRequestRunRow,
 } from '../db/types';
-import { isVacuousResult } from './test-runner';
+import { readRunTestOutcomes } from '../orchestration/runTestOutcomes';
 import { getOrchestratorConfig } from '../config/appConfig';
 import { mintStageCredential } from '../auth/SessionStageAuth';
 import { routeCredentialFilePath } from '../auth/SessionRouteAuth';
@@ -51,8 +50,6 @@ import {
   setTaskPauseReason,
   setHumanMergeOnly,
   getLatestTestRequestRun,
-  getTestRunSummary,
-  runHasExtractedReport,
   getFailingTestIdsForRun,
   getUnexcusedFailingTestIdsForRun,
   setSessionLastErrorDetail,
@@ -2495,49 +2492,20 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     const acquisitionAttempted = Boolean(
       winningRun?.test_report_acquisition_attempted,
     );
-    let winningStructuredResult: StructuredTestResult | null = null;
-    let structuredResultParseFailed = false;
-    // structured_result is transient: the extraction drain
-    // (clearExtractedStructuredResultsBatch) nulls it on every row once its
-    // durable test_run_summaries counterpart has been written, whether or
-    // not this call lands before or after that sweep. runHasExtractedReport
-    // is the canonical predicate that disambiguates "not yet acquired" from
-    // "acquired and already recorded" — once it's true, the summary's own
-    // counts are the vacuousness signal, not the now-cleared column.
-    const winningSummary =
-      winningRun && runHasExtractedReport(winningRun.id)
-        ? getTestRunSummary(winningRun.id)
-        : undefined;
-    if (winningRun?.structured_result) {
-      try {
-        winningStructuredResult = JSON.parse(
-          winningRun.structured_result,
-        ) as StructuredTestResult;
-      } catch (e) {
-        // A parse failure means this run's vacuousness is genuinely
-        // unknown, not that it was vacuous — folding it into the vacuous
-        // verdict would block a legitimate passing PR on a misleading
-        // "zero assertions" message. Warn and fall through (fail open),
-        // same as this function's other infra-failure handling above.
-        structuredResultParseFailed = true;
-        logger.warn(
-          `[AgentSession] failed to parse structured_result for test-request gate vacuousness check: ${(e as Error).message}`,
-        );
-      }
-    }
-    // Once the durable summary exists, it is the source of truth for
-    // vacuousness — including when structured_result was already cleared by
-    // the extraction sweep (winningStructuredResult stays null in that
-    // case, which must not be misread as "vacuous").
-    const summaryExecutedCount = winningSummary
-      ? winningSummary.passed_count +
-        winningSummary.failed_count +
-        winningSummary.error_count
-      : null;
+    // Per-test outcomes via the accessor, which survives the transient
+    // structured_result clear. A parse failure means vacuousness is genuinely
+    // unknown, not vacuous — folding it into the vacuous verdict would block
+    // a legitimate passing PR on a misleading "zero assertions" message, so
+    // fail open (same as this function's other infra-failure handling above).
+    const outcomes = winningRun ? readRunTestOutcomes(winningRun) : null;
+    const structuredResultParseFailed = outcomes?.parseFailed ?? false;
     const isVacuous =
-      summaryExecutedCount !== null
-        ? summaryExecutedCount === 0
-        : isVacuousResult(winningStructuredResult);
+      outcomes && outcomes.source !== 'none'
+        ? outcomes.totals.passed +
+            outcomes.totals.failed +
+            outcomes.totals.errors ===
+          0
+        : true;
     if (acquisitionAttempted && !structuredResultParseFailed && isVacuous) {
       sessionLog(
         this.sessionId,

@@ -78,7 +78,6 @@ import {
   setHeadSha,
   setPendingPush,
   getLatestTestRequestRun,
-  runHasExtractedReport,
   markSessionDone,
   updateSessionStatus,
   recordPrAnchoredCompletingSignal,
@@ -94,7 +93,8 @@ import {
 } from '../db/queries';
 import { emitTaskUpdated } from '../routes/tasks';
 import { logger } from '../logger';
-import { buildTestResultDigest } from '../session/testResultDigest';
+import { buildTestResultDigestFromOutcomes } from '../session/testResultDigest';
+import { getRunTestOutcomes } from '../orchestration/runTestOutcomes';
 
 /**
  * Emitted by PRMergeWatcher.handleMerged once a merge commit has been
@@ -1068,9 +1068,9 @@ export class PRMergeWatcher extends EventEmitter {
                       gate.guardBlocked,
                     )
                   : null;
-              const digest = testResult.structured_result
-                ? buildTestResultDigest(testResult.structured_result)
-                : null;
+              const digest = buildTestResultDigestFromOutcomes(
+                await getRunTestOutcomes(testResult.id),
+              );
               setPauseReason(
                 pr.pr_number,
                 pr.repo,
@@ -1124,11 +1124,16 @@ export class PRMergeWatcher extends EventEmitter {
       // is also transiently nulled by the extraction drain once a durable
       // test_run_summaries row exists for the run — that row (not the
       // cleared column) is what proves acquisition actually succeeded.
+      const reportOutcomes = testResult
+        ? await getRunTestOutcomes(testResult.id)
+        : null;
+      const reportAcquired =
+        reportOutcomes !== null &&
+        (reportOutcomes.source !== 'none' || reportOutcomes.parseFailed);
       if (
         testResult &&
         testResult.test_report_acquisition_attempted === 1 &&
-        testResult.structured_result === null &&
-        !runHasExtractedReport(testResult.id) &&
+        !reportAcquired &&
         testResult.state !== 'failed'
       ) {
         setPauseReason(
@@ -1145,8 +1150,7 @@ export class PRMergeWatcher extends EventEmitter {
         this.autoMerger?.attempt(pr.pr_number, pr.repo);
       } else if (
         testResult &&
-        (testResult.structured_result !== null ||
-          runHasExtractedReport(testResult.id)) &&
+        reportAcquired &&
         parsePauseReason(pr.pause_reason)?.reason ===
           'test_report_acquisition_failed'
       ) {

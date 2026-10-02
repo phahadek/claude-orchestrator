@@ -238,7 +238,8 @@ import type {
   TestRequestPayload,
   TestRequestRunRow,
 } from '../db/types';
-import { buildTestResultDigest } from '../session/testResultDigest';
+import { buildTestResultDigestFromOutcomes } from '../session/testResultDigest';
+import { getRunTestOutcomes } from '../orchestration/runTestOutcomes';
 import {
   filterBaseAttributableFailuresForF2Gate,
   renderBaseAttributableFilterDigest,
@@ -6660,8 +6661,8 @@ export async function triggerTestRequestExecution(
   });
 
   if (!intent.sessionId || !sessionManager) return;
-  const structuredResult = runId
-    ? getTestRequestRunById(runId)?.structured_result
+  const outcomesDigest = runId
+    ? buildTestResultDigestFromOutcomes(await getRunTestOutcomes(runId))
     : null;
   const output = superseded
     ? `[test.request] This run was withdrawn before it executed — a newer request (or a PR merge/close/push) superseded it. Nothing to act on here; the tree this ran against is no longer current.`
@@ -6670,7 +6671,7 @@ export async function triggerTestRequestExecution(
       : (filterResult &&
           filterResult.outcome !== 'unfiltered' &&
           renderBaseAttributableFilterDigest(filterResult, guardBlocked)) ||
-        (structuredResult && buildTestResultDigest(structuredResult)) ||
+        outcomesDigest ||
         truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP);
   try {
     await sessionManager.enqueueFeedback(
