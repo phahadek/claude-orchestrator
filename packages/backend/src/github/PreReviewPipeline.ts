@@ -1428,6 +1428,14 @@ export class PreReviewPipeline {
             `[PreReviewPipeline] PR #${job.prNumber}: autofix produced no diff — skipping retry of stage=${blockedStage?.id ?? priorPreReviewStage}, settling at ${priorPreReviewStage}`,
           );
           setPreReviewStage(job.prNumber, job.repo, priorPreReviewStage);
+          this.sessionManager.emit('message', {
+            type: 'autofix_noop_retry_skipped',
+            prNumber: job.prNumber,
+            repo: job.repo,
+            stage: blockedStage?.id ?? priorPreReviewStage,
+            headSha: worktreeHeadAtRunStart,
+            reason: `Nothing changed since the ${blockedStage?.id ?? priorPreReviewStage} gate failed at ${worktreeHeadAtRunStart.slice(0, 7)} — push a fix to retry it`,
+          });
           recordEvent({
             event_type: 'autofix_noop_retry_skipped',
             actor_type: 'system',

@@ -93,6 +93,7 @@ function baseStoreReturn(overrides: Record<string, unknown> = {}) {
     lastCacheUpdatedEvent: null,
     prPipelineStages: new Map(),
     prPipelineFailedCommands: new Map(),
+    reviewNotDispatched: new Map(),
     ...overrides,
   };
 }

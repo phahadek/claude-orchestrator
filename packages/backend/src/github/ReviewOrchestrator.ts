@@ -1409,6 +1409,16 @@ export class ReviewOrchestrator {
     setPauseReason(job.prNumber, job.repo, 'verdict_routing_failed');
   }
 
+  private reportNotDispatched(job: ReviewJob, reason: string): void {
+    if (!job.operatorRequested) return;
+    this.sessionManager.emit('message', {
+      type: 'review_not_dispatched',
+      prNumber: job.prNumber,
+      repo: job.repo,
+      reason,
+    });
+  }
+
   private async executeReview(job: ReviewJob): Promise<void> {
     logger.info(
       `[ReviewOrchestrator] executeReview: entered for PR #${job.prNumber} (${job.repo}) taskId=${job.taskId ?? 'none'}`,
@@ -1431,6 +1441,7 @@ export class ReviewOrchestrator {
       logger.warn(
         `[ReviewOrchestrator] PR #${job.prNumber}: no project found for repo ${job.repo} — skipping`,
       );
+      this.reportNotDispatched(job, `No project is configured for ${job.repo}`);
       return;
     }
 
@@ -1440,6 +1451,7 @@ export class ReviewOrchestrator {
       logger.info(
         `[ReviewOrchestrator] executeReview: PR #${job.prNumber} (${job.repo}) is no longer open (state=${prRow.state}) — skipping pre-review pipeline`,
       );
+      this.reportNotDispatched(job, `PR is no longer open (${prRow.state})`);
       return;
     }
     const maxIterations = getMaxReviewIterations();
@@ -1461,10 +1473,19 @@ export class ReviewOrchestrator {
     }
 
     // ── Pre-review pipeline (autofix → verify → analyze → tests) ────────────
-    const pipelineResult = await this.preReviewPipeline.run(job, project);
-    if (!pipelineResult.passed) {
-      this.consumePendingPushIfSet(job.prNumber, job.repo);
-      return;
+    // An operator click bypasses the pipeline entirely. When the PR was parked
+    // at a blocked gate, the verdict carries a gateBypassed marker so AutoMerger
+    // never merges it over the failed gate.
+    const bypassedStage =
+      job.operatorRequested && prRow?.pre_review_stage?.startsWith('blocked_')
+        ? prRow.pre_review_stage
+        : null;
+    if (!job.operatorRequested) {
+      const pipelineResult = await this.preReviewPipeline.run(job, project);
+      if (!pipelineResult.passed) {
+        this.consumePendingPushIfSet(job.prNumber, job.repo);
+        return;
+      }
     }
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -1474,15 +1495,19 @@ export class ReviewOrchestrator {
     // doc source-fidelity against the Notion/repo source of truth, so a docs
     // PR is never gated on review_result for its (human-only) merge.
     if (prRow?.human_merge_only) {
-      setPreReviewStage(job.prNumber, job.repo, null);
+      if (!bypassedStage) setPreReviewStage(job.prNumber, job.repo, null);
       logger.info(
         `[ReviewOrchestrator] PR #${job.prNumber}: human_merge_only — analyze passed, skipping review session`,
+      );
+      this.reportNotDispatched(
+        job,
+        'This PR is human-merge-only — it never gets an AI review session',
       );
       this.consumePendingPushIfSet(job.prNumber, job.repo);
       return;
     }
 
-    setPreReviewStage(job.prNumber, job.repo, null);
+    if (!bypassedStage) setPreReviewStage(job.prNumber, job.repo, null);
     this.sessionManager.emit('message', {
       type: 'review_started',
       prNumber: job.prNumber,
@@ -1514,17 +1539,32 @@ export class ReviewOrchestrator {
 
     let result: PRReviewResult;
     try {
-      result = await this.reviewService.reviewPR(
-        workItem,
-        diffSource,
-        project.id,
-        job.contextUrl,
-      );
+      result = bypassedStage
+        ? await this.reviewService.reviewPR(
+            workItem,
+            diffSource,
+            project.id,
+            job.contextUrl,
+            undefined,
+            0,
+            { stage: bypassedStage, headSha: prRow?.head_sha ?? null },
+          )
+        : await this.reviewService.reviewPR(
+            workItem,
+            diffSource,
+            project.id,
+            job.contextUrl,
+          );
     } catch (e) {
       if (e instanceof FetchRetryExhaustedError) {
         // review_failed was already emitted by PRReviewService; leave review_result null
+        this.reportNotDispatched(
+          job,
+          `Review could not start: ${e.message}`,
+        );
         return;
       }
+      this.reportNotDispatched(job, `Review session failed: ${String(e)}`);
       // PRReviewService persists the verdict immediately after parse, before any
       // side effects. If reviewPR throws, it means parsing never completed and no
       // verdict was persisted — write the error sentinel only in that case to avoid

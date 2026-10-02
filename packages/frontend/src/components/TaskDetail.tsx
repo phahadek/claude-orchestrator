@@ -200,6 +200,8 @@ interface Props {
   autoMergeEnabled?: boolean;
   setSessionArchived?: (sessionId: string, archived: boolean) => void;
   setSessionFavorited?: (sessionId: string, favorited: boolean) => void;
+  /** Why the operator's Run Review click did not dispatch a review session. */
+  reviewNotDispatchedReason?: string;
 }
 
 // A concluded grooming session is historical reference; collapse it by default.
@@ -228,6 +230,7 @@ export function TaskDetail({
   autoMergeEnabled = false,
   setSessionArchived = () => {},
   setSessionFavorited = () => {},
+  reviewNotDispatchedReason,
 }: Props) {
   const [showReviewSection, setShowReviewSection] = useState(true);
   const [showDepthReviewSection, setShowDepthReviewSection] = useState(true);
@@ -1102,6 +1105,12 @@ export function TaskDetail({
 
             {reviewError && (
               <div className={styles.errorBanner}>{reviewError}</div>
+            )}
+
+            {reviewNotDispatchedReason && (
+              <div className={styles.errorBanner}>
+                Review not dispatched: {reviewNotDispatchedReason}
+              </div>
             )}
 
             {task.pr.mergeState === 'dirty' && (

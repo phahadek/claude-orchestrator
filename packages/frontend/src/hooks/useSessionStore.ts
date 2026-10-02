@@ -231,6 +231,9 @@ export function useSessionStore() {
   const [prPipelineFailedCommands, setPrPipelineFailedCommands] = useState<
     Map<number, string | undefined>
   >(new Map());
+  const [reviewNotDispatched, setReviewNotDispatched] = useState<
+    Map<number, string>
+  >(new Map());
 
   const dispatch = useCallback((msg: ServerMessage) => {
     setSynced(true);
@@ -562,6 +565,26 @@ export function useSessionStore() {
         { prNumber: msg.prNumber, repo: msg.repo, message: msg.message },
       ]);
     }
+    if (
+      msg.type === 'review_not_dispatched' ||
+      msg.type === 'autofix_noop_retry_skipped'
+    ) {
+      const prNumber = msg.prNumber;
+      const reason =
+        msg.type === 'review_not_dispatched'
+          ? msg.reason
+          : `${msg.reason} (stage ${msg.stage}, head ${msg.headSha.slice(0, 7)})`;
+      setReviewNotDispatched((prev) => new Map(prev).set(prNumber, reason));
+    }
+    if (msg.type === 'review_started' || msg.type === 'pr_review_complete') {
+      const prNumber = msg.prNumber;
+      setReviewNotDispatched((prev) => {
+        if (!prev.has(prNumber)) return prev;
+        const next = new Map(prev);
+        next.delete(prNumber);
+        return next;
+      });
+    }
     if (msg.type === 'review_escalated') {
       // receivedAt makes the value unique per arrival so the toast effect re-fires
       // even when the same PR escalates twice in a session.
@@ -831,5 +854,6 @@ export function useSessionStore() {
     lastCacheUpdatedEvent,
     prPipelineStages,
     prPipelineFailedCommands,
+    reviewNotDispatched,
   };
 }

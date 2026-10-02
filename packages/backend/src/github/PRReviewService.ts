@@ -417,6 +417,17 @@ export interface PRReviewResult {
    * ReviewOrchestrator.ts's pause-reason selection.
    */
   migrationReservationOvertaken?: boolean;
+  /**
+   * Set when an operator-requested review skipped the pre-review pipeline
+   * while the PR was parked at a blocked gate. AutoMerger never merges such
+   * an approval until the head moves.
+   */
+  gateBypassed?: GateBypass;
+}
+
+export interface GateBypass {
+  stage: string;
+  headSha: string | null;
 }
 
 export type WorkItem =
@@ -722,7 +733,9 @@ export class PRReviewService {
     headSha: string | null,
     finalResult: PRReviewResult,
     taskId?: string | null,
+    gateBypassed?: GateBypass,
   ): { result: PRReviewResult; suppressed: boolean } {
+    if (gateBypassed) finalResult = { ...finalResult, gateBypassed };
     const current = getPRByNumber(prNumber, repo);
     if (
       finalResult.verdict === 'incomplete' &&
@@ -806,6 +819,7 @@ export class PRReviewService {
     projectContextUrl: string = this.defaultProjectContextUrl,
     sleep: (ms: number) => Promise<void> = defaultSleep,
     followUpDeliveryAttempt: number = 0,
+    gateBypassed?: GateBypass,
   ): Promise<PRReviewResult> {
     if (workItem.type === 'local_branch') {
       return this.reviewLocalBranch(
@@ -940,6 +954,7 @@ export class PRReviewService {
             projectContextUrl,
             sleep,
             followUpDeliveryAttempt + 1,
+            gateBypassed,
           );
         }
         const aiResult = await verdictPromise;
@@ -967,6 +982,7 @@ export class PRReviewService {
             prData.headSha ?? null,
             finalResult,
             prRow.task_id,
+            gateBypassed,
           );
         if (!suppressed1 && persistedResult1.verdict === 'approved') {
           await this.handleApprovedVerdict(
@@ -1099,6 +1115,7 @@ export class PRReviewService {
               prData.headSha ?? null,
               finalResult,
               prRow.task_id,
+              gateBypassed,
             );
           if (!suppressed2 && persistedResult2.verdict === 'approved') {
             await this.handleApprovedVerdict(
@@ -1201,6 +1218,7 @@ export class PRReviewService {
           prData.headSha ?? null,
           finalResult,
           prRow.task_id,
+          gateBypassed,
         );
       if (!suppressed3 && persistedResult3.verdict === 'approved') {
         await this.handleApprovedVerdict(

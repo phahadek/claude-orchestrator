@@ -325,6 +325,20 @@ export type ServerMessage =
       message: string;
     }
   | {
+      type: 'review_not_dispatched';
+      prNumber: number;
+      repo: string;
+      reason: string;
+    }
+  | {
+      type: 'autofix_noop_retry_skipped';
+      prNumber: number;
+      repo: string;
+      stage: string;
+      headSha: string;
+      reason: string;
+    }
+  | {
       type: 'review_failed';
       prNumber: number;
       repo: string;

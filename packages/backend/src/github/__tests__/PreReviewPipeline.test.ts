@@ -598,6 +598,16 @@ describe('PreReviewPipeline — autofix no-diff retry short-circuit', () => {
         }),
       }),
     );
+    expect(sm.emit).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        type: 'autofix_noop_retry_skipped',
+        prNumber: PR_NUMBER,
+        repo: REPO,
+        stage: 'verify',
+        headSha: HEAD_SHA,
+      }),
+    );
     // Existing pause reason is left alone — untouched by this run.
     expect(mockSetPauseReason).not.toHaveBeenCalled();
   });
