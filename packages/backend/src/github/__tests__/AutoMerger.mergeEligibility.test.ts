@@ -289,7 +289,11 @@ describe('AutoMerger merge eligibility — pre-review gate bypass', () => {
     ).isMergeEligible(pr);
 
   it('declines an approval that bypassed a failed gate while the head is unchanged, and stops declining once the head moves', async () => {
-    const merger = new AutoMerger(makeMockGitHub(), makeMockWatcher(), () => {});
+    const merger = new AutoMerger(
+      makeMockGitHub(),
+      makeMockWatcher(),
+      () => {},
+    );
     const review_result = JSON.stringify({
       verdict: 'approved',
       gateBypassed: { stage: 'blocked_verify', headSha: 'sha-old' },
@@ -303,7 +307,10 @@ describe('AutoMerger merge eligibility — pre-review gate bypass', () => {
       merger,
       makePRRow({ review_result, head_sha: 'sha-new' }),
     );
-    expect(moved).not.toEqual({ ok: false, reason: 'pre_review_gate_bypassed' });
+    expect(moved).not.toEqual({
+      ok: false,
+      reason: 'pre_review_gate_bypassed',
+    });
   });
 });
 

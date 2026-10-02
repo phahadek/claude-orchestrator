@@ -1558,10 +1558,7 @@ export class ReviewOrchestrator {
     } catch (e) {
       if (e instanceof FetchRetryExhaustedError) {
         // review_failed was already emitted by PRReviewService; leave review_result null
-        this.reportNotDispatched(
-          job,
-          `Review could not start: ${e.message}`,
-        );
+        this.reportNotDispatched(job, `Review could not start: ${e.message}`);
         return;
       }
       this.reportNotDispatched(job, `Review session failed: ${String(e)}`);
