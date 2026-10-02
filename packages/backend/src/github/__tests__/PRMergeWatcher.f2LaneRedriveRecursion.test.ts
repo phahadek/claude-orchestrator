@@ -49,6 +49,7 @@ vi.mock('../../db/queries', () => ({
   setFlakeRecoveryBaseExhausted: vi.fn(),
   getLatestTestRequestRunForSession: vi.fn().mockReturnValue(undefined),
   isRunFailureBreadthAttributable: vi.fn().mockReturnValue(false),
+  resolveBreadthOwnTree: vi.fn(() => ({ sessionIds: [], worktreePaths: [] })),
   // Consulted by orchestration/runTestOutcomes.ts's accessor (per-test
   // outcomes) whenever a run's structured_result is null — this suite's
   // fixtures never populate an extracted summary, so both fall through to

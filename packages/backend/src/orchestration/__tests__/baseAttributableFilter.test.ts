@@ -27,12 +27,17 @@ const {
   mockListTestRequestRunsForSession,
   mockComputeTestFailureBreadthFlag,
   mockMarkTestResultExcused,
+  mockResolveBreadthOwnTree,
 } = vi.hoisted(() => ({
   mockGetFailingTestIdsForRun: vi.fn(),
   mockGetFlaggedFlakyTestIds: vi.fn(() => new Set<string>()),
   mockListTestRequestRunsForSession: vi.fn(() => []),
   mockComputeTestFailureBreadthFlag: vi.fn(),
   mockMarkTestResultExcused: vi.fn(),
+  mockResolveBreadthOwnTree: vi.fn(() => ({
+    sessionIds: ['sess-1'],
+    worktreePaths: ['/wt/own'],
+  })),
 }));
 vi.mock('../../db/queries', () => ({
   getFailingTestIdsForRun: mockGetFailingTestIdsForRun,
@@ -54,6 +59,7 @@ vi.mock('../../db/queries', () => ({
   getFlaggedFlakyTestIds: mockGetFlaggedFlakyTestIds,
   listTestRequestRunsForSession: mockListTestRequestRunsForSession,
   computeTestFailureBreadthFlag: mockComputeTestFailureBreadthFlag,
+  resolveBreadthOwnTree: mockResolveBreadthOwnTree,
   markTestResultExcused: mockMarkTestResultExcused,
 }));
 
@@ -95,6 +101,7 @@ import type { ProjectConfig } from '../../config';
 import type { StructuredTestResult, TestRequestRunRow } from '../../db/types';
 
 const PROJECT = { id: 'proj-1', projectDir: '/tmp/x' } as ProjectConfig;
+const SUBJECT = { sessionId: 'sess-1', worktreePath: '/wt/own' };
 
 function makeRun(
   overrides: Partial<TestRequestRunRow> = {},
@@ -185,6 +192,7 @@ describe('filterBaseAttributableFailures', () => {
       24,
       3,
       expect.any(Number),
+      { sessionIds: ['sess-1'], worktreePaths: ['/wt/own'] },
     );
   });
 
@@ -242,35 +250,34 @@ describe('filterBaseAttributableFailures', () => {
     ]);
   });
 
-  it("uses the PR's own first-run timestamp as the breadth cutoff, so its own repeated runs cannot raise its breadth count", async () => {
-    const run = makeRun({ id: 'run-latest', started_at: 5_000_000 });
-    mockListTestRequestRunsForSession.mockReturnValue([
-      makeRun({ id: 'run-earliest', started_at: 1_000_000 }),
-      makeRun({ id: 'run-middle', started_at: 3_000_000 }),
-      run,
-    ]);
+  it("resolves the run's own tree by its session and worktree and evaluates breadth at call time, not at the session's first run", async () => {
+    const run = makeRun({
+      id: 'run-latest',
+      started_at: 5_000_000,
+      worktree_path: '/wt/own',
+    });
     mockGetFailingTestIdsForRun.mockReturnValue([
       { test_id: 'suite.testA', name: 'testA' },
     ]);
     stubBreadthFlags(new Set());
+    const before = Date.now();
 
     await filterBaseAttributableFailures(PROJECT, run, 'task-1');
 
-    expect(mockListTestRequestRunsForSession).toHaveBeenCalledWith(
-      'proj-1',
-      'sess-1',
-      1000,
-    );
-    expect(mockComputeTestFailureBreadthFlag).toHaveBeenCalledWith(
-      'suite.testA',
-      24,
-      3,
-      1_000_000,
-    );
+    expect(mockResolveBreadthOwnTree).toHaveBeenCalledWith('proj-1', {
+      sessionId: 'sess-1',
+      worktreePath: '/wt/own',
+    });
+    expect(mockListTestRequestRunsForSession).not.toHaveBeenCalled();
+    const asOf = mockComputeTestFailureBreadthFlag.mock.calls[0][3] as number;
+    expect(asOf).toBeGreaterThanOrEqual(before);
   });
 
-  it('falls back to the run’s own started_at when it has no session', async () => {
-    const run = makeRun({ session_id: null, started_at: 2_500_000 });
+  it('resolves the own tree from the worktree alone for a pr_gate run with no session', async () => {
+    const run = makeRun({
+      session_id: null,
+      worktree_path: '/wt/own',
+    });
     mockGetFailingTestIdsForRun.mockReturnValue([
       { test_id: 'suite.testA', name: 'testA' },
     ]);
@@ -278,13 +285,10 @@ describe('filterBaseAttributableFailures', () => {
 
     await filterBaseAttributableFailures(PROJECT, run, 'task-1');
 
-    expect(mockListTestRequestRunsForSession).not.toHaveBeenCalled();
-    expect(mockComputeTestFailureBreadthFlag).toHaveBeenCalledWith(
-      'suite.testA',
-      24,
-      3,
-      2_500_000,
-    );
+    expect(mockResolveBreadthOwnTree).toHaveBeenCalledWith('proj-1', {
+      sessionId: null,
+      worktreePath: '/wt/own',
+    });
   });
 
   it('leaves a passed run untouched without consulting the breadth corpus', async () => {
@@ -480,7 +484,12 @@ function makeStructuredResult(
 
 describe('filterVerifyFailureByBaseHealth', () => {
   it('returns null when the verify failure has no structured report', async () => {
-    const result = await filterVerifyFailureByBaseHealth(PROJECT, null);
+    const result = await filterVerifyFailureByBaseHealth(
+      PROJECT,
+      null,
+      null,
+      SUBJECT,
+    );
     expect(result).toBeNull();
   });
 
@@ -489,6 +498,7 @@ describe('filterVerifyFailureByBaseHealth', () => {
       PROJECT,
       null,
       makeStructuredResult([], 10),
+      SUBJECT,
     );
     expect(result).toBeNull();
   });
@@ -503,7 +513,12 @@ describe('filterVerifyFailureByBaseHealth', () => {
       6686,
     );
 
-    const result = await filterVerifyFailureByBaseHealth(PROJECT, null, sr);
+    const result = await filterVerifyFailureByBaseHealth(
+      PROJECT,
+      null,
+      sr,
+      SUBJECT,
+    );
 
     expect(result?.outcome).toBe('filtered_pass');
     expect(result?.passed).toBe(true);
@@ -520,7 +535,12 @@ describe('filterVerifyFailureByBaseHealth', () => {
       { id: 't2', name: 'b' },
     ]);
 
-    const result = await filterVerifyFailureByBaseHealth(PROJECT, null, sr);
+    const result = await filterVerifyFailureByBaseHealth(
+      PROJECT,
+      null,
+      sr,
+      SUBJECT,
+    );
 
     expect(result?.outcome).toBe('filtered_partial');
     expect(result?.passed).toBe(false);
@@ -539,11 +559,17 @@ describe('filterVerifyFailureByBaseHealth', () => {
       failing.map((f) => ({ id: f.test_id, name: f.name })),
     );
 
-    const fresh = await filterVerifyFailureByBaseHealth(PROJECT, null, sr);
+    const fresh = await filterVerifyFailureByBaseHealth(
+      PROJECT,
+      null,
+      sr,
+      SUBJECT,
+    );
     const replayed = await filterVerifyFailureByBaseHealth(
       PROJECT,
       'run-replayed',
       null,
+      SUBJECT,
     );
 
     expect(replayed).toEqual(fresh);

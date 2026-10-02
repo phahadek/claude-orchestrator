@@ -25,6 +25,7 @@ import {
   setReconcileExhausted,
   getLatestTestRequestRunForSession,
   isRunFailureBreadthAttributable,
+  resolveBreadthOwnTree,
   hasUndispositionedNoOpForSession,
 } from '../db/queries';
 import { isManualActionPause } from '../db/pauseReason';
@@ -74,6 +75,10 @@ function isPrLatestRunBreadthAttributable(
     typedGetSetting('flip_rate_breadth_n'),
     typedGetSetting('flip_rate_breadth_window_hours'),
     Date.now(),
+    resolveBreadthOwnTree(project.id, {
+      sessionId: pr.session_id,
+      worktreePath: run.worktree_path,
+    }),
   );
 }
 

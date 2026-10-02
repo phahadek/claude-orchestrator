@@ -9,7 +9,7 @@
  * eligible.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('../../db/db', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
@@ -25,6 +25,8 @@ import {
 
 let seq = 0;
 
+const OWN_TREE = { sessionIds: [], worktreePaths: ['wt-subject'] };
+
 /** Shared across the flip-rate history fixtures so they keep pooling into one tree, as they did before content-hash scoping — this suite isn't testing that scoping itself. */
 const HISTORY_SHARED_HASH = 'history-shared-hash';
 
@@ -33,9 +35,14 @@ function insertTestRequestRun(state: 'passed' | 'failed' = 'passed'): string {
   const id = `run-${seq}`;
   db.prepare(
     `INSERT INTO test_request_runs
-       (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at)
-     VALUES (@id, 'proj-1', @content_hash, NULL, @state, '', 0, 0, 0)`,
-  ).run({ id, content_hash: `hash-${seq}`, state });
+       (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, worktree_path)
+     VALUES (@id, 'proj-1', @content_hash, NULL, @state, '', 0, 0, 0, @worktree_path)`,
+  ).run({
+    id,
+    content_hash: `hash-${seq}`,
+    state,
+    worktree_path: `wt-${seq}`,
+  });
   return id;
 }
 
@@ -114,6 +121,9 @@ function seedRunFailures(
   runId: string,
   tests: Array<{ testId: string; name: string }>,
 ): void {
+  db.prepare(
+    `UPDATE test_request_runs SET worktree_path = 'wt-subject' WHERE id = ?`,
+  ).run(runId);
   insertTestRunResults(
     runId,
     'proj-1',
@@ -133,6 +143,13 @@ beforeEach(() => {
   db.prepare('DELETE FROM test_request_runs').run();
   db.prepare('DELETE FROM test_perf_baselines').run();
   seq = 0;
+  // Breadth is evaluated as of call time — pin it just past the fixtures.
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(100_000 + 1000);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('evaluateF2LaneFlakyDisposition', () => {
@@ -153,6 +170,7 @@ describe('evaluateF2LaneFlakyDisposition', () => {
       THRESHOLD_K,
       BREADTH_N,
       BREADTH_WINDOW_HOURS,
+      OWN_TREE,
     );
     expect(eligible).toBe(false);
   });
@@ -172,6 +190,7 @@ describe('evaluateF2LaneFlakyDisposition', () => {
       THRESHOLD_K,
       BREADTH_N,
       BREADTH_WINDOW_HOURS,
+      OWN_TREE,
     );
     expect(eligible).toBe(true);
   });
@@ -193,6 +212,7 @@ describe('evaluateF2LaneFlakyDisposition', () => {
       THRESHOLD_K,
       BREADTH_N,
       BREADTH_WINDOW_HOURS,
+      OWN_TREE,
     );
     expect(eligible).toBe(false);
   });
@@ -212,6 +232,7 @@ describe('evaluateF2LaneFlakyDisposition', () => {
       THRESHOLD_K,
       BREADTH_N,
       BREADTH_WINDOW_HOURS,
+      OWN_TREE,
     );
     expect(eligible).toBe(false);
   });
@@ -237,6 +258,7 @@ describe('evaluateF2LaneFlakyDisposition', () => {
       THRESHOLD_K,
       BREADTH_N,
       BREADTH_WINDOW_HOURS,
+      OWN_TREE,
     );
     expect(eligible).toBe(false);
   });
@@ -262,6 +284,7 @@ describe('evaluateF2LaneFlakyDisposition', () => {
       THRESHOLD_K,
       BREADTH_N,
       BREADTH_WINDOW_HOURS,
+      OWN_TREE,
     );
     expect(eligible).toBe(true);
   });
@@ -280,6 +303,7 @@ describe('evaluateF2LaneFlakyDisposition', () => {
       THRESHOLD_K,
       BREADTH_N,
       BREADTH_WINDOW_HOURS,
+      OWN_TREE,
     );
     expect(eligible).toBe(false);
   });
@@ -298,14 +322,13 @@ describe('evaluateF2LaneFlakyDisposition', () => {
       THRESHOLD_K,
       BREADTH_N,
       BREADTH_WINDOW_HOURS,
+      OWN_TREE,
     );
     expect(eligible).toBe(false);
   });
 
-  it("is not eligible when breadth failures at/after this PR's own created_at are excluded from the window", () => {
+  it("counts other trees' breadth failures that arrive after the cutoff (asOf is call time)", () => {
     const testId = 'tests.unit.test_foo.test_bar';
-    // Only 1 breadth failure predates the PR; the rest occur at/after
-    // CUTOFF and must not count toward BREADTH_N.
     insertBreadthFailure(testId, CUTOFF - 100);
     insertBreadthFailure(testId, CUTOFF + 50);
     insertBreadthFailure(testId, CUTOFF + 60);
@@ -320,6 +343,37 @@ describe('evaluateF2LaneFlakyDisposition', () => {
       THRESHOLD_K,
       BREADTH_N,
       BREADTH_WINDOW_HOURS,
+      OWN_TREE,
+    );
+    expect(eligible).toBe(true);
+  });
+
+  it("does not count the subject's own tree toward breadth", () => {
+    const testId = 'tests.unit.test_foo.test_bar';
+    insertBreadthFailure(testId, CUTOFF - 100);
+    for (let i = 0; i < 3; i++) {
+      const own = insertTestRequestRun('failed');
+      db.prepare(
+        `UPDATE test_request_runs SET worktree_path = 'wt-subject' WHERE id = ?`,
+      ).run(own);
+      db.prepare(
+        `INSERT INTO test_run_results
+           (test_request_run_id, project_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
+         VALUES (?, 'proj-1', ?, ?, 'failed', 1, 0, 0, ?)`,
+      ).run(own, testId, testId, CUTOFF + i);
+    }
+    const runId = insertTestRequestRun('failed');
+    seedRunFailures(runId, [{ testId, name: 'test_bar' }]);
+
+    const eligible = evaluateF2LaneFlakyDisposition(
+      runId,
+      CUTOFF,
+      ['src/unrelated.ts'],
+      WINDOW_N,
+      THRESHOLD_K,
+      BREADTH_N,
+      BREADTH_WINDOW_HOURS,
+      OWN_TREE,
     );
     expect(eligible).toBe(false);
   });

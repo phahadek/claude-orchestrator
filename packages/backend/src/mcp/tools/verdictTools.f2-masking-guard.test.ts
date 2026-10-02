@@ -34,6 +34,7 @@ import {
 vi.mock('../../db/queries', () => ({
   getPRBySessionId: vi.fn(),
   evaluateTestFlakinessCorpus: vi.fn(),
+  resolveBreadthOwnTree: vi.fn(() => ({ sessionIds: [], worktreePaths: [] })),
   getLatestTestRequestRunForSession: vi.fn(),
   getLatestPrGateRunForWorktree: vi.fn(),
   getFailingTestIdsForRun: vi.fn(),

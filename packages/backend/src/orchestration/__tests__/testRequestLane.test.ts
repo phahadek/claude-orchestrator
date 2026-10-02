@@ -1979,6 +1979,7 @@ describe('concurrent_run_count validity signal — end-to-end through the produc
       24,
       3,
       Date.now() + 1,
+      { sessionIds: [], worktreePaths: [] },
     );
     expect(breadthFlag.distinctContentHashCount).toBe(3);
     expect(breadthFlag.flagged).toBe(true);

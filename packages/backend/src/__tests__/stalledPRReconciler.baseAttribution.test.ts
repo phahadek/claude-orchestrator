@@ -43,6 +43,12 @@ vi.mock('../db/queries.js', () => ({
   getSessionLastActivityMs: vi.fn(() => null),
   getLatestTestRequestRunForSession: vi.fn(),
   isRunFailureBreadthAttributable: vi.fn(),
+  resolveBreadthOwnTree: vi.fn(
+    (_projectId: string, s: { sessionId?: string | null }) => ({
+      sessionIds: s.sessionId ? [s.sessionId] : [],
+      worktreePaths: [],
+    }),
+  ),
   hasUndispositionedNoOpForSession: vi.fn(() => false),
 }));
 
@@ -185,6 +191,7 @@ describe('StalledPRReconciler breadth-attributable-failures exemption', () => {
       3,
       24,
       expect.any(Number),
+      { sessionIds: ['session-1'], worktreePaths: [] },
     );
   });
 

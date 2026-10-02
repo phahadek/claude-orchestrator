@@ -32,6 +32,12 @@ vi.mock('../../db/queries', () => ({
   getLatestTestRequestRun: vi.fn().mockReturnValue(undefined),
   getLatestTestRequestRunForSession: vi.fn(),
   isRunFailureBreadthAttributable: vi.fn(),
+  resolveBreadthOwnTree: vi.fn(
+    (_projectId: string, s: { sessionId?: string | null }) => ({
+      sessionIds: s.sessionId ? [s.sessionId] : [],
+      worktreePaths: [],
+    }),
+  ),
   markSessionDone: vi.fn(),
   updateSessionStatus: vi.fn(),
   setPreReviewStage: vi.fn(),
@@ -259,6 +265,7 @@ describe('PRMergeWatcher — flake_recovery_attempts breadth-attributable exempt
       2,
       2,
       expect.any(Number),
+      { sessionIds: ['coding-session'], worktreePaths: [] },
     );
   });
 

@@ -568,6 +568,10 @@ export class PreReviewPipeline {
               ctx.project,
               outcome.runId,
               outcome.structuredResult,
+              {
+                sessionId: ctx.job.sessionId,
+                worktreePath: ctx.worktreePath,
+              },
             );
           } catch (err) {
             logger.warn(
