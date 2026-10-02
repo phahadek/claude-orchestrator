@@ -945,8 +945,10 @@ describe('AgentSession — overflow escalation window', () => {
 
   it('is pending at the escalated spawn and until its first event', async () => {
     mockRuntimeSettings.large_task_model = LARGE_MODEL;
-    const session = makeSession('standard');
+    let session!: AgentSession;
     const observed: Record<string, boolean> = {};
+    const endedBeforeFirstEvent: boolean[] = [];
+    const messages: ServerMessage[] = [];
     vi.mocked(CliSessionRunner).mockImplementationOnce(() => ({
       run: vi
         .fn()
@@ -972,6 +974,10 @@ describe('AgentSession — overflow escalation window', () => {
               return Promise.resolve(1);
             }
             observed.atEscalatedSpawn = session.isOverflowEscalationPending;
+            endedBeforeFirstEvent.push(
+              session.hasEnded ||
+                messages.some((m) => m.type === 'session_ended'),
+            );
             onEvent({ type: 'system', subtype: 'init' });
             observed.afterFirstEvent = session.isOverflowEscalationPending;
             return Promise.resolve(0);
@@ -982,12 +988,16 @@ describe('AgentSession — overflow escalation window', () => {
       kill: vi.fn().mockResolvedValue(undefined),
       hasSpawnError: false,
     }));
+    session = makeSession('standard');
+    session.on('message', (m: ServerMessage) => messages.push(m));
     await session.run();
     expect(observed).toEqual({
       afterOverflow: true,
       atEscalatedSpawn: true,
       afterFirstEvent: false,
     });
+    // No session_ended (the trigger for worktree teardown) before the escalated process's first event.
+    expect(endedBeforeFirstEvent).toEqual([false]);
   });
 
   it('does not spawn and errors the session when large_task_model is empty', async () => {
