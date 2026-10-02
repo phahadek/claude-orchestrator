@@ -62,6 +62,43 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+describe('endSession() on a terminal row', () => {
+  it('drops the map entry and revokes the stage credential in the same turn', () => {
+    const sessionId = 'terminal-end-session';
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: sessionId,
+      status: 'done',
+    } as never);
+
+    const sm = new SessionManager();
+    setSessionEntry(sm, sessionId);
+
+    sm.endSession(sessionId);
+
+    expect(hasSessionEntry(sm, sessionId)).toBe(false);
+    expect(revokeStageCredential).toHaveBeenCalledWith(
+      sessionId,
+      'terminal_status:done',
+    );
+  });
+
+  it('leaves the entry and credential for a non-terminal row', () => {
+    const sessionId = 'idle-end-session';
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: sessionId,
+      status: 'idle',
+    } as never);
+
+    const sm = new SessionManager();
+    setSessionEntry(sm, sessionId);
+
+    sm.endSession(sessionId);
+
+    expect(hasSessionEntry(sm, sessionId)).toBe(true);
+    expect(revokeStageCredential).not.toHaveBeenCalled();
+  });
+});
+
 describe('reconcileSessionsMap()', () => {
   it('drops an entry whose DB row is missing and revokes its stage credential', () => {
     const sessionId = 'missing-row-session';
