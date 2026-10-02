@@ -16,7 +16,6 @@ import {
   getMergedPRForTask,
   getMergedLocalBranchForTaskId,
   getAuthoritativeTestRunForPr,
-  getTestRunSummary,
   listTestRequestRunsForPrSession,
   getUnexcusedFailingTestIdsForRun,
 } from '../db/queries';
@@ -27,10 +26,9 @@ export { supersedeReviewSession } from './reviewSessionSupersede';
 import type {
   OpsPrIntentPayload,
   PullRequestRow,
-  StructuredTestResult,
   TestRequestRunRow,
-  TestRunSummaryRow,
 } from '../db/types';
+import { readRunTestOutcomes } from '../orchestration/runTestOutcomes';
 import {
   getReservationForTaskDirSuffix,
   getReservationByNumber,
@@ -530,45 +528,35 @@ const REVIEW_JSON_SCHEMA_BLOCK = buildReviewJsonSchemaBlock();
  * missing rows both fall back to today's no-section behavior) — the reviewer
  * then evaluates the evidence bar exactly as before.
  *
- * `summary` is the test_run_summaries row for this run, when one exists. It's
- * the fallback source of truth when `run.structured_result` has already been
- * nulled by the storage-dedup sweep (clearExtractedStructuredResultsBatch /
- * clearSupersededStructuredResults in db/queries.ts) — without it, a real,
- * already-extracted run reads back as an unexplained crash forever, since
- * nothing ever re-populates or re-evaluates that row.
+ * Per-test totals come from readRunTestOutcomes, so a run whose raw
+ * structured_result was already nulled by the storage-dedup sweep still
+ * renders its extracted totals instead of reading as an unexplained crash.
  */
 function buildTestRunEvidenceSection(
   run: TestRequestRunRow | undefined,
-  summary?: TestRunSummaryRow,
 ): string {
   if (!run || run.state === 'running' || run.state === 'queued') return '';
   if (run.failure_reason === 'superseded') return '';
   const finishedAt = run.finished_at
     ? new Date(run.finished_at).toISOString()
     : '(unknown)';
+  const outcomes = readRunTestOutcomes(run);
+  const totalsLine = `Result totals: ${outcomes.totals.passed} passed, ${outcomes.totals.failed} failed, ${outcomes.totals.skipped} skipped, ${outcomes.totals.errors} errors`;
+  const incompleteLine = outcomes.incomplete
+    ? '\nNote: this run is marked incomplete (a test command may have crashed before its report was written).'
+    : '';
   let commandLines = '(no structured result recorded)';
-  if (run.structured_result) {
-    try {
-      const parsed = JSON.parse(run.structured_result) as StructuredTestResult;
-      const suiteNames = parsed.suites.map((s) => s.name);
-      const commandsLine =
-        suiteNames.length > 0
-          ? `Commands/suites run: ${suiteNames.join(', ')}`
-          : 'Commands/suites run: (none recorded)';
-      const totalsLine = `Result totals: ${parsed.totals.passed} passed, ${parsed.totals.failed} failed, ${parsed.totals.skipped} skipped, ${parsed.totals.errors} errors`;
-      const incompleteLine = parsed.incomplete
-        ? '\nNote: this run is marked incomplete (a test command may have crashed before its report was written).'
-        : '';
-      commandLines = `${commandsLine}\n${totalsLine}${incompleteLine}`;
-    } catch {
-      commandLines = '(structured result present but unparsable)';
-    }
-  } else if (summary) {
-    const totalsLine = `Result totals: ${summary.passed_count} passed, ${summary.failed_count} failed, ${summary.skipped_count} skipped, ${summary.error_count} errors`;
-    const incompleteLine = summary.incomplete
-      ? '\nNote: this run is marked incomplete (a test command may have crashed before its report was written).'
-      : '';
+  if (outcomes.source === 'structured') {
+    const suiteNames = outcomes.suiteNames ?? [];
+    const commandsLine =
+      suiteNames.length > 0
+        ? `Commands/suites run: ${suiteNames.join(', ')}`
+        : 'Commands/suites run: (none recorded)';
+    commandLines = `${commandsLine}\n${totalsLine}${incompleteLine}`;
+  } else if (outcomes.source === 'extracted') {
     commandLines = `(raw structured result was cleared by storage dedup after extraction; totals below are from the extracted summary)\n${totalsLine}${incompleteLine}`;
+  } else if (outcomes.parseFailed) {
+    commandLines = '(structured result present but unparsable)';
   }
   const sourceLine =
     run.session_id === null
@@ -865,10 +853,6 @@ export class PRReviewService {
               followUpWorktreePath,
             )
           : undefined;
-        const followUpTestRunSummary =
-          followUpTestRun && !followUpTestRun.structured_result
-            ? getTestRunSummary(followUpTestRun.id)
-            : undefined;
         const followUp = [
           `The code session has pushed new commits to PR #${prNumber}.`,
           `Please re-review the updated diff against the same task spec.`,
@@ -881,7 +865,7 @@ export class PRReviewService {
           '```',
           diff,
           '```',
-          buildTestRunEvidenceSection(followUpTestRun, followUpTestRunSummary),
+          buildTestRunEvidenceSection(followUpTestRun),
           buildGateChargedFailuresSection(
             followUpGateChargedFailures,
             parseDiffFiles(diff),
@@ -1016,10 +1000,6 @@ export class PRReviewService {
             sessionWorktreePath,
           )
         : undefined;
-      const testRunSummary =
-        testRun && !testRun.structured_result
-          ? getTestRunSummary(testRun.id)
-          : undefined;
       const gateChargedFailures = prRow.session_id
         ? collectGateChargedFailures(
             projectId,
@@ -1033,7 +1013,6 @@ export class PRReviewService {
         taskBody,
         prIntent,
         testRun,
-        testRunSummary,
         gateChargedFailures,
       );
 
@@ -2063,7 +2042,6 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     taskBody: string,
     prIntent?: OpsPrIntentPayload | null,
     testRun?: TestRequestRunRow | null,
-    testRunSummary?: TestRunSummaryRow,
     gateChargedFailures: FailingTestForRun[] = [],
   ): string {
     const prIntentSection = prIntent
@@ -2076,10 +2054,7 @@ Reason: ${prIntent.reason}
     const schemaBlock = prIntent
       ? buildReviewJsonSchemaBlock(OPS_PR_INTENT_FILES_DIMENSION_GUIDANCE)
       : REVIEW_JSON_SCHEMA_BLOCK;
-    const testRunSection = buildTestRunEvidenceSection(
-      testRun ?? undefined,
-      testRunSummary,
-    );
+    const testRunSection = buildTestRunEvidenceSection(testRun ?? undefined);
     const gateChargedFailuresSection = buildGateChargedFailuresSection(
       gateChargedFailures,
       parseDiffFiles(diff.diff),

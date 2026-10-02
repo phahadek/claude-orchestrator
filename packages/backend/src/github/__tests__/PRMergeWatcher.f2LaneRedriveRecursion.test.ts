@@ -49,6 +49,13 @@ vi.mock('../../db/queries', () => ({
   setFlakeRecoveryBaseExhausted: vi.fn(),
   getLatestTestRequestRunForSession: vi.fn().mockReturnValue(undefined),
   isRunFailureBreadthAttributable: vi.fn().mockReturnValue(false),
+  // Consulted by orchestration/runTestOutcomes.ts's accessor (per-test
+  // outcomes) whenever a run's structured_result is null — this suite's
+  // fixtures never populate an extracted summary, so both fall through to
+  // "no outcomes" the same way a direct null structured_result read used to.
+  getTestRunSummary: vi.fn().mockReturnValue(undefined),
+  getFailingTestIdsForRun: vi.fn().mockReturnValue([]),
+  getTestRequestRunById: vi.fn().mockReturnValue(undefined),
   recordMergeCommitForSession: vi.fn(),
   setConflictNudgeSha: vi.fn(),
   setPreReviewStage: vi.fn(),

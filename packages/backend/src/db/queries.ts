@@ -10252,9 +10252,12 @@ export function getTaskTestFlipRateFlags(
  * extraction has already happened. Call right after a run transitions out of
  * `running` — that transition makes it the latest completed run for the key
  * (see getLatestTestRequestRun's ordering), so every other row's
- * structured_result becomes permanently unreachable by any production
- * reader. test_run_results already retains the per-test outcome/duration
- * data those blobs duplicate — but extraction can be deferred to the
+ * structured_result is superseded. A superseded row can still be read later
+ * (a replayed same-hash verify run, a PR review, merge-watcher checks), so
+ * every reader of per-test outcomes goes through orchestration/
+ * runTestOutcomes.ts, which falls back to test_run_summaries/
+ * test_run_results — they already retain the per-test outcome/duration
+ * data those blobs duplicate. But extraction can be deferred to the
  * boot-time sweep (listTestRequestRunsNeedingExtraction) after a crash
  * mid-run, so a row whose extraction hasn't run yet still needs its
  * structured_result as the sweep's only source; clearing it here would race

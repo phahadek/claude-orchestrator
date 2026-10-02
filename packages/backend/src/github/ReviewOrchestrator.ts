@@ -1092,6 +1092,7 @@ export class ReviewOrchestrator {
     try {
       filtered = await filterVerifyFailureByBaseHealth(
         project,
+        null,
         result.structuredResult,
       );
     } catch (err) {

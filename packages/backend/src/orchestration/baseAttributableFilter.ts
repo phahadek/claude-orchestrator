@@ -24,7 +24,6 @@
 import type { ProjectConfig } from '../config';
 import type { TestRequestRunRow, StructuredTestResult } from '../db/types';
 import {
-  getFailingTestIdsForRun,
   getFlaggedFlakyTestIds,
   listTestRequestRunsForSession,
   computeTestFailureBreadthFlag,
@@ -32,8 +31,11 @@ import {
 } from '../db/queries';
 import { typedGetSetting } from '../config/settings';
 import { isTestIdTouchedByChangedFiles } from '../session/test-runner';
-import { getRunIngestionPromise } from './testRequestLane';
-import { logger } from '../logger';
+import {
+  getRunTestOutcomes,
+  getRunTestOutcomesForRun,
+  outcomesFromStructuredResult,
+} from './runTestOutcomes';
 
 type BaseAttributableFilterOutcome =
   | 'unfiltered'
@@ -112,25 +114,10 @@ export async function filterBaseAttributableFailures(
     return UNFILTERED(run.state === 'passed');
   }
 
-  // The run's own test_run_results rows are written by a fire-and-forget
-  // worker-thread dispatch (testRequestLane.ts) that is still in flight when
-  // this filter runs immediately after completion — reading
-  // getFailingTestIdsForRun before that write commits would find an empty
-  // failing set and silently charge an attributable failure to the session.
-  // Await this run's own dispatch (if it's still tracked as in flight) so
-  // the read below is always sequenced after the write.
-  const pendingIngestion = getRunIngestionPromise(run.id);
-  if (pendingIngestion) {
-    try {
-      await pendingIngestion;
-    } catch (err) {
-      logger.warn(
-        `[baseAttributableFilter] ingestion failed for run ${run.id} — filtering against a possibly-incomplete failing set: ${err instanceof Error ? err.message : err}`,
-      );
-    }
-  }
-
-  const sessionFailing = getFailingTestIdsForRun(run.id);
+  // The accessor awaits this run's in-flight ingestion dispatch, so a
+  // just-completed run never reads back an empty failing set. Reads off the
+  // row already in hand — no extra db/queries round trip to re-fetch it.
+  const sessionFailing = (await getRunTestOutcomesForRun(run)).failingTests;
   if (sessionFailing.length === 0) {
     // No per-test breakdown for the session's own run — nothing to
     // attribute granularly against, so leave it charged as a raw failure.
@@ -226,37 +213,36 @@ function attributeFailingTests(
  * Filters a pre-review verify gate's own failure against the cross-SHA
  * failure-breadth corpus — a narrower sibling of
  * filterBaseAttributableFailures scoped to the case where verify's failing
- * command produced a structured report (matching the project's
- * test_report_glob), rather than a TestRequestRunRow. `structuredResult` is
- * the report parsed from verify's own worktree (see verifyRunner.ts's
- * runVerifyAsGate). Verify has no persisted test_request_runs row (and no
- * session/PR identity) to derive a "first run" cutoff from, so the corpus is
- * evaluated as of now — verify's own re-runs aren't tracked as
- * test_run_results samples in the first place, so there's no self-inflation
- * risk to guard against here.
+ * command produced a per-test report. Failing tests come from the run-outcome
+ * accessor (getRunTestOutcomes) for `runId`, so a replayed verify run whose
+ * structured_result was already cleared still yields the same failing set as
+ * the fresh run; `fallbackStructuredResult` is only for the direct
+ * (non-lane) runVerifyAsGate path that has no persisted run row. With no
+ * session/PR identity to derive a "first run" cutoff from, the corpus is
+ * evaluated as of now.
  *
- * Returns null when `structuredResult` is absent or carries no failing
- * tests — the caller falls through to today's unfiltered verify-gate
- * behavior in that case.
+ * Returns null when no failing tests are found — the caller falls through to
+ * today's unfiltered verify-gate behavior in that case.
  */
 export async function filterVerifyFailureByBaseHealth(
   project: ProjectConfig,
-  structuredResult: StructuredTestResult | null | undefined,
+  runId: string | null | undefined,
+  fallbackStructuredResult?: StructuredTestResult | null,
 ): Promise<BaseAttributableFilterResult | null> {
-  if (!structuredResult) return null;
-
-  const failing = new Map<string, string>();
-  for (const suite of structuredResult.suites ?? []) {
-    for (const test of suite.tests ?? []) {
-      if (test.outcome === 'failed' || test.outcome === 'error') {
-        failing.set(test.id, test.name);
-      }
-    }
+  let failingTests: FailingTest[];
+  if (runId) {
+    failingTests = (await getRunTestOutcomes(runId)).failingTests;
+  } else if (fallbackStructuredResult) {
+    failingTests = outcomesFromStructuredResult(
+      fallbackStructuredResult,
+    ).failingTests;
+  } else {
+    return null;
   }
-  if (failing.size === 0) return null;
+  if (failingTests.length === 0) return null;
 
-  const sessionFailing: FailingTest[] = Array.from(failing.entries()).map(
-    ([test_id, name]) => ({ test_id, name }),
+  const sessionFailing: FailingTest[] = failingTests.map(
+    ({ test_id, name }) => ({ test_id, name }),
   );
 
   return attributeFailingTests(project, sessionFailing, Date.now());

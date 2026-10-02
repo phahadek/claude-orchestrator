@@ -25,6 +25,7 @@ vi.mock('../db/queries.js', () => ({
   getLatestFinishedTestRequestRunForSession: vi.fn().mockReturnValue(undefined),
   getAuthoritativeTestRunForPr: vi.fn().mockReturnValue(undefined),
   getTestRunSummary: vi.fn().mockReturnValue(undefined),
+  getFailingTestIdsForRun: vi.fn().mockReturnValue([]),
   listTestRequestRunsForPrSession: vi.fn().mockReturnValue([]),
   getUnexcusedFailingTestIdsForRun: vi.fn().mockReturnValue([]),
   markSessionSuperseded: vi.fn(),
@@ -511,7 +512,6 @@ describe('PRReviewService.buildPrompt()', () => {
       mockTaskBody,
       undefined,
       undefined,
-      undefined,
       [
         {
           test_id: 'src/foo.test.ts.bar works',
@@ -675,13 +675,13 @@ describe('PRReviewService.buildPrompt()', () => {
       created_at: finishedAt,
     } as any;
 
+    vi.mocked(getTestRunSummary).mockReturnValueOnce(testRunSummary);
     const prompt = service.buildPrompt(
       mockPR,
       mockDiff,
       mockTaskBody,
       null,
       testRun,
-      testRunSummary,
     );
 
     expect(prompt).toContain('## Orchestrator-Verified Test Run');

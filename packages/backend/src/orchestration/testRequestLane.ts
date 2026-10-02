@@ -65,7 +65,6 @@ import {
   listTestRequestRunsNeedingExtraction,
   countTestRequestRunsNeedingExtraction,
   runHasExtractedReport,
-  getTestRunSummary,
   ingestTestRunResultsTx,
   upsertTestPerfBaseline,
   computeTestFlipRateFlag,
@@ -92,6 +91,11 @@ import type {
   TestRunKind,
 } from '../db/types';
 import type { TestPerfDigestSampleResult } from '../db/queries';
+import {
+  getRunIngestionPromise,
+  readRunTestOutcomes,
+  trackRunIngestion,
+} from './runTestOutcomes';
 import { logger } from '../logger';
 import type { ServerMessage, TestRequestRunStatusPayload } from '../ws/types';
 
@@ -1429,19 +1433,13 @@ async function executeTestRequestRun(
       commands: JSON.stringify(recordedCommands),
       coverage_source_run_id: null,
     });
-    runIngestionPromises.set(runId, ingestionPromise);
-    ingestionPromise
-      .catch((err) => {
-        logger.error(
-          `[testRequestLane] ingestion dispatch failed for run ${runId}:`,
-          err,
-        );
-      })
-      .finally(() => {
-        if (runIngestionPromises.get(runId) === ingestionPromise) {
-          runIngestionPromises.delete(runId);
-        }
-      });
+    trackRunIngestion(runId, ingestionPromise);
+    ingestionPromise.catch((err) => {
+      logger.error(
+        `[testRequestLane] ingestion dispatch failed for run ${runId}:`,
+        err,
+      );
+    });
     return { ...result, runId };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -1558,33 +1556,10 @@ export function recoverInterruptedTestRequestRuns(): void {
  */
 const projectIngestionQueues = new Map<string, Promise<void>>();
 
-/**
- * A completed run's own ingestTestRunResults dispatch promise, keyed by
- * run id, live only while that dispatch is still in flight — removed as
- * soon as it settles (success or failure), so the map never grows past the
- * count of runs currently mid-ingestion. Lets a reader of this run's failing
- * set (baseAttributableFilter.ts's filterBaseAttributableFailures) await
- * this specific run's own write before querying test_run_results, without
- * the completion handler above ever blocking on it, and without waiting on
- * any other run's ingestion beyond what this run's own FIFO position in
- * enqueueProjectIngestion already implies. Absence of an entry means either
- * "already settled" (the common case by the time a filter call gets here)
- * or "never dispatched" — both are safe to treat as "nothing to wait for".
- */
-const runIngestionPromises = new Map<string, Promise<void>>();
-
-/**
- * Lets a caller outside this module (the base-attribution filter) await a
- * specific run's own ingestion dispatch before reading its extracted
- * test_run_results rows — see runIngestionPromises above. Returns undefined
- * once the dispatch has settled or if it was never tracked (e.g. a run
- * predating this process, or one with no structured_result to ingest).
- */
-export function getRunIngestionPromise(
-  runId: string,
-): Promise<void> | undefined {
-  return runIngestionPromises.get(runId);
-}
+// A completed run's in-flight ingestion dispatch is tracked in
+// runTestOutcomes.ts (trackRunIngestion), which getRunTestOutcomes awaits
+// before reading test_run_results.
+export { getRunIngestionPromise };
 
 function enqueueProjectIngestion(
   projectId: string,
@@ -1722,47 +1697,18 @@ async function dispatchIngestion(
  * classifyFailedRun) — classifyTestRunOutcome (below) is its sole surviving
  * consumer.
  *
- * The durable source of the breakdown is test_run_summaries/test_run_results
- * (this module's own extraction output), not test_request_runs.structured_result
- * — that column is cleared once extraction has consumed it
- * (clearExtractedStructuredResultsBatch), so a null structured_result on an
- * already-extracted run means "already processed", never "crashed". The
- * extraction summary's own `incomplete` flag (mirroring
- * StructuredTestResult.incomplete, see db/schema.ts) is what survives that
- * clear and lets an incomplete merge still classify as total_fail
- * post-sweep. structured_result is only consulted as a fallback for a run
- * that hasn't been swept (or extracted) yet — gated by runHasExtractedReport,
- * the same durable-record predicate every other structured_result-null
- * reader now uses, rather than reading a null structured_result itself as
- * "no report".
+ * Per-test outcomes come from readRunTestOutcomes (runTestOutcomes.ts),
+ * which survives the structured_result clear. An incomplete merge (missing
+ * an expected report file, e.g. a command crashed/OOM-killed before writing
+ * its report) is never a mere partial failure of the suites it did capture —
+ * an entire suite never ran — so it classifies as total_fail.
  */
 function classifyFailedRun(
   run: TestRequestRunRow,
 ): 'partial_fail' | 'total_fail' {
-  if (runHasExtractedReport(run.id)) {
-    const summary = getTestRunSummary(run.id)!;
-    if (summary.incomplete) return 'total_fail';
-    return summary.total_count > 0 ? 'partial_fail' : 'total_fail';
-  }
-
-  if (!run.structured_result) return 'total_fail';
-  try {
-    const parsed = JSON.parse(run.structured_result) as StructuredTestResult;
-    // A merge missing one or more expected report files (e.g. a command
-    // crashed/OOM-killed before writing its report) is never a mere partial
-    // failure of the suites it did capture — an entire suite never ran, so
-    // this must not look identical to an ordinary named-test failure.
-    if (parsed.incomplete) return 'total_fail';
-    const totalTests =
-      (parsed.totals?.passed ?? 0) +
-      (parsed.totals?.failed ?? 0) +
-      (parsed.totals?.skipped ?? 0) +
-      (parsed.totals?.errors ?? 0);
-    if (totalTests > 0) return 'partial_fail';
-  } catch {
-    // Unparseable structured_result carries no usable per-test breakdown.
-  }
-  return 'total_fail';
+  const outcomes = readRunTestOutcomes(run);
+  if (outcomes.source === 'none' || outcomes.incomplete) return 'total_fail';
+  return outcomes.totals.total > 0 ? 'partial_fail' : 'total_fail';
 }
 
 /**

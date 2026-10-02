@@ -1064,19 +1064,16 @@ describe('PreReviewPipeline — verify gate', () => {
   });
 
   it('passes verify when every failing test in the structured report is a confirmed base-attributable break', async () => {
-    const structuredResult = {
-      format: 'junit-xml',
-      suites: [],
-      totals: { passed: 6686, failed: 4, skipped: 0, errors: 0 },
-      durationMsTotal: 1000,
-    };
     mockLaneResult({
       passed: false,
       failedCommand: 'pytest',
       output: '4 failed, 6686 passed',
     });
+    // The pipeline hands the filter the run id, never the (transient)
+    // structured_result blob — a replayed run with it nulled behaves the same.
     mockGetTestRequestRunById.mockReturnValue({
-      structured_result: JSON.stringify(structuredResult),
+      id: 'run-enqueued',
+      structured_result: null,
     });
     mockFilterVerifyFailureByBaseHealth.mockResolvedValue({
       outcome: 'filtered_pass',
@@ -1098,7 +1095,8 @@ describe('PreReviewPipeline — verify gate', () => {
 
     expect(mockFilterVerifyFailureByBaseHealth).toHaveBeenCalledWith(
       makeProject(),
-      structuredResult,
+      'run-enqueued',
+      null,
     );
     expect(result.passed).toBe(true);
     expect(mockSetPauseReason).toHaveBeenCalledWith(
@@ -1127,6 +1125,7 @@ describe('PreReviewPipeline — verify gate', () => {
       output: '2 failed',
     });
     mockGetTestRequestRunById.mockReturnValue({
+      id: 'run-enqueued',
       structured_result: JSON.stringify(structuredResult),
     });
     mockFilterVerifyFailureByBaseHealth.mockResolvedValue({
@@ -1167,7 +1166,10 @@ describe('PreReviewPipeline — verify gate', () => {
       failedCommand: 'tsc',
       output: 'type error',
     });
-    mockGetTestRequestRunById.mockReturnValue({ structured_result: null });
+    mockGetTestRequestRunById.mockReturnValue({
+      id: 'run-enqueued',
+      structured_result: null,
+    });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 
@@ -1175,6 +1177,7 @@ describe('PreReviewPipeline — verify gate', () => {
 
     expect(mockFilterVerifyFailureByBaseHealth).toHaveBeenCalledWith(
       makeProject(),
+      'run-enqueued',
       null,
     );
     expect(result.passed).toBe(false);
@@ -1204,6 +1207,7 @@ describe('PreReviewPipeline — verify gate', () => {
       output: '1 failed',
     });
     mockGetTestRequestRunById.mockReturnValue({
+      id: 'run-enqueued',
       structured_result: JSON.stringify(structuredResult),
     });
     // filterVerifyFailureByBaseHealth returns 'unfiltered' when the base

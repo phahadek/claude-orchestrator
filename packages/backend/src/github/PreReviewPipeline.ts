@@ -365,6 +365,9 @@ export class PreReviewPipeline {
           isTimeoutInfraFailure?: boolean;
           isWorkerCrash?: boolean;
           crashMessage?: string;
+          /** The persisted lane run to read per-test outcomes from; null on the direct runVerifyAsGate path. */
+          runId: string | null;
+          /** Only set on the direct runVerifyAsGate path, which has no persisted run row. */
           structuredResult: StructuredTestResult | null;
         }
 
@@ -387,16 +390,6 @@ export class PreReviewPipeline {
             toolFailureReason?: string;
           },
         ): NormalizedVerifyOutcome => {
-          let structuredResult: StructuredTestResult | null = null;
-          if (run?.structured_result) {
-            try {
-              structuredResult = JSON.parse(
-                run.structured_result,
-              ) as StructuredTestResult;
-            } catch {
-              structuredResult = null;
-            }
-          }
           const isWorkerCrash = run?.failure_reason === 'worker_crash';
           return {
             passed: base.passed,
@@ -415,7 +408,8 @@ export class PreReviewPipeline {
                     ) ?? { matchedLines: [] },
                   )
                 : undefined,
-            structuredResult,
+            runId: run?.id ?? null,
+            structuredResult: null,
           };
         };
 
@@ -534,6 +528,7 @@ export class PreReviewPipeline {
             isTimeoutInfraFailure: gateResult.isTimeoutInfraFailure,
             isWorkerCrash: gateResult.isWorkerCrash,
             crashMessage: gateResult.crashMessage,
+            runId: null,
             structuredResult: gateResult.structuredResult ?? null,
           };
         }
@@ -571,6 +566,7 @@ export class PreReviewPipeline {
           try {
             filtered = await filterVerifyFailureByBaseHealth(
               ctx.project,
+              outcome.runId,
               outcome.structuredResult,
             );
           } catch (err) {
