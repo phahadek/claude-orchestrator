@@ -129,6 +129,7 @@ import {
   upsertDepthReviewVerdict,
   getDepthReviewVerdict,
   getTestRequestRunById,
+  incrementReviewIteration,
 } from '../db/queries';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
@@ -1902,11 +1903,124 @@ describe('ReviewOrchestrator — iteration cap escalation', () => {
     ).toBeUndefined();
   });
 
+  it('enqueueReview with operatorRequested enters the pipeline at the cap without resetting the counter', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      review_iteration: 3,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+
+    expect(orch.enqueueReview({ ...baseJob, operatorRequested: true })).toBe(
+      true,
+    );
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'max_reviews',
+    );
+    expect(vi.mocked(incrementReviewIteration)).not.toHaveBeenCalled();
+  });
+
+  it('enqueueReview without operatorRequested still stops at the cap', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      review_iteration: 3,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+
+    orch.enqueueReview({ ...baseJob });
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'max_reviews',
+    );
+  });
+
+  it('enqueueReview of the current head is admitted when last_reviewed_sha equals head_sha', () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      last_reviewed_sha: 'sha-abc',
+      head_sha: 'sha-abc',
+      review_result: JSON.stringify({ verdict: 'needs_changes' }),
+    } as any);
+
+    const orch = new ReviewOrchestrator(
+      makeMockReviewService(),
+      makeMockSessionManager() as any,
+      true,
+    );
+    expect(
+      orch.enqueueReview({
+        ...baseJob,
+        headSha: 'sha-abc',
+        operatorRequested: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('a needs_changes verdict from an operator-requested review enqueues ai-reviewer feedback', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      review_iteration: 3,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'needs_changes',
+      dimensions: [{ name: 'Tests', passed: false, notes: 'Missing.' }],
+      summary: 'Needs changes.',
+      reviewedAt: new Date().toISOString(),
+    });
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+
+    orch.enqueueReview({ ...baseJob, operatorRequested: true });
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(sm.enqueueFeedback).toHaveBeenCalledWith(
+      'coding-session-id',
+      'ai-reviewer',
+      expect.any(String),
+      expect.anything(),
+    );
+  });
+
+  it('an approved verdict from an operator-requested review dispatches depth review', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      review_iteration: 3,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const runDepthReview = vi.fn().mockResolvedValue(makeDepthResult({}));
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+
+    orch.enqueueReview({ ...baseJob, operatorRequested: true });
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(runDepthReview).toHaveBeenCalledOnce();
+  });
+
   it('an operator re-review resetting review_iteration to 0 does not exempt later automatic dispatches from the cap', async () => {
     // Simulates the operator-facing re-review route's resetReviewIteration
     // call: the counter is back at 0 (as if just reset), so the automatic
     // dispatcher should run this one normally...
-    vi.mocked(getPRByNumber).mockReturnValueOnce({
+    vi.mocked(getPRByNumber).mockReturnValue({
       ...basePRRow,
       review_iteration: 0,
     } as any);

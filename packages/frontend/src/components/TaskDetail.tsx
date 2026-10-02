@@ -334,10 +334,15 @@ export function TaskDetail({
     setReviewInFlight(true);
     setReviewError(null);
     try {
-      const url = projectId
-        ? `/api/prs/${task.pr.prNumber}/review?projectId=${encodeURIComponent(projectId)}`
-        : `/api/prs/${task.pr.prNumber}/review`;
-      const res = await authedFetch(url, { method: 'POST' });
+      const ownerRepo = parseOwnerRepo(task.pr.prUrl);
+      if (!ownerRepo) {
+        setReviewError('Could not parse owner/repo from PR URL.');
+        return;
+      }
+      const res = await authedFetch(
+        `/api/prs/${ownerRepo.owner}/${ownerRepo.repo}/${task.pr.prNumber}/re-review`,
+        { method: 'POST' },
+      );
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
         setReviewError(body.error ?? `HTTP ${res.status}`);

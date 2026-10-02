@@ -20,6 +20,7 @@ vi.mock('../db/queries.js', () => ({
   setPRReviewResult: vi.fn(),
   updatePRDraftStatus: vi.fn(),
   getSessionsByProject: vi.fn().mockReturnValue([]),
+  getSession: vi.fn().mockReturnValue(undefined),
   markSessionDone: vi.fn(),
   clearTerminalPRFlags: vi.fn(),
   lookupSessionByBranch: vi.fn().mockReturnValue(null),
@@ -117,7 +118,6 @@ import type { SessionManager } from '../session/SessionManager.js';
 import type { NotionClient } from '../notion/NotionClient.js';
 import type { PRMergeWatcher } from '../github/PRMergeWatcher.js';
 import type { PullRequestRow } from '../db/types.js';
-import { formatReviewFeedback } from '../github/reviewUtils.js';
 import {
   pauseReasonFromCanonical,
   parsePauseReasonSet,
@@ -282,6 +282,9 @@ function buildApp(
   sessionManager = makeMockSessionManager(),
   notionClient = makeMockNotionClient(),
   mergeWatcher: PRMergeWatcher | undefined = undefined,
+  reviewOrchestrator: Parameters<typeof createPrsRouter>[6] = {
+    enqueueReview: vi.fn().mockReturnValue(true),
+  } as any,
 ) {
   const app = express();
   app.use(express.json());
@@ -293,6 +296,8 @@ function buildApp(
       sessionManager,
       notionClient,
       mergeWatcher,
+      undefined,
+      reviewOrchestrator,
     ),
   );
   return app;
@@ -858,80 +863,6 @@ describe('GET /api/prs — local-only project returns local_branch items', () =>
 
 // ── POST /api/prs/:prNumber/review ────────────────────────────────────────────
 
-describe('POST /api/prs/:prNumber/review', () => {
-  it('calls reviewPR and returns review result when PR exists', async () => {
-    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
-    const res = await supertest(buildApp()).post(
-      '/api/prs/42/review?projectId=proj-1',
-    );
-    expect(res.status).toBe(200);
-    expect(res.body.verdict).toBe('approved');
-    expect(res.body.summary).toBe('Looks good');
-  });
-
-  it('calls reviewPR even when PR has no task_id (service handles error)', async () => {
-    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRowNoTask);
-    const res = await supertest(buildApp()).post(
-      '/api/prs/43/review?projectId=proj-1',
-    );
-    expect(res.status).toBe(200);
-    expect(res.body.verdict).toBe('approved');
-  });
-
-  it('performs on-demand sync and calls reviewPR when PR is not in DB initially', async () => {
-    vi.mocked(queries.getPRByNumber)
-      .mockReturnValueOnce(null) // first call — not found
-      .mockReturnValueOnce(mockPRRow); // second call — after upsert
-    const github = makeMockGitHub();
-    const res = await supertest(buildApp(github)).post(
-      '/api/prs/42/review?projectId=proj-1',
-    );
-    expect(res.status).toBe(200);
-    expect(res.body.verdict).toBe('approved');
-    expect(vi.mocked(github.fetchPR)).toHaveBeenCalledWith('owner/repo', 42);
-    expect(vi.mocked(queries.upsertPullRequest)).toHaveBeenCalledOnce();
-  });
-
-  it('returns 404 when PR is not in DB and GitHub fetch also fails', async () => {
-    vi.mocked(queries.getPRByNumber).mockReturnValue(null);
-    const github = makeMockGitHub();
-    vi.mocked(github.fetchPR).mockRejectedValue(new Error('Not Found'));
-    const res = await supertest(buildApp(github)).post(
-      '/api/prs/42/review?projectId=proj-1',
-    );
-    expect(res.status).toBe(404);
-    expect(res.body.error).toMatch(/PR #42 not found/);
-  });
-
-  it('returns 404 when PR is not in DB and still not found after upsert', async () => {
-    vi.mocked(queries.getPRByNumber).mockReturnValue(null);
-    const res = await supertest(buildApp()).post(
-      '/api/prs/42/review?projectId=proj-1',
-    );
-    expect(res.status).toBe(404);
-  });
-
-  it('broadcasts pr_review_complete after a successful review', async () => {
-    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
-    const broadcastedMessages: object[] = [];
-    setPRBroadcast((msg) => broadcastedMessages.push(msg));
-
-    await supertest(buildApp()).post('/api/prs/42/review?projectId=proj-1');
-
-    expect(broadcastedMessages).toHaveLength(1);
-    expect(broadcastedMessages[0]).toMatchObject({
-      type: 'pr_review_complete',
-      prNumber: 42,
-      repo: 'owner/repo',
-      verdict: 'approved',
-      summary: 'Looks good',
-    });
-
-    // Reset broadcast to no-op
-    setPRBroadcast(() => {});
-  });
-});
-
 // ── POST /api/prs/:prNumber/merge ─────────────────────────────────────────────
 
 describe('POST /api/prs/:prNumber/merge', () => {
@@ -1387,16 +1318,36 @@ describe('POST /api/prs/:prNumber/re-review', () => {
     expect(res.status).toBe(404);
   });
 
-  it('resets review_iteration and runs review on success', async () => {
+  it('enqueues an operatorRequested review and does not call reviewPR or reset the iteration', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
-    const res = await supertest(buildApp()).post(
-      '/api/prs/owner/repo/42/re-review',
+    const prReviewService = makeMockPRReviewService();
+    const enqueueReview = vi.fn().mockReturnValue(true);
+    const res = await supertest(
+      buildApp(undefined, prReviewService, undefined, undefined, undefined, {
+        enqueueReview,
+      } as any),
+    ).post('/api/prs/owner/repo/42/re-review');
+    expect(res.status).toBe(202);
+    expect(enqueueReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prNumber: 42,
+        repo: 'owner/repo',
+        operatorRequested: true,
+      }),
     );
-    expect(res.status).toBe(200);
-    expect(vi.mocked(queries.resetReviewIteration)).toHaveBeenCalledWith(
-      42,
-      'owner/repo',
-    );
+    expect(enqueueReview.mock.calls[0][0].pushTriggered).toBeUndefined();
+    expect(vi.mocked(prReviewService.reviewPR)).not.toHaveBeenCalled();
+    expect(vi.mocked(queries.resetReviewIteration)).not.toHaveBeenCalled();
+  });
+
+  it('returns 409 when the orchestrator refuses the job', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const res = await supertest(
+      buildApp(undefined, undefined, undefined, undefined, undefined, {
+        enqueueReview: vi.fn().mockReturnValue(false),
+      } as any),
+    ).post('/api/prs/owner/repo/42/re-review');
+    expect(res.status).toBe(409);
   });
 
   it('returns 422 when repo not in config', async () => {
@@ -1406,98 +1357,6 @@ describe('POST /api/prs/:prNumber/re-review', () => {
     );
     expect(res.status).toBe(422);
     expect(res.body.error).toMatch(/No project configured/);
-  });
-
-  it('broadcasts pr_review_complete after a successful re-review', async () => {
-    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
-    const broadcastedMessages: object[] = [];
-    setPRBroadcast((msg) => broadcastedMessages.push(msg));
-
-    await supertest(buildApp()).post('/api/prs/owner/repo/42/re-review');
-
-    expect(broadcastedMessages).toHaveLength(1);
-    expect(broadcastedMessages[0]).toMatchObject({
-      type: 'pr_review_complete',
-      prNumber: 42,
-      repo: 'owner/repo',
-      verdict: 'approved',
-      summary: 'Looks good',
-    });
-
-    // Reset broadcast to no-op
-    setPRBroadcast(() => {});
-  });
-
-  it('routes a needs_changes verdict to the implementing session, matching the normal review path', async () => {
-    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
-    const needsChangesResult = {
-      prNumber: 42,
-      repo: 'owner/repo',
-      verdict: 'needs_changes' as const,
-      dimensions: [
-        { name: 'Tests', passed: false, notes: 'Missing test coverage.' },
-      ],
-      summary: 'Needs changes.',
-      reviewedAt: '2024-01-01T00:00:00Z',
-    };
-    const prReviewService = {
-      reviewPR: vi.fn().mockResolvedValue(needsChangesResult),
-    } as unknown as PRReviewService;
-    const sessionManager = makeMockSessionManager();
-
-    const res = await supertest(
-      buildApp(undefined, prReviewService, sessionManager),
-    ).post('/api/prs/owner/repo/42/re-review');
-
-    expect(res.status).toBe(200);
-    expect(res.body.feedbackRouted).toBe(true);
-    expect(vi.mocked(sessionManager.enqueueFeedback)).toHaveBeenCalledWith(
-      mockPRRow.session_id,
-      'ai-reviewer',
-      formatReviewFeedback(needsChangesResult, 0, {
-        conflicted: mockPRRow.merge_state === 'dirty',
-        baseBranch: mockPRRow.base_branch ?? undefined,
-      }),
-    );
-  });
-
-  it('does not route feedback for an approved verdict', async () => {
-    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
-    const sessionManager = makeMockSessionManager();
-
-    const res = await supertest(
-      buildApp(undefined, makeMockPRReviewService(), sessionManager),
-    ).post('/api/prs/owner/repo/42/re-review');
-
-    expect(res.status).toBe(200);
-    expect(res.body.feedbackRouted).toBe(false);
-    expect(vi.mocked(sessionManager.enqueueFeedback)).not.toHaveBeenCalled();
-  });
-
-  it('skips feedback routing cleanly when the PR has no resolvable implementing session', async () => {
-    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRowNoTask);
-    const needsChangesResult = {
-      prNumber: 43,
-      repo: 'owner/repo',
-      verdict: 'needs_changes' as const,
-      dimensions: [
-        { name: 'Tests', passed: false, notes: 'Missing test coverage.' },
-      ],
-      summary: 'Needs changes.',
-      reviewedAt: '2024-01-01T00:00:00Z',
-    };
-    const prReviewService = {
-      reviewPR: vi.fn().mockResolvedValue(needsChangesResult),
-    } as unknown as PRReviewService;
-    const sessionManager = makeMockSessionManager();
-
-    const res = await supertest(
-      buildApp(undefined, prReviewService, sessionManager),
-    ).post('/api/prs/owner/repo/43/re-review');
-
-    expect(res.status).toBe(200);
-    expect(res.body.feedbackRouted).toBe(false);
-    expect(vi.mocked(sessionManager.enqueueFeedback)).not.toHaveBeenCalled();
   });
 });
 
@@ -1877,24 +1736,14 @@ describe('POST /api/prs/:owner/:repo/:prNumber/approve', () => {
 // Required by task: Wire ReviewOrchestrator into server event flow
 // Verifies the endpoint is NOT stubbed and delegates to prReviewService.reviewPR().
 
-describe('Break 2 (AC) — POST /api/prs/:prNumber/review calls prReviewService.reviewPR()', () => {
-  it('calls prReviewService.reviewPR() with correct args and returns real verdict, not stub null', async () => {
+describe('POST /api/prs/:prNumber/review no longer reviews directly', () => {
+  it('does not call prReviewService.reviewPR()', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
     const prReviewService = makeMockPRReviewService();
     const res = await supertest(
       buildApp(makeMockGitHub(), prReviewService),
     ).post('/api/prs/42/review?projectId=proj-1');
-    expect(res.status).toBe(200);
-    // Must invoke reviewPR — not return the old stub { verdict: null }
-    expect(vi.mocked(prReviewService.reviewPR)).toHaveBeenCalledWith(
-      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
-      expect.objectContaining({ fetchDiff: expect.any(Function) }),
-      'proj-1',
-      'https://notion.so/ctx',
-    );
-    expect(res.body.verdict).toBe('approved');
-    expect(res.body.verdict).not.toBeNull();
-    // Old stub message must be absent (response has no message field in current impl)
-    expect(res.body.message ?? '').not.toMatch(/not yet implemented/i);
+    expect(res.status).toBe(404);
+    expect(vi.mocked(prReviewService.reviewPR)).not.toHaveBeenCalled();
   });
 });
