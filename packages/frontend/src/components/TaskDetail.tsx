@@ -240,6 +240,7 @@ export function TaskDetail({
   );
   const [reviewInFlight, setReviewInFlight] = useState(false);
   const [mergeInFlight, setMergeInFlight] = useState(false);
+  const [approveInFlight, setApproveInFlight] = useState(false);
   const [markMergedInFlight, setMarkMergedInFlight] = useState(false);
   const [fixConflictsInFlight, setFixConflictsInFlight] = useState(false);
   const [abortInFlight, setAbortInFlight] = useState(false);
@@ -370,6 +371,31 @@ export function TaskDetail({
       setReviewError(err instanceof Error ? err.message : 'Network error');
     } finally {
       setFixConflictsInFlight(false);
+    }
+  }
+
+  async function handleApprove() {
+    if (!task.pr) return;
+    setApproveInFlight(true);
+    setReviewError(null);
+    try {
+      const ownerRepo = parseOwnerRepo(task.pr.prUrl);
+      if (!ownerRepo) {
+        setReviewError('Could not parse owner/repo from PR URL.');
+        return;
+      }
+      const res = await authedFetch(
+        `/api/prs/${ownerRepo.owner}/${ownerRepo.repo}/${task.pr.prNumber}/approve`,
+        { method: 'POST' },
+      );
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setReviewError(body.error ?? `HTTP ${res.status}`);
+      }
+    } catch (err) {
+      setReviewError(err instanceof Error ? err.message : 'Network error');
+    } finally {
+      setApproveInFlight(false);
     }
   }
 
@@ -1103,6 +1129,16 @@ export function TaskDetail({
                     {fixConflictsInFlight ? 'Fixing…' : '↺ Fix Conflicts'}
                   </button>
                 )}
+                {task.review?.verdict !== 'approved' &&
+                  task.pr.mergeState !== 'dirty' && (
+                    <button
+                      className={styles.reviewButton}
+                      disabled={approveInFlight}
+                      onClick={() => void handleApprove()}
+                    >
+                      {approveInFlight ? 'Approving…' : 'Approve'}
+                    </button>
+                  )}
                 {task.review?.verdict === 'approved' &&
                   task.pr.mergeState !== 'dirty' && (
                     <button
