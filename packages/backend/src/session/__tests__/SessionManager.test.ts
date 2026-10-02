@@ -863,6 +863,37 @@ describe('sendOrResume — live session fast path', () => {
     );
   });
 
+  it('during a pending overflow escalation: persists text, no direct send, no second spawn', async () => {
+    const p = sm.sendOrResume(SESSION_ID, 'first');
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
+    capturedSessions[0].emit('message', {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: 'boot',
+    });
+    await p;
+
+    const live = capturedSessions[0] as any;
+    live.isOverflowEscalationPending = true;
+    live.noteInboxDuringEscalation = vi.fn();
+    vi.mocked(AgentSession).mockClear();
+    live.sendMessage.mockClear();
+    vi.mocked(enqueueFeedbackItem).mockClear();
+
+    const result = await sm.sendOrResume(SESSION_ID, 'in-flight text');
+
+    expect(result).toBe(SESSION_ID);
+    expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+    expect(live.sendMessage).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueFeedbackItem)).toHaveBeenCalledWith(
+      SESSION_ID,
+      'operator:message',
+      'in-flight text',
+    );
+    expect(live.noteInboxDuringEscalation).toHaveBeenCalledTimes(1);
+  });
+
   it('updates status to running and emits session_status when live session is idle', async () => {
     // Establish the session as live (DB row has status 'idle' from beforeEach).
     const p = sm.sendOrResume(SESSION_ID, 'first');

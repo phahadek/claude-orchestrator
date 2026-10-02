@@ -782,6 +782,12 @@ describe('AgentSession — escalation deadlock watchdog + bounded retry', () => 
 
     // 4 total spawns: initial (overflow) + 3 escalated attempts (all deadlocked).
     expect(runCalls).toHaveLength(4);
+    // Every spawn after the overflow is on the large model — no parallel 200k spawn.
+    for (const call of runCalls.slice(1)) {
+      expect(call.options.model).toBe(LARGE_MODEL);
+    }
+    // Giving up releases the pending window.
+    expect(session.isOverflowEscalationPending).toBe(false);
 
     // kill() called 3 times (once per deadlocked attempt).
     expect(mockKill).toHaveBeenCalledTimes(3);
@@ -937,9 +943,74 @@ describe('AgentSession — overflow escalation window', () => {
     );
   });
 
-  it('does not spawn when large_task_model is empty', async () => {
+  it('is pending at the escalated spawn and until its first event', async () => {
+    mockRuntimeSettings.large_task_model = LARGE_MODEL;
     const session = makeSession('standard');
+    const observed: Record<string, boolean> = {};
+    vi.mocked(CliSessionRunner).mockImplementationOnce(() => ({
+      run: vi
+        .fn()
+        .mockImplementation(
+          (
+            _p: unknown,
+            _r: unknown,
+            options: SessionRunnerOptions,
+            onEvent: (e: Record<string, unknown>) => void,
+          ) => {
+            const idx = runCalls.length;
+            runCalls.push({ options, onEvent });
+            if (idx === 0) {
+              onEvent({
+                type: 'result',
+                stop_reason: 'model_context_window_exceeded',
+                is_error: true,
+                result: '',
+                duration_ms: 100,
+                usage: { input_tokens: 0, output_tokens: 0 },
+              });
+              observed.afterOverflow = session.isOverflowEscalationPending;
+              return Promise.resolve(1);
+            }
+            observed.atEscalatedSpawn = session.isOverflowEscalationPending;
+            onEvent({ type: 'system', subtype: 'init' });
+            observed.afterFirstEvent = session.isOverflowEscalationPending;
+            return Promise.resolve(0);
+          },
+        ),
+      sendMessage: mockSendMessage,
+      endSession: vi.fn(),
+      kill: vi.fn().mockResolvedValue(undefined),
+      hasSpawnError: false,
+    }));
+    await session.run();
+    expect(observed).toEqual({
+      afterOverflow: true,
+      atEscalatedSpawn: true,
+      afterFirstEvent: false,
+    });
+  });
+
+  it('does not spawn and errors the session when large_task_model is empty', async () => {
+    const mockSessionManager = { markSessionErrored: vi.fn(), send: vi.fn() };
+    const session = new AgentSession(
+      'test-session-overflow',
+      'https://notion.so/task',
+      'https://notion.so/project',
+      { attachPR: vi.fn(), getTask: vi.fn() } as never,
+      '/tmp/worktree',
+      'task-123',
+      undefined,
+      undefined,
+      'standard',
+      mockSessionManager as never,
+    );
     await session.run();
     expect(runCalls).toHaveLength(1);
+    expect(mockSessionManager.markSessionErrored).toHaveBeenCalledWith(
+      'test-session-overflow',
+      'error',
+      'context_overflow',
+      expect.any(String),
+    );
   });
 });
