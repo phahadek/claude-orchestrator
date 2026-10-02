@@ -1107,6 +1107,7 @@ describe('PreReviewPipeline — verify gate', () => {
       makeProject(),
       'run-enqueued',
       null,
+      { sessionId: SESSION_ID, worktreePath: expect.any(String) },
     );
     expect(result.passed).toBe(true);
     expect(mockSetPauseReason).toHaveBeenCalledWith(
@@ -1189,6 +1190,7 @@ describe('PreReviewPipeline — verify gate', () => {
       makeProject(),
       'run-enqueued',
       null,
+      { sessionId: SESSION_ID, worktreePath: expect.any(String) },
     );
     expect(result.passed).toBe(false);
     expect(mockSetPRReviewResult).toHaveBeenCalledWith(

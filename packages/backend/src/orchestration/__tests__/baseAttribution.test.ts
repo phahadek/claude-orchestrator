@@ -26,10 +26,10 @@ import { isRunFailureBreadthAttributable } from '../../db/queries';
 
 let seq = 0;
 
-const OWN = {
-  sessionIds: [],
-  worktreePaths: ['wt-hash-this-run', 'wt-hash-mixed'],
-};
+/** Excludes only the subject's own tree (its content hash's worktree). */
+function ownOf(contentHash: string) {
+  return { sessionIds: [], worktreePaths: [`wt-${contentHash}`] };
+}
 
 function insertRunWithFailure(opts: {
   testId: string;
@@ -128,7 +128,15 @@ describe('isRunFailureBreadthAttributable', () => {
       createdAt: 800,
     });
 
-    expect(isRunFailureBreadthAttributable(runId, 3, 24, 2000, OWN)).toBe(true);
+    expect(
+      isRunFailureBreadthAttributable(
+        runId,
+        3,
+        24,
+        2000,
+        ownOf('hash-this-run'),
+      ),
+    ).toBe(true);
   });
 
   it('does not attribute a run whose failure is unique to it (not seen on any other tree)', () => {
@@ -138,7 +146,15 @@ describe('isRunFailureBreadthAttributable', () => {
       createdAt: 1000,
     });
 
-    expect(isRunFailureBreadthAttributable(runId, 3, 24, 2000, OWN)).toBe(false);
+    expect(
+      isRunFailureBreadthAttributable(
+        runId,
+        3,
+        24,
+        2000,
+        ownOf('hash-this-run'),
+      ),
+    ).toBe(false);
   });
 
   it('does not attribute a run with no failing tests', () => {
@@ -150,7 +166,9 @@ describe('isRunFailureBreadthAttributable', () => {
        VALUES (@id, 'proj-1', 'hash-clean', NULL, 'passed', '', 0, 0, 0)`,
     ).run({ id: runId });
 
-    expect(isRunFailureBreadthAttributable(runId, 3, 24, 2000, OWN)).toBe(false);
+    expect(
+      isRunFailureBreadthAttributable(runId, 3, 24, 2000, ownOf('hash-clean')),
+    ).toBe(false);
   });
 
   it('requires every failing test to clear the breadth bar — one unflagged failure blocks attribution', () => {
@@ -185,6 +203,8 @@ describe('isRunFailureBreadthAttributable', () => {
       createdAt: 800,
     });
 
-    expect(isRunFailureBreadthAttributable(runId, 3, 24, 2000, OWN)).toBe(false);
+    expect(
+      isRunFailureBreadthAttributable(runId, 3, 24, 2000, ownOf('hash-mixed')),
+    ).toBe(false);
   });
 });

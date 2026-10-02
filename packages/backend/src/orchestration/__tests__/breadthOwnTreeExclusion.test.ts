@@ -46,6 +46,28 @@ function addSession(opts: {
   } as never);
 }
 
+/** Structured-result JSON matching one failing test — readRunTestOutcomes' preferred source. */
+function structuredResultFor(testId: string): string {
+  return JSON.stringify({
+    format: 'junit-xml',
+    suites: [
+      {
+        name: 'suite',
+        tests: [
+          {
+            id: testId,
+            name: 'test_broken_everywhere',
+            outcome: 'failed',
+            durationMs: 1,
+          },
+        ],
+      },
+    ],
+    totals: { passed: 0, failed: 1, skipped: 0, errors: 0 },
+    durationMsTotal: 1000,
+  });
+}
+
 /** One failing run of TEST_ID in its own tree (distinct content hash). */
 function addFailingRun(opts: {
   sessionId: string | null;
@@ -56,16 +78,18 @@ function addFailingRun(opts: {
 }): string {
   seq += 1;
   const id = `run-${seq}`;
+  const testId = opts.testId ?? TEST_ID;
   db.prepare(
     `INSERT INTO test_request_runs
-       (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, worktree_path)
-     VALUES (@id, 'proj-1', @hash, @session_id, 'failed', '', 0, @started_at, @started_at, @worktree_path)`,
+       (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, worktree_path, structured_result)
+     VALUES (@id, 'proj-1', @hash, @session_id, 'failed', '', 0, @started_at, @started_at, @worktree_path, @structured_result)`,
   ).run({
     id,
     hash: `hash-${seq}`,
     session_id: opts.sessionId,
     started_at: opts.startedAt,
     worktree_path: opts.worktree,
+    structured_result: structuredResultFor(testId),
   });
   db.prepare(
     `INSERT INTO test_run_results

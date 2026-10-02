@@ -569,7 +569,7 @@ export class PreReviewPipeline {
               outcome.runId,
               outcome.structuredResult,
               {
-                sessionId: ctx.job.sessionId,
+                sessionId: getPRByNumber(ctx.prNumber, ctx.repo)?.session_id,
                 worktreePath: ctx.worktreePath,
               },
             );

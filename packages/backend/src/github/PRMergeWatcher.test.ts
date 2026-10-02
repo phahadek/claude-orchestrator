@@ -4804,9 +4804,13 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
     const runId = `breadth-run-${seq}`;
     db.prepare(
       `INSERT INTO test_request_runs
-         (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at)
-       VALUES (@id, 'proj-1', @content_hash, NULL, 'failed', '', 0, 0, 0)`,
-    ).run({ id: runId, content_hash: `breadth-hash-${seq}` });
+         (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, worktree_path)
+       VALUES (@id, 'proj-1', @content_hash, NULL, 'failed', '', 0, 0, 0, @worktree_path)`,
+    ).run({
+      id: runId,
+      content_hash: `breadth-hash-${seq}`,
+      worktree_path: `/wt/foreign-${seq}`,
+    });
     db.prepare(
       `INSERT INTO test_run_results
          (test_request_run_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
