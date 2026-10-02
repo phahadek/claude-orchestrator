@@ -2860,8 +2860,8 @@ export function runMigrations(target: Database.Database): void {
   // test id rather than content hash, so a recurring break with the SAME
   // failing tests but a DIFFERENT content hash (e.g. an unrelated file
   // changed on the base branch) dedupes against the still-open remediation
-  // instead of filing again. Still read via queries.ts's
-  // getBaseHealthRemediationTestTracking (mcp/tools/testHealthReadTools.ts).
+  // instead of filing again. No longer read or written (producer and readers
+  // removed); the table is retained because migrations are forward-only.
   target.exec(`
     CREATE TABLE IF NOT EXISTS base_health_remediation_test_tracking (
       project_id               TEXT    NOT NULL,

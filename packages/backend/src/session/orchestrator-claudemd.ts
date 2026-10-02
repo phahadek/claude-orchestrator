@@ -358,7 +358,7 @@ Test commands are blocked at the permission layer — always via \`mcp__orchestr
 
 The backend refuses (naming why) unless the test clears the corpus and its file isn't in your diff. On success it re-runs the gate on the same commit and re-drives the merge loop on a pass — bounded, so exhaustion parks the PR for a human rather than looping.
 
-Check \`mcp__orchestrator__testHealth_getFlakyHistory\` first for a test's prior flaky/base-failing history — it grounds your \`reason\` and tells you whether \`flaky_confirm\` is even worth calling.
+Check \`mcp__orchestrator__testHealth_getFlakyHistory\` first — pass the failing test ids from your run — it grounds your \`reason\` and tells you whether \`flaky_confirm\` is even worth calling.
 
 Retrying \`test_request\` against an unchanged tree is futile either way: a settled run just replays via dedup, and a broken run (timeout, crash, OOM, failed spawn) stays held for operator approval instead — re-staging changes neither. \`flaky_confirm\` is a separate call, not deduped that way, so re-calling it (even periodically, against the same tree) always re-checks fresh corpus evidence. Prefer that over blind retries.
 

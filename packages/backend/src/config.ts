@@ -200,7 +200,7 @@ export const ALLOWED_TOOLS = [
   // testHealth.getFlakyHistory — same read-only flaky-history lookup already
   // granted to groom/design/ops/investigate/depth-review sessions (see
   // PROJECT_READ_MCP_TOOLS below); a code session needs it too, to check
-  // prior flaky/base-failing evidence for a test before deciding whether to
+  // prior flip-rate evidence for a test before deciding whether to
   // call flaky.confirm pre-PR (see the Pre-PR Gate / flaky_confirm docs in
   // orchestrator-claudemd.ts). Registered server-side unconditionally
   // (buildMcpServer) but unlisted here would mean every call denied by the

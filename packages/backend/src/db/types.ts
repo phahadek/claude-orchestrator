@@ -1664,18 +1664,3 @@ export interface FlakyRemediationTrackingRow {
   created_at: string;
   updated_at: string;
 }
-
-/**
- * One row per (project_id, test_id) ever confirmed failing on the base tree
- * itself (partial_fail outcome) — historical rows from the now-removed
- * audit/baseHealthRemediationFiling.ts producer; read-only via queries.ts's
- * getBaseHealthRemediationTestTracking.
- */
-export interface BaseHealthRemediationTestTrackingRow {
-  project_id: string;
-  test_id: string;
-  remediation_task_id: string | null;
-  remediation_task_open: number;
-  created_at: string;
-  updated_at: string;
-}
