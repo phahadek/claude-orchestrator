@@ -186,6 +186,7 @@ describe('unfixable violations from autofix', () => {
       summary: 'autofix committed deadbeef',
       commitSha: 'deadbeef',
       unfixableViolations: violationOutput,
+      unfixableMentionedFiles: ['src/foo.py'],
     });
 
     const { pipeline, sessionManager } = makePipeline();
@@ -196,6 +197,21 @@ describe('unfixable violations from autofix', () => {
     const [, nudge] = sessionManager.sendOrResume.mock.calls[0];
     expect(nudge).toMatch(/Unfixable Violations/);
     expect(nudge).toContain(violationOutput);
+    expect(nudge).toContain('Changed files the output mentions: src/foo.py');
+    expect(nudge).toContain('predate this PR');
+  });
+
+  it('does not nudge when runAutofix dropped all violations', async () => {
+    mockRunAutofix.mockResolvedValue({
+      success: true,
+      summary: 'autofix produced no diff',
+      unfixableViolations: undefined,
+    });
+
+    const { pipeline, sessionManager } = makePipeline();
+    await pipeline.run(JOB, PROJECT);
+
+    expect(sessionManager.sendOrResume).not.toHaveBeenCalled();
   });
 
   it('does not call sendOrResume when there are no unfixable violations', async () => {

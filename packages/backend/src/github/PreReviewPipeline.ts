@@ -241,6 +241,11 @@ export class PreReviewPipeline {
                   `The autofix pass committed what it could, but some violations ` +
                   `could not be fixed automatically (e.g. line-length E501). ` +
                   `Please fix these manually and re-push.\n\n` +
+                  (result.unfixableMentionedFiles?.length
+                    ? `Changed files the output mentions: ${result.unfixableMentionedFiles.join(', ')}\n`
+                    : '') +
+                  `Violations in any other file predate this PR — leave them alone; ` +
+                  `do not edit files outside your task to fix them.\n\n` +
                   `**Violations:**\n\`\`\`\n${result.unfixableViolations}\n\`\`\``;
                 try {
                   await this.sessionManager.sendOrResume(sessionId, nudge);
