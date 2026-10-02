@@ -1998,7 +1998,12 @@ describe('ReviewOrchestrator — iteration cap escalation', () => {
 
   it('emits review_not_dispatched for an operator job on a closed PR, human_merge_only PR, and a spawn failure — but not for an automatic job', async () => {
     const run = async (row: object, job: Partial<ReviewJob>, rsOverride?: any) => {
-      vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow, ...row } as any);
+      // admitJob refuses a closed PR up front, so the first read (admission)
+      // sees it open and later reads see the PR close while queued.
+      vi.mocked(getPRByNumber)
+        .mockReset()
+        .mockReturnValueOnce({ ...basePRRow } as any)
+        .mockReturnValue({ ...basePRRow, ...row } as any);
       const sm = makeMockSessionManager();
       const rs = rsOverride ?? makeMockReviewService();
       const messages: any[] = [];
