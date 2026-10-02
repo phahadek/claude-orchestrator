@@ -3437,6 +3437,9 @@ export function upsertPullRequest(
     );
     return null;
   }
+  const existing = getPRByUrl(pr.pr_url);
+  const headMoved =
+    !!existing && !!pr.head_sha && existing.head_sha !== pr.head_sha;
   db.prepare(
     `
     INSERT INTO pull_requests
@@ -3462,16 +3465,19 @@ export function upsertPullRequest(
       updated_at             = excluded.updated_at,
       node_id                = COALESCE(excluded.node_id, node_id),
       head_sha               = COALESCE(excluded.head_sha, head_sha),
-      mergeable              = COALESCE(excluded.mergeable, mergeable),
-      merge_state            = COALESCE(excluded.merge_state, merge_state),
-      merge_state_checked_at = COALESCE(excluded.merge_state_checked_at, merge_state_checked_at)
+      mergeable              = CASE WHEN @head_moved = 1 THEN excluded.mergeable ELSE COALESCE(excluded.mergeable, mergeable) END,
+      merge_state            = CASE WHEN @head_moved = 1 THEN excluded.merge_state ELSE COALESCE(excluded.merge_state, merge_state) END,
+      merge_state_checked_at = CASE WHEN @head_moved = 1 THEN excluded.merge_state_checked_at ELSE COALESCE(excluded.merge_state_checked_at, merge_state_checked_at) END,
+      failing_checks         = CASE WHEN @head_moved = 1 THEN NULL ELSE failing_checks END
   `,
   ).run({
     mergeable: null,
     merge_state: null,
     merge_state_checked_at: null,
     ...pr,
+    head_moved: headMoved ? 1 : 0,
   });
+  if (headMoved && existing) recordMergeStateResetAudit(existing);
   return db
     .prepare<{ pr_url: string }>(
       `
@@ -3560,19 +3566,50 @@ export function setHeadSha(
   sha: string | null,
 ): void {
   const now = new Date().toISOString();
+  const before = getPRByNumber(prNumber, repo);
+  const headMoved = !!sha && !!before && before.head_sha !== sha;
   db.prepare<{
     pr_number: number;
     repo: string;
     head_sha: string | null;
     updated_at: string;
+    reset: number;
   }>(
     `
     UPDATE pull_requests
     SET head_sha = @head_sha, stalled_pr_retry_count = 0,
+        mergeable = CASE WHEN @reset = 1 THEN NULL ELSE mergeable END,
+        merge_state = CASE WHEN @reset = 1 THEN NULL ELSE merge_state END,
+        merge_state_checked_at = CASE WHEN @reset = 1 THEN NULL ELSE merge_state_checked_at END,
+        failing_checks = CASE WHEN @reset = 1 THEN NULL ELSE failing_checks END,
         updated_at = @updated_at, synced_at = @updated_at
     WHERE pr_number = @pr_number AND repo = @repo
   `,
-  ).run({ pr_number: prNumber, repo, head_sha: sha, updated_at: now });
+  ).run({
+    pr_number: prNumber,
+    repo,
+    head_sha: sha,
+    updated_at: now,
+    reset: headMoved ? 1 : 0,
+  });
+  if (headMoved && before) recordMergeStateResetAudit(before);
+}
+
+function recordMergeStateResetAudit(before: PullRequestRow): void {
+  if (before.merge_state === null && before.mergeable === null) return;
+  recordEvent({
+    event_type: 'pr_merge_state_changed',
+    actor_type: 'system',
+    task_id: before.task_id ?? null,
+    payload: {
+      pr_number: before.pr_number,
+      repo: before.repo,
+      from_mergeable: before.mergeable,
+      to_mergeable: null,
+      from_merge_state: before.merge_state,
+      to_merge_state: null,
+    },
+  });
 }
 
 export function incrementStalledPRRetryCount(
