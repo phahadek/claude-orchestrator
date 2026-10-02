@@ -1323,14 +1323,9 @@ describe('POST /api/prs/:prNumber/re-review', () => {
     const prReviewService = makeMockPRReviewService();
     const enqueueReview = vi.fn().mockReturnValue(true);
     const res = await supertest(
-      buildApp(
-        undefined,
-        prReviewService,
-        undefined,
-        undefined,
-        undefined,
-        { enqueueReview } as any,
-      ),
+      buildApp(undefined, prReviewService, undefined, undefined, undefined, {
+        enqueueReview,
+      } as any),
     ).post('/api/prs/owner/repo/42/re-review');
     expect(res.status).toBe(202);
     expect(enqueueReview).toHaveBeenCalledWith(
@@ -1363,7 +1358,6 @@ describe('POST /api/prs/:prNumber/re-review', () => {
     expect(res.status).toBe(422);
     expect(res.body.error).toMatch(/No project configured/);
   });
-
 });
 
 // ── POST /api/prs/:prNumber/fix ─────────────────────────────────────────────
