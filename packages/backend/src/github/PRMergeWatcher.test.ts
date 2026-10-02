@@ -964,6 +964,40 @@ describe('PRMergeWatcher categorization branches', () => {
     );
   });
 
+  it('writes the category GitHub returns for a PR whose merge state was reset by a head change', async () => {
+    const pr = makePRRow({
+      merge_state: null,
+      mergeable: null,
+      merge_state_checked_at: null,
+      failing_checks: null,
+      head_sha: 'new-head',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorize(github, {
+      category: 'clean',
+      mergeState: 'clean',
+      rawMergeableState: 'clean',
+      failingChecks: [],
+    });
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(updateMergeState)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      1,
+      'clean',
+      null,
+    );
+  });
+
   it('omits Run: line when no failing check has a detailsUrl', async () => {
     const pr = makePRRow({
       merge_state: 'clean',
