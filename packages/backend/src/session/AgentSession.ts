@@ -575,6 +575,10 @@ export class AgentSession extends EventEmitter {
   private _pendingEscalationNudge: string | null = null;
   /** Text that triggered an overflow on this resume; re-delivered to the escalated session. */
   private _pendingOverflowText: string | null = null;
+  /** True from tryEscalateForOverflow() until the escalated process emits its first event or the escalation gives up. */
+  private _escalationAwaitingFirstEvent = false;
+  /** True once the continuation nudge has been written to the escalated process. */
+  private _escalationNudgeDelivered = false;
   /** Set by setProactiveEscalation() — skip waiting for overflow and enter escalation spawn on the first run iteration. */
   private _proactiveEscalation = false;
   /** Number of rebase nudges sent for diverged-branch recovery. Bounded by MAX_REBASE_NUDGES. */
@@ -985,7 +989,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         escalationNudgeTimer = setTimeout(() => {
           if (!nudgeSentThisAttempt) {
             nudgeSentThisAttempt = true;
-            this.runner.sendMessage(capturedNudge);
+            this.sendEscalationNudge(capturedNudge);
           }
         }, ESCALATION_NUDGE_DELAY_MS);
         escalationNudgeTimer.unref?.();
@@ -1065,9 +1069,10 @@ The full task spec and all rules are in your system prompt. Begin implementing d
                 clearTimeout(escalationNudgeTimer);
                 escalationNudgeTimer = null;
               }
-              this.runner.sendMessage(escalationNudgeText);
+              this.sendEscalationNudge(escalationNudgeText);
             }
           }
+          if (isEscalationSpawn) this._escalationAwaitingFirstEvent = false;
           this.handleRawEvent(event);
         },
       );
@@ -1096,6 +1101,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
           resumeIdForSpawn = this.sessionId;
           continue;
         }
+        this._escalationAwaitingFirstEvent = false;
         sessionLog(
           this.sessionId,
           `escalation deadlock: all ${MAX_ESCALATION_RETRIES + 1} attempts exhausted — surfacing to operator`,
@@ -1744,7 +1750,8 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     if (rawType === 'assistant' && this.model === null && event.message) {
       const msgForModel = event.message as Record<string, unknown>;
       if (typeof msgForModel.model === 'string' && msgForModel.model) {
-        this.model = msgForModel.model;
+        // An escalated process reports the base model id without the [1m] suffix.
+        this.model = this._escalationModel ?? msgForModel.model;
         setSessionModel(this.sessionId, this.model);
         this.broadcast({
           type: 'session_updated',
@@ -3356,6 +3363,42 @@ The full task spec and all rules are in your system prompt. Begin implementing d
   }
 
   /**
+   * True while a context overflow has been detected and the escalated
+   * large-model process has not yet emitted its first event (or given up).
+   * sendOrResume must not respawn on the stored model during this window.
+   */
+  get isOverflowEscalationPending(): boolean {
+    return this.contextOverflowDetected || this._escalationAwaitingFirstEvent;
+  }
+
+  /**
+   * Called by SessionManager when new inbox text lands during the escalation
+   * window. Items still undelivered are folded into the nudge when it is sent;
+   * if the nudge already went out, flush them to the escalated process now.
+   */
+  noteInboxDuringEscalation(): void {
+    if (this._escalationNudgeDelivered) {
+      const text = this.drainInboxText();
+      if (text) this.runner.sendMessage(text);
+    }
+  }
+
+  private drainInboxText(): string {
+    const items = listUndeliveredInboxItems(this.sessionId);
+    if (items.length === 0) return '';
+    markInboxItemsDelivered(items.map((item) => item.id));
+    return items
+      .map((item) => `[${item.source}]\n${item.payload}`)
+      .join('\n\n');
+  }
+
+  private sendEscalationNudge(nudge: string): void {
+    this._escalationNudgeDelivered = true;
+    const inbox = this.drainInboxText();
+    this.runner.sendMessage(inbox ? `${nudge}\n\n${inbox}` : nudge);
+  }
+
+  /**
    * Configures this session for proactive ceiling-escalation. Called by
    * SessionManager._doSendOrResume when the persisted context occupancy is at/over
    * the ceiling before the first spawn. On the first run-loop iteration the session
@@ -3410,6 +3453,8 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     });
     // Reset overflow flag and model; set escalation overrides for the next spawn.
     this.contextOverflowDetected = false;
+    this._escalationAwaitingFirstEvent = true;
+    this._escalationNudgeDelivered = false;
     this.model = null;
     this._escalationModel = largeModel;
     this._escalationDisableAutoCompact = false;
