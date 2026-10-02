@@ -90,6 +90,20 @@ describe('classifyStalledPR — gate_failed', () => {
   });
 });
 
+describe('classifyStalledPR — reset merge state', () => {
+  it('does not classify an approved PR with an idle session and NULL merge state as conflict_dead_session', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'approved' }),
+      mergeable: null,
+      merge_state: null,
+    });
+
+    expect(classifyStalledPR(pr, null, 'idle')?.kind).not.toBe(
+      'conflict_dead_session',
+    );
+  });
+});
+
 describe('classifyStalledPR — analyze_failing', () => {
   it('classifies a PR paused on analyze_failing (source: analyze, automatic) with no pending push as analyze_failing', () => {
     const pr = makePR({
