@@ -648,15 +648,16 @@ describe('MilestoneDecisionStack', () => {
     expect(declaration).not.toBeNull();
     expect(declaration!.onApprove).toBeDefined();
 
-    act(() => declaration!.onApprove?.({ id: 'intent-1' }));
-
-    await waitFor(() =>
+    // The card's own keydown listener attaches in an effect after the card
+    // mounts, so re-fire until it has registered rather than racing it.
+    await waitFor(() => {
+      act(() => declaration!.onApprove?.({ id: 'intent-1' }));
       expect(apply).toHaveBeenCalledWith('intent-1', {
         override: false,
         reason: undefined,
         mirrorDisposition: undefined,
-      }),
-    );
+      });
+    });
   });
 
   describe('re-selecting the topmost card after a disposition', () => {

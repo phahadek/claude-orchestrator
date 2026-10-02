@@ -428,9 +428,9 @@ export class PreReviewPipeline {
           // Cross-kind reuse now lives entirely in admitTestRequest's own
           // coverage-reuse layer (testRequestLane.ts): a passed run of any
           // other run_kind at this exact hash (e.g. a session's own 'full'
-          // test.request) whose command set covers config.verify in full
-          // satisfies this request without executing — same in-flight-join
-          // and settled-coverage rules a session test.request gets. Never
+          // test.request) satisfies this request without executing when it
+          // covers config.verify in full; when it covers only some commands,
+          // the lane executes just the uncovered ones (e.g. pyright). Never
           // applies once a settled verify row already exists for this
           // hash — the lane's own exact-run_kind settled-run guard replays
           // that row first.
