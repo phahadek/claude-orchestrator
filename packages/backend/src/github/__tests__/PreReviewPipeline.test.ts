@@ -1064,12 +1064,6 @@ describe('PreReviewPipeline — verify gate', () => {
   });
 
   it('passes verify when every failing test in the structured report is a confirmed base-attributable break', async () => {
-    const structuredResult = {
-      format: 'junit-xml',
-      suites: [],
-      totals: { passed: 6686, failed: 4, skipped: 0, errors: 0 },
-      durationMsTotal: 1000,
-    };
     mockLaneResult({
       passed: false,
       failedCommand: 'pytest',
