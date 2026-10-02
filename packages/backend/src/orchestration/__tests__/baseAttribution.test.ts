@@ -109,9 +109,10 @@ describe('base-health module deletion', () => {
 });
 
 describe('isRunFailureBreadthAttributable', () => {
-  it('attributes a run whose only failing test is breadth-flagged across enough distinct trees', () => {
-    // The run under test, plus enough other trees failing the same test id
-    // within the window to clear breadthN=3.
+  it('attributes a run whose only failing test is breadth-flagged across enough distinct other trees', () => {
+    // The run under test, plus breadthN=3 *other* trees failing the same
+    // test id within the window — the subject's own tree never counts
+    // toward its own breadth, so this needs 3 foreign hashes, not 2.
     const runId = insertRunWithFailure({
       testId: 'test-a',
       contentHash: 'hash-this-run',
@@ -126,6 +127,11 @@ describe('isRunFailureBreadthAttributable', () => {
       testId: 'test-a',
       contentHash: 'hash-3',
       createdAt: 800,
+    });
+    insertRunWithFailure({
+      testId: 'test-a',
+      contentHash: 'hash-4',
+      createdAt: 700,
     });
 
     expect(

@@ -4958,11 +4958,14 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
 
   it('auto-recovers a deterministically-failing test (never flip-rate flagged) once it clears the breadth-of-trees guard instead', async () => {
     const testId = 'tests.unit.test_foo.test_deterministic';
-    // Fails on 3 distinct trees before the PR was created — never alternates
-    // (flip-rate stays unflagged), but breadth alone clears guard 1.
-    seedBreadthFailure(testId, PR_CREATED_AT_MS - 300);
-    seedBreadthFailure(testId, PR_CREATED_AT_MS - 200);
-    seedBreadthFailure(testId, PR_CREATED_AT_MS - 100);
+    // Fails on 3 distinct (foreign) trees — never alternates (flip-rate
+    // stays unflagged), but breadth alone clears guard 1. Breadth is
+    // evaluated as of call time (real Date.now()), not PR_CREATED_AT_MS —
+    // these must land inside the real breadth window, not the fixture's
+    // small fake-epoch flip-rate timestamps.
+    seedBreadthFailure(testId, Date.now() - 300);
+    seedBreadthFailure(testId, Date.now() - 200);
+    seedBreadthFailure(testId, Date.now() - 100);
 
     const runId = 'f2-run-breadth';
     seedRunFailures(runId, [{ testId, name: 'test_deterministic' }]);
