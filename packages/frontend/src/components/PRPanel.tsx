@@ -47,6 +47,8 @@ interface Props {
   prPipelineStages?: Map<number, string | null>;
   /** Failed command per PR number for blocked stage hover tooltip */
   prPipelineFailedCommands?: Map<number, string | undefined>;
+  /** Why an operator-requested review did not dispatch, per PR number */
+  reviewNotDispatched?: Map<number, string>;
 }
 
 export function PRPanel({
@@ -63,6 +65,7 @@ export function PRPanel({
   reviewStartedEvent,
   prPipelineStages,
   prPipelineFailedCommands,
+  reviewNotDispatched,
 }: Props) {
   const [prs, setPRs] = useState<WorkItemListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -698,7 +701,11 @@ export function PRPanel({
                     fixConflictsInFlight={fixConflictsInFlight.has(prNumber)}
                     approveInFlight={approveInFlight.has(prNumber)}
                     reviewElapsed={reviewElapsed.get(prNumber) ?? 0}
-                    error={cardErrors.get(prNumber) ?? null}
+                    error={
+                      cardErrors.get(prNumber) ??
+                      reviewNotDispatched?.get(prNumber) ??
+                      null
+                    }
                   />
                 </ErrorBoundary>
               );

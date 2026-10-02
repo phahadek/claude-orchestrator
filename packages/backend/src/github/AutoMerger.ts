@@ -810,6 +810,7 @@ export class AutoMerger {
         reason:
           | 'human_merge_only'
           | 'verdict_not_approved'
+          | 'pre_review_gate_bypassed'
           | 'test_gate_not_passed';
       }
   > {
@@ -818,15 +819,27 @@ export class AutoMerger {
     }
 
     let verdict: string | undefined;
+    let gateBypassed: { headSha?: string | null } | undefined;
     try {
-      verdict = pr.review_result
-        ? (JSON.parse(pr.review_result) as { verdict?: string }).verdict
+      const parsed = pr.review_result
+        ? (JSON.parse(pr.review_result) as {
+            verdict?: string;
+            gateBypassed?: { headSha?: string | null };
+          })
         : undefined;
+      verdict = parsed?.verdict;
+      gateBypassed = parsed?.gateBypassed;
     } catch {
       verdict = undefined;
     }
     if (verdict !== 'approved') {
       return { ok: false, reason: 'verdict_not_approved' };
+    }
+    if (
+      gateBypassed &&
+      (!gateBypassed.headSha || gateBypassed.headSha === pr.head_sha)
+    ) {
+      return { ok: false, reason: 'pre_review_gate_bypassed' };
     }
 
     const project = getProjectByGithubRepo(pr.repo);

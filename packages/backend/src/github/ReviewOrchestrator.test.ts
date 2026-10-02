@@ -108,6 +108,7 @@ vi.mock('../session/orchestrator-config.js', () => ({
 }));
 
 import { ReviewOrchestrator } from './ReviewOrchestrator';
+import { PreReviewPipeline } from './PreReviewPipeline';
 import { runtimeSettings } from '../config';
 import {
   setPRReviewResult,
@@ -1946,6 +1947,98 @@ describe('ReviewOrchestrator — iteration cap escalation', () => {
       'owner/repo',
       'max_reviews',
     );
+  });
+
+  it('operatorRequested skips the pre-review pipeline and dispatches a review at a blocked_verify gate, tagging the verdict as gate-bypassed', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      pre_review_stage: 'blocked_verify',
+      head_sha: 'sha-abc',
+    } as any);
+    const runSpy = vi.spyOn(PreReviewPipeline.prototype, 'run');
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+
+    orch.enqueueReview({ ...baseJob, operatorRequested: true });
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(runSpy).not.toHaveBeenCalled();
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
+    expect(vi.mocked(rs.reviewPR).mock.calls[0][6]).toEqual({
+      stage: 'blocked_verify',
+      headSha: 'sha-abc',
+    });
+    expect(vi.mocked(setPreReviewStage)).not.toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      null,
+    );
+    runSpy.mockRestore();
+  });
+
+  it('an automatic job keeps the pre-review pipeline', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow } as any);
+    const runSpy = vi
+      .spyOn(PreReviewPipeline.prototype, 'run')
+      .mockResolvedValue({ passed: false });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+
+    orch.enqueueReview({ ...baseJob });
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(runSpy).toHaveBeenCalledOnce();
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+    runSpy.mockRestore();
+  });
+
+  it('emits review_not_dispatched for an operator job on a closed PR, human_merge_only PR, and a spawn failure — but not for an automatic job', async () => {
+    const run = async (
+      row: object,
+      job: Partial<ReviewJob>,
+      rsOverride?: any,
+    ) => {
+      // admitJob refuses a closed PR up front, so the first read (admission)
+      // sees it open and later reads see the PR close while queued.
+      vi.mocked(getPRByNumber)
+        .mockReset()
+        .mockReturnValueOnce({ ...basePRRow } as any)
+        .mockReturnValue({ ...basePRRow, ...row } as any);
+      const sm = makeMockSessionManager();
+      const rs = rsOverride ?? makeMockReviewService();
+      const messages: any[] = [];
+      sm.on('message', (m: object) => messages.push(m));
+      const orch = new ReviewOrchestrator(rs, sm as any, true);
+      orch.enqueueReview({ ...baseJob, ...job });
+      await new Promise((r) => setTimeout(r, 40));
+      return messages.filter((m) => m.type === 'review_not_dispatched');
+    };
+
+    const closed = await run({ state: 'closed' }, { operatorRequested: true });
+    expect(closed).toHaveLength(1);
+    expect(closed[0]).toMatchObject({ prNumber: 1, repo: 'owner/repo' });
+    expect(closed[0].reason).toContain('no longer open');
+
+    const humanOnly = await run(
+      { human_merge_only: 1 },
+      { operatorRequested: true },
+    );
+    expect(humanOnly).toHaveLength(1);
+    expect(humanOnly[0].reason).toContain('human-merge-only');
+
+    const failingRs = {
+      reviewPR: vi.fn().mockRejectedValue(new Error('spawn failed')),
+    };
+    const spawnFail = await run({}, { operatorRequested: true }, failingRs);
+    expect(spawnFail).toHaveLength(1);
+    expect(spawnFail[0].reason).toContain('spawn failed');
+
+    const automatic = await run({ state: 'closed' }, {});
+    expect(automatic).toHaveLength(0);
   });
 
   it('enqueueReview of the current head is admitted when last_reviewed_sha equals head_sha', () => {
@@ -5730,10 +5823,9 @@ describe('ReviewOrchestrator — enqueueReview and isReviewInFlight', () => {
     const orch = new ReviewOrchestrator(rs, sm as any, true);
     sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
 
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(orch.isReviewInFlight(1, 'owner/repo')).toBe(true);
+    await vi.waitFor(() =>
+      expect(orch.isReviewInFlight(1, 'owner/repo')).toBe(true),
+    );
     holdReview();
   });
 

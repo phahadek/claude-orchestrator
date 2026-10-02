@@ -58,6 +58,44 @@ const msg = {
 };
 
 describe('useSessionStore', () => {
+  it('records review_not_dispatched and the no-diff skip per PR, and clears on review_started', () => {
+    const { result } = renderHook(() => useSessionStore());
+    act(() =>
+      result.current.dispatch({
+        type: 'review_not_dispatched',
+        prNumber: 7,
+        repo: 'o/r',
+        reason: 'PR is no longer open (closed)',
+      }),
+    );
+    expect(result.current.reviewNotDispatched.get(7)).toBe(
+      'PR is no longer open (closed)',
+    );
+
+    act(() =>
+      result.current.dispatch({
+        type: 'autofix_noop_retry_skipped',
+        prNumber: 8,
+        repo: 'o/r',
+        stage: 'verify',
+        headSha: '5492a41abcdef',
+        reason: 'Nothing changed',
+      }),
+    );
+    expect(result.current.reviewNotDispatched.get(8)).toContain('verify');
+    expect(result.current.reviewNotDispatched.get(8)).toContain('5492a41');
+
+    act(() =>
+      result.current.dispatch({
+        type: 'review_started',
+        prNumber: 7,
+        sessionId: 's',
+      }),
+    );
+    expect(result.current.reviewNotDispatched.has(7)).toBe(false);
+    expect(result.current.reviewNotDispatched.has(8)).toBe(true);
+  });
+
   it('handles session_started', () => {
     const { result } = renderHook(() => useSessionStore());
     act(() => result.current.dispatch(msg.session_started()));

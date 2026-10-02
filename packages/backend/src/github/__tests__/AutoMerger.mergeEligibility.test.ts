@@ -278,6 +278,42 @@ describe('AutoMerger merge eligibility — human_merge_only', () => {
   });
 });
 
+describe('AutoMerger merge eligibility — pre-review gate bypass', () => {
+  const eligible = (merger: AutoMerger, pr: PullRequestRow) =>
+    (
+      merger as unknown as {
+        isMergeEligible: (
+          pr: PullRequestRow,
+        ) => Promise<{ ok: true } | { ok: false; reason: string }>;
+      }
+    ).isMergeEligible(pr);
+
+  it('declines an approval that bypassed a failed gate while the head is unchanged, and stops declining once the head moves', async () => {
+    const merger = new AutoMerger(
+      makeMockGitHub(),
+      makeMockWatcher(),
+      () => {},
+    );
+    const review_result = JSON.stringify({
+      verdict: 'approved',
+      gateBypassed: { stage: 'blocked_verify', headSha: 'sha-old' },
+    });
+
+    expect(
+      await eligible(merger, makePRRow({ review_result, head_sha: 'sha-old' })),
+    ).toEqual({ ok: false, reason: 'pre_review_gate_bypassed' });
+
+    const moved = await eligible(
+      merger,
+      makePRRow({ review_result, head_sha: 'sha-new' }),
+    );
+    expect(moved).not.toEqual({
+      ok: false,
+      reason: 'pre_review_gate_bypassed',
+    });
+  });
+});
+
 describe('AutoMerger merge eligibility — verdict gate', () => {
   it('declines to merge a clean PR whose latest review verdict is verify_failed, never calling mergePR', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(

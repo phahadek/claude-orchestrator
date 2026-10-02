@@ -221,6 +221,7 @@ export default function App() {
     lastCacheUpdatedEvent,
     prPipelineStages,
     prPipelineFailedCommands,
+    reviewNotDispatched,
   } = useSessionStore();
   const [projects, setProjects] = useState<ProjectConfig[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
@@ -1594,6 +1595,13 @@ export default function App() {
                           }
                           setSessionArchived={setSessionArchived}
                           setSessionFavorited={setSessionFavorited}
+                          reviewNotDispatchedReason={
+                            selectedTask.pr
+                              ? reviewNotDispatched?.get(
+                                  selectedTask.pr.prNumber,
+                                )
+                              : undefined
+                          }
                         />
                       </ErrorBoundary>
                     );
@@ -1774,6 +1782,7 @@ export default function App() {
                 reviewStartedEvent={lastReviewStartedEvent}
                 prPipelineStages={prPipelineStages}
                 prPipelineFailedCommands={prPipelineFailedCommands}
+                reviewNotDispatched={reviewNotDispatched}
               />
             </div>
           </ErrorBoundary>
