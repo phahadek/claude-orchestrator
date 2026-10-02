@@ -1,45 +1,28 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import {
-  getFlaggedFlakyTestsRollup,
-  getBaseHealthRemediationTestTracking,
-  getAllBaseHealthRemediationTestTracking,
-} from '../../db/queries';
-import type { BaseHealthRemediationTestTrackingRow } from '../../db/types';
+import { getFlaggedFlakyTestsRollupForTests } from '../../db/queries';
+import { typedGetSetting } from '../../config/settings';
 
 /** Per-connection context the test-health read tool is scoped to. */
 export interface TestHealthReadToolContext {
   projectId: string;
 }
 
-/** Flagged-flaky-test rollup entry — see flagged_flaky_tests_rollup. */
-interface FlakyRollupEntry {
+/** One explicit flip-rate answer per requested test id. */
+interface FlakyHistoryEntry {
   testId: string;
-  name: string;
-  sampleCount: number;
-  transitionCount: number;
-}
-
-/** Open/closed base-health remediation claim state for one test id. */
-interface RemediationTrackingState {
-  testId: string;
-  remediationTaskId: string | null;
-  remediationTaskOpen: boolean;
-  createdAt: string;
-  updatedAt: string;
+  flipRateFlagged: boolean;
+  transitionCount: number | null;
+  sampleCount: number | null;
+  flipThreshold: number;
 }
 
 /**
- * Registers `testHealth.getFlakyHistory` — the read-only aggregated
- * test-run/flakiness lookup a grooming/investigation session dereferences
- * instead of re-running the test suite itself to "confirm" or "refute" a
- * flakiness/base-health claim. Wraps the precomputed
- * flagged_flaky_tests_rollup table (via getFlaggedFlakyTestsRollup) and the
- * per-test base_health_remediation_test_tracking claim state (via
- * getBaseHealthRemediationTestTracking) — both already computed/maintained
- * by FlakyTestRollupJob and baseHealthRemediationFiling.ts respectively.
- * Always-on for any session resolving to a project — same precedent as
- * `gateSeed.getState`.
+ * Registers `testHealth.getFlakyHistory` — the read-only flip-rate lookup a
+ * grooming/investigation session dereferences instead of re-running the test
+ * suite to "confirm" or "refute" a flakiness claim. Reads the precomputed
+ * flagged_flaky_tests_rollup scoped to the requested ids. Always-on for any
+ * session resolving to a project — same precedent as `gateSeed.getState`.
  */
 export function registerTestHealthReadTools(
   server: McpServer,
@@ -48,47 +31,31 @@ export function registerTestHealthReadTools(
   server.registerTool(
     'testHealth.getFlakyHistory',
     {
-      title: 'Fetch aggregated test-run/flakiness history for a project',
+      title: 'Fetch flip-rate flakiness status for specific tests',
       description:
-        "Read-only: returns { rollup, tracking } — the orchestrator's own accumulated flaky-test evidence, never a fresh test run. `rollup` is the flagged_flaky_tests_rollup entries (each { testId, name, sampleCount, transitionCount }, recomputed every 15 minutes from full pass/fail history) currently flagged as flaky. `tracking` is the base_health_remediation_test_tracking claim state (each { testId, remediationTaskId, remediationTaskOpen, createdAt, updatedAt }) for tests ever confirmed base-failing. Pass optional `testId` to scope both arrays to a single test — an unflagged test with no tracking row returns { rollup: [], tracking: [] } rather than throwing. A single ad hoc local test run cannot substitute for this: a flaky test has no guaranteed per-execution failure rate, so this accumulated history is the source of truth to consult and cite.",
-      inputSchema: { testId: z.string().optional() },
+        "Read-only: pass `testIds` (1-50 failing test ids from your run) and get { entries } — exactly one entry per distinct requested id, in request order: { testId, flipRateFlagged, transitionCount, sampleCount, flipThreshold }. flipRateFlagged is true when the test is in the orchestrator's flagged_flaky_tests_rollup (recomputed every 15 minutes) with its transitionCount/sampleCount; otherwise false with null counts. flipThreshold is the configured flip_rate_threshold_k. Flip-rate only counts same-hash pass<->fail transitions, so flipRateFlagged: false does NOT mean the test is healthy — a test failing deterministically across trees is never flagged. It is accumulated history, never a fresh test run; a single ad hoc local run cannot substitute for it.",
+      inputSchema: { testIds: z.array(z.string().min(1)).min(1).max(50) },
     },
     async (args) => {
-      const rollupRows = getFlaggedFlakyTestsRollup(ctx.projectId);
-      const rollup: FlakyRollupEntry[] = rollupRows
-        .filter((row) => !args.testId || row.testId === args.testId)
-        .map((row) => ({
-          testId: row.testId,
-          name: row.name,
-          sampleCount: row.sampleCount,
-          transitionCount: row.transitionCount,
-        }));
-
-      const toTrackingState = (
-        row: BaseHealthRemediationTestTrackingRow,
-      ): RemediationTrackingState => ({
-        testId: row.test_id,
-        remediationTaskId: row.remediation_task_id,
-        remediationTaskOpen: row.remediation_task_open === 1,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
+      const testIds = [...new Set(args.testIds)];
+      const rows = new Map(
+        getFlaggedFlakyTestsRollupForTests(ctx.projectId, testIds).map((r) => [
+          r.testId,
+          r,
+        ]),
+      );
+      const flipThreshold = typedGetSetting('flip_rate_threshold_k');
+      const entries: FlakyHistoryEntry[] = testIds.map((testId) => {
+        const row = rows.get(testId);
+        return {
+          testId,
+          flipRateFlagged: row !== undefined,
+          transitionCount: row?.transitionCount ?? null,
+          sampleCount: row?.sampleCount ?? null,
+          flipThreshold,
+        };
       });
-
-      const tracking: RemediationTrackingState[] = args.testId
-        ? (() => {
-            const row = getBaseHealthRemediationTestTracking(
-              ctx.projectId,
-              args.testId,
-            );
-            return row ? [toTrackingState(row)] : [];
-          })()
-        : getAllBaseHealthRemediationTestTracking(ctx.projectId).map(
-            toTrackingState,
-          );
-
-      return {
-        content: [{ type: 'text', text: JSON.stringify({ rollup, tracking }) }],
-      };
+      return { content: [{ type: 'text', text: JSON.stringify({ entries }) }] };
     },
   );
 }

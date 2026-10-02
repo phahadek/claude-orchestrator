@@ -1,8 +1,6 @@
 /**
- * Tests for `testHealth.getFlakyHistory`: returns the flagged_flaky_tests_rollup
- * + base_health_remediation_test_tracking state scoped to a project (and
- * optionally a single test id), never throwing for a test id with no
- * recorded history.
+ * Tests for `testHealth.getFlakyHistory`: requires testIds and returns exactly
+ * one flip-rate entry per distinct requested id, in request order.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -16,6 +14,7 @@ import { db } from '../../db/db';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { typedGetSetting } from '../../config/settings';
 import { registerTestHealthReadTools } from './testHealthReadTools';
 
 const PROJECT_ID = 'proj-1';
@@ -28,7 +27,6 @@ beforeEach(() => {
 function insertRollupRow(opts: {
   projectId: string;
   testId: string;
-  name: string;
   sampleCount: number;
   transitionCount: number;
 }): void {
@@ -39,31 +37,19 @@ function insertRollupRow(opts: {
   ).run({
     project_id: opts.projectId,
     test_id: opts.testId,
-    name: opts.name,
+    name: `${opts.testId}.ts`,
     sample_count: opts.sampleCount,
     transition_count: opts.transitionCount,
     computed_at: 1700000000000,
   });
 }
 
-function insertTrackingRow(opts: {
-  projectId: string;
-  testId: string;
-  remediationTaskId: string | null;
-  remediationTaskOpen: boolean;
-}): void {
+function insertTrackingRow(testId: string): void {
   db.prepare(
     `INSERT INTO base_health_remediation_test_tracking
        (project_id, test_id, remediation_task_id, remediation_task_open, created_at, updated_at)
-     VALUES (@project_id, @test_id, @remediation_task_id, @remediation_task_open, @created_at, @updated_at)`,
-  ).run({
-    project_id: opts.projectId,
-    test_id: opts.testId,
-    remediation_task_id: opts.remediationTaskId,
-    remediation_task_open: opts.remediationTaskOpen ? 1 : 0,
-    created_at: '2024-01-01T00:00:00Z',
-    updated_at: '2024-01-02T00:00:00Z',
-  });
+     VALUES (@project_id, @test_id, 'notion:task-1', 1, '2024-01-01T00:00:00Z', '2024-01-02T00:00:00Z')`,
+  ).run({ project_id: PROJECT_ID, test_id: testId });
 }
 
 async function connectedClient() {
@@ -85,203 +71,103 @@ async function connectedClient() {
   };
 }
 
-function resultOf(result: {
+type ToolResult = {
+  isError?: boolean;
   content: Array<{ type: string; text?: string }>;
-}): Record<string, unknown> {
+};
+
+async function call(args: Record<string, unknown>): Promise<ToolResult> {
+  const { client, close } = await connectedClient();
+  try {
+    return (await client.callTool({
+      name: 'testHealth.getFlakyHistory',
+      arguments: args,
+    })) as ToolResult;
+  } finally {
+    await close();
+  }
+}
+
+function entriesOf(result: ToolResult): Record<string, unknown>[] {
   const text = result.content[0]?.text;
   if (typeof text !== 'string') throw new Error('expected text content');
-  return JSON.parse(text) as Record<string, unknown>;
+  return (JSON.parse(text) as { entries: Record<string, unknown>[] }).entries;
 }
 
 describe('testHealth.getFlakyHistory', () => {
-  it('returns the rollup sampleCount/transitionCount for a flagged test id', async () => {
+  it('rejects a call with no testIds', async () => {
+    const result = await call({});
+    expect(result.isError).toBe(true);
+  });
+
+  it('rejects an empty testIds array', async () => {
+    const result = await call({ testIds: [] });
+    expect(result.isError).toBe(true);
+  });
+
+  it('returns one entry per distinct id in request order, collapsing duplicates', async () => {
+    const result = await call({ testIds: ['b', 'a', 'b', 'c'] });
+    expect(entriesOf(result).map((e) => e.testId)).toEqual(['b', 'a', 'c']);
+  });
+
+  it('returns counts for a flagged test and null counts plus the threshold for an absent one', async () => {
     insertRollupRow({
       projectId: PROJECT_ID,
-      testId: 'test-1',
-      name: 'src/planning/__tests__/decisionPickOnePayloadShape.test.ts',
+      testId: 'flagged',
       sampleCount: 12,
       transitionCount: 5,
     });
+    const flipThreshold = typedGetSetting('flip_rate_threshold_k');
 
-    const { client, close } = await connectedClient();
-    const result = resultOf(
-      (await client.callTool({
-        name: 'testHealth.getFlakyHistory',
-        arguments: { testId: 'test-1' },
-      })) as { content: Array<{ type: string; text?: string }> },
-    );
-    await close();
+    const result = await call({ testIds: ['flagged', 'absent'] });
 
-    expect(result.rollup).toEqual([
+    expect(entriesOf(result)).toEqual([
       {
-        testId: 'test-1',
-        name: 'src/planning/__tests__/decisionPickOnePayloadShape.test.ts',
-        sampleCount: 12,
+        testId: 'flagged',
+        flipRateFlagged: true,
         transitionCount: 5,
+        sampleCount: 12,
+        flipThreshold,
       },
-    ]);
-  });
-
-  it('returns tracking claim state for a test id', async () => {
-    insertTrackingRow({
-      projectId: PROJECT_ID,
-      testId: 'test-1',
-      remediationTaskId: 'notion:task-1',
-      remediationTaskOpen: true,
-    });
-
-    const { client, close } = await connectedClient();
-    const result = resultOf(
-      (await client.callTool({
-        name: 'testHealth.getFlakyHistory',
-        arguments: { testId: 'test-1' },
-      })) as { content: Array<{ type: string; text?: string }> },
-    );
-    await close();
-
-    expect(result.tracking).toEqual([
       {
-        testId: 'test-1',
-        remediationTaskId: 'notion:task-1',
-        remediationTaskOpen: true,
-        createdAt: '2024-01-01T00:00:00Z',
-        updatedAt: '2024-01-02T00:00:00Z',
+        testId: 'absent',
+        flipRateFlagged: false,
+        transitionCount: null,
+        sampleCount: null,
+        flipThreshold,
       },
     ]);
   });
 
-  it('returns an empty result for a test id with no rollup entry and no tracking row, rather than throwing', async () => {
-    const { client, close } = await connectedClient();
-    const result = resultOf(
-      (await client.callTool({
-        name: 'testHealth.getFlakyHistory',
-        arguments: { testId: 'never-seen-test' },
-      })) as { content: Array<{ type: string; text?: string }> },
-    );
-    await close();
-
-    expect(result.rollup).toEqual([]);
-    expect(result.tracking).toEqual([]);
-  });
-
-  it('scopes results to the given project id', async () => {
+  it('never returns rollup rows for tests that were not requested', async () => {
     insertRollupRow({
-      projectId: 'other-proj',
-      testId: 'test-1',
-      name: 'some-other-project-test.ts',
+      projectId: PROJECT_ID,
+      testId: 'other',
       sampleCount: 3,
       transitionCount: 2,
     });
-
-    const { client, close } = await connectedClient();
-    const result = resultOf(
-      (await client.callTool({
-        name: 'testHealth.getFlakyHistory',
-        arguments: { testId: 'test-1' },
-      })) as { content: Array<{ type: string; text?: string }> },
-    );
-    await close();
-
-    expect(result.rollup).toEqual([]);
-    expect(result.tracking).toEqual([]);
+    const result = await call({ testIds: ['requested'] });
+    expect(entriesOf(result).map((e) => e.testId)).toEqual(['requested']);
+    expect(entriesOf(result)[0]?.flipRateFlagged).toBe(false);
   });
 
-  it('with no testId, returns every flagged test in the rollup plus its tracking state', async () => {
+  it('ignores rollup rows from other projects', async () => {
     insertRollupRow({
-      projectId: PROJECT_ID,
+      projectId: 'other-proj',
       testId: 'test-1',
-      name: 'test-one.ts',
-      sampleCount: 10,
-      transitionCount: 4,
+      sampleCount: 3,
+      transitionCount: 2,
     });
-    insertRollupRow({
-      projectId: PROJECT_ID,
-      testId: 'test-2',
-      name: 'test-two.ts',
-      sampleCount: 8,
-      transitionCount: 3,
-    });
-    insertTrackingRow({
-      projectId: PROJECT_ID,
-      testId: 'test-1',
-      remediationTaskId: 'notion:task-1',
-      remediationTaskOpen: false,
-    });
-
-    const { client, close } = await connectedClient();
-    const result = resultOf(
-      (await client.callTool({
-        name: 'testHealth.getFlakyHistory',
-        arguments: {},
-      })) as { content: Array<{ type: string; text?: string }> },
-    );
-    await close();
-
-    expect(result.rollup).toEqual([
-      {
-        testId: 'test-1',
-        name: 'test-one.ts',
-        sampleCount: 10,
-        transitionCount: 4,
-      },
-      {
-        testId: 'test-2',
-        name: 'test-two.ts',
-        sampleCount: 8,
-        transitionCount: 3,
-      },
-    ]);
-    expect(result.tracking).toEqual([
-      {
-        testId: 'test-1',
-        remediationTaskId: 'notion:task-1',
-        remediationTaskOpen: false,
-        createdAt: '2024-01-01T00:00:00Z',
-        updatedAt: '2024-01-02T00:00:00Z',
-      },
-    ]);
+    const result = await call({ testIds: ['test-1'] });
+    expect(entriesOf(result)[0]?.flipRateFlagged).toBe(false);
   });
 
-  it('with no testId, still returns a tracking row for a test that has dropped out of the rollup', async () => {
-    insertRollupRow({
-      projectId: PROJECT_ID,
-      testId: 'test-still-flaky',
-      name: 'test-still-flaky.ts',
-      sampleCount: 10,
-      transitionCount: 4,
-    });
-    insertTrackingRow({
-      projectId: PROJECT_ID,
-      testId: 'test-fixed-and-unrolled',
-      remediationTaskId: 'notion:task-2',
-      remediationTaskOpen: false,
-    });
-
-    const { client, close } = await connectedClient();
-    const result = resultOf(
-      (await client.callTool({
-        name: 'testHealth.getFlakyHistory',
-        arguments: {},
-      })) as { content: Array<{ type: string; text?: string }> },
-    );
-    await close();
-
-    expect(result.rollup).toEqual([
-      {
-        testId: 'test-still-flaky',
-        name: 'test-still-flaky.ts',
-        sampleCount: 10,
-        transitionCount: 4,
-      },
-    ]);
-    expect(result.tracking).toEqual([
-      {
-        testId: 'test-fixed-and-unrolled',
-        remediationTaskId: 'notion:task-2',
-        remediationTaskOpen: false,
-        createdAt: '2024-01-01T00:00:00Z',
-        updatedAt: '2024-01-02T00:00:00Z',
-      },
-    ]);
+  it('does not surface base-health tracking rows', async () => {
+    insertTrackingRow('test-1');
+    const result = await call({ testIds: ['test-1'] });
+    const text = result.content[0]?.text ?? '';
+    expect(text).not.toContain('notion:task-1');
+    expect(text).not.toContain('remediation');
+    expect(text).not.toContain('tracking');
   });
 });

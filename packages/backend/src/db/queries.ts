@@ -68,7 +68,6 @@ import type {
   CapabilityDisqualificationRow,
   NewCapabilityDisqualificationRow,
   FlakyRemediationTrackingRow,
-  BaseHealthRemediationTestTrackingRow,
   GateItemRow,
   GateItemSourceRow,
   NewGateItemSourceRow,
@@ -8213,54 +8212,6 @@ export function getFlakyRemediationTrackingRowsByOpenTaskId(
     .all({ remediation_task_id: taskId }) as FlakyRemediationTrackingRow[];
 }
 
-// ─── base_health_remediation_test_tracking / _reason_tracking / _reason_counts ──
-// Statements are cached lazily (prepared on first use, not at module load) so
-// importing this module doesn't fail on a not-yet-migrated db handle. The
-// producer that used to write these tables (audit/baseHealthRemediationFiling.ts)
-// has been removed — filterBaseAttributableFailures no longer files
-// remediation tasks — so only the read paths still consulted by
-// mcp/tools/testHealthReadTools.ts and AutoLauncher.ts remain here.
-
-let _stmtGetBaseHealthRemediationTestTracking: Database.Statement | null = null;
-let _stmtGetAllBaseHealthRemediationTestTracking: Database.Statement | null =
-  null;
-
-/** The current tracking row for one (project_id, test_id), or undefined if it was never confirmed base-failing. */
-export function getBaseHealthRemediationTestTracking(
-  projectId: string,
-  testId: string,
-): BaseHealthRemediationTestTrackingRow | undefined {
-  _stmtGetBaseHealthRemediationTestTracking ??= db.prepare<{
-    project_id: string;
-    test_id: string;
-  }>(
-    `SELECT * FROM base_health_remediation_test_tracking WHERE project_id = @project_id AND test_id = @test_id`,
-  );
-  return _stmtGetBaseHealthRemediationTestTracking.get({
-    project_id: projectId,
-    test_id: testId,
-  }) as BaseHealthRemediationTestTrackingRow | undefined;
-}
-
-/**
- * All tracking rows for a project, independent of the flaky rollup — used by
- * the bulk (no-testId) path of testHealth.getFlakyHistory so remediation
- * history for a test that has since dropped out of flagged_flaky_tests_rollup
- * is still surfaced.
- */
-export function getAllBaseHealthRemediationTestTracking(
-  projectId: string,
-): BaseHealthRemediationTestTrackingRow[] {
-  _stmtGetAllBaseHealthRemediationTestTracking ??= db.prepare<{
-    project_id: string;
-  }>(
-    `SELECT * FROM base_health_remediation_test_tracking WHERE project_id = @project_id`,
-  );
-  return _stmtGetAllBaseHealthRemediationTestTracking.all({
-    project_id: projectId,
-  }) as BaseHealthRemediationTestTrackingRow[];
-}
-
 // ─── gate_item ────────────────────────────────────────────────────────────
 // Statements are cached lazily (prepared on first use, not at module load) so
 // importing this module doesn't fail on a not-yet-migrated db handle.
@@ -11959,6 +11910,31 @@ export function getFlaggedFlakyTestsRollup(
     remediationTaskOpen: r.remediation_task_open === 1,
     remediationTaskId:
       r.remediation_task_open === 1 ? r.remediation_task_id : null,
+  }));
+}
+
+/** Rollup rows for `projectId` restricted to the given test ids; unrequested rows are never read. */
+export function getFlaggedFlakyTestsRollupForTests(
+  projectId: string,
+  testIds: string[],
+): { testId: string; sampleCount: number; transitionCount: number }[] {
+  if (testIds.length === 0) return [];
+  const placeholders = testIds.map(() => '?').join(',');
+  const rows = db
+    .prepare(
+      `SELECT test_id, sample_count, transition_count
+       FROM flagged_flaky_tests_rollup
+       WHERE project_id = ? AND test_id IN (${placeholders})`,
+    )
+    .all(projectId, ...testIds) as {
+    test_id: string;
+    sample_count: number;
+    transition_count: number;
+  }[];
+  return rows.map((r) => ({
+    testId: r.test_id,
+    sampleCount: r.sample_count,
+    transitionCount: r.transition_count,
   }));
 }
 

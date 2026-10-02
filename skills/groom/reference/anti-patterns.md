@@ -93,10 +93,11 @@ several, even the full suite) proves nothing about whether the failure reproduce
 and is not evidence that a base-health remediation task's premise is stale. Don't
 shell out to `vitest`/the project's test runner to verify one of these claims, and
 don't stage a `task.setStatus` move (e.g. to Deferred) on the strength of a rerun.
-Instead call the `testHealth.getFlakyHistory` MCP tool, which surfaces the
-orchestrator's own accumulated evidence: the `flagged_flaky_tests_rollup` sample/
-transition history and the `base_health_remediation_test_tracking` open/closed claim
-state for the test in question. Cite that data in the disposition, not a rerun's
+Instead call the `testHealth.getFlakyHistory` MCP tool with the `testIds` in question,
+which surfaces the orchestrator's own accumulated evidence: one entry per test with its
+`flagged_flaky_tests_rollup` flip-rate status (`flipRateFlagged`, `transitionCount`,
+`sampleCount`). Unflagged does not mean healthy — a test failing deterministically
+across trees is never flagged. Cite that data in the disposition, not a rerun's
 pass/fail outcome. This is the same failure mode the project's real history shows: a
 groom session re-ran a base-health task's named test a few times, found it green, and
 staged Deferred on "investigation is complete and conclusively shows nothing
