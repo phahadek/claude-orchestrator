@@ -31,10 +31,7 @@ const runIngestionPromises = new Map<string, Promise<void>>();
  * ingestion dispatch, so getRunTestOutcomes can await it before reading
  * test_run_results. Self-cleans once the dispatch settles.
  */
-export function trackRunIngestion(
-  runId: string,
-  promise: Promise<void>,
-): void {
+export function trackRunIngestion(runId: string, promise: Promise<void>): void {
   runIngestionPromises.set(runId, promise);
   const cleanup = () => {
     if (runIngestionPromises.get(runId) === promise) {

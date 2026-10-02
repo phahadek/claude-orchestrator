@@ -4,10 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { GITHUB_REPO, runtimeSettings, getProjectById } from '../config';
 import { getCorporateMode } from '../config/corporateMode';
-import type {
-  GateItemClassification,
-  TestRequestRunRow,
-} from '../db/types';
+import type { GateItemClassification, TestRequestRunRow } from '../db/types';
 import { readRunTestOutcomes } from '../orchestration/runTestOutcomes';
 import { getOrchestratorConfig } from '../config/appConfig';
 import { mintStageCredential } from '../auth/SessionStageAuth';

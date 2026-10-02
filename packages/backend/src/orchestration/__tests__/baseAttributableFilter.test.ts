@@ -535,7 +535,9 @@ describe('filterVerifyFailureByBaseHealth', () => {
       { test_id: 't2', name: 'b' },
     ];
     mockGetFailingTestIdsForRun.mockReturnValue(failing);
-    const sr = makeStructuredResult(failing.map((f) => ({ id: f.test_id, name: f.name })));
+    const sr = makeStructuredResult(
+      failing.map((f) => ({ id: f.test_id, name: f.name })),
+    );
 
     const fresh = await filterVerifyFailureByBaseHealth(PROJECT, null, sr);
     const replayed = await filterVerifyFailureByBaseHealth(

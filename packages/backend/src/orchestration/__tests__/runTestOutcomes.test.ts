@@ -54,7 +54,11 @@ const structured: StructuredTestResult = {
 } as unknown as StructuredTestResult;
 
 /** Inserts a settled run with `structured` extracted into test_run_results/summaries. */
-function seedExtractedRun(id: string, hash: string, state: 'failed' | 'passed') {
+function seedExtractedRun(
+  id: string,
+  hash: string,
+  state: 'failed' | 'passed',
+) {
   insertTestRequestRun(id, PROJECT.id, hash, null, Date.now());
   completeTestRequestRun(
     id,
@@ -107,7 +111,9 @@ describe('readRunTestOutcomes', () => {
 
   it('falls back to test_run_summaries + test_run_results once structured_result is cleared, with the same failing set and totals', () => {
     seedExtractedRun('run-out-cleared', 'hash-out-2', 'failed');
-    const before = readRunTestOutcomes(getTestRequestRunById('run-out-cleared')!);
+    const before = readRunTestOutcomes(
+      getTestRequestRunById('run-out-cleared')!,
+    );
 
     clearExtractedStructuredResultsBatch();
     const cleared = getTestRequestRunById('run-out-cleared')!;
@@ -152,7 +158,14 @@ describe('getRunTestOutcomes', () => {
       ingestTestRunResultsTx(
         'run-out-pending',
         PROJECT.id,
-        [{ test_id: 't.late', name: 'late', outcome: 'failed', duration_ms: 1 }],
+        [
+          {
+            test_id: 't.late',
+            name: 'late',
+            outcome: 'failed',
+            duration_ms: 1,
+          },
+        ],
         null,
         false,
         false,
