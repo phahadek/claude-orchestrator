@@ -357,8 +357,10 @@ describe('runAutofix — fail open on non-zero exit', () => {
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'diff') return makeProc(0, 'foo.ts\n');
+      if (cmd === 'git') return makeProc(1, '');
       // autofix shell command exits 1 with output (treated as unfixable violations)
-      return makeProc(1, 'lint error', '');
+      return makeProc(1, 'foo.ts:1:1 lint error', '');
     };
 
     const logged: string[] = [];
@@ -371,8 +373,74 @@ describe('runAutofix — fail open on non-zero exit', () => {
 
     expect(result.success).toBe(true);
     expect(result.commitSha).toBeUndefined();
-    expect(result.unfixableViolations).toBe('lint error');
+    expect(result.unfixableViolations).toBe('foo.ts:1:1 lint error');
+    expect(result.unfixableMentionedFiles).toEqual(['foo.ts']);
     expect(logged.some((l) => l.includes('WARN'))).toBe(true);
+  });
+
+  it('drops unscoped violations that only name files outside the changed set', async () => {
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'diff') return makeProc(0, 'src/x/a.py\n');
+      if (cmd === 'git') return makeProc(1, '');
+      return makeProc(
+        1,
+        '/worktree/other.py:1:1 E501\ntests/src/x/a.py:2:1 E501',
+        '',
+      );
+    };
+    const logged: string[] = [];
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['ruff check .'],
+      (m) => logged.push(m),
+    );
+    expect(result.success).toBe(true);
+    expect(result.unfixableViolations).toBeUndefined();
+    expect(logged.some((l) => l.includes('dropped unfixable violations'))).toBe(
+      true,
+    );
+  });
+
+  it('counts an absolute worktree path as a mention of a changed file', async () => {
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'diff') return makeProc(0, 'src/x/a.py\n');
+      if (cmd === 'git') return makeProc(1, '');
+      return makeProc(
+        1,
+        '/worktree/src/x/a.py:2:1 E501\nother.py:1:1 E501',
+        '',
+      );
+    };
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['ruff check .'],
+      () => {},
+    );
+    expect(result.unfixableViolations).toContain('other.py');
+    expect(result.unfixableMentionedFiles).toEqual(['src/x/a.py']);
+  });
+
+  it('relays a scoped ({{changed_files}}) command output unchanged even with no path', async () => {
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'diff') return makeProc(0, 'foo.ts\n');
+      if (cmd === 'git') return makeProc(1, '');
+      return makeProc(1, 'something is wrong', '');
+    };
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['lint {{changed_files}}'],
+      () => {},
+    );
+    expect(result.unfixableViolations).toBe('something is wrong');
   });
 
   it('commits changes and reports unfixableViolations when a command exits 1 with output', async () => {
@@ -398,7 +466,7 @@ describe('runAutofix — fail open on non-zero exit', () => {
       if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'rev-parse') return makeProc(0, 'abc\n');
       // autofix shell command exits 1 with output (unfixable violations)
-      return makeProc(1, 'error', '');
+      return makeProc(1, 'foo.ts:1:1 error', '');
     };
 
     const result = await runAutofix(
@@ -412,7 +480,7 @@ describe('runAutofix — fail open on non-zero exit', () => {
     expect(result.commitSha).toBe('abc');
     // Exit 1 with output is treated as unfixable violations, not a hard failure
     expect(result.success).toBe(true);
-    expect(result.unfixableViolations).toBe('error');
+    expect(result.unfixableViolations).toBe('foo.ts:1:1 error');
   });
 });
 

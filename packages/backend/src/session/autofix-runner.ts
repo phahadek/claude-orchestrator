@@ -30,6 +30,8 @@ export interface AutofixResult {
    * the implementing session so the coding agent can fix them.
    */
   unfixableViolations?: string;
+  /** Changed files that relayed unscoped-command output mentions (for the nudge). */
+  unfixableMentionedFiles?: string[];
   /** True when a git operation (add/commit/push) exited 128 — infrastructure failure, not a code defect. */
   isGitInfraFailure?: boolean;
   /** Combined stderr/stdout of the failing git command, surfaced distinctly from summary. */
@@ -300,6 +302,35 @@ export function expandAutofixCommand(
   return cmd.replace(/\{\{changed_files\}\}/g, quoted);
 }
 
+/**
+ * Returns the changed files a tool's output mentions as a whole path. Absolute
+ * paths under the worktree are made repo-relative first; a match must not be
+ * preceded by `/` (so src/a.py does not match tests/src/a.py).
+ */
+function changedFilesMentioned(
+  output: string,
+  changedFiles: string[],
+  worktreePath: string,
+): string[] {
+  const text = output.split(worktreePath.replace(/\/+$/, '') + '/').join('');
+  const before = /^[\s'"(>]$/;
+  const after = /^[:\s'")]$/;
+  return changedFiles.filter((p) => {
+    let idx = text.indexOf(p);
+    while (idx !== -1) {
+      const prev = idx === 0 ? '' : text[idx - 1];
+      const next = text[idx + p.length] ?? '';
+      if (
+        (prev === '' || before.test(prev)) &&
+        (next === '' || after.test(next))
+      )
+        return true;
+      idx = text.indexOf(p, idx + 1);
+    }
+    return false;
+  });
+}
+
 export interface AutofixGateEnvOptions {
   /** Env var name -> path (relative to worktreePath) scoping a tool's cache to this worktree. See OrchestratorConfig.cache_env. */
   cacheEnv?: Record<string, string>;
@@ -364,7 +395,11 @@ export async function runAutofix(
 
   const failures: string[] = [];
   // exit-1 output from linting tools that fixed what they could but left violations behind
-  const violationChunks: string[] = [];
+  const violationChunks: Array<{
+    text: string;
+    rawCmd: string;
+    scoped: boolean;
+  }> = [];
 
   for (const rawCmd of commands) {
     const cmd = expandAutofixCommand(rawCmd, changedFiles);
@@ -393,7 +428,11 @@ export async function runAutofix(
       log(`[autofix] WARN: ${msg}\n`);
       if (exitCode === 1 && output.trim()) {
         // Treat exit 1 with output as unfixable violations (e.g. ruff E501)
-        violationChunks.push(output.trim());
+        violationChunks.push({
+          text: output.trim(),
+          rawCmd,
+          scoped: rawCmd.includes('{{changed_files}}'),
+        });
       } else {
         failures.push(msg);
       }
@@ -401,8 +440,31 @@ export async function runAutofix(
   }
 
   const dirty = await isWorktreeDirty(worktreePath);
+  const relayedChunks: string[] = [];
+  const mentionedSet = new Set<string>();
+  for (const chunk of violationChunks) {
+    if (chunk.scoped) {
+      relayedChunks.push(chunk.text);
+      continue;
+    }
+    const mentioned = changedFilesMentioned(
+      chunk.text,
+      changedFiles,
+      worktreePath,
+    );
+    if (mentioned.length === 0) {
+      log(
+        `[autofix] dropped unfixable violations outside the PR's changed files: ${chunk.rawCmd}\n`,
+      );
+      continue;
+    }
+    relayedChunks.push(chunk.text);
+    mentioned.forEach((p) => mentionedSet.add(p));
+  }
   const unfixableViolations =
-    violationChunks.length > 0 ? violationChunks.join('\n---\n') : undefined;
+    relayedChunks.length > 0 ? relayedChunks.join('\n---\n') : undefined;
+  const unfixableMentionedFiles =
+    mentionedSet.size > 0 ? [...mentionedSet] : undefined;
   if (!dirty) {
     if (failures.length > 0) {
       return {
@@ -414,6 +476,7 @@ export async function runAutofix(
       success: true,
       summary: 'autofix commands produced no diff',
       unfixableViolations,
+      unfixableMentionedFiles,
     };
   }
 
@@ -497,6 +560,7 @@ export async function runAutofix(
       restoredPaths,
       summary: 'autofix: no in-scope changes staged; skipped commit',
       unfixableViolations,
+      unfixableMentionedFiles,
     };
   }
 
@@ -624,5 +688,6 @@ export async function runAutofix(
     restoredPaths,
     summary,
     unfixableViolations: success ? unfixableViolations : undefined,
+    unfixableMentionedFiles: success ? unfixableMentionedFiles : undefined,
   };
 }
