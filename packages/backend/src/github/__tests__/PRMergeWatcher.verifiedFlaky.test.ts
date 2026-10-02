@@ -34,6 +34,7 @@ vi.mock('../../db/queries', () => ({
   // behavior itself.
   getLatestTestRequestRunForSession: vi.fn().mockReturnValue(undefined),
   isRunFailureBreadthAttributable: vi.fn().mockReturnValue(false),
+  resolveBreadthOwnTree: vi.fn(() => ({ sessionIds: [], worktreePaths: [] })),
 }));
 
 vi.mock('../../config', () => ({

@@ -573,6 +573,10 @@ export class PreReviewPipeline {
               ctx.project,
               outcome.runId,
               outcome.structuredResult,
+              {
+                sessionId: getPRByNumber(ctx.prNumber, ctx.repo)?.session_id,
+                worktreePath: ctx.worktreePath,
+              },
             );
           } catch (err) {
             logger.warn(

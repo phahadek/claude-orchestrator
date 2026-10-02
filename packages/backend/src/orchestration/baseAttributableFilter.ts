@@ -28,6 +28,8 @@ import {
   listTestRequestRunsForSession,
   computeTestFailureBreadthFlag,
   markTestResultExcused,
+  resolveBreadthOwnTree,
+  type BreadthOwnTree,
 } from '../db/queries';
 import { typedGetSetting } from '../config/settings';
 import { isTestIdTouchedByChangedFiles } from '../session/test-runner';
@@ -75,8 +77,8 @@ const UNFILTERED = (passed: boolean): BaseAttributableFilterResult => ({
 });
 
 /**
- * The cutoff computeTestFailureBreadthFlag is evaluated before — the
- * earliest started_at among `run`'s own session's test_request_runs, so a
+ * The flip-rate cutoff (a genuinely temporal guard; breadth excludes the
+ * subject's own tree by identity instead) — the earliest started_at among `run`'s own session's test_request_runs, so a
  * PR's own repeated runs (all sharing that session) can never count toward
  * their own breadth. Falls back to `run.started_at` itself when the run
  * carries no session (nothing else to look up against).
@@ -127,17 +129,26 @@ export async function filterBaseAttributableFailures(
   return attributeFailingTests(
     project,
     sessionFailing,
-    firstRunCutoffMs(project, run),
+    ownTreeOfRun(project, run),
     run.id,
   );
+}
+
+function ownTreeOfRun(
+  project: ProjectConfig,
+  run: Pick<TestRequestRunRow, 'session_id' | 'worktree_path'>,
+): BreadthOwnTree {
+  return resolveBreadthOwnTree(project.id, {
+    sessionId: run.session_id,
+    worktreePath: run.worktree_path,
+  });
 }
 
 /**
  * Shared tail of the attribution path — splits `sessionFailing` into
  * breadth-flagged (excluded), flaky-flagged (excluded), and
- * genuinely-remaining buckets. `beforeMs` is the cutoff
- * computeTestFailureBreadthFlag is evaluated before — see firstRunCutoffMs.
- * Used by both filterBaseAttributableFailures and
+ * genuinely-remaining buckets. Breadth is evaluated as of now, excluding
+ * `ownTree` (the subject's own runs) by identity. Used by both filterBaseAttributableFailures and
  * filterVerifyFailureByBaseHealth so the two call sites can never disagree
  * about how attribution is computed. `runId`, when given (only
  * filterBaseAttributableFailures has a persisted row to attach to), writes
@@ -147,11 +158,12 @@ export async function filterBaseAttributableFailures(
 function attributeFailingTests(
   project: ProjectConfig,
   sessionFailing: FailingTest[],
-  beforeMs: number,
+  ownTree: BreadthOwnTree,
   runId: string | null = null,
 ): BaseAttributableFilterResult {
   const breadthN = typedGetSetting('flip_rate_breadth_n');
   const breadthWindowHours = typedGetSetting('flip_rate_breadth_window_hours');
+  const asOfMs = Date.now();
 
   const excludedTests = sessionFailing.filter(
     (t) =>
@@ -159,7 +171,8 @@ function attributeFailingTests(
         t.test_id,
         breadthWindowHours,
         breadthN,
-        beforeMs,
+        asOfMs,
+        ownTree,
       ).flagged,
   );
   const excludedIds = new Set(excludedTests.map((t) => t.test_id));
@@ -227,7 +240,8 @@ function attributeFailingTests(
 export async function filterVerifyFailureByBaseHealth(
   project: ProjectConfig,
   runId: string | null | undefined,
-  fallbackStructuredResult?: StructuredTestResult | null,
+  fallbackStructuredResult: StructuredTestResult | null | undefined,
+  subject: { sessionId?: string | null; worktreePath?: string | null },
 ): Promise<BaseAttributableFilterResult | null> {
   let failingTests: FailingTest[];
   if (runId) {
@@ -245,7 +259,11 @@ export async function filterVerifyFailureByBaseHealth(
     ({ test_id, name }) => ({ test_id, name }),
   );
 
-  return attributeFailingTests(project, sessionFailing, Date.now());
+  return attributeFailingTests(
+    project,
+    sessionFailing,
+    resolveBreadthOwnTree(project.id, subject),
+  );
 }
 
 /**
@@ -257,8 +275,8 @@ export async function filterVerifyFailureByBaseHealth(
  *     test's file (isTestIdTouchedByChangedFiles fails closed: an
  *     unmappable test id or a touched file blocks exclusion).
  *  2. breadth signal re-confirmed — the same corpus check
- *     filterBaseAttributableFailures used, re-evaluated against `prRun`'s
- *     own first-run cutoff, must still flag the test. Re-pointed here (was
+ *     filterBaseAttributableFailures used, re-evaluated as of now excluding
+ *     `prRun`'s own tree, must still flag the test. Re-pointed here (was
  *     previously a base-probe-run failure-signature comparison) now that
  *     attribution no longer consults a dedicated base-health probe run.
  *
@@ -278,7 +296,11 @@ export function applyF2GateMaskingGuards(
 
   const breadthN = typedGetSetting('flip_rate_breadth_n');
   const breadthWindowHours = typedGetSetting('flip_rate_breadth_window_hours');
-  const beforeMs = prRun.started_at;
+  const asOfMs = Date.now();
+  const ownTree = resolveBreadthOwnTree(prRun.project_id, {
+    sessionId: prRun.session_id,
+    worktreePath: prRun.worktree_path,
+  });
 
   const cleared: FailingTest[] = [];
   const blocked: FailingTest[] = [];
@@ -296,7 +318,8 @@ export function applyF2GateMaskingGuards(
       t.test_id,
       breadthWindowHours,
       breadthN,
-      beforeMs,
+      asOfMs,
+      ownTree,
     );
     if (!breadthFlag.flagged) {
       blocked.push(t);

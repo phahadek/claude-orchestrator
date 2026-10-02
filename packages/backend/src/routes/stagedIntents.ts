@@ -230,6 +230,7 @@ import {
   countTestRunResultsForRun,
   getTaskTestFlipRateFlags,
   isRunFailureBreadthAttributable,
+  resolveBreadthOwnTree,
   getProjectRowById,
 } from '../db/queries';
 import { classifyTestRunOutcome } from '../orchestration/testRequestLane';
@@ -6937,6 +6938,10 @@ async function maybeAutoApproveTestRequest(
             typedGetSetting('flip_rate_breadth_n'),
             typedGetSetting('flip_rate_breadth_window_hours'),
             Date.now(),
+            resolveBreadthOwnTree(project.id, {
+              sessionId: intent.sessionId,
+              worktreePath: priorRun.worktree_path,
+            }),
           )
         : false;
     if (!priorFailureBaseAttributable) {

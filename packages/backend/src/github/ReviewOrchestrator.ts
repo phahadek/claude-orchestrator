@@ -1084,9 +1084,10 @@ export class ReviewOrchestrator {
    */
   private async applyVerifyBaseAttributionFilter(
     project: ProjectConfig,
-    localBranchId: number,
+    job: LocalBranchJob,
     result: VerifyResult,
   ): Promise<VerifyResult> {
+    const localBranchId = job.localBranchId;
     if (result.passed) return result;
     let filtered: Awaited<ReturnType<typeof filterVerifyFailureByBaseHealth>>;
     try {
@@ -1094,6 +1095,7 @@ export class ReviewOrchestrator {
         project,
         null,
         result.structuredResult,
+        { sessionId: job.sessionId, worktreePath: job.worktreePath },
       );
     } catch (err) {
       logger.warn(
@@ -1125,7 +1127,7 @@ export class ReviewOrchestrator {
       const config = loadOrchestratorConfig(project.projectDir);
       const verifyResult = await this.applyVerifyBaseAttributionFilter(
         project,
-        job.localBranchId,
+        job,
         await runVerifyAsGate(
           job.worktreePath,
           config.verify,
@@ -1172,7 +1174,7 @@ export class ReviewOrchestrator {
               // Re-run verify to see if autofix resolved it
               const retryResult = await this.applyVerifyBaseAttributionFilter(
                 project,
-                job.localBranchId,
+                job,
                 await runVerifyAsGate(
                   job.worktreePath,
                   config.verify,

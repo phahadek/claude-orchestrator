@@ -11186,31 +11186,108 @@ export interface TestFailureBreadthFlag {
 }
 
 let _stmtTestFailureBreadth: Database.Statement | null = null;
+let _stmtSessionsForBreadthSeed: Database.Statement | null = null;
+let _stmtSessionsForBreadthTask: Database.Statement | null = null;
+
+/** The subject's own runs, excluded from a breadth count by identity. */
+export interface BreadthOwnTree {
+  sessionIds: string[];
+  worktreePaths: string[];
+}
+
+/** Every session of the subject's task (same project), plus the given ids. */
+export function resolveBreadthOwnTree(
+  projectId: string,
+  subject: { sessionId?: string | null; worktreePath?: string | null },
+): BreadthOwnTree {
+  const sessionIds = new Set<string>();
+  const worktreePaths = new Set<string>();
+  const taskNorms = new Set<string>();
+  if (subject.sessionId) sessionIds.add(subject.sessionId);
+  if (subject.worktreePath) worktreePaths.add(subject.worktreePath);
+
+  type Seed = {
+    session_id: string;
+    task_id: string | null;
+    worktree_path: string | null;
+  };
+  const addSeed = (r: Seed): void => {
+    sessionIds.add(r.session_id);
+    if (r.worktree_path) worktreePaths.add(r.worktree_path);
+    if (r.task_id) taskNorms.add(normalizeBoardId(r.task_id));
+  };
+
+  if (subject.sessionId) {
+    const row = getStmtGetSession().get({ session_id: subject.sessionId }) as
+      | Seed
+      | undefined;
+    if (row) addSeed(row);
+  }
+  if (subject.worktreePath) {
+    _stmtSessionsForBreadthSeed ??= db.prepare<{
+      project_id: string;
+      worktree_path: string;
+    }>(`
+      SELECT session_id, task_id, worktree_path FROM sessions
+      WHERE project_id = @project_id AND worktree_path = @worktree_path
+    `);
+    for (const r of _stmtSessionsForBreadthSeed.all({
+      project_id: projectId,
+      worktree_path: subject.worktreePath,
+    }) as Seed[]) {
+      addSeed(r);
+    }
+  }
+
+  _stmtSessionsForBreadthTask ??= db.prepare<{
+    project_id: string;
+    a: string;
+    b: string;
+  }>(`
+    SELECT session_id, task_id, worktree_path FROM sessions
+    WHERE project_id = @project_id AND task_id_norm IN (@a, @b)
+  `);
+  for (const norm of taskNorms) {
+    const rows = _stmtSessionsForBreadthTask.all({
+      project_id: projectId,
+      a: norm,
+      b: 'notion:' + norm,
+    }) as Seed[];
+    for (const r of rows) {
+      sessionIds.add(r.session_id);
+      if (r.worktree_path) worktreePaths.add(r.worktree_path);
+    }
+  }
+  return {
+    sessionIds: [...sessionIds],
+    worktreePaths: [...worktreePaths],
+  };
+}
 
 /**
- * The lane-side breadth-of-trees masking signal, supplementing
- * computeTestFlipRateFlag: counts the distinct test_request_runs.content_hash
- * values a test failed under within (beforeMs - windowHours, beforeMs) —
- * i.e. the same "predates this PR's own runs" cutoff flip-rate uses, so a
- * PR's own re-runs (all sharing that PR's content_hash) can't inflate this
- * signal. A failure appearing across `breadthN` or more distinct trees
- * cannot be attributable to any single diff — see evaluateF2LaneFlakyDisposition.
- *
- * Joins test_run_results (SEARCH via idx_test_run_results_test_id_created_at
- * on test_id + the created_at range) to test_request_runs by its primary key
- * (id) to read content_hash — both index-assisted, no full table scan; see
- * scripts/check-query-plans.mjs.
+ * The breadth-of-trees masking signal, supplementing computeTestFlipRateFlag:
+ * counts the distinct test_request_runs.content_hash values a test failed
+ * under within [asOfMs - windowHours, asOfMs), excluding the subject's own
+ * tree by identity (`ownTree`: runs by its sessions or in its worktrees), so
+ * a PR's/session's own re-runs can't inflate this signal while evidence from
+ * other trees that arrives later is still seen. Runs with no worktree_path
+ * never contribute. A failure appearing across `breadthN` or more distinct
+ * other trees cannot be attributable to any single diff — see
+ * evaluateF2LaneFlakyDisposition.
  */
 export function computeTestFailureBreadthFlag(
   testId: string,
   windowHours: number,
   breadthN: number,
-  beforeMs: number,
+  asOfMs: number,
+  ownTree: BreadthOwnTree,
 ): TestFailureBreadthFlag {
   _stmtTestFailureBreadth ??= db.prepare<{
     test_id: string;
     since_ms: number;
     before_ms: number;
+    own_sessions: string;
+    own_worktrees: string;
   }>(`
     SELECT COUNT(DISTINCT r.content_hash) AS distinct_hashes
     FROM test_run_results t
@@ -11219,12 +11296,18 @@ export function computeTestFailureBreadthFlag(
       AND t.outcome IN ('failed', 'error')
       AND t.created_at >= @since_ms
       AND t.created_at < @before_ms
+      AND r.worktree_path IS NOT NULL
+      AND r.worktree_path NOT IN (SELECT value FROM json_each(@own_worktrees))
+      AND (r.session_id IS NULL
+           OR r.session_id NOT IN (SELECT value FROM json_each(@own_sessions)))
   `);
-  const sinceMs = beforeMs - windowHours * 60 * 60 * 1000;
+  const sinceMs = asOfMs - windowHours * 60 * 60 * 1000;
   const row = _stmtTestFailureBreadth.get({
     test_id: testId,
     since_ms: sinceMs,
-    before_ms: beforeMs,
+    before_ms: asOfMs,
+    own_sessions: JSON.stringify(ownTree.sessionIds),
+    own_worktrees: JSON.stringify(ownTree.worktreePaths),
   }) as { distinct_hashes: number };
   const distinctContentHashCount = row.distinct_hashes;
   return {
@@ -11248,7 +11331,8 @@ export function isRunFailureBreadthAttributable(
   runId: string,
   breadthN: number,
   breadthWindowHours: number,
-  beforeMs: number,
+  asOfMs: number,
+  ownTree: BreadthOwnTree,
 ): boolean {
   const failing = getFailingTestIdsForRun(runId);
   if (failing.length === 0) return false;
@@ -11258,7 +11342,8 @@ export function isRunFailureBreadthAttributable(
         t.test_id,
         breadthWindowHours,
         breadthN,
-        beforeMs,
+        asOfMs,
+        ownTree,
       ).flagged,
   );
 }
@@ -11286,6 +11371,7 @@ export function evaluateTestFlakinessCorpus(
   flipRateThresholdK: number,
   breadthN: number,
   breadthWindowHours: number,
+  ownTree: BreadthOwnTree,
 ): TestFlakinessCorpusVerdict {
   const flipFlag = computeTestFlipRateFlag(
     testId,
@@ -11297,7 +11383,8 @@ export function evaluateTestFlakinessCorpus(
     testId,
     breadthWindowHours,
     breadthN,
-    beforeMs,
+    Date.now(),
+    ownTree,
   );
   if (flipFlag.flagged || breadthFlag.flagged) {
     return { testId, eligible: true };
@@ -11305,7 +11392,7 @@ export function evaluateTestFlakinessCorpus(
   return {
     testId,
     eligible: false,
-    reason: `has not cleared the cross-SHA flakiness bar yet (${flipFlag.transitionCount}/${flipRateThresholdK} flip-rate transitions over ${flipFlag.sampleCount} samples, failed across ${breadthFlag.distinctContentHashCount}/${breadthN} distinct trees)`,
+    reason: `has not cleared the cross-SHA flakiness bar yet (${flipFlag.transitionCount}/${flipRateThresholdK} flip-rate transitions over ${flipFlag.sampleCount} samples, failed across ${breadthFlag.distinctContentHashCount}/${breadthN} distinct other trees)`,
   };
 }
 

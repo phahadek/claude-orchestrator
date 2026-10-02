@@ -90,6 +90,7 @@ import {
   recordMergeCommitForSession,
   getLatestTestRequestRunForSession,
   isRunFailureBreadthAttributable,
+  resolveBreadthOwnTree,
 } from '../db/queries';
 import { emitTaskUpdated } from '../routes/tasks';
 import { logger } from '../logger';
@@ -188,6 +189,10 @@ function isPrLatestRunBreadthAttributable(
     typedGetSetting('flip_rate_breadth_n'),
     typedGetSetting('flip_rate_breadth_window_hours'),
     Date.now(),
+    resolveBreadthOwnTree(project.id, {
+      sessionId: pr.session_id,
+      worktreePath: run.worktree_path,
+    }),
   );
 }
 
@@ -1933,6 +1938,10 @@ export class PRMergeWatcher extends EventEmitter {
       typedGetSetting('flip_rate_threshold_k'),
       typedGetSetting('flip_rate_breadth_n'),
       typedGetSetting('flip_rate_breadth_window_hours'),
+      resolveBreadthOwnTree(project.id, {
+        sessionId: pr.session_id,
+        worktreePath: testResult.worktree_path ?? worktreePath,
+      }),
       baseExcusedTestIds,
     );
     if (!eligible) return false;

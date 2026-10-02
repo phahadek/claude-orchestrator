@@ -70,6 +70,7 @@ import {
   computeTestFlipRateFlag,
   computeTestFlipRateFlagFromOutcomes,
   computeTestFailureBreadthFlag,
+  type BreadthOwnTree,
   getFailingTestIdsForRun,
   getProjectRowById,
   getLatestTestRequestRun,
@@ -1838,6 +1839,7 @@ export function evaluateF2LaneFlakyDisposition(
   flipRateThresholdK: number,
   breadthN: number,
   breadthWindowHours: number,
+  ownTree: BreadthOwnTree,
   baseExcusedTestIds: ReadonlySet<string> = new Set(),
 ): boolean {
   const failing = getFailingTestIdsForRun(testRequestRunId).filter(
@@ -1856,7 +1858,8 @@ export function evaluateF2LaneFlakyDisposition(
       test.test_id,
       breadthWindowHours,
       breadthN,
-      beforeMs,
+      Date.now(),
+      ownTree,
     );
     if (!flipFlag.flagged && !breadthFlag.flagged) return false;
 

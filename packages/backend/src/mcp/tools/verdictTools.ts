@@ -17,6 +17,7 @@ import {
 import {
   getPRBySessionId,
   evaluateTestFlakinessCorpus,
+  resolveBreadthOwnTree,
   getLatestTestRequestRunForSession,
   getLatestPrGateRunForWorktree,
   getFailingTestIdsForRun,
@@ -148,6 +149,8 @@ async function checkTestCorpusAndDiff(
   beforeMs: number,
   worktreePath: string,
   baseBranch: string,
+  projectId: string,
+  sessionId: string,
 ): Promise<ReturnType<typeof invalid> | null> {
   const corpus = evaluateTestFlakinessCorpus(
     testId,
@@ -156,6 +159,7 @@ async function checkTestCorpusAndDiff(
     typedGetSetting('flip_rate_threshold_k'),
     typedGetSetting('flip_rate_breadth_n'),
     typedGetSetting('flip_rate_breadth_window_hours'),
+    resolveBreadthOwnTree(projectId, { sessionId, worktreePath }),
   );
   if (!corpus.eligible) {
     return invalid(`${testName} ${corpus.reason}`);
@@ -311,6 +315,8 @@ export function registerVerdictTools(
             beforeMs,
             session.worktreePath,
             project?.baseBranch ?? 'dev',
+            session.projectId,
+            ctx.sessionId,
           );
           if (refusal) return refusal;
 
@@ -353,6 +359,8 @@ export function registerVerdictTools(
             beforeMs,
             session.worktreePath,
             pr.base_branch ?? 'dev',
+            session.projectId,
+            ctx.sessionId,
           );
           if (refusal) return refusal;
         }

@@ -192,6 +192,7 @@ describe('verify gate regression — structured_result cleared between runs on t
       PROJECT,
       'run-verify-fresh',
       null,
+      {},
     );
     expect(fresh?.outcome).toBe('filtered_pass');
     expect(fresh?.passed).toBe(true);
@@ -206,6 +207,7 @@ describe('verify gate regression — structured_result cleared between runs on t
       PROJECT,
       'run-verify-fresh',
       null,
+      {},
     );
 
     expect(replayed?.outcome).toBe('filtered_pass');
