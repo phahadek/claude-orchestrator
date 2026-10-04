@@ -577,6 +577,40 @@ describe('filterVerifyFailureByBaseHealth', () => {
     expect(replayed?.excludedTests.map((t) => t.test_id)).toEqual(['t1']);
     expect(mockGetFailingTestIdsForRun).toHaveBeenCalledWith('run-replayed');
   });
+
+  it('marks breadth_corpus and flaky_rollup excusals on the given verify lane run', async () => {
+    stubBreadthFlags(new Set(['t1']));
+    mockGetFlaggedFlakyTestIds.mockReturnValue(new Set(['t2']));
+    mockGetFailingTestIdsForRun.mockReturnValue([
+      { test_id: 't1', name: 'a' },
+      { test_id: 't2', name: 'b' },
+      { test_id: 't3', name: 'c' },
+    ]);
+
+    const result = await filterVerifyFailureByBaseHealth(
+      PROJECT,
+      'verify-run',
+      null,
+      SUBJECT,
+    );
+
+    expect(result?.outcome).toBe('filtered_partial');
+    expect(mockMarkTestResultExcused).toHaveBeenCalledWith(
+      'verify-run',
+      't1',
+      'breadth_corpus',
+    );
+    expect(mockMarkTestResultExcused).toHaveBeenCalledWith(
+      'verify-run',
+      't2',
+      'flaky_rollup',
+    );
+    expect(mockMarkTestResultExcused).not.toHaveBeenCalledWith(
+      'verify-run',
+      't3',
+      expect.anything(),
+    );
+  });
 });
 
 describe('applyF2GateMaskingGuards', () => {

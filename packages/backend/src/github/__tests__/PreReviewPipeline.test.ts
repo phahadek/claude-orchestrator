@@ -1451,6 +1451,40 @@ describe('PreReviewPipeline — verify gate superseded-run handling', () => {
     expectNoTimeoutPause();
   });
 
+  it('hands the superseding run id (not the withdrawn one) to the verify base-attribution filter', async () => {
+    mockAdmitTestRequest.mockReturnValue(superseded('run-new'));
+    mockGetTestRequestRunById.mockImplementation((id: string) =>
+      id === 'run-new'
+        ? runRow({ id: 'run-new', state: 'failed', failure_reason: 'generic' })
+        : undefined,
+    );
+    mockFilterVerifyFailureByBaseHealth.mockResolvedValue({
+      outcome: 'filtered_pass',
+      passed: true,
+      excludedTests: [{ test_id: 't1', name: 'a' }],
+      flakyExcludedTests: [],
+      remainingTests: [],
+      baseRun: null,
+    });
+    const result = await new PreReviewPipeline(makeSessionManager()).run(
+      makeJob(),
+      makeProject(),
+    );
+    expect(result.passed).toBe(true);
+    expect(mockFilterVerifyFailureByBaseHealth).toHaveBeenCalledWith(
+      makeProject(),
+      'run-new',
+      null,
+      expect.anything(),
+    );
+    expect(mockFilterVerifyFailureByBaseHealth).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'run-x',
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
   it('follows a chain of superseded runs to a passed verdict', async () => {
     mockAdmitTestRequest.mockReturnValue(superseded('run-a'));
     mockGetTestRequestRunById.mockImplementation((id: string) => {

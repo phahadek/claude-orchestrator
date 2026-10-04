@@ -11455,6 +11455,24 @@ export function getUnexcusedFailingTestIdsForRun(
   }) as FailingTestForRun[];
 }
 
+/** Failing tests of a run with their excusal reason (null = charged). */
+export function getFailingTestExcusalsForRun(
+  testRequestRunId: string,
+): Array<{ test_id: string; name: string; excused_reason: string | null }> {
+  return db
+    .prepare(
+      `SELECT test_id, name,
+              CASE WHEN excused_at IS NULL THEN NULL ELSE COALESCE(excused_reason, 'unknown') END AS excused_reason
+       FROM test_run_results
+       WHERE test_request_run_id = ? AND outcome IN ('failed', 'error')`,
+    )
+    .all(testRequestRunId) as Array<{
+    test_id: string;
+    name: string;
+    excused_reason: string | null;
+  }>;
+}
+
 let _stmtMarkTestResultExcused: Database.Statement | null = null;
 
 /**
