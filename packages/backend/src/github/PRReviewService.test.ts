@@ -4500,6 +4500,18 @@ describe('collectGateChargedFailures()', () => {
     ]);
   });
 
+  it('returns [] and renders "None." when the only failure was excused at verify', () => {
+    vi.mocked(listTestRequestRunsForPrSession).mockReturnValue([
+      { id: 'verify-run' } as any,
+    ]);
+    vi.mocked(getUnexcusedFailingTestIdsForRun).mockReturnValue([]);
+
+    const result = collectGateChargedFailures('proj-1', 'session-1', '/wt');
+
+    expect(result).toEqual([]);
+    expect(buildGateChargedFailuresSection(result, [])).toContain('None.');
+  });
+
   it('dedupes a test id that repeats across multiple runs', () => {
     vi.mocked(listTestRequestRunsForPrSession).mockReturnValue([
       { id: 'run-1' } as any,
