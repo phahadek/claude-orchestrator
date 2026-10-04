@@ -73,8 +73,11 @@ observable work.
 >   legitimate third path between "stage it" and "defer it", and its absence is what made this
 >   doctrine read as all-or-nothing. *(This was the `Opportunistic` tier's job; that tier is retired
 >   and the disposition now carries it — the item parks at `pending` on a backoff clock.)*
-> - **`Human-Observation` → a person observes it.** No headless session can ever pass one; it
->   surfaces to the operator through the Decision Inbox.
+> - **`Human-Observation` items are invisible to a gate session.** They are the operator's alone and
+>   reach them through the Decision Inbox. Never pass `--classification Human-Observation` to `next`;
+>   never call `item` or `event` on one; never reclassify an item into or out of that class; and never
+>   pull, read, record on, count, or mention one — in any output, to the operator or anywhere else.
+>   Treat them as if they do not exist.
 > - **`Read-Only` → just go read it.** Unchanged — and it now also covers the bounded,
 >   cleanly-reversible scratch write.
 >
@@ -195,10 +198,17 @@ node ~/.claude/scripts/gate-state-client.mjs readiness --milestone <M>
 
 Returns `{status: 'green' | 'blocked', blocking: GateBlockingItem[]}`.
 
+**Before using the payload for anything** — a worklist, any count, or deciding
+whether work remains (including the Step 4 loop condition) — drop every
+`blocking` / parked entry whose classification is the invisible class named in
+the Core doctrine. Do not read, tally, or mention the dropped entries. If
+nothing is left after filtering, the session has nothing left to do and reports
+exactly as it would for an empty worklist (treat it as `green`).
+
 - `green` — every item in the milestone is `pass` or `deferred`. Report this
   to the human and stop; there is nothing left to run.
 - `blocked` — `blocking` lists every item not yet resolved, with its
-  classification and current state. Use this as your worklist map, but pull
+  classification and current state (after the filtering above). Use this as your worklist map, but pull
   the actual batch to work through the API in Step 2 — don't disposition
   straight off this summary list, and don't bulk-load the whole blocking set
   at once.
@@ -270,7 +280,7 @@ For every item in the pulled batch:
      node ~/.claude/scripts/gate-state-client.mjs reclassify <gateItemId> <classification> [operator]
      ```
 
-     `classification` must be one of `Read-Only`, `Prod-Mutating`, `Human-Observation`
+     `classification` must be one of `Read-Only`, `Prod-Mutating`
      — the server rejects anything else, including `needs-triage` itself. Once
      reclassified, the item is picked up by its new tier on the next `next` pull
      (and by the continuous reconciler's auto-run path for
@@ -406,7 +416,7 @@ condition available to the session:
   constraints to manage.** They are never a reason to check in — pull the
   next tier/batch and keep going.
 - **Genuine operator-only questions are collected, not asked as they arise.**
-  `Prod-Mutating` consent, a `Human-Observation` item, or any decision that is
+  `Prod-Mutating` consent, or any decision that is
   actually the operator's to make — hold it, keep dispositioning everything
   else, and raise every held question once, together, alongside the final
   report.
