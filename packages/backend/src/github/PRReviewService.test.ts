@@ -707,56 +707,56 @@ describe('PRReviewService.buildPrompt()', () => {
         { test_id: 't1', name: 'a', excused_reason: 'flaky_rollup' },
         { test_id: 't2', name: 'b', excused_reason: null },
       ],
-      [
-        'Excused: 1 (flaky_rollup 1), Charged: 1',
-        'Charged test ids: t2',
-      ],
+      ['Excused: 1 (flaky_rollup 1), Charged: 1', 'Charged test ids: t2'],
     ],
-  ])('renders the excused/charged split (%s) and a non-crash incomplete note', (_n, rows, expected) => {
-    const service = new PRReviewService(
-      makeMockGitHub(),
-      makeMockNotion(),
-      makeMockSessionManager() as any,
-      'proj-1',
-      'https://notion.so/ctx',
-    );
-    const finishedAt = Date.parse('2024-01-02T03:04:05Z');
-    const testRun = {
-      id: 'run-x',
-      project_id: 'proj-1',
-      content_hash: 'abc',
-      session_id: 'session-xyz',
-      state: 'failed',
-      output: '',
-      requested_at: finishedAt - 1000,
-      started_at: finishedAt - 1000,
-      finished_at: finishedAt,
-      structured_result: null,
-      failure_reason: null,
-      run_kind: 'full',
-    } as any;
-    vi.mocked(getTestRunSummary).mockReturnValueOnce({
-      test_request_run_id: 'run-x',
-      passed_count: 5,
-      failed_count: rows.length,
-      skipped_count: 0,
-      error_count: 0,
-      total_count: 5 + rows.length,
-      incomplete: 1,
-    } as any);
-    vi.mocked(getFailingTestExcusalsForRun).mockReturnValueOnce(rows as any);
+  ])(
+    'renders the excused/charged split (%s) and a non-crash incomplete note',
+    (_n, rows, expected) => {
+      const service = new PRReviewService(
+        makeMockGitHub(),
+        makeMockNotion(),
+        makeMockSessionManager() as any,
+        'proj-1',
+        'https://notion.so/ctx',
+      );
+      const finishedAt = Date.parse('2024-01-02T03:04:05Z');
+      const testRun = {
+        id: 'run-x',
+        project_id: 'proj-1',
+        content_hash: 'abc',
+        session_id: 'session-xyz',
+        state: 'failed',
+        output: '',
+        requested_at: finishedAt - 1000,
+        started_at: finishedAt - 1000,
+        finished_at: finishedAt,
+        structured_result: null,
+        failure_reason: null,
+        run_kind: 'full',
+      } as any;
+      vi.mocked(getTestRunSummary).mockReturnValueOnce({
+        test_request_run_id: 'run-x',
+        passed_count: 5,
+        failed_count: rows.length,
+        skipped_count: 0,
+        error_count: 0,
+        total_count: 5 + rows.length,
+        incomplete: 1,
+      } as any);
+      vi.mocked(getFailingTestExcusalsForRun).mockReturnValueOnce(rows as any);
 
-    const prompt = service.buildPrompt(
-      mockPR,
-      mockDiff,
-      mockTaskBody,
-      null,
-      testRun,
-    );
-    for (const e of expected) expect(prompt).toContain(e);
-    expect(prompt).toContain('produced no structured report');
-    expect(prompt).not.toContain('may have crashed before');
-  });
+      const prompt = service.buildPrompt(
+        mockPR,
+        mockDiff,
+        mockTaskBody,
+        null,
+        testRun,
+      );
+      for (const e of expected) expect(prompt).toContain(e);
+      expect(prompt).toContain('produced no structured report');
+      expect(prompt).not.toContain('may have crashed before');
+    },
+  );
 
   it('still renders as unexplained when structured_result is null and no test_run_summaries row exists (genuine crash)', () => {
     const service = new PRReviewService(
