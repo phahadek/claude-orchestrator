@@ -28,6 +28,7 @@ vi.mock('../db/queries.js', () => ({
   getFailingTestIdsForRun: vi.fn().mockReturnValue([]),
   listTestRequestRunsForPrSession: vi.fn().mockReturnValue([]),
   getUnexcusedFailingTestIdsForRun: vi.fn().mockReturnValue([]),
+  getFailingTestExcusalsForRun: vi.fn().mockReturnValue([]),
   markSessionSuperseded: vi.fn(),
   TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED: new Set([
     'done',
@@ -84,6 +85,7 @@ import {
   getTestRunSummary,
   listTestRequestRunsForPrSession,
   getUnexcusedFailingTestIdsForRun,
+  getFailingTestExcusalsForRun,
   markSessionSuperseded,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
@@ -687,6 +689,73 @@ describe('PRReviewService.buildPrompt()', () => {
     expect(prompt).toContain('## Orchestrator-Verified Test Run');
     expect(prompt).not.toContain('(no structured result recorded)');
     expect(prompt).toContain('11993 passed, 1 failed, 24 skipped, 0 errors');
+  });
+
+  it.each([
+    [
+      'all excused',
+      [{ test_id: 't1', name: 'a', excused_reason: 'breadth_corpus' }],
+      [
+        'all 1 failing tests were excused by the orchestrator',
+        'not charged to this PR',
+        'Excused: 1 (breadth_corpus 1), Charged: 0',
+      ],
+    ],
+    [
+      'charged',
+      [
+        { test_id: 't1', name: 'a', excused_reason: 'flaky_rollup' },
+        { test_id: 't2', name: 'b', excused_reason: null },
+      ],
+      [
+        'Excused: 1 (flaky_rollup 1), Charged: 1',
+        'Charged test ids: t2',
+      ],
+    ],
+  ])('renders the excused/charged split (%s) and a non-crash incomplete note', (_n, rows, expected) => {
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    const finishedAt = Date.parse('2024-01-02T03:04:05Z');
+    const testRun = {
+      id: 'run-x',
+      project_id: 'proj-1',
+      content_hash: 'abc',
+      session_id: 'session-xyz',
+      state: 'failed',
+      output: '',
+      requested_at: finishedAt - 1000,
+      started_at: finishedAt - 1000,
+      finished_at: finishedAt,
+      structured_result: null,
+      failure_reason: null,
+      run_kind: 'full',
+    } as any;
+    vi.mocked(getTestRunSummary).mockReturnValueOnce({
+      test_request_run_id: 'run-x',
+      passed_count: 5,
+      failed_count: rows.length,
+      skipped_count: 0,
+      error_count: 0,
+      total_count: 5 + rows.length,
+      incomplete: 1,
+    } as any);
+    vi.mocked(getFailingTestExcusalsForRun).mockReturnValueOnce(rows as any);
+
+    const prompt = service.buildPrompt(
+      mockPR,
+      mockDiff,
+      mockTaskBody,
+      null,
+      testRun,
+    );
+    for (const e of expected) expect(prompt).toContain(e);
+    expect(prompt).toContain('produced no structured report');
+    expect(prompt).not.toContain('may have crashed before');
   });
 
   it('still renders as unexplained when structured_result is null and no test_run_summaries row exists (genuine crash)', () => {

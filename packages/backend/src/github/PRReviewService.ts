@@ -18,6 +18,7 @@ import {
   getAuthoritativeTestRunForPr,
   listTestRequestRunsForPrSession,
   getUnexcusedFailingTestIdsForRun,
+  getFailingTestExcusalsForRun,
 } from '../db/queries';
 import type { FailingTestForRun } from '../db/queries';
 import { isTestIdTouchedByChangedFiles } from '../session/test-runner';
@@ -543,6 +544,30 @@ const REVIEW_JSON_SCHEMA_BLOCK = buildReviewJsonSchemaBlock();
  * structured_result was already nulled by the storage-dedup sweep still
  * renders its extracted totals instead of reading as an unexplained crash.
  */
+function buildExcusalLine(runId: string): string {
+  const failing = getFailingTestExcusalsForRun(runId);
+  if (failing.length === 0) return '';
+  const charged = failing.filter((f) => f.excused_reason === null);
+  const excused = failing.filter((f) => f.excused_reason !== null);
+  if (charged.length === 0) {
+    return `\nFailing tests: all ${failing.length} failing tests were excused by the orchestrator's gates and are not charged to this PR.\nExcused: ${failing.length} (${formatExcusalBreakdown(excused)}), Charged: 0`;
+  }
+  const breakdown =
+    excused.length > 0 ? ` (${formatExcusalBreakdown(excused)})` : '';
+  return `\nFailing tests: Excused: ${excused.length}${breakdown}, Charged: ${charged.length}\nCharged test ids: ${charged.map((f) => f.test_id).join(', ')}`;
+}
+
+function formatExcusalBreakdown(
+  excused: Array<{ excused_reason: string | null }>,
+): string {
+  const counts = new Map<string, number>();
+  for (const f of excused) {
+    const r = f.excused_reason ?? 'unknown';
+    counts.set(r, (counts.get(r) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([r, n]) => `${r} ${n}`).join(', ');
+}
+
 function buildTestRunEvidenceSection(
   run: TestRequestRunRow | undefined,
 ): string {
@@ -554,8 +579,9 @@ function buildTestRunEvidenceSection(
   const outcomes = readRunTestOutcomes(run);
   const totalsLine = `Result totals: ${outcomes.totals.passed} passed, ${outcomes.totals.failed} failed, ${outcomes.totals.skipped} skipped, ${outcomes.totals.errors} errors`;
   const incompleteLine = outcomes.incomplete
-    ? '\nNote: this run is marked incomplete (a test command may have crashed before its report was written).'
+    ? '\nNote: this run is marked incomplete (at least one test command produced no structured report — it may have crashed, or it may not write one).'
     : '';
+  const excusalLine = buildExcusalLine(run.id);
   let commandLines = '(no structured result recorded)';
   if (outcomes.source === 'structured') {
     const suiteNames = outcomes.suiteNames ?? [];
@@ -563,9 +589,9 @@ function buildTestRunEvidenceSection(
       suiteNames.length > 0
         ? `Commands/suites run: ${suiteNames.join(', ')}`
         : 'Commands/suites run: (none recorded)';
-    commandLines = `${commandsLine}\n${totalsLine}${incompleteLine}`;
+    commandLines = `${commandsLine}\n${totalsLine}${incompleteLine}${excusalLine}`;
   } else if (outcomes.source === 'extracted') {
-    commandLines = `(raw structured result was cleared by storage dedup after extraction; totals below are from the extracted summary)\n${totalsLine}${incompleteLine}`;
+    commandLines = `(raw structured result was cleared by storage dedup after extraction; totals below are from the extracted summary)\n${totalsLine}${incompleteLine}${excusalLine}`;
   } else if (outcomes.parseFailed) {
     commandLines = '(structured result present but unparsable)';
   }

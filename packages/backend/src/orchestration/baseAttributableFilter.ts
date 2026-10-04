@@ -227,9 +227,12 @@ function attributeFailingTests(
  * failure-breadth corpus — a narrower sibling of
  * filterBaseAttributableFailures scoped to the case where verify's failing
  * command produced a per-test report. Failing tests come from the run-outcome
- * accessor (getRunTestOutcomes) for `runId`, so a replayed verify run whose
+ * accessor (getRunTestOutcomes) for `runId` — the persisted verify lane run
+ * whose outcome the gate read — so a replayed verify run whose
  * structured_result was already cleared still yields the same failing set as
- * the fresh run; `fallbackStructuredResult` is only for the direct
+ * the fresh run, and every excluded test is marked excused (breadth_corpus /
+ * flaky_rollup) on that run's test_run_results rows.
+ * `fallbackStructuredResult` is only for the direct
  * (non-lane) runVerifyAsGate path that has no persisted run row. With no
  * session/PR identity to derive a "first run" cutoff from, the corpus is
  * evaluated as of now.
@@ -263,6 +266,7 @@ export async function filterVerifyFailureByBaseHealth(
     project,
     sessionFailing,
     resolveBreadthOwnTree(project.id, subject),
+    runId ?? null,
   );
 }
 
