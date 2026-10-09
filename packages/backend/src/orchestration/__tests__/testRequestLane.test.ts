@@ -57,7 +57,8 @@ vi.mock('../../session/orchestrator-config', () => ({
 // oldest still-queued row's hash (the semaphore is FIFO, so that row is the
 // one about to execute). Individual tests override via mockResolvedValueOnce.
 vi.mock('../../session/analyzeGating', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../session/analyzeGating')>();
+  const actual =
+    await importOriginal<typeof import('../../session/analyzeGating')>();
   const { db: testDb } = await import('../../db/db');
   // Rows stay 'queued' until markTestRequestRunRunning, so concurrent
   // executions must not both resolve to the same oldest row.
