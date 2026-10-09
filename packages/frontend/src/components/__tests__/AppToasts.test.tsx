@@ -75,6 +75,7 @@ function baseStoreReturn(sessions: object[] = []) {
     lastPrMergeabilityChangedEvent: null,
     lastReviewEscalation: null,
     lastReviewFailed: null,
+    lastDeployNeedsAttention: null,
     lastStuckNotification: null,
     lastStuckPaused: null,
     lastStuckKilled: null,

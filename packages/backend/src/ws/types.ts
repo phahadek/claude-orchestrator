@@ -351,6 +351,14 @@ export type ServerMessage =
       message: string;
     }
   | {
+      type: 'deploy_needs_attention';
+      runKind: 'deploy' | 'wrap';
+      runId: string;
+      project: string;
+      stepId: string;
+      reason: string;
+    }
+  | {
       type: 'stuck_session_notified';
       sessionId: string;
       taskName: string;

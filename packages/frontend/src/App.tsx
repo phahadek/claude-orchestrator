@@ -204,6 +204,7 @@ export default function App() {
     lastPrMergeabilityChangedEvent,
     lastReviewEscalation,
     lastReviewFailed,
+    lastDeployNeedsAttention,
     lastStuckNotification,
     lastStuckPaused,
     lastStuckKilled,
@@ -920,6 +921,22 @@ export default function App() {
     ]);
     setTimeout(() => dismissNotification(notifId), 10000);
   }, [lastReviewFailed, dismissNotification]);
+
+  useEffect(() => {
+    if (!lastDeployNeedsAttention) return;
+    const { runKind, runId, project, stepId, reason, receivedAt } =
+      lastDeployNeedsAttention;
+    const notifId = `deploy-attention-${runId}-${receivedAt}`;
+    setNotifications((prev) => [
+      ...prev,
+      {
+        id: notifId,
+        message: `${runKind} run for ${project} needs attention at step "${stepId}": ${reason}`,
+        status: 'review',
+      },
+    ]);
+    setTimeout(() => dismissNotification(notifId), 15000);
+  }, [lastDeployNeedsAttention, dismissNotification]);
 
   useEffect(() => {
     if (!lastStuckNotification) return;

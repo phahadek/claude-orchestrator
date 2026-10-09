@@ -125,6 +125,7 @@ import {
   createWrapRouter,
   setDeployScheduler,
   setDeploySessionManager,
+  setDeployBroadcast,
   resumeActiveDeployRuns,
   resumeActiveWrapRuns,
 } from './routes/deploy';
@@ -458,6 +459,8 @@ setSessionManager(sessionManager);
 setPRBroadcast(broadcast);
 // Wire broadcast into the tasks route (for task_updated WS messages)
 setTaskBroadcast(broadcast);
+// Wire broadcast into deploy/wrap runs (for deploy_needs_attention toasts)
+setDeployBroadcast(broadcast);
 // Wire broadcast into enrollment (for enrollment_request events)
 setEnrollmentBroadcast(broadcast);
 // Wire broadcast into the staged-intents route (for staged_intent_changed WS messages)
