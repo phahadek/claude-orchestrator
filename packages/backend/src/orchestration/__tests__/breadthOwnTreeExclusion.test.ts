@@ -256,6 +256,41 @@ describe('breadth corpus own-tree exclusion', () => {
     expect(flag.distinctContentHashCount).toBe(0);
   });
 
+  it('counts several runs of one other session (distinct hashes, shared session_id or shared pr_gate worktree) as one origin', () => {
+    addSession({ id: 'O', taskId: 'task-o', worktree: '/wt/O' });
+    addFailingRun({ sessionId: 'O', worktree: '/wt/O', startedAt: NOW - 30 * MIN });
+    addFailingRun({ sessionId: 'O', worktree: '/wt/O', startedAt: NOW - 20 * MIN });
+    addFailingRun({ sessionId: null, worktree: '/wt/O', startedAt: NOW - 10 * MIN });
+    const flag = breadth({ sessionIds: [], worktreePaths: [] });
+    expect(flag.distinctContentHashCount).toBe(1);
+    expect(flag.flagged).toBe(false);
+  });
+
+  it('excludes the own pr_gate run and own test_request runs as the same origin', () => {
+    addSession({ id: 'S', taskId: 'task-s', worktree: '/wt/S' });
+    addFailingRun({ sessionId: 'S', worktree: '/wt/S', startedAt: NOW - 30 * MIN });
+    addFailingRun({ sessionId: null, worktree: '/wt/S', startedAt: NOW - 20 * MIN });
+    // Same origin even when only the session id is given as the own tree.
+    const flag = breadth({ sessionIds: ['S'], worktreePaths: [] });
+    expect(flag.distinctContentHashCount).toBe(0);
+  });
+
+  it('keys a session-less row with no resolvable session per tree', () => {
+    addFailingRun({ sessionId: null, worktree: '/wt/gone-1', startedAt: NOW - 30 * MIN });
+    addFailingRun({ sessionId: null, worktree: '/wt/gone-2', startedAt: NOW - 20 * MIN });
+    const flag = breadth({ sessionIds: [], worktreePaths: [] });
+    expect(flag.distinctContentHashCount).toBe(2);
+  });
+
+  it('falls back to the per-tree origin when a worktree path is shared by several sessions', () => {
+    addSession({ id: 'A', taskId: 'task-a', worktree: '/wt/shared' });
+    addSession({ id: 'B', taskId: 'task-b', worktree: '/wt/shared' });
+    addFailingRun({ sessionId: null, worktree: '/wt/shared', startedAt: NOW - 30 * MIN });
+    addFailingRun({ sessionId: null, worktree: '/wt/shared', startedAt: NOW - 20 * MIN });
+    const flag = breadth({ sessionIds: [], worktreePaths: [] });
+    expect(flag.distinctContentHashCount).toBe(2);
+  });
+
   it('requires ownTree — omitting it is a type error', () => {
     expect(() =>
       // @ts-expect-error ownTree is required

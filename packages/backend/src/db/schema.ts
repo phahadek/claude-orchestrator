@@ -3576,6 +3576,29 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
+  // breadth_origin: the distinct-origin evidence unit the breadth corpus
+  // counts (see db/queries.ts's computeTestFailureBreadthFlag) — stamped at
+  // insert as 'session:<id>' (session_id present, else the single session
+  // owning worktree_path), falling back to 'tree:<content_hash>' for
+  // session-less rows with no unambiguous owning session.
+  try {
+    target.exec(`ALTER TABLE test_request_runs ADD COLUMN breadth_origin TEXT`);
+  } catch {
+    /* already exists */
+  }
+  target.exec(`
+    UPDATE test_request_runs SET breadth_origin = CASE
+      WHEN session_id IS NOT NULL THEN 'session:' || session_id
+      ELSE COALESCE(
+        (SELECT 'session:' || MIN(s.session_id) FROM sessions s
+           WHERE s.project_id = test_request_runs.project_id
+             AND s.worktree_path = test_request_runs.worktree_path
+           HAVING COUNT(*) = 1),
+        'tree:' || content_hash)
+    END
+    WHERE breadth_origin IS NULL
+  `);
+
   // parked_at: the occupancy marker for a session left idle and resumable
   // by a machine path whose process was reclaimed or died without a
   // result — replaces archiveSession(id, 'machine_park') for that case (see

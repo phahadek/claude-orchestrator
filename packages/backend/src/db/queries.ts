@@ -9424,8 +9424,8 @@ export function insertTestRequestRun(
   commands?: string[] | null,
 ): void {
   db.prepare(
-    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, concurrent_run_count, run_origin, producer, run_kind, base_sha, worktree_path, commands)
-     VALUES (?, ?, ?, ?, ?, '', ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, concurrent_run_count, run_origin, producer, run_kind, base_sha, worktree_path, commands, breadth_origin)
+     VALUES (?, ?, ?, ?, ?, '', ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     projectId,
@@ -9444,7 +9444,33 @@ export function insertTestRequestRun(
     baseSha ?? null,
     worktreePath ?? null,
     commands ? JSON.stringify(commands) : null,
+    resolveRunBreadthOrigin(projectId, contentHash, sessionId, worktreePath),
   );
+}
+
+/**
+ * The origin a test_request_runs row is stamped with: its session when it
+ * has one; else the single session owning its worktree_path (PR-gate rows
+ * carry only the worktree); else one origin per content_hash. A worktree
+ * path shared by several sessions is ambiguous and falls back to the
+ * per-tree origin rather than guessing.
+ */
+export function resolveRunBreadthOrigin(
+  projectId: string,
+  contentHash: string,
+  sessionId: string | null | undefined,
+  worktreePath: string | null | undefined,
+): string {
+  if (sessionId) return `session:${sessionId}`;
+  if (worktreePath) {
+    const owners = db
+      .prepare(
+        `SELECT session_id FROM sessions WHERE project_id = ? AND worktree_path = ? LIMIT 2`,
+      )
+      .all(projectId, worktreePath) as { session_id: string }[];
+    if (owners.length === 1) return `session:${owners[0].session_id}`;
+  }
+  return `tree:${contentHash}`;
 }
 
 /**
@@ -9478,8 +9504,8 @@ export function insertCoverageTestRequestRun(
     `INSERT INTO test_request_runs (
        id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at,
        failure_reason, structured_result, oom_killed, test_report_acquisition_attempted,
-       run_origin, producer, run_kind, base_sha, worktree_path, failed_command, commands, coverage_source_run_id
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       run_origin, producer, run_kind, base_sha, worktree_path, failed_command, commands, coverage_source_run_id, breadth_origin
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     newId,
     projectId,
@@ -9502,6 +9528,7 @@ export function insertCoverageTestRequestRun(
     source.failed_command,
     JSON.stringify(requestedCommands),
     source.id,
+    resolveRunBreadthOrigin(projectId, contentHash, sessionId, worktreePath),
   );
 }
 
@@ -11265,9 +11292,9 @@ export function resolveBreadthOwnTree(
 }
 
 /**
- * The breadth-of-trees masking signal, supplementing computeTestFlipRateFlag:
- * counts the distinct test_request_runs.content_hash values a test failed
- * under within [asOfMs - windowHours, asOfMs), excluding the subject's own
+ * The breadth-of-origins masking signal, supplementing computeTestFlipRateFlag:
+ * counts the distinct test_request_runs.breadth_origin values (owning
+ * session, else per-tree content hash) a test failed under within [asOfMs - windowHours, asOfMs), excluding the subject's own
  * tree by identity (`ownTree`: runs by its sessions or in its worktrees), so
  * a PR's/session's own re-runs can't inflate this signal while evidence from
  * other trees that arrives later is still seen. Runs with no worktree_path
@@ -11289,7 +11316,14 @@ export function computeTestFailureBreadthFlag(
     own_sessions: string;
     own_worktrees: string;
   }>(`
-    SELECT COUNT(DISTINCT r.content_hash) AS distinct_hashes
+    SELECT COUNT(DISTINCT COALESCE(r.breadth_origin, CASE
+        WHEN r.session_id IS NOT NULL THEN 'session:' || r.session_id
+        ELSE COALESCE(
+          (SELECT 'session:' || MIN(s.session_id) FROM sessions s
+             WHERE s.project_id = r.project_id AND s.worktree_path = r.worktree_path
+             HAVING COUNT(*) = 1),
+          'tree:' || r.content_hash)
+      END)) AS distinct_hashes
     FROM test_run_results t
     JOIN test_request_runs r ON r.id = t.test_request_run_id
     WHERE t.test_id = @test_id
@@ -11300,6 +11334,8 @@ export function computeTestFailureBreadthFlag(
       AND r.worktree_path NOT IN (SELECT value FROM json_each(@own_worktrees))
       AND (r.session_id IS NULL
            OR r.session_id NOT IN (SELECT value FROM json_each(@own_sessions)))
+      AND (r.breadth_origin IS NULL
+           OR r.breadth_origin NOT IN (SELECT 'session:' || value FROM json_each(@own_sessions)))
   `);
   const sinceMs = asOfMs - windowHours * 60 * 60 * 1000;
   const row = _stmtTestFailureBreadth.get({
