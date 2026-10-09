@@ -35,11 +35,16 @@ import {
   insertSession,
   insertStagedIntent,
   getSession,
+  transitionStagedIntent,
+  getStagedIntent,
+  hasOpenGroomGroupForTask,
 } from '../../db/queries';
+import { normalizeTaskId } from '../../tasks/taskId';
 import {
   createStagedIntentsRouter,
   stageIntent,
   withdrawIntent,
+  withdrawGateVerifyMirror,
   IntentWithdrawError,
 } from '../stagedIntents';
 import { PlanningOrchestrator } from '../../orchestration/PlanningOrchestrator';
@@ -110,6 +115,98 @@ describe('withdrawIntent', () => {
 
     expect(withdrawn.state).toBe('withdrawn');
     expect(withdrawn.dispositionReason).toBe('staged against the wrong field');
+  });
+
+  it('lets the owning session withdraw a needs_revision intent, but not another session', () => {
+    seedSession('sess-1');
+    seedSession('sess-2', 'task-2');
+    const intent = stageIntent(
+      'task.setProperties',
+      { taskId: 'task-1', patch: { priority: 'High' } },
+      'proj-1',
+      null,
+      'sess-1',
+    );
+    transitionStagedIntent(intent.id, 'needs_revision');
+
+    expect(() => withdrawIntent(intent.id, 'not mine', 'sess-2')).toThrow(
+      IntentWithdrawError,
+    );
+    const withdrawn = withdrawIntent(intent.id, 'no decision now', 'sess-1');
+    expect(withdrawn.state).toBe('withdrawn');
+    expect(withdrawn.dispositionReason).toBe('no decision now');
+  });
+
+  it('still rejects withdrawing a pending_verification, rejected, committed or superseded intent', () => {
+    seedSession('sess-1');
+    for (const state of [
+      'pending_verification',
+      'rejected',
+      'committed',
+      'superseded',
+    ] as const) {
+      const intent = stageIntent(
+        'task.setProperties',
+        { taskId: 'task-1', patch: { priority: state } },
+        'proj-1',
+        null,
+        'sess-1',
+      );
+      db.prepare('UPDATE staged_intent SET state = ? WHERE id = ?').run(
+        state,
+        intent.id,
+      );
+      expect(() => withdrawIntent(intent.id, 'nope', 'sess-1')).toThrow(
+        IntentWithdrawError,
+      );
+    }
+  });
+
+  it('withdrawGateVerifyMirror is a no-op for a needs_revision row', () => {
+    seedSession('sess-1');
+    const intent = stageIntent(
+      'task.setProperties',
+      { taskId: 'task-1', patch: { priority: 'High' } },
+      'proj-1',
+      null,
+      'sess-1',
+    );
+    transitionStagedIntent(intent.id, 'needs_revision');
+    withdrawGateVerifyMirror(intent.id, 'reconciler retire');
+    expect(getStagedIntent(intent.id)?.state).toBe('needs_revision');
+  });
+
+  it('a fully withdrawn all-needs_revision groom group stops counting as an open groom group', () => {
+    seedSession('sess-1');
+    const taskId = normalizeTaskId('task-1');
+    const ids = ['grp-a', 'grp-b'].map((id, i) => {
+      const now = Date.now();
+      insertStagedIntent({
+        id,
+        kind: i === 0 ? 'task.setStatus' : 'task.updateBody',
+        payload: JSON.stringify({ taskId }),
+        payload_hash: `hash-${id}`,
+        task_id: taskId,
+        project_id: 'proj-1',
+        session_id: 'sess-1',
+        group_id: 'g-withdraw',
+        milestone: null,
+        state: 'needs_revision',
+        supersedes: null,
+        annotation: null,
+        decision_proposal: null,
+        groom_proposal: null,
+        advisory: null,
+        disposition_reason: null,
+        answer: null,
+        created_at: now,
+        updated_at: now,
+      });
+      return id;
+    });
+    expect(hasOpenGroomGroupForTask(taskId)).toBe(true);
+    for (const id of ids) withdrawIntent(id, 'not Ready now', 'sess-1');
+    expect(hasOpenGroomGroupForTask(taskId)).toBe(false);
   });
 
   it('rejects withdrawing an intent staged by a different session', () => {

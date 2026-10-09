@@ -113,6 +113,30 @@ describe('PlanningOrchestrator.checkTerminal — resumable blocked-members nudge
     expect(getTaskPauseReason(TASK_ID)).toBeNull();
   });
 
+  it('the nudge names both supersede and withdraw-group-then-noOp', () => {
+    seedSession();
+    stageIntent({ state: 'needs_revision' });
+    const sessionManager = makeSessionManager();
+    new PlanningOrchestrator(sessionManager).checkTerminal(SESSION_ID);
+    const message = sessionManager.enqueueFeedback.mock.calls[0][2] as string;
+    expect(message).toContain('supersede');
+    expect(message).toContain('withdraw the whole group');
+    expect(message).toContain('planning.noOp');
+  });
+
+  it('sends no blocked-members nudge once every blocked member is withdrawn', () => {
+    seedSession();
+    const a = stageIntent({ state: 'withdrawn' });
+    const b = stageIntent({ state: 'withdrawn' });
+    const sessionManager = makeSessionManager();
+    new PlanningOrchestrator(sessionManager).checkTerminal(SESSION_ID);
+    for (const call of sessionManager.enqueueFeedback.mock.calls) {
+      expect(call[2]).not.toContain(a.id);
+      expect(call[2]).not.toContain(b.id);
+      expect(call[2]).not.toContain('needs_revision/pending_verification');
+    }
+  });
+
   it('re-engages a session ending its turn with a pending_verification intent, naming the blocked id', () => {
     seedSession();
     const intent = stageIntent({ state: 'pending_verification' });

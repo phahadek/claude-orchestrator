@@ -353,8 +353,16 @@ describe('procedureCore', () => {
       const rendered = renderPrinciple(principle!, skill);
       expect(rendered).toMatch(/needs_revision/);
       expect(rendered).toContain('supersedes');
-      expect(rendered).toMatch(/DO NOT withdraw/);
+      expect(rendered).toMatch(/path \(b\)/i);
+      expect(rendered).toMatch(/withdraw the whole group/);
+      expect(rendered).toContain('planning.noOp');
+      expect(rendered).not.toContain(
+        'withdrawing it would only strand its group',
+      );
     }
+    expect(renderHardRulesMarkdown()).not.toContain(
+      'withdrawing it would only strand its group',
+    );
   });
 
   it("teaches supersede-on-stage-time-block's scope limit: only the blocked intent, never its unblocked group siblings — both in CORE_PRINCIPLES and in the assembled hard-rules.md markdown", () => {
@@ -387,13 +395,13 @@ describe('procedureCore', () => {
     // The self-caught directive now points at the needs_revision case instead
     // of silently overlapping with it — both directives must agree on which
     // path governs a needs_revision intent.
-    expect(rendered).toMatch(/needs_revision case below/);
+    expect(rendered).toMatch(/needs_revision rule below/);
 
     const supersede = CORE_PRINCIPLES.find(
       (p) => p.id === 'supersede-on-stage-time-block',
     )!;
     const supersedeRendered = renderPrinciple(supersede, 'groom');
-    expect(supersedeRendered).toMatch(/self-caught-mistake path/);
+    expect(supersedeRendered).toMatch(/withdraw the whole group/);
   });
 
   it('states the ops capability-request path as a concrete imperative directive, not just the grant model', () => {
