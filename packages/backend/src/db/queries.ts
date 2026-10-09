@@ -3125,6 +3125,61 @@ export function updateTaskStatusInBoardCaches(
   }
 }
 
+/**
+ * Write-through for a dependsOn change: patches `dependsOn` of the given task
+ * inside every cached `board:*` blob containing it, so a graph walk over board
+ * rows (resolveProjectDepStatus) sees an edge committed moments ago without
+ * waiting for a board refresh. Same best-effort, zero-Notion-call contract as
+ * updateTaskStatusInBoardCaches.
+ */
+export function updateTaskDependsOnInBoardCaches(
+  taskId: string,
+  dependsOn: string[],
+): void {
+  const normalized = normalizeTaskId(taskId);
+  let rows: Array<{ task_id: string; fetched_at: number; raw_json: string }>;
+  try {
+    rows = getStmtGetBoardCacheRows().all() as Array<{
+      task_id: string;
+      fetched_at: number;
+      raw_json: string;
+    }>;
+  } catch {
+    return;
+  }
+  for (const row of rows) {
+    let tasks: unknown;
+    try {
+      tasks = JSON.parse(row.raw_json);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(tasks)) continue;
+    let changed = false;
+    for (const entry of tasks) {
+      if (
+        entry &&
+        typeof entry === 'object' &&
+        typeof (entry as { id?: unknown }).id === 'string' &&
+        normalizeTaskId((entry as { id: string }).id) === normalized
+      ) {
+        (entry as { dependsOn: string[] }).dependsOn = [...dependsOn];
+        changed = true;
+      }
+    }
+    if (!changed) continue;
+    try {
+      getStmtUpsertTaskCache().run({
+        task_id: row.task_id,
+        fetched_at: row.fetched_at,
+        raw_json: JSON.stringify(tasks),
+      });
+    } catch {
+      // Non-fatal: leave the row as-is rather than failing the write.
+    }
+  }
+}
+
 let _stmtRecordTaskStatusWrite: Database.Statement | null = null;
 let _stmtGetTaskStatusWrite: Database.Statement | null = null;
 

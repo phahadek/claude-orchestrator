@@ -25,7 +25,17 @@ vi.mock('../db/db', async () => {
 
 import { db } from '../db/db';
 import { createStagedIntentsRouter } from '../routes/stagedIntents';
-import { upsertTaskCache, insertProject, insertMilestone } from '../db/queries';
+import {
+  upsertTaskCache,
+  insertProject,
+  insertMilestone,
+  updateTaskDependsOnInBoardCaches,
+} from '../db/queries';
+import { resolveProjectDepStatus } from '../orchestration/DispatchTriggerEvaluator';
+import {
+  assertNoDependencyCycle,
+  DependencyCycleError,
+} from '../tasks/taskReferenceValidation';
 import type { NotionTask } from '../notion/types';
 
 const KNOWN_TASK_IDS = new Set([
@@ -592,6 +602,172 @@ describe('dependency cycle validation', () => {
         groupId: 'group-net',
       });
       expect(res.status).toBe(201);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+});
+
+describe('commit-time dependency cycle re-check', () => {
+  /** Backend whose setDependsOn writes through to the board cache, like NotionTaskBackend. */
+  function useWriteThroughBackend() {
+    const backend = makeBackend();
+    backend.setDependsOn = vi.fn(async (taskId: string, deps: string[]) => {
+      updateTaskDependsOnInBoardCaches(taskId, deps);
+    });
+    mockGetTaskBackend.mockReturnValue(backend);
+    return backend;
+  }
+
+  async function stageDep(
+    projectId: string,
+    groupId: string,
+    taskId: string,
+    dep: string,
+  ) {
+    const res = await stagePost(app(), {
+      kind: 'task.setDependsOn',
+      payload: { taskId, dependsOn: [dep] },
+      projectId,
+      groupId,
+    });
+    expect(res.status).toBe(201);
+    return res.body.id as string;
+  }
+
+  async function commitGroup(groupId: string) {
+    const rows = db
+      .prepare(
+        "SELECT id FROM staged_intent WHERE group_id = ? AND state = 'staged'",
+      )
+      .all(groupId) as Array<{ id: string }>;
+    for (const r of rows) {
+      await supertest(app())
+        .post(`/api/staged-intents/${r.id}/approve`)
+        .send({});
+    }
+    return supertest(app())
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+  }
+
+  it('commits A->B, then rejects the concurrently-staged B->A naming both ids, leaving it uncommitted', async () => {
+    seedBoard('proj-commit', 'm-commit', [
+      boardTask('cyc-a'),
+      boardTask('cyc-b'),
+    ]);
+    const backend = useWriteThroughBackend();
+    const first = await stageDep(
+      'proj-commit',
+      'g-1',
+      'notion:cyc-a',
+      'notion:cyc-b',
+    );
+    const second = await stageDep(
+      'proj-commit',
+      'g-2',
+      'notion:cyc-b',
+      'notion:cyc-a',
+    );
+
+    const r1 = await commitGroup('g-1');
+    expect(r1.status).toBeLessThan(300);
+    expect(backend.setDependsOn).toHaveBeenCalledTimes(1);
+
+    const r2 = await commitGroup('g-2');
+    expect(r2.status).toBeGreaterThanOrEqual(400);
+    expect(JSON.stringify(r2.body)).toContain('notion:cyc-a');
+    expect(JSON.stringify(r2.body)).toContain('notion:cyc-b');
+    expect(backend.setDependsOn).toHaveBeenCalledTimes(1);
+    const row = db
+      .prepare('SELECT state FROM staged_intent WHERE id = ?')
+      .get(second) as { state: string };
+    expect(row.state).not.toBe('committed');
+    const firstRow = db
+      .prepare('SELECT state FROM staged_intent WHERE id = ?')
+      .get(first) as { state: string };
+    expect(firstRow.state).toBe('committed');
+  });
+
+  it('a committed setDependsOn edge is visible to the board-level cache view immediately', () => {
+    seedBoard('proj-vis', 'm-vis', [boardTask('cyc-a'), boardTask('cyc-b')]);
+    updateTaskDependsOnInBoardCaches('notion:cyc-a', ['notion:cyc-b']);
+
+    const resolved = resolveProjectDepStatus('proj-vis', 'notion:cyc-a');
+    expect(resolved.status).toBe('found');
+    if (resolved.status === 'found') {
+      expect(resolved.task.dependsOn).toEqual(['notion:cyc-b']);
+    }
+    expect(() =>
+      assertNoDependencyCycle('proj-vis', 'notion:cyc-b', ['notion:cyc-a']),
+    ).toThrow(DependencyCycleError);
+  });
+
+  it('a task.create whose dependsOn reaches a cycle committed after staging is rejected at commit', async () => {
+    seedBoard('proj-create', 'm-create', [
+      boardTask('cyc-x'),
+      boardTask('cyc-y', ['cyc-x']),
+    ]);
+    const backend = useWriteThroughBackend();
+    const createRes = await stagePost(app(), {
+      kind: 'task.create',
+      payload: { title: 'New', dependsOn: ['notion:cyc-x'] },
+      projectId: 'proj-create',
+      groupId: 'g-create',
+    });
+    expect(createRes.status).toBe(201);
+    // Edge committed after staging closes x -> y -> x.
+    updateTaskDependsOnInBoardCaches('notion:cyc-x', ['notion:cyc-y']);
+    const createTask = vi.fn();
+    (backend as unknown as { createTask: unknown }).createTask = createTask;
+
+    const res = await commitGroup('g-create');
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(JSON.stringify(res.body)).toContain('notion:cyc-x');
+    expect(createTask).not.toHaveBeenCalled();
+  });
+
+  it('accepts a legitimate acyclic cross-board chain at commit', async () => {
+    seedBoard('proj-ok', 'm-ok-1', [
+      boardTask('cyc-a'),
+      boardTask('cyc-b', ['cyc-c']),
+    ]);
+    insertMilestone({
+      id: 'm-ok-2',
+      project_id: 'proj-ok',
+      name: 'm-ok-2',
+      source_id: null,
+      canonical_short_id: null,
+      wrapped_at: null,
+    });
+    upsertTaskCache('board:m-ok-2', JSON.stringify([boardTask('cyc-c')]));
+    const backend = useWriteThroughBackend();
+    await stageDep('proj-ok', 'g-ok', 'notion:cyc-a', 'notion:cyc-b');
+
+    const res = await commitGroup('g-ok');
+    expect(res.status).toBeLessThan(300);
+    expect(backend.setDependsOn).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails open on an uncached board and issues zero network calls at commit', async () => {
+    seedBoard('proj-open', 'm-open', [boardTask('cyc-a', ['cyc-mid'])]);
+    insertMilestone({
+      id: 'm-open-cold',
+      project_id: 'proj-open',
+      name: 'm-open-cold',
+      source_id: null,
+      canonical_short_id: null,
+      wrapped_at: null,
+    });
+    const backend = useWriteThroughBackend();
+    await stageDep('proj-open', 'g-open', 'notion:cyc-b', 'notion:cyc-a');
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    try {
+      const res = await commitGroup('g-open');
+      expect(res.status).toBeLessThan(300);
+      expect(backend.setDependsOn).toHaveBeenCalledTimes(1);
       expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
       fetchSpy.mockRestore();
