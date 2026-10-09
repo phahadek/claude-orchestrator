@@ -580,6 +580,12 @@ that actuation here.
    reporting the service healthy, and only the run record (7 runs in 20h, a Postgres-restart wedge)
    showed the true cause.
 
+   **Spot-verify delegated first-pass reports.** When the first-pass is delegated to subagents,
+   every load-bearing claim in a returned report (counts, `file:line`, "absent / not wired",
+   "fresh") is re-checked **by value by the parent** before it is journaled or presented. Subagents
+   have cited non-existent files and columns, concluded "no unbind path" when the deployed code had
+   one, and reported row counts off by ~80× and a stale meta as "fresh".
+
    > **GATE — do not start step 5 (resolving) until step 3 has advanced _every_ journal entry off
    > `pending`.** The ops-context load seeds one `ops_journal` row per eligible task at `pending`;
    > the first-pass must move each to a worked state (`candidate` / `staged-proposal` /
@@ -647,6 +653,13 @@ Step 5 is where this skill is most often mishandled. Codified:
   it is blocked, then stop** — do **not** enumerate resolution options ("add a permission rule vs.
   run it yourself"). Surfacing the block is required; turning it into an option list is the same menu
   anti-pattern above and offloads a call that is the operator's to make however they choose.
+
+- **Background watches must not flood the operator.** A Monitor / background watch emits only on a
+  **state change or terminal state** — never a per-interval heartbeat or "still waiting" line.
+- **Check a task's current Status immediately before writing to it.** Before any write to an
+  existing task page, fetch its current Status in the same turn; never rely on the status seen when
+  it was filed or loaded (it may have reached ✅ Done in between — a filed task is read-only once
+  past Backlog).
 
 ## Status handling
 

@@ -10,6 +10,7 @@ vi.mock('../ops/opsLoad.js', () => ({
   loadOpsContext: mockLoadOpsContext,
 }));
 
+import { UnknownMilestoneError } from '../projects/milestoneResolver.js';
 import { createOpsContextRouter } from '../routes/opsContext.js';
 
 function makeApp() {
@@ -55,6 +56,17 @@ describe('GET /api/ops-context', () => {
     expect(res.status).toBe(200);
     expect(mockLoadOpsContext).toHaveBeenCalledWith('m1', { project: 'p1' });
     expect(res.body).toEqual(bundle);
+  });
+
+  it('maps UnknownMilestoneError to a 404 with its message', async () => {
+    const message =
+      '"M99" is not a known milestone for project "p1" — expected one of: M1, M2';
+    mockLoadOpsContext.mockRejectedValue(new UnknownMilestoneError(message));
+    const res = await request(makeApp()).get(
+      '/api/ops-context?milestone=M99&project=p1',
+    );
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe(message);
   });
 
   it('returns 500 when the loader throws', async () => {

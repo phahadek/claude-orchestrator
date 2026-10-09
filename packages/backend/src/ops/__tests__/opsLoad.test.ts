@@ -50,6 +50,7 @@ import {
 import { loadOpsContext } from '../opsLoad.js';
 import { getEntry } from '../opsJournal.js';
 import { createUnit } from '../../architecture/ArchUnitStore.js';
+import { UnknownMilestoneError } from '../../projects/milestoneResolver.js';
 import { GroomTaskSourceUnsupportedError } from '../../planning/errors.js';
 
 const TARGET_BOARD = 'target-board-id';
@@ -362,6 +363,39 @@ describe('loadOpsContext — classification', () => {
       'Findings',
       'Retrospective',
     ]);
+  });
+});
+
+describe('loadOpsContext — milestone name resolution', () => {
+  it('resolves a canonical name with a project to the same milestone as its UUID', async () => {
+    rows = [
+      {
+        id: 'task-op-ready',
+        name: 'Op ready',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+      },
+    ];
+    const byId = await loadOpsContext(MILESTONE, { project: PROJECT });
+    const byName = await loadOpsContext('M1', { project: PROJECT });
+    expect(byName.worklist.executable.map((t) => t.id)).toEqual(
+      byId.worklist.executable.map((t) => t.id),
+    );
+    expect(byName.boards.target.milestone).toBe(MILESTONE);
+  });
+
+  it('throws UnknownMilestoneError naming known milestones for an unknown name with a project', async () => {
+    const err = await loadOpsContext('M99', { project: PROJECT }).catch(
+      (e) => e,
+    );
+    expect(err).toBeInstanceOf(UnknownMilestoneError);
+    expect((err as Error).message).toContain('M1');
+  });
+
+  it('still fails on a non-UUID name without a project', async () => {
+    await expect(loadOpsContext('M1')).rejects.toThrow(
+      'ops-load: unknown milestone M1',
+    );
   });
 });
 
