@@ -502,7 +502,8 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
   },
   {
     id: 'supersede-on-stage-time-block',
-    title: 'Resolve a needs_revision intent: supersede it, or withdraw the whole group',
+    title:
+      'Resolve a needs_revision intent: supersede it, or withdraw the whole group',
     appliesTo: ['groom', 'design', 'ops', 'split', 'docs'],
     text:
       'DO, when a staged intent fails stage-time validation and comes back to you as ' +
