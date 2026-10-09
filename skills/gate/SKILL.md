@@ -174,6 +174,19 @@ The six disciplines below are how that rule is kept:
 >   disposition). It means: after filing, say so and **re-read the task's state** before reporting,
 >   since it may no longer be sitting inert at Backlog by the time you report.
 
+> ⚠️ **A gate session never carries out 🔧 Operational task scope** (this bit the Polimarket M17
+> gate: reconcile/recompute commands that were the listed steps of a Backlog Operational task
+> were run out of order, and the task's capture requirement became unmeetable):
+> - **Before staging any prod mutation for a gate item, search the milestone board for a task
+>   whose scope owns that mutation.** If one exists, the step belongs to that task (`/ops`); the
+>   gate item's disposition is `needs-setup` naming that task.
+> - **An operator remark that rejects an option** (e.g. "don't leave bad data") **is not
+>   authorization to run the alternative.** Prod-mutating commands need the operator to name
+>   the action.
+> - **If a step owned by another task was run anyway,** record exactly what ran (command ids,
+>   counts, timestamps, what was not captured) in *that task's* Implementation notes. The gate
+>   event log alone is not enough.
+
 > **Expect to hand off the final mutating step — that is the stable shape of an RC gate session, not
 > a failure.** The harness reliably permits the entire analysis path and blocks the last
 > state-changing action: a systemd write, a wrapped-marker `POST`, and a `group-commit` were all
@@ -264,6 +277,9 @@ For every item in the pulled batch:
        bounded and reversible. Reserve **`Prod-Mutating`** for a flip of **real**
        state (a real task's status, a real config row). This removes the recurring
        hesitation on staging checks that only ever touch scratch objects.
+   - **Before staging any prod mutation, check for an owning task** (see the
+     Operational-scope constraint in Core doctrine): if a 🔧 Operational task on the
+     milestone board owns it, do not run it — disposition `needs-setup` naming that task.
    - **Prod-Mutating** — do **not** self-grant a pass. These are
      non-mechanical: surface the exact action to the human, get their
      explicit go-ahead before performing anything that mutates production,
@@ -336,6 +352,12 @@ For every item in the pulled batch:
      pre-file veto). Leave the gate item itself unresolved: it's pending the fix, re-verified
      after that fix deploys. "Record `fail`" is not a resolution, and a `fail` state correctly
      does not clear the rollup.
+   - **A follow-up is offered only with its root cause and justification.** Before proposing
+     the follow-on (or any other follow-up), have the three root-cause locks from
+     `config/task-writing.md` § Root cause — the branch, the input that takes it, the fix that
+     follows — plus a measured reason it matters. If the finding is unmeasured or unlocated,
+     investigate it in-session first; never offer it as "file an Investigation." Withdraw a
+     proposal explicitly when the evidence doesn't hold (see Reporting discipline).
    - **A mis-accreted / orphaned item → `discarded` (with evidence), never `deferred`.**
      Deferred means punted-to-a-later-milestone; a void item that should never have existed
      is `discarded` — terminal and non-blocking, but audited.
@@ -438,6 +460,12 @@ For a gate, *how* you report is part of the deliverable:
   🔲 Backlog. *(But see the armed-milestone note above — "left at Backlog" is not the same as
   "inert," so re-read its state before reporting; it is not a reason to have hesitated before
   filing it.)*
+- **Offer a follow-up only with its root cause and a measured justification.** A proposed
+  follow-up carries the three root-cause locks from `config/task-writing.md` § Root cause
+  (the branch, the input that takes it, the fix that follows) plus a *measured* reason it
+  matters. An unmeasured or unlocated finding is investigated in-session before it is
+  reported — never offered as "file an Investigation," and never handed back as a task. When
+  the evidence doesn't hold, withdraw the proposal explicitly.
 - **Never claim a sweep is complete without re-pulling it, and never do arithmetic in prose.** Two
   overclaims in one run: a tier sweep (the then-live `Opportunistic` tier, since retired) was
   reported finished while `ca637934` sat untouched,
@@ -488,3 +516,8 @@ node ~/.claude/scripts/gate-state-client.mjs reclassify <gateItemId> <classifica
   pending-approval items as an "approve these" ask — resolving a
   `pending-approval` item is an operator action through the Decision Inbox,
   outside this skill's scope.
+- It does not put verification or EXPLAIN-evidence requirements into PRs, PR
+  descriptions, or prompts/specs for implementing sessions — those carry the
+  code change only. Runtime and plan verification is gate work
+  (`config/task-writing.md` § Manual Verification Gate); verify at the gate
+  after deploy.
