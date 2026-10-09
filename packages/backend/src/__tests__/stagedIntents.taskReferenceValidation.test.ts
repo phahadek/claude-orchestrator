@@ -636,7 +636,17 @@ describe('commit-time dependency cycle re-check', () => {
     return res.body.id as string;
   }
 
-  function commitGroup(groupId: string) {
+  async function commitGroup(groupId: string) {
+    const rows = db
+      .prepare(
+        "SELECT id FROM staged_intent WHERE group_id = ? AND state = 'staged'",
+      )
+      .all(groupId) as Array<{ id: string }>;
+    for (const r of rows) {
+      await supertest(app())
+        .post(`/api/staged-intents/${r.id}/approve`)
+        .send({});
+    }
     return supertest(app())
       .post(`/api/staged-intents/group/${groupId}/commit`)
       .send({});
@@ -648,8 +658,18 @@ describe('commit-time dependency cycle re-check', () => {
       boardTask('cyc-b'),
     ]);
     const backend = useWriteThroughBackend();
-    const first = await stageDep('proj-commit', 'g-1', 'notion:cyc-a', 'notion:cyc-b');
-    const second = await stageDep('proj-commit', 'g-2', 'notion:cyc-b', 'notion:cyc-a');
+    const first = await stageDep(
+      'proj-commit',
+      'g-1',
+      'notion:cyc-a',
+      'notion:cyc-b',
+    );
+    const second = await stageDep(
+      'proj-commit',
+      'g-2',
+      'notion:cyc-b',
+      'notion:cyc-a',
+    );
 
     const r1 = await commitGroup('g-1');
     expect(r1.status).toBeLessThan(300);
@@ -709,7 +729,10 @@ describe('commit-time dependency cycle re-check', () => {
   });
 
   it('accepts a legitimate acyclic cross-board chain at commit', async () => {
-    seedBoard('proj-ok', 'm-ok-1', [boardTask('cyc-a'), boardTask('cyc-b', ['cyc-c'])]);
+    seedBoard('proj-ok', 'm-ok-1', [
+      boardTask('cyc-a'),
+      boardTask('cyc-b', ['cyc-c']),
+    ]);
     insertMilestone({
       id: 'm-ok-2',
       project_id: 'proj-ok',

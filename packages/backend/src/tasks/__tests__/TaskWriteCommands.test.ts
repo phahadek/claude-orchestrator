@@ -21,6 +21,7 @@ vi.mock('../../db/queries', () => ({
   deleteTaskCacheRow: (...args: unknown[]) => mockDeleteTaskCacheRow(...args),
   getAllBoardCacheTasks: (...args: unknown[]) =>
     mockGetAllBoardCacheTasks(...args),
+  updateTaskDependsOnInBoardCaches: vi.fn(),
 }));
 
 vi.mock('../../audit/AuditLog', () => ({
