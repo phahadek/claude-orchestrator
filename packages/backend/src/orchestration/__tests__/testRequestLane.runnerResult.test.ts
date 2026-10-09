@@ -138,10 +138,10 @@ describe('executeTestRequestRun with a runner result package', () => {
         `SELECT test_id, outcome, concurrent_run_count FROM test_run_results WHERE test_request_run_id = ? ORDER BY test_id`,
       )
       .all(res.runId) as Array<Record<string, unknown>>;
-    expect(rows.map((x) => [x.test_id, x.outcome, x.concurrent_run_count])).toEqual([
-      ['t::a', 'passed', 3],
-      ['t::b', 'failed', 3],
-    ]);
+    // Only non-passing tests get per-test rows.
+    expect(
+      rows.map((x) => [x.test_id, x.outcome, x.concurrent_run_count]),
+    ).toEqual([['t::b', 'failed', 3]]);
   });
 
   it('records a null structuredResult (acquisition failed / no report) without results rows', async () => {
