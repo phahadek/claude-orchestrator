@@ -472,7 +472,7 @@ describe('isSessionComplete — session parked on its blocked members', () => {
   function stageBlocked() {
     const blocked = stageIntent(
       'task.setProperties',
-      { taskId: 'task-a', patch: { priority: 'High' } },
+      { taskId: TASK_ID, patch: { priority: 'High' } },
       PROJECT_ID,
       GROUP,
       SESSION_ID,
@@ -523,7 +523,7 @@ describe('isSessionComplete — session parked on its blocked members', () => {
     const blocked = stageBlocked();
     const other = stageIntent(
       'task.setProperties',
-      { taskId: 'task-b', patch: { priority: 'Low' } },
+      { taskId: TASK_ID, patch: { priority: 'Low' } },
       PROJECT_ID,
       GROUP,
       SESSION_ID,
