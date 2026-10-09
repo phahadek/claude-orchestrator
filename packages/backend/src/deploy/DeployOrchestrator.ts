@@ -166,10 +166,10 @@ type CompensatingConsentWaiter = (input: {
 }) => Promise<boolean>;
 
 /** Disposition recorded for a deploy-run confirm-gate that was auto-approved, never shown to an operator. */
-export const AUTO_APPROVED_DISPOSITION = 'auto_approved';
+const AUTO_APPROVED_DISPOSITION = 'auto_approved';
 
 /** Event type recording that a compensating step was declined for lack of a consent dependency; the step never ran. */
-export const ROLLBACK_DECLINED_EVENT = 'rollback_declined';
+const ROLLBACK_DECLINED_EVENT = 'rollback_declined';
 
 /** Computes the repo-relative changed paths between the deployed and target SHAs. */
 export type DiffProvider = (input: {
