@@ -59,15 +59,21 @@ vi.mock('../../session/orchestrator-config', () => ({
 vi.mock('../../session/analyzeGating', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../session/analyzeGating')>();
   const { db: testDb } = await import('../../db/db');
+  // Rows stay 'queued' until markTestRequestRunRunning, so concurrent
+  // executions must not both resolve to the same oldest row.
+  const claimed = new Set<string>();
   mockComputeHash.mockImplementation(async (worktreePath: string) => {
-    const row = testDb
+    const rows = testDb
       .prepare(
-        `SELECT content_hash FROM test_request_runs
+        `SELECT id, content_hash FROM test_request_runs
          WHERE state = 'queued' AND worktree_path = ?
-         ORDER BY requested_at, rowid LIMIT 1`,
+         ORDER BY requested_at, rowid`,
       )
-      .get(worktreePath) as { content_hash: string } | undefined;
-    return row?.content_hash ?? null;
+      .all(worktreePath) as { id: string; content_hash: string }[];
+    const row = rows.find((r) => !claimed.has(r.id));
+    if (!row) return null;
+    claimed.add(row.id);
+    return row.content_hash;
   });
   return { ...actual, computeWholeTreeContentHash: mockComputeHash };
 });
