@@ -20,7 +20,13 @@ describe('deriveDeployStepStates', () => {
     const plan: DeployPlanStep[] = [{ id: 'fetch', description: null }];
     const result = deriveDeployStepStates(plan, []);
     expect(result).toEqual([
-      { id: 'fetch', description: null, state: 'pending', failureDetail: null },
+      {
+        id: 'fetch',
+        description: null,
+        state: 'pending',
+        failureDetail: null,
+        note: null,
+      },
     ]);
   });
 
