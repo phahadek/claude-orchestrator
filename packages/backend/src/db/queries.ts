@@ -9455,7 +9455,7 @@ export function insertTestRequestRun(
  * path shared by several sessions is ambiguous and falls back to the
  * per-tree origin rather than guessing.
  */
-export function resolveRunBreadthOrigin(
+function resolveRunBreadthOrigin(
   projectId: string,
   contentHash: string,
   sessionId: string | null | undefined,
