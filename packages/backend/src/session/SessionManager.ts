@@ -110,6 +110,7 @@ import {
   setSessionLastErrorDetail,
   incrementTaskCrashCount,
   setTaskPauseReason,
+  setTaskPauseReasonForSession,
   getTerminalSessionsForTask,
   listSessionsWithUndeliveredInboxItems,
   listNonTerminalSessionsWithUndeliveredInboxItems,
@@ -1830,7 +1831,12 @@ export class SessionManager extends EventEmitter {
       ? 'planning_crashed'
       : 'planning_terminal_no_decision';
 
-    setTaskPauseReason(taskId, pauseReason, detail ?? reason);
+    setTaskPauseReasonForSession(
+      row.session_id,
+      taskId,
+      pauseReason,
+      detail ?? reason,
+    );
     recordEvent({
       event_type: 'auto_launch_paused',
       actor_type: 'system',
@@ -3111,7 +3117,8 @@ export class SessionManager extends EventEmitter {
         `[SessionManager] respawnSession: deferring ${row.session_id.slice(0, 8)} — plan usage (${usageAdmission.window}) exhausted until ${usageAdmission.deferredUntil ? new Date(usageAdmission.deferredUntil).toISOString() : 'unknown'}`,
       );
       if (row.task_id) {
-        setTaskPauseReason(
+        setTaskPauseReasonForSession(
+          row.session_id,
           row.task_id,
           'usage_limit_deferred',
           usageAdmission.window ?? 'unknown',
@@ -3458,7 +3465,12 @@ export class SessionManager extends EventEmitter {
     });
 
     if (row.task_id) {
-      setTaskPauseReason(row.task_id, 'resume_failed', detail);
+      setTaskPauseReasonForSession(
+        row.session_id,
+        row.task_id,
+        'resume_failed',
+        detail,
+      );
       recordEvent({
         event_type: 'auto_launch_paused',
         actor_type: 'system',
@@ -3493,7 +3505,8 @@ export class SessionManager extends EventEmitter {
         `[SessionManager] resumeSession ${row.session_id}: deferring — plan usage (${usageAdmission.window}) exhausted until ${usageAdmission.deferredUntil ? new Date(usageAdmission.deferredUntil).toISOString() : 'unknown'}`,
       );
       if (row.task_id) {
-        setTaskPauseReason(
+        setTaskPauseReasonForSession(
+          row.session_id,
           row.task_id,
           'usage_limit_deferred',
           usageAdmission.window ?? 'unknown',

@@ -6,7 +6,7 @@ import type { Scheduler } from './Scheduler';
 import {
   getPRBySessionId,
   setPauseReason,
-  setTaskPauseReason,
+  setTaskPauseReasonForSession,
   setSessionPauseReason,
   setSessionParkedAt,
   insertPauseInterval,
@@ -994,7 +994,12 @@ export class StuckSessionMonitor {
     // needs_attention (TaskStatusEngine / attentionSignals) see a stuck
     // pre-PR session, which pull_requests.pause_reason alone can't reach.
     if (session.task_id) {
-      setTaskPauseReason(session.task_id, 'stuck_timeout', 'stuck_timeout');
+      setTaskPauseReasonForSession(
+        sessionId,
+        session.task_id,
+        'stuck_timeout',
+        'stuck_timeout',
+      );
     }
     insertPauseInterval(sessionId, 'stuck_timeout');
 

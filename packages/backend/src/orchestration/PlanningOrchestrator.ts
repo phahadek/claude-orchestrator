@@ -9,6 +9,7 @@ import {
   clearPendingApproveTerminal,
   getSessionsWithPendingApproveTerminal,
   setTaskPauseReason,
+  setTaskPauseReasonForSession,
   getPRBySessionId,
   setSessionTerminalCompletionReason,
   TERMINAL_SESSION_STATUSES,
@@ -675,7 +676,8 @@ export class PlanningOrchestrator {
 
     const row = getSession(sessionId);
     if (row?.task_id) {
-      setTaskPauseReason(
+      setTaskPauseReasonForSession(
+        sessionId,
         row.task_id,
         'planning_terminal_no_decision',
         'Planning session reached terminal with no staged decision, ops journal transition, or explicit no-op — twice, after one self-correct nudge.',
@@ -1293,7 +1295,8 @@ export class PlanningOrchestrator {
       (i) => i.state === 'needs_revision' || i.state === 'pending_verification',
     );
     if (blockedMembers.length === 0) return false;
-    setTaskPauseReason(
+    setTaskPauseReasonForSession(
+      sessionId,
       row.task_id,
       'planning_terminal_blocked_members',
       `Planning session ${sessionId} reached terminal (${reason}) with ` +

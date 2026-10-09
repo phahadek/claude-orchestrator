@@ -44,7 +44,7 @@ import {
   getSessionMilestoneId,
   markSessionInitiatedPRClose,
   getGrantedCapabilities,
-  setTaskPauseReason,
+  setTaskPauseReasonForSession,
   setHumanMergeOnly,
   getLatestTestRequestRun,
   getFailingTestIdsForRun,
@@ -1582,7 +1582,8 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       setPauseReason(pr.pr_number, pr.repo, 'api_overloaded_exhausted');
     }
     if (this.taskId) {
-      setTaskPauseReason(
+      setTaskPauseReasonForSession(
+        this.sessionId,
         this.taskId,
         'api_overloaded_exhausted',
         'in-session 529/500 auto-retry budget exhausted',

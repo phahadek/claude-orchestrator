@@ -637,7 +637,9 @@ export class DispatchTriggerEvaluator {
     logger.warn(
       `[DispatchTriggerEvaluator] ${flow} dispatch failed for task ${candidate.task.id} (attempt ${count}): ${reason}`,
     );
-    if (escalated) {
+    // A groom never pauses its task; the crash budget's cooldown alone
+    // bounds retries.
+    if (escalated && flow !== 'groom') {
       setTaskPauseReason(candidate.task.id, 'launch_failed', reason);
     }
     return false;
