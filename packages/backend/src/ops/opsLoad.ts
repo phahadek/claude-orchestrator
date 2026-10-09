@@ -58,6 +58,7 @@ import {
   type CodeWorklistOptions,
 } from '../groom/codeWorklist';
 import { ProjectService } from '../projects/ProjectService';
+import { resolveMilestoneRowForProject } from '../projects/milestoneResolver';
 import { GroomTaskSourceUnsupportedError } from '../planning/errors';
 
 // ─── Notion status vocabulary (matches the values NotionClient reads/writes) ──
@@ -305,11 +306,17 @@ function toTaskRef(t: NotionTask): TaskRef {
  * tasks, and pre-seed/reconcile/trim the ops_journal staging store.
  */
 export async function loadOpsContext(
-  milestoneId: string,
+  milestoneRef: string,
   opts: OpsLoadOptions = {},
 ): Promise<OpsLoadResult> {
-  const milestone = getMilestoneById(milestoneId);
-  if (!milestone) throw new Error(`ops-load: unknown milestone ${milestoneId}`);
+  let milestone = getMilestoneById(milestoneRef);
+  if (!milestone && opts.project) {
+    // Throws UnknownMilestoneError (naming the known milestones) on a miss.
+    const row = resolveMilestoneRowForProject(opts.project, milestoneRef);
+    milestone = getMilestoneById(row.id);
+  }
+  if (!milestone) throw new Error(`ops-load: unknown milestone ${milestoneRef}`);
+  const milestoneId = milestone.id;
   if (opts.project && opts.project !== milestone.project_id) {
     throw new Error(
       `ops-load: milestone ${milestoneId} belongs to project ${milestone.project_id}, not ${opts.project}`,
