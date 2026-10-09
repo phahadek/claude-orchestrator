@@ -352,7 +352,7 @@ export interface DeviceRow {
   role: DeviceRole;
 }
 
-export type DeviceRole = 'operator' | 'runner';
+type DeviceRole = 'operator' | 'runner';
 
 export type NewDeviceRow = Omit<DeviceRow, 'last_seen' | 'revoked' | 'role'> & {
   last_seen?: number | null;

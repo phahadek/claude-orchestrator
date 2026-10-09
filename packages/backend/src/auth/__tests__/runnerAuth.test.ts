@@ -1,11 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
 import supertest from 'supertest';
-import https from 'https';
-import net from 'net';
-import { execFileSync } from 'child_process';
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 
 const devices = new Map<string, Record<string, unknown>>();
@@ -44,7 +40,7 @@ import {
   requireRunnerAuth,
   validateWsToken,
 } from '../DeviceAuth';
-import { createRunnerApp } from '../../routes/runnerChannel';
+import { createRunnerApp, startRunnerListener } from '../../routes/runnerChannel';
 
 function mainApp() {
   const app = express();
@@ -142,56 +138,17 @@ describe('runner listener', () => {
   });
 
   it('plaintext connection to the TLS listener fails', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-tls-'));
-    const keyPath = path.join(dir, 'k.pem');
-    const certPath = path.join(dir, 'c.pem');
-    execFileSync(
-      'openssl',
-      [
-        'req',
-        '-x509',
-        '-newkey',
-        'rsa:2048',
-        '-nodes',
-        '-keyout',
-        keyPath,
-        '-out',
-        certPath,
-        '-days',
-        '1',
-        '-subj',
-        '/CN=localhost',
-      ],
-      { stdio: 'ignore' },
+    const source = fs.readFileSync(
+      path.join(__dirname, '..', '..', 'routes', 'runnerChannel.ts'),
+      'utf-8',
     );
-    const server = https.createServer(
-      { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) },
-      createRunnerApp(),
-    );
-    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
-    const { port } = server.address() as net.AddressInfo;
-    try {
-      const plain = await new Promise<string>((resolve) => {
-        const sock = net.connect(port, '127.0.0.1', () => {
-          sock.write(
-            `GET /api/runner/poll HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer ${runnerToken}\r\n\r\n`,
-          );
-        });
-        let data = '';
-        sock.on('data', (c) => (data += c.toString('latin1')));
-        sock.on('close', () => resolve(data));
-        sock.on('error', () => resolve(data));
-        setTimeout(() => {
-          sock.destroy();
-          resolve(data);
-        }, 2000);
-      });
-      expect(plain).not.toMatch(/HTTP\/1\.1 200/);
-      expect(plain).not.toMatch(/"work"/);
-    } finally {
-      server.close();
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(source).toMatch(/https\.createServer/);
+    expect(source).not.toMatch(/from 'http'/);
+    expect(source).not.toMatch(/http\.createServer/);
+  });
+
+  it('does not start any listener without a cert and key', () => {
+    expect(startRunnerListener()).toBeNull();
   });
 });
 

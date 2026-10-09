@@ -14,7 +14,7 @@ import {
 /** Runner-only routes. The poll response carries admitted-work descriptors
  *  only — never project secrets (.env etc.). Empty until the dispatch-payload
  *  and snapshot-transport siblings land. */
-export function createRunnerRouter(): Router {
+function createRunnerRouter(): Router {
   const router = Router();
   router.get('/poll', (_req: Request, res: Response) => {
     res.json({ work: [] });
