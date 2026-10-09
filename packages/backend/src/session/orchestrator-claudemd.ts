@@ -362,7 +362,7 @@ Check \`mcp__orchestrator__testHealth_getFlakyHistory\` first — pass the faili
 
 Retrying \`test_request\` against an unchanged tree is futile either way: a settled run just replays via dedup, and a broken run (timeout, crash, OOM, failed spawn) stays held for operator approval instead — re-staging changes neither.
 
-If the \`test_request\` result digest carries a **Wait** instruction, every remaining failure is outside your diff and the orchestrator will re-attribute it for you: you will be woken at most once. Follow that instruction — do not re-run the tests and do not call \`flaky_confirm\`. Do not poll or re-call \`flaky_confirm\` on a timer.
+If the \`test_request\` digest carries a **Wait** instruction, you will be woken at most once — do not re-run or call \`flaky_confirm\`.
 
 ---
 
