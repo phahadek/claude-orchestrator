@@ -137,6 +137,27 @@ export function bootstrapEnroll(
   return { token, deviceId };
 }
 
+/** Enroll a durable runner device (role 'runner'). Called only from the
+ *  operator-authed gated router; the token is returned once. */
+export function enrollRunner(
+  name: string,
+  ip: string,
+): { token: string; deviceId: string } {
+  const token = generateToken();
+  const deviceId = generateDeviceId();
+  insertDevice({
+    id: deviceId,
+    name: name || 'Test Runner',
+    user_agent: 'runner',
+    last_ip: ip,
+    last_seen: null,
+    enrolled_at: Date.now(),
+    token,
+    role: 'runner',
+  });
+  return { token, deviceId };
+}
+
 // Exported for tests
 export { pendingEnrollments };
 
@@ -240,6 +261,13 @@ export function createGatedEnrollmentRouter(): Router {
       return;
     }
     res.json({ ok: true, ...result });
+  });
+
+  // POST /api/enrollment/runner — enroll a runner-role device (operator device required)
+  router.post('/runner', (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as { name?: string };
+    const name = typeof body.name === 'string' ? body.name : 'Test Runner';
+    res.json(enrollRunner(name, req.socket.remoteAddress ?? ''));
   });
 
   // GET /api/enrollment/devices — list enrolled devices (enrolled device required)

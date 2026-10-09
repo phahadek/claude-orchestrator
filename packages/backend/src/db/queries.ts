@@ -6325,12 +6325,13 @@ export function getPendingRoutedCommentCount(
 export function insertDevice(device: NewDeviceRow): void {
   db.prepare<NewDeviceRow>(
     `
-    INSERT INTO devices (id, name, user_agent, last_ip, last_seen, enrolled_at, token, revoked)
-    VALUES (@id, @name, @user_agent, @last_ip, @last_seen, @enrolled_at, @token, @revoked)
+    INSERT INTO devices (id, name, user_agent, last_ip, last_seen, enrolled_at, token, revoked, role)
+    VALUES (@id, @name, @user_agent, @last_ip, @last_seen, @enrolled_at, @token, @revoked, @role)
   `,
   ).run({
     last_seen: null,
     revoked: 0,
+    role: 'operator',
     ...device,
   });
 }

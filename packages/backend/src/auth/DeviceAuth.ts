@@ -65,6 +65,12 @@ export function requireDeviceAuth(
     res.status(401).json({ error: 'unauthorized', code: 'invalid_token' });
     return;
   }
+  if (device.role === 'runner') {
+    res
+      .status(403)
+      .json({ error: 'forbidden', code: 'runner_token_not_permitted' });
+    return;
+  }
 
   const ip =
     (req.headers['x-forwarded-for'] as string | undefined)
@@ -78,8 +84,41 @@ export function requireDeviceAuth(
   next();
 }
 
-/** Validate a device token from a WebSocket upgrade request URL. */
+/** Express middleware for the runner listener — accepts only an enrolled,
+ *  non-revoked device with role 'runner'. No bootstrap exception. */
+export function requireRunnerAuth(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  const token = getTokenFromRequest(req);
+  if (!token) {
+    res
+      .status(401)
+      .json({ error: 'unauthorized', code: 'device_not_enrolled' });
+    return;
+  }
+  const device = validateDeviceToken(token);
+  if (!device) {
+    res.status(401).json({ error: 'unauthorized', code: 'invalid_token' });
+    return;
+  }
+  if (device.role !== 'runner') {
+    res
+      .status(403)
+      .json({ error: 'forbidden', code: 'runner_role_required' });
+    return;
+  }
+  const ip = req.socket.remoteAddress ?? null;
+  updateDeviceLastSeen(device.id, ip, Date.now());
+  (req as Request & { device: DeviceRow }).device = device;
+  next();
+}
+
+/** Validate a device token from a WebSocket upgrade request URL.
+ *  Runner-role tokens are not valid on the main WebSocket. */
 export function validateWsToken(token: string | null): DeviceRow | null {
   if (!token) return null;
-  return getDeviceByToken(token);
+  const device = getDeviceByToken(token);
+  return device && device.role !== 'runner' ? device : null;
 }
