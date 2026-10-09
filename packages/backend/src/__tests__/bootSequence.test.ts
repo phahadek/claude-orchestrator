@@ -271,10 +271,81 @@ describe('boot chain — base_branch_broken_pause_clear step', () => {
     expect(row).toBeUndefined();
   });
 
+  it('clears a groom-attributed planning pause at boot and keeps a design one', async () => {
+    // Both tasks sit on a live board so the stale-pause sweep that runs just
+    // before groom_pause_clear leaves their rows alone.
+    const { deps } = makeDeps();
+    const { insertProject, insertMilestone, upsertTaskCache } =
+      await import('../db/queries.js');
+    insertProject({
+      id: 'boot-groom-proj',
+      name: 'Boot Groom Project',
+      project_dir: '/tmp/boot-groom-proj',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+      auto_launch_enabled: 1,
+    });
+    insertMilestone({
+      id: 'boot-groom-ms',
+      project_id: 'boot-groom-proj',
+      name: 'Boot Groom Milestone',
+      source_id: 'boot-groom-src',
+      canonical_short_id: null,
+      wrapped_at: null,
+    });
+    upsertTaskCache(
+      'board:boot-groom-ms',
+      JSON.stringify([
+        { id: 'boot-groom-task', title: 'g', status: '🗂️ Ready' },
+        { id: 'boot-design-task', title: 'd', status: '🔲 Backlog' },
+      ]),
+    );
+    const groomSid = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const designSid = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    try {
+      for (const [sid, taskId, type] of [
+        [groomSid, 'boot-groom-task', 'groom'],
+        [designSid, 'boot-design-task', 'design'],
+      ] as const) {
+        db.prepare(
+          `INSERT INTO sessions (session_id, task_id, status, started_at, session_type) VALUES (?, ?, 'done', ?, ?)`,
+        ).run(sid, taskId, Date.now(), type);
+        db.prepare(
+          `INSERT OR REPLACE INTO task_pause_reasons (task_id, pause_reason, detail, set_at) VALUES (?, ?, ?, ?)`,
+        ).run(
+          taskId,
+          JSON.stringify({
+            reason: 'planning_terminal_blocked_members',
+            source: 'launch',
+            severity: 'needs_attention',
+            retry_strategy: 'manual_action',
+            blocks_merge: true,
+          }),
+          `Planning session ${sid} reached terminal`,
+          Date.now(),
+        );
+      }
+
+      await runAndDrain(deps);
+
+      const remaining = (
+        db.prepare(`SELECT task_id FROM task_pause_reasons`).all() as {
+          task_id: string;
+        }[]
+      ).map((r) => r.task_id);
+      expect(remaining).not.toContain('boot-groom-task');
+      expect(remaining).toContain('boot-design-task');
+    } finally {
+      db.prepare('DELETE FROM task_cache').run();
+      db.prepare('DELETE FROM milestones').run();
+      db.prepare('DELETE FROM projects').run();
+      db.prepare('DELETE FROM sessions').run();
+      db.prepare('DELETE FROM task_pause_reasons').run();
+    }
+  });
+
   it('announces groom_pause_clear among the boot steps', async () => {
-    // Row-level behavior is covered DB-backed in groomPauseClear.test.ts; the
-    // stale-pause sweep just before this step already deletes rows for tasks
-    // on no board, so a row assertion here could not isolate the step.
     const { deps, broadcast } = makeDeps();
 
     await runAndDrain(deps);
