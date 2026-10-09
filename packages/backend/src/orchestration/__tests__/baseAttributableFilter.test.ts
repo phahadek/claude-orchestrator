@@ -21,6 +21,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 
+const summaryState = vi.hoisted(() => ({ incomplete: 0 }));
+
 const {
   mockGetFailingTestIdsForRun,
   mockGetFlaggedFlakyTestIds,
@@ -54,7 +56,7 @@ vi.mock('../../db/queries', () => ({
     skipped_count: 0,
     error_count: 0,
     total_count: 1,
-    incomplete: 0,
+    incomplete: summaryState.incomplete,
   }),
   getFlaggedFlakyTestIds: mockGetFlaggedFlakyTestIds,
   listTestRequestRunsForSession: mockListTestRequestRunsForSession,
@@ -149,6 +151,7 @@ beforeEach(() => {
     confident: true,
   });
   mockMarkTestResultExcused.mockReset();
+  summaryState.incomplete = 0;
 });
 
 describe('baseAttributableFilter.ts source', () => {
@@ -325,7 +328,12 @@ describe('filterBaseAttributableFailures', () => {
     ]);
 
     const run = makeRun({ id: 'run-42' });
-    const result = await filterBaseAttributableFailures(PROJECT, run, 'task-1');
+    const { result } = await filterBaseAttributableFailuresForF2Gate(
+      PROJECT,
+      run,
+      [],
+      'task-1',
+    );
 
     expect(result.outcome).toBe('filtered_pass');
     expect(mockMarkTestResultExcused).toHaveBeenCalledWith(
@@ -720,6 +728,55 @@ describe('filterBaseAttributableFailuresForF2Gate — the shared PreReviewPipeli
 
     expect(order).toEqual(['ingestion-committed', 'read-failing-set']);
     expect(result.outcome).toBe('filtered_pass');
+  });
+});
+
+describe('excused-marker write ordering and completeness guard', () => {
+  it('never marks a diff-touching, breadth-flagged test excused', async () => {
+    stubBreadthFlags(new Set(['suite.testA', 'suite.testB']));
+    mockGetFailingTestIdsForRun.mockReturnValue([
+      { test_id: 'suite.testA', name: 'testA' },
+      { test_id: 'suite.testB', name: 'testB' },
+    ]);
+    mockIsTestIdTouchedByChangedFiles.mockImplementation(((id: string) => ({
+      touched: id === 'suite.testA',
+      confident: true,
+    })) as never);
+
+    const { result, guardBlocked } =
+      await filterBaseAttributableFailuresForF2Gate(
+        PROJECT,
+        makeRun(),
+        ['suite/testA.spec.ts'],
+        'task-1',
+      );
+
+    expect(guardBlocked).toEqual([{ test_id: 'suite.testA', name: 'testA' }]);
+    expect(result.remainingTests).toEqual([
+      { test_id: 'suite.testA', name: 'testA' },
+    ]);
+    const marked = mockMarkTestResultExcused.mock.calls.map((c) => c[1]);
+    expect(marked).not.toContain('suite.testA');
+    expect(marked).toContain('suite.testB');
+  });
+
+  it('never flips an incomplete run to passed even when every captured failure clears breadth', async () => {
+    summaryState.incomplete = 1;
+    stubBreadthFlags(new Set(['suite.testA']));
+    mockGetFailingTestIdsForRun.mockReturnValue([
+      { test_id: 'suite.testA', name: 'testA' },
+    ]);
+
+    const { result } = await filterBaseAttributableFailuresForF2Gate(
+      PROJECT,
+      makeRun(),
+      [],
+      'task-1',
+    );
+
+    expect(result.passed).toBe(false);
+    expect(result.outcome).toBe('unfiltered');
+    expect(mockMarkTestResultExcused).not.toHaveBeenCalled();
   });
 });
 

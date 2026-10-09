@@ -25,6 +25,7 @@ import type { ProjectConfig } from '../config';
 import type { TestRequestRunRow, StructuredTestResult } from '../db/types';
 import {
   getFlaggedFlakyTestIds,
+  getTestRunSummary,
   listTestRequestRunsForSession,
   computeTestFailureBreadthFlag,
   markTestResultExcused,
@@ -192,16 +193,12 @@ function attributeFailingTests(
     return UNFILTERED(false);
   }
 
-  if (runId) {
-    for (const t of excludedTests) {
-      markTestResultExcused(runId, t.test_id, 'breadth_corpus');
-    }
-    for (const t of flakyExcludedTests) {
-      markTestResultExcused(runId, t.test_id, 'flaky_rollup');
-    }
-  }
-
   if (remainingTests.length === 0) {
+    // A partial report (OOM kill, truncated merge) captured only some of the
+    // run's failures — never flip it to passed on the strength of those rows.
+    if (runId && getTestRunSummary(runId)?.incomplete) {
+      return UNFILTERED(false);
+    }
     return {
       outcome: 'filtered_pass',
       passed: true,
@@ -262,12 +259,33 @@ export async function filterVerifyFailureByBaseHealth(
     ({ test_id, name }) => ({ test_id, name }),
   );
 
-  return attributeFailingTests(
+  const result = attributeFailingTests(
     project,
     sessionFailing,
     resolveBreadthOwnTree(project.id, subject),
     runId ?? null,
   );
+  // No masking guards on the verify path, so the filter result is final.
+  if (runId) writeExcusedMarkers(runId, result);
+  return result;
+}
+
+/**
+ * Writes the excused marker flaky.confirm(gate:'test_request') writes onto
+ * every excluded test's (runId, test_id) row — see markTestResultExcused.
+ * Only called once a result is final (after any masking guards), so a
+ * guard-blocked test never carries a stale marker.
+ */
+function writeExcusedMarkers(
+  runId: string,
+  result: BaseAttributableFilterResult,
+): void {
+  for (const t of result.excludedTests) {
+    markTestResultExcused(runId, t.test_id, 'breadth_corpus');
+  }
+  for (const t of result.flakyExcludedTests) {
+    markTestResultExcused(runId, t.test_id, 'flaky_rollup');
+  }
 }
 
 /**
@@ -295,6 +313,7 @@ export function applyF2GateMaskingGuards(
   changedFiles: string[],
 ): { result: BaseAttributableFilterResult; guardBlocked: FailingTest[] } {
   if (result.excludedTests.length === 0) {
+    writeExcusedMarkers(prRun.id, result);
     return { result, guardBlocked: [] };
   }
 
@@ -333,6 +352,7 @@ export function applyF2GateMaskingGuards(
   }
 
   if (blocked.length === 0) {
+    writeExcusedMarkers(prRun.id, result);
     return { result, guardBlocked: [] };
   }
 
@@ -345,17 +365,16 @@ export function applyF2GateMaskingGuards(
         ? 'filtered_partial'
         : 'unfiltered';
 
-  return {
-    result: {
-      outcome,
-      passed,
-      excludedTests: cleared,
-      flakyExcludedTests: result.flakyExcludedTests,
-      remainingTests,
-      baseRun: result.baseRun,
-    },
-    guardBlocked: blocked,
+  const guarded: BaseAttributableFilterResult = {
+    outcome,
+    passed,
+    excludedTests: cleared,
+    flakyExcludedTests: result.flakyExcludedTests,
+    remainingTests,
+    baseRun: result.baseRun,
   };
+  writeExcusedMarkers(prRun.id, guarded);
+  return { result: guarded, guardBlocked: blocked };
 }
 
 /**
@@ -380,9 +399,6 @@ export async function filterBaseAttributableFailuresForF2Gate(
     run,
     triggeringTaskId,
   );
-  if (filterResult.excludedTests.length === 0) {
-    return { result: filterResult, guardBlocked: [] };
-  }
   return applyF2GateMaskingGuards(filterResult, run, changedFiles);
 }
 
