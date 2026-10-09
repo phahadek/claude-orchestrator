@@ -569,7 +569,9 @@ describe('DeployOrchestrator: step failure halts + compensating step', () => {
   });
 
   it('records a non-operator disposition for a deploy-run confirm-gate and approved for a wrap run', async () => {
-    const playbook = playbookWith([step({ id: 'confirm', kind: 'confirm-gate' })]);
+    const playbook = playbookWith([
+      step({ id: 'confirm', kind: 'confirm-gate' }),
+    ]);
     const deployOrch = new DeployOrchestrator(
       'proj',
       '/tmp/proj',
