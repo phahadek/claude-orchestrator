@@ -309,7 +309,11 @@ function failureReasonFor(
  * Every project shares this single budget — there is no per-project override.
  */
 function getGlobalTestRunLimit(): number {
-  return typedGetSetting('test_request_max_concurrent');
+  const maxConcurrent = typedGetSetting('test_request_max_concurrent');
+  const ceilingMb = typedGetSetting('test_request_memory_ceiling_mb');
+  if (ceilingMb === 0) return maxConcurrent;
+  const perRunMb = typedGetSetting('test_request_per_run_memory_mb');
+  return Math.min(maxConcurrent, Math.max(1, Math.floor(ceilingMb / perRunMb)));
 }
 
 let globalTestRunSemaphore: Semaphore | null = null;

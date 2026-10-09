@@ -56,6 +56,9 @@ const SettingsSchema = z.object({
   flake_recovery_max_retries: z.coerce.number().int().min(0),
   test_request_max_concurrent: z.coerce.number().int().min(1),
   test_request_cycle_limit: z.coerce.number().int().min(1),
+  // 0 disables the joint memory sizing of test-run concurrency.
+  test_request_memory_ceiling_mb: z.coerce.number().int().min(0),
+  test_request_per_run_memory_mb: z.coerce.number().int().min(1),
   dependency_cache_max_age_hours: z.coerce.number().int().min(1),
   dependency_cache_max_total_size_mb: z.coerce.number().int().min(1),
   session_cgroup_prod_reserve_mb: z.coerce.number().int().min(0),
@@ -202,6 +205,8 @@ export const SETTING_DEFAULTS: Settings = {
   flake_recovery_max_retries: 2,
   test_request_max_concurrent: 2,
   test_request_cycle_limit: 5,
+  test_request_memory_ceiling_mb: 0,
+  test_request_per_run_memory_mb: 1024,
   dependency_cache_max_age_hours: 168,
   dependency_cache_max_total_size_mb: 10_240,
   session_cgroup_prod_reserve_mb: 4096,
