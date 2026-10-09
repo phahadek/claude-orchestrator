@@ -224,6 +224,8 @@ import {
   getLatestTestRequestRunForSession,
   getTestRequestRunById,
   updateTestRequestRunState,
+  markTestRequestRunAwaitingDisposition,
+  getTestRunSummary,
   listTestRequestRunsForPrSession,
   listTestRequestRunsForProject,
   listTestRunResultsForRun,
@@ -239,11 +241,15 @@ import type {
   TestRequestPayload,
   TestRequestRunRow,
 } from '../db/types';
-import { buildTestResultDigestFromOutcomes } from '../session/testResultDigest';
+import {
+  appendAwaitingDispositionInstruction,
+  buildTestResultDigestFromOutcomes,
+} from '../session/testResultDigest';
 import { getRunTestOutcomes } from '../orchestration/runTestOutcomes';
 import {
   filterBaseAttributableFailuresForF2Gate,
   renderBaseAttributableFilterDigest,
+  shouldMarkAwaitingDisposition,
   type FailingTest,
   type BaseAttributableFilterResult,
 } from '../orchestration/baseAttributableFilter';
@@ -6628,6 +6634,22 @@ export async function triggerTestRequestExecution(
   if (filterResult && filterResult.outcome !== 'unfiltered') {
     result = { ...result, passed: filterResult.passed };
   }
+  // filterResult non-null implies changedFiles was known.
+  let awaitingDisposition = false;
+  if (filterResult && runId && !result.passed) {
+    const unexcusedFailureCount =
+      filterResult.outcome === 'unfiltered'
+        ? (await getRunTestOutcomes(runId)).failingTests.length
+        : filterResult.remainingTests.length;
+    const summary = getTestRunSummary(runId);
+    awaitingDisposition = shouldMarkAwaitingDisposition({
+      changedFilesKnown: true,
+      guardBlockedCount: guardBlocked.length,
+      unexcusedFailureCount,
+      reportComplete: !!summary && !summary.incomplete,
+    });
+    if (awaitingDisposition) markTestRequestRunAwaitingDisposition(runId);
+  }
   if ((executionFailed || superseded) && intent.sessionId) {
     decrementSessionTestRequestCycleCount(intent.sessionId);
   }
@@ -6688,7 +6710,7 @@ export async function triggerTestRequestExecution(
   const outcomesDigest = runId
     ? buildTestResultDigestFromOutcomes(await getRunTestOutcomes(runId))
     : null;
-  const output = superseded
+  const baseOutput = superseded
     ? `[test.request] This run was withdrawn before it executed — a newer request (or a PR merge/close/push) superseded it. Nothing to act on here; the tree this ran against is no longer current.`
     : executionFailed
       ? `[test.request] The test run could not be executed — the test runner process failed to start, so no test result exists. This is an infrastructure failure, not a test failure; it does not indicate your changes are broken. A further request against this same tree will be held for operator approval rather than auto-run again — re-staging will not change that.\n\n${truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP)}`
@@ -6697,6 +6719,10 @@ export async function triggerTestRequestExecution(
           renderBaseAttributableFilterDigest(filterResult, guardBlocked)) ||
         outcomesDigest ||
         truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP);
+  const output = appendAwaitingDispositionInstruction(
+    baseOutput,
+    awaitingDisposition,
+  );
   try {
     await sessionManager.enqueueFeedback(
       intent.sessionId,

@@ -1,5 +1,21 @@
 import { describe, it, expect } from 'vitest';
-import { buildTestResultDigest } from '../testResultDigest';
+import {
+  appendAwaitingDispositionInstruction,
+  buildTestResultDigest,
+} from '../testResultDigest';
+
+describe('appendAwaitingDispositionInstruction', () => {
+  it('appends the wait instruction only when the marker is present', () => {
+    const withMarker = appendAwaitingDispositionInstruction('digest', true);
+    expect(withMarker).toContain('digest');
+    expect(withMarker).toContain('outside your diff');
+    expect(withMarker).toContain('woken at most once');
+    expect(withMarker).toContain('flaky_confirm');
+    expect(appendAwaitingDispositionInstruction('digest', false)).toBe(
+      'digest',
+    );
+  });
+});
 
 function structuredResult(
   tests: { id: string; name: string; outcome: string; durationMs: number }[],

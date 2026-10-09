@@ -1540,6 +1540,7 @@ async function executeTestRequestRun(
       failed_command: result.passed ? null : (result.failedCommand ?? null),
       commands: JSON.stringify(recordedCommands),
       coverage_source_run_id: null,
+      awaiting_disposition_at: null,
     });
     trackRunIngestion(runId, ingestionPromise);
     ingestionPromise.catch((err) => {

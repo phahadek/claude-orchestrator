@@ -53,7 +53,9 @@ The backend refuses (naming why) unless the test clears the corpus and its file 
 
 Check \`mcp__orchestrator__testHealth_getFlakyHistory\` first — pass the failing test ids from your run — it grounds your \`reason\` and tells you whether \`flaky_confirm\` is even worth calling.
 
-Retrying \`test_request\` against an unchanged tree is futile either way: a settled run just replays via dedup, and a broken run (timeout, crash, OOM, failed spawn) stays held for operator approval instead — re-staging changes neither. \`flaky_confirm\` is a separate call, not deduped that way, so re-calling it (even periodically, against the same tree) always re-checks fresh corpus evidence. Prefer that over blind retries.
+Retrying \`test_request\` against an unchanged tree is futile either way: a settled run just replays via dedup, and a broken run (timeout, crash, OOM, failed spawn) stays held for operator approval instead — re-staging changes neither.
+
+If the \`test_request\` result digest carries a **Wait** instruction, every remaining failure is outside your diff and the orchestrator will re-attribute it for you: you will be woken at most once. Follow that instruction — do not re-run the tests and do not call \`flaky_confirm\`. Do not poll or re-call \`flaky_confirm\` on a timer.
 
 ---
 
@@ -268,7 +270,9 @@ The backend refuses (naming why) unless the test clears the corpus and its file 
 
 Check \`mcp__orchestrator__testHealth_getFlakyHistory\` first — pass the failing test ids from your run — it grounds your \`reason\` and tells you whether \`flaky_confirm\` is even worth calling.
 
-Retrying \`test_request\` against an unchanged tree is futile either way: a settled run just replays via dedup, and a broken run (timeout, crash, OOM, failed spawn) stays held for operator approval instead — re-staging changes neither. \`flaky_confirm\` is a separate call, not deduped that way, so re-calling it (even periodically, against the same tree) always re-checks fresh corpus evidence. Prefer that over blind retries.
+Retrying \`test_request\` against an unchanged tree is futile either way: a settled run just replays via dedup, and a broken run (timeout, crash, OOM, failed spawn) stays held for operator approval instead — re-staging changes neither.
+
+If the \`test_request\` result digest carries a **Wait** instruction, every remaining failure is outside your diff and the orchestrator will re-attribute it for you: you will be woken at most once. Follow that instruction — do not re-run the tests and do not call \`flaky_confirm\`. Do not poll or re-call \`flaky_confirm\` on a timer.
 
 ---
 
@@ -485,7 +489,9 @@ The backend refuses (naming why) unless the test clears the corpus and its file 
 
 Check \`mcp__orchestrator__testHealth_getFlakyHistory\` first — pass the failing test ids from your run — it grounds your \`reason\` and tells you whether \`flaky_confirm\` is even worth calling.
 
-Retrying \`test_request\` against an unchanged tree is futile either way: a settled run just replays via dedup, and a broken run (timeout, crash, OOM, failed spawn) stays held for operator approval instead — re-staging changes neither. \`flaky_confirm\` is a separate call, not deduped that way, so re-calling it (even periodically, against the same tree) always re-checks fresh corpus evidence. Prefer that over blind retries.
+Retrying \`test_request\` against an unchanged tree is futile either way: a settled run just replays via dedup, and a broken run (timeout, crash, OOM, failed spawn) stays held for operator approval instead — re-staging changes neither.
+
+If the \`test_request\` result digest carries a **Wait** instruction, every remaining failure is outside your diff and the orchestrator will re-attribute it for you: you will be woken at most once. Follow that instruction — do not re-run the tests and do not call \`flaky_confirm\`. Do not poll or re-call \`flaky_confirm\` on a timer.
 
 ---
 
@@ -700,7 +706,9 @@ The backend refuses (naming why) unless the test clears the corpus and its file 
 
 Check \`mcp__orchestrator__testHealth_getFlakyHistory\` first — pass the failing test ids from your run — it grounds your \`reason\` and tells you whether \`flaky_confirm\` is even worth calling.
 
-Retrying \`test_request\` against an unchanged tree is futile either way: a settled run just replays via dedup, and a broken run (timeout, crash, OOM, failed spawn) stays held for operator approval instead — re-staging changes neither. \`flaky_confirm\` is a separate call, not deduped that way, so re-calling it (even periodically, against the same tree) always re-checks fresh corpus evidence. Prefer that over blind retries.
+Retrying \`test_request\` against an unchanged tree is futile either way: a settled run just replays via dedup, and a broken run (timeout, crash, OOM, failed spawn) stays held for operator approval instead — re-staging changes neither.
+
+If the \`test_request\` result digest carries a **Wait** instruction, every remaining failure is outside your diff and the orchestrator will re-attribute it for you: you will be woken at most once. Follow that instruction — do not re-run the tests and do not call \`flaky_confirm\`. Do not poll or re-call \`flaky_confirm\` on a timer.
 
 ---
 

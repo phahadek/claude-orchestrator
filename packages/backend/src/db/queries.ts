@@ -9748,7 +9748,13 @@ export function updateTestRequestRunState(
   );
 }
 
-const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha, foreign_concurrent_run_count, worktree_path, superseded_by, failed_command, commands, coverage_source_run_id`;
+export function markTestRequestRunAwaitingDisposition(id: string): void {
+  db.prepare(
+    `UPDATE test_request_runs SET awaiting_disposition_at = ? WHERE id = ?`,
+  ).run(Date.now(), id);
+}
+
+const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha, foreign_concurrent_run_count, worktree_path, superseded_by, failed_command, commands, coverage_source_run_id, awaiting_disposition_at`;
 
 /**
  * Every settled `passed` run for (project_id, content_hash) that carries a

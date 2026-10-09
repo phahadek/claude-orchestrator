@@ -96,8 +96,31 @@ import {
   filterBaseAttributableFailuresForF2Gate,
   renderBaseAttributableFilterDigest,
   applyF2GateMaskingGuards,
+  shouldMarkAwaitingDisposition,
   type BaseAttributableFilterResult,
 } from '../baseAttributableFilter';
+
+describe('shouldMarkAwaitingDisposition', () => {
+  const all = {
+    changedFilesKnown: true,
+    guardBlockedCount: 0,
+    unexcusedFailureCount: 2,
+    reportComplete: true,
+  };
+
+  it('marks only when every condition holds', () => {
+    expect(shouldMarkAwaitingDisposition(all)).toBe(true);
+  });
+
+  it.each([
+    ['changedFiles unknown', { changedFilesKnown: false }],
+    ['guard-blocked candidates present', { guardBlockedCount: 1 }],
+    ['no unexcused failure remains', { unexcusedFailureCount: 0 }],
+    ['report incomplete', { reportComplete: false }],
+  ])('withholds when %s', (_name, override) => {
+    expect(shouldMarkAwaitingDisposition({ ...all, ...override })).toBe(false);
+  });
+});
 import { logger } from '../../logger';
 import type { ProjectConfig } from '../../config';
 import type { StructuredTestResult, TestRequestRunRow } from '../../db/types';

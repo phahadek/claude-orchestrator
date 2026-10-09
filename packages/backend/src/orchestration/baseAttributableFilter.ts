@@ -403,6 +403,27 @@ export async function filterBaseAttributableFailuresForF2Gate(
 }
 
 /**
+ * Write predicate for the run row's awaiting-disposition marker: every input
+ * must be affirmatively known-good — an unknown diff, a guard-blocked
+ * candidate, no unexcused failure left, or an incomplete/missing report all
+ * withhold it (the session could still own the failure, so it must not be
+ * told to wait).
+ */
+export function shouldMarkAwaitingDisposition(inputs: {
+  changedFilesKnown: boolean;
+  guardBlockedCount: number;
+  unexcusedFailureCount: number;
+  reportComplete: boolean;
+}): boolean {
+  return (
+    inputs.changedFilesKnown &&
+    inputs.guardBlockedCount === 0 &&
+    inputs.unexcusedFailureCount > 0 &&
+    inputs.reportComplete
+  );
+}
+
+/**
  * Renders a session-facing digest for a filter result whose outcome isn't
  * `unfiltered` — the caller's fallback (buildTestResultDigest /
  * truncateForDelivery) already covers the unfiltered case.
