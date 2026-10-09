@@ -88,7 +88,7 @@ export function setDeployBroadcast(fn: (msg: ServerMessage) => void): void {
 }
 
 /** Fire-and-forget operator toast; the status endpoint remains the durable record. */
-export function createDeployNeedsAttentionSink(): DeployOrchestratorSink {
+function createDeployNeedsAttentionSink(): DeployOrchestratorSink {
   return {
     onNeedsAttention: (info) => {
       try {
