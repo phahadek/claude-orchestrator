@@ -1300,16 +1300,30 @@ describe('TaskWriteCommands.setType', () => {
     );
   });
 
-  it('rejects Investigation when the body has no open investigation', async () => {
+  it('accepts Investigation on a body with no Open Questions or Deliverables', async () => {
     const backend = makeBackend({
       fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll resolved.\n'),
     });
     const commands = new BackendTaskWriteCommands(backend);
 
-    await expect(
-      commands.setType('notion:abc', '🔎 Investigation'),
-    ).rejects.toThrow(/no open investigation/i);
-    expect(backend.setType).not.toHaveBeenCalled();
+    await commands.setType('notion:abc', '🔎 Investigation');
+    expect(backend.setType).toHaveBeenCalledWith(
+      'notion:abc',
+      '🔎 Investigation',
+      undefined,
+    );
+  });
+
+  it('accepts Investigation on a Deliverables-shaped body without Open Questions', async () => {
+    const backend = makeBackend({
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue('## Summary\nx\n## Deliverables\n- decision\n'),
+    });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.setType('notion:abc', '🔎 Investigation');
+    expect(backend.setType).toHaveBeenCalledTimes(1);
   });
 
   it('rejects an unknown/illegal type', async () => {

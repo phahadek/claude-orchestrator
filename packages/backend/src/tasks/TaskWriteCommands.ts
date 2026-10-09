@@ -169,8 +169,7 @@ function isValidTaskType(type: string): type is TaskType {
 /**
  * Count non-empty list items under an "Open Questions" heading in the task
  * body. Used to gate 💻 Code reclassification (a Code task must carry no
- * open / to-be-investigated items) and 🔎 Investigation reclassification (an
- * Investigation task's deliverable is the open investigation itself).
+ * open / to-be-investigated items).
  */
 function countOpenQuestions(body: string): number {
   let inSection = false;
@@ -199,11 +198,6 @@ function validateTypeBodyConsistency(type: TaskType, body: string): void {
   if (type === '💻 Code' && openQuestions > 0) {
     throw new Error(
       `[TaskWriteCommands] cannot set type to 💻 Code: task body has ${openQuestions} open/to-be-investigated item(s)`,
-    );
-  }
-  if (type === '🔎 Investigation' && openQuestions === 0) {
-    throw new Error(
-      `[TaskWriteCommands] cannot set type to 🔎 Investigation: task body has no open investigation`,
     );
   }
 }
