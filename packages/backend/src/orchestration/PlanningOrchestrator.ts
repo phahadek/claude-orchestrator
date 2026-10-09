@@ -42,6 +42,7 @@ import {
   sessionHasAppliedDesignClosingSet,
   findIncompleteOpsTerminalGroupsForSession,
   isOpsTerminalClosingSetMember,
+  broadcastSessionCompleteness,
 } from '../routes/stagedIntents';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { emitTaskUpdated, broadcastTaskStatusChanged } from '../routes/tasks';
@@ -1300,6 +1301,7 @@ export class PlanningOrchestrator {
         `${blockedMembers.length} blocked staged intent(s) still outstanding: ` +
         `${blockedMembers.map((i) => i.id).join(', ')}.`,
     );
+    broadcastSessionCompleteness(sessionId, this.sessionManager);
     return true;
   }
 

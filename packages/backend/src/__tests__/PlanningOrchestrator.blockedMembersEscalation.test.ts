@@ -24,6 +24,7 @@ import {
 import type { StagedIntentRow } from '../db/types';
 import { PlanningOrchestrator } from '../orchestration/PlanningOrchestrator';
 import type { SessionManager } from '../session/SessionManager';
+import { setStagedIntentBroadcast } from '../routes/stagedIntents';
 
 function makeSessionManager() {
   const emitter = new EventEmitter();
@@ -129,5 +130,40 @@ describe('PlanningOrchestrator — escalate outstanding blocked members on sessi
     orchestrator.endSession(SESSION_ID);
 
     expect(getTaskPauseReason(TASK_ID)).toBeNull();
+  });
+
+  it('broadcasts session_completeness complete:true once the pause row is written', () => {
+    seedSession();
+    db.prepare('UPDATE sessions SET status = ? WHERE session_id = ?').run(
+      'idle',
+      SESSION_ID,
+    );
+    stageIntent({ state: 'needs_revision' });
+    const broadcast = vi.fn();
+    setStagedIntentBroadcast(broadcast);
+    const orchestrator = new PlanningOrchestrator(makeSessionManager());
+
+    (
+      orchestrator as unknown as {
+        surfaceBlockedMembersPauseReason: (
+          sessionId: string,
+          row: unknown,
+          reason: string,
+        ) => boolean;
+      }
+    ).surfaceBlockedMembersPauseReason(
+      SESSION_ID,
+      db.prepare('SELECT * FROM sessions WHERE session_id = ?').get(SESSION_ID),
+      'test',
+    );
+
+    expect(getTaskPauseReason(TASK_ID)?.reason).toBe(
+      'planning_terminal_blocked_members',
+    );
+    expect(broadcast).toHaveBeenCalledWith({
+      type: 'session_completeness',
+      sessionId: SESSION_ID,
+      complete: true,
+    });
   });
 });

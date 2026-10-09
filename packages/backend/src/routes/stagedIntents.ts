@@ -309,7 +309,7 @@ export function broadcastIntentById(id: string): void {
  * via resolveSessionCompleteForDisplay rather than importing this, since it
  * has its own `_broadcast` wiring already.
  */
-function broadcastSessionCompleteness(
+export function broadcastSessionCompleteness(
   sessionId: string,
   sessionManager: SessionManager | undefined,
 ): void {
