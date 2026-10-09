@@ -5021,7 +5021,11 @@ const SESSION_ID_RE =
 export function clearGroomAttributedTaskPauseReasons(): number {
   const rows = db
     .prepare(`SELECT task_id, pause_reason, detail FROM task_pause_reasons`)
-    .all() as { task_id: string; pause_reason: string; detail: string | null }[];
+    .all() as {
+    task_id: string;
+    pause_reason: string;
+    detail: string | null;
+  }[];
   const typeOf = db.prepare(
     `SELECT session_type FROM sessions WHERE session_id = ?`,
   );
