@@ -173,6 +173,7 @@ interface NeedsAttentionInfo {
   runId: string;
   project: string;
   stepId: string;
+  runKind: DeployRunKind;
   reason: string;
 }
 
@@ -182,7 +183,7 @@ interface CompanionFlagInfo {
   companions: CompanionDecl[];
 }
 
-interface DeployOrchestratorSink {
+export interface DeployOrchestratorSink {
   /** A step failed and rollback (if any) has run — the operator must intervene. */
   onNeedsAttention?(info: NeedsAttentionInfo): void;
   /** Advisory: a companion's trigger_paths matched the deployed→target diff. */
@@ -582,6 +583,7 @@ export class DeployOrchestrator {
         runId: active.run_id,
         project: this.project,
         stepId: active.current_step ?? '',
+        runKind: this.kind,
         reason: `cannot resume: ${loaded.reason}`,
       });
       return;
@@ -596,6 +598,7 @@ export class DeployOrchestrator {
         runId: active.run_id,
         project: this.project,
         stepId: active.current_step ?? '',
+        runKind: this.kind,
         reason: `cannot resume: ${loadedBindings.reason}`,
       });
       return;
@@ -613,6 +616,7 @@ export class DeployOrchestrator {
         runId: active.run_id,
         project: this.project,
         stepId: active.current_step ?? '',
+        runKind: this.kind,
         reason: `cannot resume: ${bindingCheck.reason}`,
       });
       return;
@@ -772,17 +776,22 @@ export class DeployOrchestrator {
           detail: outcome.detail ?? null,
           at: this.now(),
         });
+        let rollbackDeclined = false;
         if (step.rollback_ref) {
-          await this.runCompensatingStep(
-            runId,
-            playbook,
-            step,
-            targetSha,
-            bindings,
-          );
+          rollbackDeclined =
+            (await this.runCompensatingStep(
+              runId,
+              playbook,
+              step,
+              targetSha,
+              bindings,
+            )) === 'declined';
         }
         completeDeployRun(runId, 'failed', this.now());
-        const reason = describeFailure(playbook, step, outcome.detail);
+        const baseReason = describeFailure(playbook, step, outcome.detail);
+        const reason = rollbackDeclined
+          ? `${baseReason} (compensating step "${step.rollback_ref}" was declined and not run)`
+          : baseReason;
         logger.error(
           `[DeployOrchestrator] run ${runId} (${this.project}) halted at step "${step.id}": ${reason}`,
         );
@@ -790,6 +799,7 @@ export class DeployOrchestrator {
           runId,
           project: this.project,
           stepId: step.id,
+          runKind: this.kind,
           reason,
         });
         return;
@@ -836,8 +846,8 @@ export class DeployOrchestrator {
     failedStep: StepDescriptor,
     targetSha: string,
     bindings: DeployBindings,
-  ): Promise<void> {
-    if (!failedStep.rollback_ref) return;
+  ): Promise<'declined' | 'attempted' | 'skipped'> {
+    if (!failedStep.rollback_ref) return 'skipped';
     const compensatingStep = playbook.steps.find(
       (s) => s.id === failedStep.rollback_ref,
     );
@@ -845,7 +855,7 @@ export class DeployOrchestrator {
       logger.warn(
         `[DeployOrchestrator] run ${runId}: rollback_ref "${failedStep.rollback_ref}" not found in playbook`,
       );
-      return;
+      return 'skipped';
     }
     const approved = await this.deps.waitForConfirmGate({
       runId,
@@ -859,7 +869,7 @@ export class DeployOrchestrator {
       disposition: approved ? 'approved' : 'rejected',
       at: this.now(),
     });
-    if (!approved) return;
+    if (!approved) return 'declined';
     try {
       const result = await this.executeStep(
         runId,
@@ -884,6 +894,7 @@ export class DeployOrchestrator {
         at: this.now(),
       });
     }
+    return 'attempted';
   }
 
   private async executeStep(

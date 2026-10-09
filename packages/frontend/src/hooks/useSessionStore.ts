@@ -135,6 +135,14 @@ export function useSessionStore() {
     message: string;
     receivedAt: number;
   } | null>(null);
+  const [lastDeployNeedsAttention, setLastDeployNeedsAttention] = useState<{
+    runKind: 'deploy' | 'wrap';
+    runId: string;
+    project: string;
+    stepId: string;
+    reason: string;
+    receivedAt: number;
+  } | null>(null);
   const [lastStuckNotification, setLastStuckNotification] = useState<{
     sessionId: string;
     taskName: string;
@@ -606,6 +614,16 @@ export function useSessionStore() {
       setTaskListRefreshTrigger((n) => n + 1);
       setPrRefreshTrigger((n) => n + 1);
     }
+    if (msg.type === 'deploy_needs_attention') {
+      setLastDeployNeedsAttention({
+        runKind: msg.runKind,
+        runId: msg.runId,
+        project: msg.project,
+        stepId: msg.stepId,
+        reason: msg.reason,
+        receivedAt: Date.now(),
+      });
+    }
     if (msg.type === 'stuck_session_notified') {
       setLastStuckNotification({
         sessionId: msg.sessionId,
@@ -836,6 +854,7 @@ export function useSessionStore() {
     lastPrMergeabilityChangedEvent,
     lastReviewEscalation,
     lastReviewFailed,
+    lastDeployNeedsAttention,
     lastStuckNotification,
     lastStuckPaused,
     lastStuckKilled,

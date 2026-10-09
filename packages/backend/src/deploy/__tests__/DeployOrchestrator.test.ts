@@ -436,7 +436,9 @@ describe('DeployOrchestrator: step failure halts + compensating step', () => {
       step({ id: 'compensate', kind: 'shell' }),
     ]);
     const shellCommands: string[] = [];
+    const onNeedsAttention = vi.fn();
     const deps = makeDeps(playbook, {
+      sink: { onNeedsAttention },
       waitForConfirmGate: vi.fn(async () => false),
       runShell: vi.fn(async (command: string): Promise<ShellResult> => {
         shellCommands.push(command);
@@ -449,6 +451,16 @@ describe('DeployOrchestrator: step failure halts + compensating step', () => {
     const run = await orchestrator.startDeploy('sha-target');
     await flush();
 
+    expect(onNeedsAttention).toHaveBeenCalledTimes(1);
+    expect(onNeedsAttention).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: run.run_id,
+        project: 'proj',
+        stepId: 'deploy',
+        runKind: 'deploy',
+        reason: expect.stringContaining('declined'),
+      }),
+    );
     expect(shellCommands).toEqual(['run deploy']);
     const events = listDeployRunEvents(run.run_id).map((e) => e.event_type);
     expect(events).toContain('confirm_gate');
@@ -697,12 +709,24 @@ describe('DeployOrchestrator: resume after a restart', () => {
         }),
       ),
     });
-    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const onNeedsAttention = vi.fn();
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', {
+      ...deps,
+      sink: { onNeedsAttention },
+    });
     await orchestrator.resume();
     await flush();
 
     expect(getDeployRun(priorRun.run_id)?.status).toBe('failed');
     expect(getProjectDeployedSha('proj')).toBeNull();
+    expect(onNeedsAttention).toHaveBeenCalledTimes(1);
+    expect(onNeedsAttention).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: priorRun.run_id,
+        project: 'proj',
+        runKind: 'deploy',
+      }),
+    );
   });
 });
 

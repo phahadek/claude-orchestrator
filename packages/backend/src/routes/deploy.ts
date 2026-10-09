@@ -3,6 +3,7 @@ import path from 'path';
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import type { Scheduler } from '../orchestration/Scheduler';
+import type { ServerMessage } from '../ws/types';
 import {
   reportProjectDeploy,
   getLatestDeployRun,
@@ -15,6 +16,7 @@ import {
 import {
   DeployOrchestrator,
   buildDeployAgenticTaskId,
+  type DeployOrchestratorSink,
 } from '../deploy/DeployOrchestrator';
 import type { StepDescriptor } from '../deploy/playbookSchema';
 import { loadDeployPlaybook } from '../deploy/loadPlaybook';
@@ -78,6 +80,27 @@ const DEFAULT_AGENTIC_STEP_BUDGET_MS = 20 * 60_000;
 const CAPABILITY_POLL_INTERVAL_MS = 5_000;
 
 let _scheduler: Scheduler | null = null;
+
+let _deployBroadcast: ((msg: ServerMessage) => void) | null = null;
+
+export function setDeployBroadcast(fn: (msg: ServerMessage) => void): void {
+  _deployBroadcast = fn;
+}
+
+/** Fire-and-forget operator toast; the status endpoint remains the durable record. */
+export function createDeployNeedsAttentionSink(): DeployOrchestratorSink {
+  return {
+    onNeedsAttention: (info) => {
+      try {
+        _deployBroadcast?.({ type: 'deploy_needs_attention', ...info });
+      } catch (err) {
+        logger.warn(
+          `[deploy] needs-attention broadcast failed for run ${info.runId}: ${String(err)}`,
+        );
+      }
+    },
+  };
+}
 
 export function setDeployScheduler(s: Scheduler): void {
   _scheduler = s;
@@ -439,6 +462,7 @@ function getOrchestrator(
   let orchestrator = orchestrators.get(project);
   if (!orchestrator) {
     orchestrator = new DeployOrchestrator(project, projectDir, {
+      sink: createDeployNeedsAttentionSink(),
       waitForConfirmGate: async () => true,
       spawnAgenticStep: (input) => {
         if (!_deployAgenticStepSpawner) {
@@ -672,6 +696,7 @@ function createWrapOrchestrator(
         bindings: WRAP_STATIC_BINDINGS,
         bindingsPath: null,
       }),
+      sink: createDeployNeedsAttentionSink(),
       runShell: createWrapShellRunner(),
       spawnAgenticStep: (input) => {
         logger.error(
