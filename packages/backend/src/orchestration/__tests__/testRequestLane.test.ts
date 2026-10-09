@@ -136,7 +136,7 @@ beforeEach(() => {
   db.prepare('DELETE FROM test_perf_baselines').run();
   db.prepare('DELETE FROM projects').run();
   db.prepare(
-    `DELETE FROM settings WHERE key = 'test_request_max_concurrent'`,
+    `DELETE FROM settings WHERE key IN ('test_request_max_concurrent', 'test_request_memory_ceiling_mb', 'test_request_per_run_memory_mb')`,
   ).run();
   __resetProjectSemaphoresForTest();
 });
@@ -2092,6 +2092,63 @@ describe('global test-run concurrency cap', () => {
     resolvers[resolvers.length - 1]({ passed: true, output: 'ok' });
 
     await Promise.all([first, second, third]);
+  });
+
+  async function burstAndCountAdmitted(
+    count: number,
+    projectId: string,
+  ): Promise<number> {
+    insertProject({
+      id: projectId,
+      name: projectId,
+      project_dir: `/tmp/${projectId}`,
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    const resolvers = queueingRunTestCommands();
+    const runs = Array.from({ length: count }, (_, i) =>
+      runProjectTestRequest(baseSpec({ projectId, contentHash: `mem-${i}` })),
+    );
+    await new Promise((r) => setTimeout(r, 50));
+    const admitted = mockRunTestCommands.mock.calls.length;
+    // Drain: resolve everything as it gets admitted.
+    while (mockRunTestCommands.mock.calls.length < count) {
+      resolvers.forEach((resolve) => resolve({ passed: true, output: 'ok' }));
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    resolvers.forEach((resolve) => resolve({ passed: true, output: 'ok' }));
+    await Promise.all(runs);
+    return admitted;
+  }
+
+  it('memory ceiling bounds a burst: ceiling=1000, perRun=400 caps at 2 even with max_concurrent=5', async () => {
+    typedSetSetting('test_request_max_concurrent', 5);
+    typedSetSetting('test_request_memory_ceiling_mb', 1000);
+    typedSetSetting('test_request_per_run_memory_mb', 400);
+    expect(await burstAndCountAdmitted(5, 'proj-mem-a')).toBe(2);
+  });
+
+  it('ceiling=0 leaves test_request_max_concurrent unchanged', async () => {
+    typedSetSetting('test_request_max_concurrent', 3);
+    typedSetSetting('test_request_memory_ceiling_mb', 0);
+    expect(await burstAndCountAdmitted(5, 'proj-mem-b')).toBe(3);
+  });
+
+  it('a ceiling smaller than perRun still admits one run', async () => {
+    typedSetSetting('test_request_max_concurrent', 5);
+    typedSetSetting('test_request_memory_ceiling_mb', 100);
+    typedSetSetting('test_request_per_run_memory_mb', 400);
+    expect(await burstAndCountAdmitted(3, 'proj-mem-c')).toBe(1);
+  });
+});
+
+describe('backend vitest config', () => {
+  it('caps workers at 3', async () => {
+    const cfg = (await import('../../../vitest.config')).default;
+    expect((cfg as { test?: { maxWorkers?: number } }).test?.maxWorkers).toBe(
+      3,
+    );
   });
 });
 
