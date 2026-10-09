@@ -19,13 +19,16 @@ const DONE_TOKEN = 'Done';
 const DESIGN_TOKEN = 'Design';
 const PLANNING_TOKEN = 'Planning';
 const INVESTIGATION_TOKEN = 'Investigation';
+const OPERATIONAL_TOKEN = 'Operational';
 const DEFERRED_TOKEN = 'Deferred';
 const DOCS_TOKEN = 'Docs';
 
 /**
- * Groom dep-gate: a Depends-On that is a decision-producing Type (📐 Design /
- * 📋 Planning / 🔎 Investigation) must be ✅ Done — grooming against an
- * unresolved decision means grooming against an unanswered question. Any
+ * Groom dep-gate: a Depends-On that is a decision-producing or outcome-
+ * dependent Type (📐 Design / 📋 Planning / 🔎 Investigation / 🔧 Operational)
+ * must be ✅ Done — grooming against an unresolved decision means grooming
+ * against an unanswered question, and the promotion gate
+ * (groomGate.ts isDependsOnGateClear) refuses all four. Any
  * other-Type Depends-On (e.g. 💻 Code) never blocks grooming while at 🔲
  * Backlog — grooming is not dispatch, and the auto-dispatcher independently
  * holds every Ready Code task until its deps reach ✅ Done, so promoting a
@@ -53,11 +56,12 @@ export function passesGroomDepGate(
       );
       return false;
     }
-    const isDecisionType =
+    const blocksUntilDone =
       dep.type.includes(DESIGN_TOKEN) ||
       dep.type.includes(PLANNING_TOKEN) ||
-      dep.type.includes(INVESTIGATION_TOKEN);
-    if (isDecisionType) {
+      dep.type.includes(INVESTIGATION_TOKEN) ||
+      dep.type.includes(OPERATIONAL_TOKEN);
+    if (blocksUntilDone) {
       if (!dep.status.includes(DONE_TOKEN)) return false;
     } else if (dep.status.includes(DEFERRED_TOKEN)) {
       return false;
@@ -121,11 +125,12 @@ export function groomBlockingDepTitles(
         continue;
       }
     }
-    const isDecisionType =
+    const blocksUntilDone =
       dep.type.includes(DESIGN_TOKEN) ||
       dep.type.includes(PLANNING_TOKEN) ||
-      dep.type.includes(INVESTIGATION_TOKEN);
-    if (isDecisionType) {
+      dep.type.includes(INVESTIGATION_TOKEN) ||
+      dep.type.includes(OPERATIONAL_TOKEN);
+    if (blocksUntilDone) {
       if (!dep.status.includes(DONE_TOKEN)) blockingTitles.push(dep.title);
     } else if (dep.status.includes(DEFERRED_TOKEN)) {
       blockingTitles.push(dep.title);

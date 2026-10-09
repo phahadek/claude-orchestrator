@@ -1494,8 +1494,8 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         '(`orchestration/planningCandidates.ts` `passesGroomDepGate`), stated ' +
         'here so a groom session applies it rather than reasoning about ' +
         'dependencies from first principles: a Depends-On of a ' +
-        'decision-producing Type — 📐 Design / 📋 Planning / 🔎 Investigation — ' +
-        'blocks promotion to Ready for as long as it is not ✅ Done. A ' +
+        'decision-producing Type — 📐 Design / 📋 Planning / 🔎 Investigation / ' +
+        '🔧 Operational — blocks promotion to Ready for as long as it is not ✅ Done. A ' +
         'Depends-On of any other Type, including 💻 Code, never blocks ' +
         'promotion while it sits at 🔲 Backlog — grooming is not dispatch, ' +
         'so a dependency merely not-yet-groomed does not stop this task from ' +

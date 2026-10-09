@@ -391,6 +391,74 @@ describe('groomBlockingDepTitles', () => {
   });
 });
 
+describe('🔧 Operational dependency — dispatch gate agrees with promotion gate', () => {
+  const types = [
+    '🔧 Operational',
+    '💻 Code',
+    '📐 Design',
+    '📋 Planning',
+    '🔎 Investigation',
+  ];
+  const statuses = [
+    '🔲 Backlog',
+    '🗂️ Ready',
+    '🔄 In Progress',
+    '✅ Done',
+    '⏭️ Deferred',
+  ];
+
+  it('blocks a non-Done 🔧 Operational dep at Ready/Backlog/In Progress, passes once Done', () => {
+    const t = task({ dependsOn: ['op-dep'] });
+    for (const status of ['🗂️ Ready', '🔲 Backlog', '🔄 In Progress']) {
+      const m = depsMap([
+        task({ id: 'op-dep', title: 'Op dep', type: '🔧 Operational', status }),
+      ]);
+      expect(passesGroomDepGate(t, m)).toBe(false);
+      expect(groomBlockingDepTitles(t, m).blockingTitles).toEqual(['Op dep']);
+    }
+    const done = depsMap([
+      task({
+        id: 'op-dep',
+        title: 'Op dep',
+        type: '🔧 Operational',
+        status: '✅ Done',
+      }),
+    ]);
+    expect(passesGroomDepGate(t, done)).toBe(true);
+    expect(groomBlockingDepTitles(t, done).blockingTitles).toEqual([]);
+  });
+
+  it('passesGroomDepGate and groomBlockingDepTitles agree on every Type × Status case', () => {
+    const t = task({ dependsOn: ['dep'] });
+    for (const type of types) {
+      for (const status of statuses) {
+        const m = depsMap([task({ id: 'dep', title: 'Dep', type, status })]);
+        expect(groomBlockingDepTitles(t, m).blockingTitles.length === 0).toBe(
+          passesGroomDepGate(t, m),
+        );
+      }
+    }
+  });
+
+  it('isGroomCandidate is false for a Backlog task whose only dep is a non-Done 🔧 Operational task', () => {
+    const t = task({ dependsOn: ['op-dep'] });
+    const tasksById = depsMap([
+      task({ id: 'op-dep', type: '🔧 Operational', status: '🗂️ Ready' }),
+    ]);
+    expect(
+      isGroomCandidate(t, {
+        tasksById,
+        hasActiveSession: () => false,
+        hasActiveGroomSession: () => false,
+        inCrashCooldown: () => false,
+        isNoOpSuppressed: () => false,
+        isKillSuppressed: () => false,
+        hasOpenGroomGroup: () => false,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe('isGroomCandidate', () => {
   const baseDeps = {
     tasksById: new Map<string, NotionTask>(),
