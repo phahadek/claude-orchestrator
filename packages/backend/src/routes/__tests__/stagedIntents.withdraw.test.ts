@@ -35,6 +35,7 @@ import {
   insertSession,
   insertStagedIntent,
   getSession,
+  transitionStagedIntent,
 } from '../../db/queries';
 import {
   createStagedIntentsRouter,
@@ -110,6 +111,46 @@ describe('withdrawIntent', () => {
 
     expect(withdrawn.state).toBe('withdrawn');
     expect(withdrawn.dispositionReason).toBe('staged against the wrong field');
+  });
+
+  it('lets the owning session withdraw a needs_revision intent, but not another session', () => {
+    seedSession('sess-1');
+    seedSession('sess-2', 'task-2');
+    const intent = stageIntent(
+      'task.setProperties',
+      { taskId: 'task-1', patch: { priority: 'High' } },
+      'proj-1',
+      null,
+      'sess-1',
+    );
+    transitionStagedIntent(intent.id, 'needs_revision');
+
+    expect(() => withdrawIntent(intent.id, 'not mine', 'sess-2')).toThrow(
+      IntentWithdrawError,
+    );
+    const withdrawn = withdrawIntent(intent.id, 'no decision now', 'sess-1');
+    expect(withdrawn.state).toBe('withdrawn');
+    expect(withdrawn.dispositionReason).toBe('no decision now');
+  });
+
+  it('still rejects withdrawing a pending_verification or rejected intent', () => {
+    seedSession('sess-1');
+    for (const state of ['pending_verification', 'rejected'] as const) {
+      const intent = stageIntent(
+        'task.setProperties',
+        { taskId: 'task-1', patch: { priority: state } },
+        'proj-1',
+        null,
+        'sess-1',
+      );
+      transitionStagedIntent(
+        intent.id,
+        state === 'rejected' ? 'rejected' : 'pending_verification',
+      );
+      expect(() => withdrawIntent(intent.id, 'nope', 'sess-1')).toThrow(
+        IntentWithdrawError,
+      );
+    }
   });
 
   it('rejects withdrawing an intent staged by a different session', () => {

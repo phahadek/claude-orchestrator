@@ -12345,7 +12345,7 @@ const STAGED_INTENT_TRANSITIONS: Record<
   // recovery route (POST /staged-intents/group/:groupId/recover) — it
   // re-surfaces an intent onto the normal staged/approved surface so the
   // usual commit or per-item disposition routes can act on it again.
-  needs_revision: ['staged', 'rejected', 'superseded'],
+  needs_revision: ['staged', 'rejected', 'superseded', 'withdrawn'],
   approved: [
     'staged',
     'committed',

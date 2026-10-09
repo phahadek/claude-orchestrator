@@ -134,7 +134,9 @@ function formatBlockedMembersNudgeMessage(
     `You ended your turn holding ${blockedMembers.length} of your own staged ` +
     'intent(s) blocked at needs_revision/pending_verification: ' +
     `${blockedMembers.map((i) => i.id).join(', ')}. Resolve these — supersede ` +
-    'a needs_revision intent with a corrected one, or address whatever ' +
+    'a needs_revision intent with a corrected one, or, if the right answer is ' +
+    '"no decision now", withdraw the whole group and then call a standalone ' +
+    'planning.noOp, or address whatever ' +
     'pending_verification is waiting on — before ending the turn again.'
   );
 }

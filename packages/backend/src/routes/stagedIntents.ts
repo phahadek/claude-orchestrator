@@ -4675,8 +4675,22 @@ async function reconcileOpsCompletion(
   );
 }
 
-/** States a session may still withdraw from — mirrors ACTIVE_STATES below (declared later in this file). */
-const WITHDRAWABLE_STATES: StagedIntentState[] = ['staged', 'approved'];
+/**
+ * States the owning session may withdraw from — ACTIVE_STATES (declared later
+ * in this file) plus needs_revision, so a session whose correct revision is
+ * "no decision now" can retire its own blocked intents.
+ */
+const WITHDRAWABLE_STATES: StagedIntentState[] = [
+  'staged',
+  'approved',
+  'needs_revision',
+];
+
+/** The window withdrawGateVerifyMirror retires from — a reconciler-retired mirror is never needs_revision. */
+const GATE_VERIFY_MIRROR_WITHDRAWABLE_STATES: StagedIntentState[] = [
+  'staged',
+  'approved',
+];
 
 /**
  * Thrown by withdrawIntent when the withdrawal cannot be honoured — never
@@ -4873,7 +4887,8 @@ export function withdrawGateVerifyMirror(
   reason: string,
 ): void {
   const row = getStagedIntentRow(intentId);
-  if (!row || !WITHDRAWABLE_STATES.includes(row.state)) return;
+  if (!row || !GATE_VERIFY_MIRROR_WITHDRAWABLE_STATES.includes(row.state))
+    return;
 
   const withdrawn = transitionStagedIntent(intentId, 'withdrawn', {
     dispositionReason: reason,
