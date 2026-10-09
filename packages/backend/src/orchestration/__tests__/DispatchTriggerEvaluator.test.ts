@@ -569,3 +569,105 @@ describe('DispatchTriggerEvaluator — dispatch provenance audit rows', () => {
     });
   });
 });
+
+describe('DispatchTriggerEvaluator — groom dispatch failures never set a task pause', () => {
+  const PROJECT = 'proj-groom-no-pause';
+  const MILESTONE = 'milestone-groom-no-pause';
+  const TASK_ID = 'task-groom-no-pause';
+
+  function makeTask(): NotionTask {
+    return {
+      id: TASK_ID,
+      title: 'Task',
+      status: '🔲 Backlog',
+      type: '💻 Code',
+      dependsOn: [],
+      notionUrl: `https://notion.so/${TASK_ID}`,
+    };
+  }
+
+  beforeEach(async () => {
+    const { db } = await import('../../db/db.js');
+    db.prepare('DELETE FROM task_cache').run();
+    db.prepare('DELETE FROM flow_arm').run();
+    db.prepare('DELETE FROM milestones').run();
+    db.prepare('DELETE FROM projects').run();
+    db.prepare('DELETE FROM task_pause_reasons').run();
+
+    insertProject({
+      id: PROJECT,
+      name: 'No Pause Project',
+      project_dir: '/tmp/proj-groom-no-pause',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    insertMilestone({
+      id: MILESTONE,
+      project_id: PROJECT,
+      name: 'No Pause Milestone',
+      source_id: null,
+      canonical_short_id: null,
+      wrapped_at: null,
+    });
+    upsertTaskCache(`board:${MILESTONE}`, JSON.stringify([makeTask()]));
+  });
+
+  function makeEvaluator() {
+    const launcher = {
+      launchSelected: vi.fn().mockResolvedValue({
+        launched: [],
+        deferred: [],
+        failed: [{ taskId: TASK_ID, reason: 'spawn boom' }],
+      }),
+    };
+    const evaluator = new DispatchTriggerEvaluator(
+      {} as never,
+      launcher as never,
+    );
+    const candidate = {
+      projectId: PROJECT,
+      milestone: { id: MILESTONE } as never,
+      task: makeTask(),
+    };
+    return { evaluator, candidate };
+  }
+
+  it('a groom dispatch that exhausts the crash budget writes no launch_failed pause and stays in cooldown', async () => {
+    const { getTaskPauseReason } = await import('../../db/queries.js');
+    const { evaluator, candidate } = makeEvaluator();
+
+    for (let i = 0; i < 3; i++) {
+      expect(
+        await (evaluator as any).dispatchPlanningCandidate(candidate, 'groom'),
+      ).toBe(false);
+    }
+
+    expect(getTaskPauseReason(TASK_ID)).toBeNull();
+    expect((evaluator as any).crashBudget.inCooldown(TASK_ID)).toBe(true);
+  });
+
+  it('a design dispatch that exhausts the crash budget still writes launch_failed', async () => {
+    const { getTaskPauseReason } = await import('../../db/queries.js');
+    const { evaluator, candidate } = makeEvaluator();
+
+    for (let i = 0; i < 3; i++) {
+      await (evaluator as any).dispatchPlanningCandidate(candidate, 'design');
+    }
+
+    expect(getTaskPauseReason(TASK_ID)?.reason).toBe('launch_failed');
+  });
+
+  it('an ops dispatch that exhausts the crash budget still writes launch_failed', async () => {
+    const { getTaskPauseReason } = await import('../../db/queries.js');
+    const { loadOpsContext } = await import('../../ops/opsLoad.js');
+    vi.mocked(loadOpsContext).mockRejectedValue(new Error('ops load boom'));
+    const { evaluator, candidate } = makeEvaluator();
+
+    for (let i = 0; i < 3; i++) {
+      await (evaluator as any).dispatchOpsCandidate(candidate);
+    }
+
+    expect(getTaskPauseReason(TASK_ID)?.reason).toBe('launch_failed');
+  });
+});

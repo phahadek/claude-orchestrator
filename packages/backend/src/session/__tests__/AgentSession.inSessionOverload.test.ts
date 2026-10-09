@@ -19,6 +19,7 @@ vi.mock('child_process', () => ({
 
 vi.mock('../../db/queries', () =>
   mockDbQueries({
+    getSession: vi.fn(),
     upsertSessionEvent: vi.fn().mockReturnValue(1),
     updateSessionStatus: vi.fn(),
     markSessionDone: vi.fn(),
@@ -115,7 +116,11 @@ vi.mock('../../utils/eventFilters', () => ({
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
 import { AgentSession } from '../AgentSession';
-import { setPauseReason, setTaskPauseReason } from '../../db/queries';
+import {
+  getSession,
+  setPauseReason,
+  setTaskPauseReason,
+} from '../../db/queries';
 import { recordEvent } from '../../audit/AuditLog';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -208,6 +213,37 @@ describe('AgentSession in-session 529/500 handling', () => {
     // Escalation is a distinct reason from the original api_overloaded pause,
     // and does not attempt a respawn.
     expect(setTaskPauseReason).toHaveBeenCalledWith(
+      'task-123',
+      'api_overloaded_exhausted',
+      expect.any(String),
+    );
+    expect(sessionManager.respawnForTransientOverload).not.toHaveBeenCalled();
+  });
+
+  it('writes no task pause when the exhausted-overload session is a groom session', () => {
+    const sessionManager = {
+      send: vi.fn(),
+      isAlive: vi.fn().mockReturnValue(true),
+      recordInSessionOverloadEvent: vi.fn().mockReturnValue({
+        count: 6,
+        escalated: true,
+        cooldownMs: 300_000,
+      }),
+      respawnForTransientOverload: vi.fn().mockResolvedValue(true),
+      clearInSessionOverloadBudget: vi.fn(),
+    };
+    const session = makeSession(sessionManager);
+    vi.mocked(getSession).mockReturnValue({
+      session_type: 'groom',
+    } as never);
+
+    try {
+      sendEvent(session, OVERLOAD_ERROR_EVENT);
+    } finally {
+      vi.mocked(getSession).mockReset();
+    }
+
+    expect(setTaskPauseReason).not.toHaveBeenCalledWith(
       'task-123',
       'api_overloaded_exhausted',
       expect.any(String),

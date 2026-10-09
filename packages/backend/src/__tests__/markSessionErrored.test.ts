@@ -708,7 +708,7 @@ describe('SessionManager.markSessionErrored() — planning session (groom) crash
 
   it('writes no task pause on a repeated crash', async () => {
     vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(2);
-    setupFakeBackend();
+    const mockUpdate = setupFakeBackend();
     const sm = new SessionManager();
     const messages: ServerMessage[] = [];
     sm.on('message', (m: ServerMessage) => messages.push(m));
@@ -716,6 +716,9 @@ describe('SessionManager.markSessionErrored() — planning session (groom) crash
     sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
     await new Promise((r) => setTimeout(r, 0));
 
+    // A groom never moves its target out of Backlog, so there is nothing to
+    // revert and no status write happens either.
+    expect(mockUpdate).not.toHaveBeenCalled();
     expect(queries.incrementTaskCrashCount).toHaveBeenCalled();
     expect(queries.setTaskPauseReason).not.toHaveBeenCalled();
     expect(

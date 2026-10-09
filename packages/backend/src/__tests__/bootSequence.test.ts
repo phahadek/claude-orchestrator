@@ -271,6 +271,56 @@ describe('boot chain — base_branch_broken_pause_clear step', () => {
     expect(row).toBeUndefined();
   });
 
+  it('clears a groom-attributed planning pause at boot but keeps a design one, and announces groom_pause_clear', async () => {
+    const { deps, broadcast } = makeDeps();
+    const groomSid = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const designSid = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    for (const [sid, taskId, type] of [
+      [groomSid, 'boot-groom-task', 'groom'],
+      [designSid, 'boot-design-task', 'design'],
+    ] as const) {
+      db.prepare(
+        `INSERT INTO sessions (session_id, task_id, status, started_at, session_type) VALUES (?, ?, 'done', ?, ?)`,
+      ).run(sid, taskId, Date.now(), type);
+      db.prepare(
+        `INSERT OR REPLACE INTO task_pause_reasons (task_id, pause_reason, detail, set_at) VALUES (?, ?, ?, ?)`,
+      ).run(
+        taskId,
+        JSON.stringify({
+          reason: 'planning_terminal_blocked_members',
+          source: 'launch',
+          severity: 'needs_attention',
+          retry_strategy: 'manual_action',
+          blocks_merge: true,
+        }),
+        `Planning session ${sid} reached terminal`,
+        Date.now(),
+      );
+    }
+
+    await runAndDrain(deps);
+
+    const remaining = (
+      db.prepare(`SELECT task_id FROM task_pause_reasons`).all() as {
+        task_id: string;
+      }[]
+    ).map((r) => r.task_id);
+    expect(remaining).not.toContain('boot-groom-task');
+    expect(remaining).toContain('boot-design-task');
+
+    const startedCall = vi
+      .mocked(broadcast)
+      .mock.calls.find(([msg]) => msg.type === 'boot_reconciliation_started');
+    expect(
+      (
+        startedCall![0] as Extract<
+          ServerMessage,
+          { type: 'boot_reconciliation_started' }
+        >
+      ).steps,
+    ).toContain('groom_pause_clear');
+  });
+
   it('includes base_branch_broken_pause_clear in the announced boot steps', async () => {
     const { deps, broadcast } = makeDeps();
 

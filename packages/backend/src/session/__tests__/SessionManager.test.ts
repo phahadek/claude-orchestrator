@@ -1247,6 +1247,30 @@ describe('resumeOrphanSessions — usage admission gate', () => {
     expect(vi.mocked(updateSessionStatus)).not.toHaveBeenCalled();
   });
 
+  it('a groom session deferred by exhausted plan usage writes no task pause', async () => {
+    const { registerUsagePoller } =
+      await import('../../orchestration/usageAdmission.js');
+    const resetsAt = new Date(Date.now() + 60_000).toISOString();
+    registerUsagePoller({
+      getCache: () => ({
+        available: true,
+        fiveHour: { percent: 100, resetsAt, severity: 'exceeded' },
+      }),
+    });
+
+    const orphanRow = {
+      ...makeDeadRow(),
+      status: 'running',
+      session_type: 'groom',
+    };
+    vi.mocked(getSessionsByStatus).mockReturnValue([orphanRow]);
+
+    await sm.resumeOrphanSessions();
+
+    expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+    expect(vi.mocked(setTaskPauseReason)).not.toHaveBeenCalled();
+  });
+
   it('resumes normally once usage is available (existing resume behavior unaffected)', async () => {
     const { registerUsagePoller } =
       await import('../../orchestration/usageAdmission.js');
@@ -1463,6 +1487,46 @@ describe('resumeOrphanSessions — resume failure flags needs_attention (resume_
     // Bypasses markSessionErrored's crash-budget/Notion-flip path entirely.
     expect(vi.mocked(incrementTaskCrashCount)).not.toHaveBeenCalled();
   });
+
+  it('groom session: resume failure errors the session but writes no task pause', async () => {
+    const orphanRow = {
+      ...makeDeadRow(),
+      status: 'running',
+      session_type: 'groom',
+    };
+    vi.mocked(getSessionsByStatus).mockReturnValue([orphanRow]);
+    vi.mocked(getProjectById).mockReturnValue(undefined);
+
+    await sm.resumeOrphanSessions();
+
+    expect(vi.mocked(updateSessionStatus)).toHaveBeenCalledWith(
+      SESSION_ID,
+      'error',
+      expect.any(Number),
+    );
+    expect(vi.mocked(setTaskPauseReason)).not.toHaveBeenCalled();
+  });
+
+  it.each(['design', 'ops'])(
+    '%s session: resume failure still writes resume_failed',
+    async (sessionType) => {
+      const orphanRow = {
+        ...makeDeadRow(),
+        status: 'running',
+        session_type: sessionType,
+      };
+      vi.mocked(getSessionsByStatus).mockReturnValue([orphanRow]);
+      vi.mocked(getProjectById).mockReturnValue(undefined);
+
+      await sm.resumeOrphanSessions();
+
+      expect(vi.mocked(setTaskPauseReason)).toHaveBeenCalledWith(
+        'task-1',
+        'resume_failed',
+        expect.stringContaining('not found'),
+      );
+    },
+  );
 
   it('resumeSession throws unexpectedly: flags resume_failed instead of the silent crash-count flow', async () => {
     const orphanRow = { ...makeDeadRow(), status: 'running' };
