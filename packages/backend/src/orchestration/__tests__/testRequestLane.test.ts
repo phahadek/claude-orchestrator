@@ -2117,7 +2117,15 @@ describe('global test-run concurrency cap', () => {
     });
     await Promise.all(
       Array.from({ length: count }, (_, i) =>
-        runProjectTestRequest(baseSpec({ projectId, contentHash: `mem-${i}` })),
+        runProjectTestRequest(
+          baseSpec({
+            projectId,
+            contentHash: `mem-${i}`,
+            // Distinct worktrees: a newer admission withdraws older queued
+            // runs sharing its worktree, which would hide the queueing.
+            worktreePath: `/tmp/wt-${projectId}-${i}`,
+          }),
+        ),
       ),
     );
     expect(mockRunTestCommands).toHaveBeenCalledTimes(count);
