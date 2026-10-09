@@ -42,6 +42,7 @@ import {
   type TestCommandResult,
 } from '../session/test-runner';
 import { hasTestRequestAdmission } from './memoryAdmission';
+import { computeWholeTreeContentHash } from '../session/analyzeGating';
 import {
   loadOrchestratorConfig,
   type ToolVersionCheck,
@@ -1230,6 +1231,49 @@ async function executeTestRequestRun(
     spec.projectId,
   );
   try {
+    // Admission hashed the tree, but the queue wait can be long — re-verify
+    // so a worktree edited while queued never records a result under the
+    // stale hash. Hash failure fails closed.
+    let currentHash: string | null = null;
+    try {
+      currentHash = await computeWholeTreeContentHash(spec.worktreePath);
+    } catch (err) {
+      logger.warn(
+        { err, runId },
+        '[testRequestLane] execution-start content hash failed — failing closed',
+      );
+    }
+    if (currentHash !== spec.contentHash) {
+      withdrawTestRequestRun(runId, 'content_changed');
+      broadcastRunStatus({
+        runId,
+        projectId: spec.projectId,
+        contentHash: spec.contentHash,
+        status: 'withdrawn',
+        sessionId: spec.sessionId,
+        requestedAt,
+        startedAt: requestedAt,
+        finishedAt: Date.now(),
+      });
+      recordEvent({
+        event_type: 'test_run_withdrawn',
+        actor_type: 'system',
+        project_id: spec.projectId,
+        payload: {
+          runId,
+          reason: 'content_changed',
+          supersededBy: 'content_changed',
+        },
+      });
+      return {
+        passed: false,
+        output:
+          '[testRequestLane] withdrawn — worktree content changed since admission',
+        runId,
+        superseded: true,
+        supersededBy: 'content_changed',
+      };
+    }
     markTestRequestRunRunning(
       runId,
       startedAt,

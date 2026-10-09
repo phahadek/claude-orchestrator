@@ -19,7 +19,9 @@ const {
   mockHasAdmission,
   mockLoadOrchestratorConfig,
   mockIngestOffMainThread,
+  mockComputeHash,
 } = vi.hoisted(() => ({
+  mockComputeHash: vi.fn(),
   mockRunTestCommands: vi.fn(),
   mockCollectStructuredTestResult: vi.fn(() => null),
   mockClearReportFiles: vi.fn(),
@@ -50,6 +52,32 @@ vi.mock('../../session/orchestrator-config', () => ({
   resolvePreGrantCapabilities: vi.fn(() => []),
   loadOrchestratorConfig: mockLoadOrchestratorConfig,
 }));
+
+// Default: the tree is unchanged since admission, i.e. the hash equals the
+// oldest still-queued row's hash (the semaphore is FIFO, so that row is the
+// one about to execute). Individual tests override via mockResolvedValueOnce.
+vi.mock('../../session/analyzeGating', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../session/analyzeGating')>();
+  const { db: testDb } = await import('../../db/db');
+  // Rows stay 'queued' until markTestRequestRunRunning, so concurrent
+  // executions must not both resolve to the same oldest row.
+  const claimed = new Set<string>();
+  mockComputeHash.mockImplementation(async (worktreePath: string) => {
+    const rows = testDb
+      .prepare(
+        `SELECT id, content_hash FROM test_request_runs
+         WHERE state = 'queued' AND worktree_path = ?
+         ORDER BY requested_at, rowid`,
+      )
+      .all(worktreePath) as { id: string; content_hash: string }[];
+    const row = rows.find((r) => !claimed.has(r.id));
+    if (!row) return null;
+    claimed.add(row.id);
+    return row.content_hash;
+  });
+  return { ...actual, computeWholeTreeContentHash: mockComputeHash };
+});
 
 // Host memory headroom is real-machine-dependent and irrelevant to most of
 // this suite (coalescing + crash recovery) — defaults to always-admit, but
@@ -418,6 +446,51 @@ describe('runProjectTestRequest — coalescing', () => {
     expect(r1.joined).toBe(false);
     expect(r2.joined).toBe(true);
     expect(r2.runId).toBe(r1.runId);
+  });
+
+  it('a worktree edited between admission and execution is withdrawn as content_changed without running commands', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+    mockComputeHash.mockResolvedValueOnce('hash-edited');
+
+    const r = await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-stale' }),
+    );
+
+    expect(r.passed).toBe(false);
+    expect(r.superseded).toBe(true);
+    expect(r.supersededBy).toBe('content_changed');
+    expect(mockRunTestCommands).not.toHaveBeenCalled();
+    const row = getTestRequestRunById(r.runId);
+    expect(row?.state).toBe('failed');
+    expect(row?.superseded_by).toBe('content_changed');
+  });
+
+  it('fails closed when re-hashing at execution start throws, and still releases the permit', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+    mockComputeHash.mockRejectedValueOnce(new Error('boom'));
+
+    const r = await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-throws' }),
+    );
+    expect(r.superseded).toBe(true);
+    expect(r.supersededBy).toBe('content_changed');
+    expect(mockRunTestCommands).not.toHaveBeenCalled();
+
+    const next = await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-after-throw' }),
+    );
+    expect(next.passed).toBe(true);
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+  });
+
+  it('an unchanged tree still executes normally', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+    const r = await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-unchanged' }),
+    );
+    expect(r.passed).toBe(true);
+    expect(r.superseded).toBeUndefined();
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
   });
 
   it('a different content-hash starts an independent execution', async () => {
