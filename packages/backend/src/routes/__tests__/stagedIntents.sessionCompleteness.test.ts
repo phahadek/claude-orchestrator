@@ -35,8 +35,13 @@ import {
   insertSession,
   isSessionComplete,
   transitionStagedIntent,
+  setTaskPauseReason,
+  hasOpenGroomGroupForTask,
+  insertStagedIntent,
 } from '../../db/queries';
+import { normalizeTaskId } from '../../tasks/taskId';
 import {
+  isVisibleOnDecisionSurface,
   createStagedIntentsRouter,
   stageIntent,
   setStagedIntentBroadcast,
@@ -442,5 +447,139 @@ describe('session_completeness broadcast — the termination-gap fix', () => {
     expect(broadcast).not.toHaveBeenCalledWith(
       expect.objectContaining({ type: 'session_completeness' }),
     );
+  });
+});
+
+describe('isSessionComplete — session parked on its blocked members', () => {
+  const TASK_ID = 'task-parked-1';
+  const GROUP = 'groom-parked-group';
+
+  function seedParked(withPause: boolean, status = 'idle') {
+    seedSession(SESSION_ID, status);
+    db.prepare('UPDATE sessions SET task_id = ? WHERE session_id = ?').run(
+      TASK_ID,
+      SESSION_ID,
+    );
+    if (withPause) {
+      setTaskPauseReason(
+        TASK_ID,
+        'planning_terminal_blocked_members',
+        'parked on blocked members',
+      );
+    }
+  }
+
+  function stageBlocked() {
+    const blocked = stageIntent(
+      'task.setProperties',
+      { taskId: 'task-a', patch: { priority: 'High' } },
+      PROJECT_ID,
+      GROUP,
+      SESSION_ID,
+    );
+    transitionStagedIntent(blocked.id, 'needs_revision');
+    return blocked;
+  }
+
+  beforeEach(() => {
+    db.prepare('DELETE FROM task_pause_reasons').run();
+  });
+
+  it('is complete for an idle session whose task carries the blocked-members pause', () => {
+    seedParked(true);
+    stageBlocked();
+    expect(isSessionComplete(SESSION_ID, false, GROUP)).toBe(true);
+    expect(isSessionComplete(SESSION_ID, false)).toBe(true);
+  });
+
+  it('stays incomplete without the pause reason', () => {
+    seedParked(false);
+    stageBlocked();
+    expect(isSessionComplete(SESSION_ID, false, GROUP)).toBe(false);
+  });
+
+  it('stays incomplete while a turn is in flight', () => {
+    seedParked(true);
+    stageBlocked();
+    expect(isSessionComplete(SESSION_ID, true, GROUP)).toBe(false);
+  });
+
+  it('shows an ungrouped capability request on the decision surface', () => {
+    seedParked(true);
+    stageBlocked();
+    const cap = stageIntent(
+      'session.requestCapability',
+      { capability: 'Bash(curl:*)', plan: 'fetch', evidence: 'needed' },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+    );
+    const sm = makeSessionManager(false);
+    expect(isVisibleOnDecisionSurface(cap, sm as never)).toBe(true);
+  });
+
+  it('still refuses a group commit containing a needs_revision member', async () => {
+    seedParked(true);
+    const blocked = stageBlocked();
+    const other = stageIntent(
+      'task.setProperties',
+      { taskId: 'task-b', patch: { priority: 'Low' } },
+      PROJECT_ID,
+      GROUP,
+      SESSION_ID,
+    );
+    transitionStagedIntent(other.id, 'approved');
+    const agent = supertest(makeApp(makeSessionManager(false)));
+
+    const res = await agent
+      .post(`/api/staged-intents/group/${GROUP}/commit`)
+      .send({});
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.body.error).toMatch(/blocked member/);
+    const states = db
+      .prepare('SELECT id, state FROM staged_intent WHERE group_id = ?')
+      .all(GROUP) as { id: string; state: string }[];
+    expect(states.find((s) => s.id === blocked.id)?.state).toBe(
+      'needs_revision',
+    );
+    expect(states.find((s) => s.id === other.id)?.state).toBe('approved');
+  });
+
+  it('lets the operator decline the whole group, closing the open groom group', async () => {
+    seedParked(true);
+    const now = Date.now();
+    insertStagedIntent({
+      id: 'parked-intent-1',
+      kind: 'task.updateBody',
+      payload: JSON.stringify({ taskId: TASK_ID, sections: {} }),
+      payload_hash: 'hash-parked-1',
+      task_id: normalizeTaskId(TASK_ID),
+      project_id: PROJECT_ID,
+      session_id: SESSION_ID,
+      group_id: GROUP,
+      milestone: null,
+      state: 'needs_revision',
+      supersedes: null,
+      annotation: null,
+      decision_proposal: null,
+      groom_proposal: null,
+      advisory: null,
+      disposition_reason: null,
+      answer: null,
+      created_at: now,
+      updated_at: now,
+    } as never);
+    expect(hasOpenGroomGroupForTask(TASK_ID)).toBe(true);
+    const agent = supertest(makeApp(makeSessionManager(false)));
+
+    const res = await agent
+      .post(`/api/staged-intents/group/${GROUP}/reject`)
+      .send({ reason: 'declined by operator' });
+    expect(res.status).toBe(200);
+    const row = db
+      .prepare('SELECT state FROM staged_intent WHERE id = ?')
+      .get('parked-intent-1') as { state: string };
+    expect(row.state).toBe('rejected');
+    expect(hasOpenGroomGroupForTask(TASK_ID)).toBe(false);
   });
 });

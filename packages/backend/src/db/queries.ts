@@ -13459,7 +13459,16 @@ export function isSessionComplete(
   ) {
     return true;
   }
-  if (hasBlockedStagedIntentForSession(sessionId, groupId)) return false;
+  if (hasBlockedStagedIntentForSession(sessionId, groupId)) {
+    // A session that parked on its blocked members (nudge budget spent,
+    // pause surfaced) has no turn coming: the operator owns them now.
+    return (
+      session?.status === 'idle' &&
+      !!session.task_id &&
+      getTaskPauseReason(session.task_id)?.reason ===
+        'planning_terminal_blocked_members'
+    );
+  }
   _stmtHasActiveStagedIntentForSession ??= db.prepare<{
     session_id: string;
   }>(
