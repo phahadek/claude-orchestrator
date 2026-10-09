@@ -11316,26 +11316,28 @@ export function computeTestFailureBreadthFlag(
     own_sessions: string;
     own_worktrees: string;
   }>(`
-    SELECT COUNT(DISTINCT COALESCE(r.breadth_origin, CASE
-        WHEN r.session_id IS NOT NULL THEN 'session:' || r.session_id
-        ELSE COALESCE(
-          (SELECT 'session:' || MIN(s.session_id) FROM sessions s
-             WHERE s.project_id = r.project_id AND s.worktree_path = r.worktree_path
-             HAVING COUNT(*) = 1),
-          'tree:' || r.content_hash)
-      END)) AS distinct_hashes
+    SELECT COUNT(DISTINCT o.origin) AS distinct_hashes
     FROM test_run_results t
-    JOIN test_request_runs r ON r.id = t.test_request_run_id
+    JOIN (
+      SELECT r.*, COALESCE(r.breadth_origin, CASE
+          WHEN r.session_id IS NOT NULL THEN 'session:' || r.session_id
+          ELSE COALESCE(
+            (SELECT 'session:' || MIN(s.session_id) FROM sessions s
+               WHERE s.project_id = r.project_id AND s.worktree_path = r.worktree_path
+               HAVING COUNT(*) = 1),
+            'tree:' || r.content_hash)
+        END) AS origin
+      FROM test_request_runs r
+    ) o ON o.id = t.test_request_run_id
     WHERE t.test_id = @test_id
       AND t.outcome IN ('failed', 'error')
       AND t.created_at >= @since_ms
       AND t.created_at < @before_ms
-      AND r.worktree_path IS NOT NULL
-      AND r.worktree_path NOT IN (SELECT value FROM json_each(@own_worktrees))
-      AND (r.session_id IS NULL
-           OR r.session_id NOT IN (SELECT value FROM json_each(@own_sessions)))
-      AND (r.breadth_origin IS NULL
-           OR r.breadth_origin NOT IN (SELECT 'session:' || value FROM json_each(@own_sessions)))
+      AND o.worktree_path IS NOT NULL
+      AND o.worktree_path NOT IN (SELECT value FROM json_each(@own_worktrees))
+      AND (o.session_id IS NULL
+           OR o.session_id NOT IN (SELECT value FROM json_each(@own_sessions)))
+      AND o.origin NOT IN (SELECT 'session:' || value FROM json_each(@own_sessions))
   `);
   const sinceMs = asOfMs - windowHours * 60 * 60 * 1000;
   const row = _stmtTestFailureBreadth.get({
