@@ -457,7 +457,7 @@ describe('procedureCore', () => {
 
     // A decision-producing Type dependency blocks promotion until Done.
     expect(text).toMatch(
-      /📐 Design \/ 📋 Planning \/ 🔎 Investigation[\s\S]{0,120}blocks promotion to Ready for as long as it is not ✅ Done/,
+      /📐 Design \/ 📋 Planning \/ 🔎 Investigation \/\s+🔧 Operational[\s\S]{0,120}blocks promotion to Ready for as long as it is not ✅ Done/,
     );
     // A Code (or any other-Type) dependency never blocks at Backlog, only at Deferred.
     expect(text).toMatch(

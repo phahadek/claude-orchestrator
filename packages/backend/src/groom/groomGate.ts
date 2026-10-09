@@ -865,8 +865,8 @@ function resolveDependsOnTasksServerSide(
 }
 
 /**
- * FM3 signal (a) — a non-Done 📐 Design / 📋 Planning / 🔎 Investigation
- * Depends On task can still reshape this task's scope, invalidating whatever
+ * FM3 signal (a) — a non-Done 📐 Design / 📋 Planning / 🔎 Investigation /
+ * 🔧 Operational Depends On task can still reshape this task's scope, invalidating whatever
  * was groomed against it. Blocks promotion until that dependency reaches
  * ✅ Done (or is ⏭️ Deferred). `dependsOnTasks` must already be server-side
  * resolved (`resolveDependsOnTasksServerSide`) — this function trusts the
