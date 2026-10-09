@@ -706,20 +706,21 @@ describe('SessionManager.markSessionErrored() — planning session (groom) crash
     );
   });
 
-  it('reverts to Backlog on a repeated crash but writes no task pause', async () => {
+  it('writes no task pause on a repeated crash', async () => {
     vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(2);
-    const mockUpdate = setupFakeBackend();
+    setupFakeBackend();
     const sm = new SessionManager();
+    const messages: ServerMessage[] = [];
+    sm.on('message', (m: ServerMessage) => messages.push(m));
 
     sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
     await new Promise((r) => setTimeout(r, 0));
 
-    expect(mockUpdate).toHaveBeenCalledWith(
-      'notion-task-id',
-      '🔲 Backlog',
-      expect.anything(),
-    );
+    expect(queries.incrementTaskCrashCount).toHaveBeenCalled();
     expect(queries.setTaskPauseReason).not.toHaveBeenCalled();
+    expect(
+      messages.find((m) => m.type === 'auto_launch_paused'),
+    ).toBeUndefined();
   });
 });
 
