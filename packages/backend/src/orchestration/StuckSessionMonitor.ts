@@ -993,7 +993,7 @@ export class StuckSessionMonitor {
     // it — same durability the PR-keyed write above gets. This is what lets
     // needs_attention (TaskStatusEngine / attentionSignals) see a stuck
     // pre-PR session, which pull_requests.pause_reason alone can't reach.
-    if (session.task_id) {
+    if (session.task_id && session.session_type !== 'groom') {
       setTaskPauseReason(session.task_id, 'stuck_timeout', 'stuck_timeout');
     }
     insertPauseInterval(sessionId, 'stuck_timeout');

@@ -137,7 +137,7 @@ describe('PlanningOrchestrator.sweepIdleTerminalSessions', () => {
   });
 
   it('does not terminalize and instead sets the blocked-member pause reason for a needs_revision intent', async () => {
-    seedIdleSession('s-needs-revision');
+    seedIdleSession('s-needs-revision', { sessionType: 'design' });
     stageIntent('s-needs-revision', { state: 'needs_revision' });
     const sessionManager = makeSessionManager();
     const orchestrator = new PlanningOrchestrator(sessionManager);
@@ -151,7 +151,7 @@ describe('PlanningOrchestrator.sweepIdleTerminalSessions', () => {
   });
 
   it('does not terminalize and instead sets the blocked-member pause reason for a pending_verification intent', async () => {
-    seedIdleSession('s-pending-verification');
+    seedIdleSession('s-pending-verification', { sessionType: 'design' });
     stageIntent('s-pending-verification', { state: 'pending_verification' });
     const sessionManager = makeSessionManager();
     const orchestrator = new PlanningOrchestrator(sessionManager);
@@ -162,6 +162,16 @@ describe('PlanningOrchestrator.sweepIdleTerminalSessions', () => {
 
     const paused = getTaskPauseReason('task-s-pending-verification');
     expect(paused?.reason).toBe('planning_terminal_blocked_members');
+  });
+
+  it('does not terminalize a groom session with a needs_revision intent and writes no task pause', async () => {
+    seedIdleSession('s-groom-blocked');
+    stageIntent('s-groom-blocked', { state: 'needs_revision' });
+    const orchestrator = new PlanningOrchestrator(makeSessionManager());
+
+    expect(await orchestrator.sweepIdleTerminalSessions(() => NOW)).toBe(0);
+    expect(getSession('s-groom-blocked')?.status).toBe('idle');
+    expect(getTaskPauseReason('task-s-groom-blocked')).toBeNull();
   });
 
   it('does not terminalize a session with an outstanding session.requestCapability intent', async () => {

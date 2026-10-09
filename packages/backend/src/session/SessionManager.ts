@@ -1830,6 +1830,8 @@ export class SessionManager extends EventEmitter {
       ? 'planning_crashed'
       : 'planning_terminal_no_decision';
 
+    // A groom never pauses its task; its target is already reverted to Backlog.
+    if (row.session_type === 'groom') return;
     setTaskPauseReason(taskId, pauseReason, detail ?? reason);
     recordEvent({
       event_type: 'auto_launch_paused',
@@ -3110,7 +3112,7 @@ export class SessionManager extends EventEmitter {
       logger.warn(
         `[SessionManager] respawnSession: deferring ${row.session_id.slice(0, 8)} — plan usage (${usageAdmission.window}) exhausted until ${usageAdmission.deferredUntil ? new Date(usageAdmission.deferredUntil).toISOString() : 'unknown'}`,
       );
-      if (row.task_id) {
+      if (row.task_id && row.session_type !== 'groom') {
         setTaskPauseReason(
           row.task_id,
           'usage_limit_deferred',
@@ -3457,7 +3459,7 @@ export class SessionManager extends EventEmitter {
       },
     });
 
-    if (row.task_id) {
+    if (row.task_id && row.session_type !== 'groom') {
       setTaskPauseReason(row.task_id, 'resume_failed', detail);
       recordEvent({
         event_type: 'auto_launch_paused',
@@ -3492,7 +3494,7 @@ export class SessionManager extends EventEmitter {
       logger.warn(
         `[SessionManager] resumeSession ${row.session_id}: deferring — plan usage (${usageAdmission.window}) exhausted until ${usageAdmission.deferredUntil ? new Date(usageAdmission.deferredUntil).toISOString() : 'unknown'}`,
       );
-      if (row.task_id) {
+      if (row.task_id && row.session_type !== 'groom') {
         setTaskPauseReason(
           row.task_id,
           'usage_limit_deferred',

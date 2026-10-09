@@ -698,6 +698,35 @@ describe('SessionManager.markSessionErrored() — planning session (design) cras
   });
 });
 
+describe('SessionManager.markSessionErrored() — planning session (groom) crash path', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({ session_type: 'groom' }) as never,
+    );
+  });
+
+  it('writes no task pause on a repeated crash', async () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(2);
+    const mockUpdate = setupFakeBackend();
+    const sm = new SessionManager();
+    const messages: ServerMessage[] = [];
+    sm.on('message', (m: ServerMessage) => messages.push(m));
+
+    sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
+    await new Promise((r) => setTimeout(r, 0));
+
+    // A groom never moves its target out of Backlog, so there is nothing to
+    // revert and no status write happens either.
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(queries.incrementTaskCrashCount).toHaveBeenCalled();
+    expect(queries.setTaskPauseReason).not.toHaveBeenCalled();
+    expect(
+      messages.find((m) => m.type === 'auto_launch_paused'),
+    ).toBeUndefined();
+  });
+});
+
 describe('SessionManager.markSessionErrored() — planning session (ops) crash path', () => {
   beforeEach(() => {
     vi.clearAllMocks();

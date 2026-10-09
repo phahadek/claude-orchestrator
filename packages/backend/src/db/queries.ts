@@ -5058,6 +5058,60 @@ export function clearTaskPauseReasonsByReason(reason: string): number {
   return deleteTaskPauseReasonsForTaskIds(taskIds);
 }
 
+const GROOM_ATTRIBUTABLE_PAUSE_REASONS = new Set<string>([
+  'planning_terminal_blocked_members',
+  'planning_terminal_no_decision',
+  'planning_crashed',
+]);
+
+const SESSION_ID_RE =
+  /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+
+/**
+ * Deletes task_pause_reasons rows left by groom sessions before groom
+ * writes were removed: planning_* rows whose detail names a groom session,
+ * or — for crash rows that name none — whose task's most recent session is
+ * a groom session. Idempotent; leaves design/ops/standard rows alone.
+ */
+export function clearGroomAttributedTaskPauseReasons(): number {
+  const rows = db
+    .prepare(`SELECT task_id, pause_reason, detail FROM task_pause_reasons`)
+    .all() as {
+    task_id: string;
+    pause_reason: string;
+    detail: string | null;
+  }[];
+  const typeOf = db.prepare(
+    `SELECT session_type FROM sessions WHERE session_id = ?`,
+  );
+  const latestTypeForTask = db.prepare(
+    `SELECT session_type FROM sessions WHERE task_id = ? ORDER BY started_at DESC LIMIT 1`,
+  );
+  const taskIds: string[] = [];
+  for (const r of rows) {
+    const reason = parsePauseReason(r.pause_reason)?.reason;
+    if (!reason || !GROOM_ATTRIBUTABLE_PAUSE_REASONS.has(reason)) continue;
+    const named = (r.detail ?? '').match(SESSION_ID_RE) ?? [];
+    const namedTypes = named
+      .map(
+        (id) =>
+          (typeOf.get(id) as { session_type: string } | undefined)
+            ?.session_type,
+      )
+      .filter((t): t is string => !!t);
+    const isGroom =
+      namedTypes.length > 0
+        ? namedTypes.includes('groom')
+        : (
+            latestTypeForTask.get(r.task_id) as
+              | { session_type: string }
+              | undefined
+          )?.session_type === 'groom';
+    if (isGroom) taskIds.push(r.task_id);
+  }
+  return deleteTaskPauseReasonsForTaskIds(taskIds);
+}
+
 /**
  * Clear the pause_reason on all PRs associated with a task (used when the task
  * transitions back to Ready so the next launch attempt is not blocked by a

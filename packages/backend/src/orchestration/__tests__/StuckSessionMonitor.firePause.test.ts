@@ -152,6 +152,47 @@ describe('StuckSessionMonitor.firePause', () => {
     );
   });
 
+  it('writes no task-level pause for a groom session, but still pauses it', () => {
+    vi.mocked(getSession).mockReturnValue({
+      session_id: 'sess-groom',
+      task_id: 'task-groom',
+      session_type: 'groom',
+    } as never);
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    const { monitor } = makeMonitor();
+    seedTimerState(monitor, 'sess-groom');
+
+    callFirePause(monitor, 'sess-groom');
+
+    expect(setTaskPauseReason).not.toHaveBeenCalled();
+    expect(insertPauseInterval).toHaveBeenCalledWith(
+      'sess-groom',
+      'stuck_timeout',
+    );
+  });
+
+  it.each(['design', 'ops', 'standard'])(
+    'still writes the task-level pause for a %s session',
+    (sessionType) => {
+      vi.mocked(getSession).mockReturnValue({
+        session_id: 'sess-x',
+        task_id: 'task-x',
+        session_type: sessionType,
+      } as never);
+      vi.mocked(getPRBySessionId).mockReturnValue(null);
+      const { monitor } = makeMonitor();
+      seedTimerState(monitor, 'sess-x');
+
+      callFirePause(monitor, 'sess-x');
+
+      expect(setTaskPauseReason).toHaveBeenCalledWith(
+        'task-x',
+        'stuck_timeout',
+        expect.any(String),
+      );
+    },
+  );
+
   it('also records the task-level pause reason when a PR already exists', () => {
     vi.mocked(getSession).mockReturnValue({
       session_id: 'sess-with-pr',

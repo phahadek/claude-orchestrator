@@ -170,7 +170,7 @@ describe('PlanningOrchestrator.checkTerminal — resumable blocked-members nudge
   });
 
   it('once the nudge budget is exhausted, surfaces planning_terminal_blocked_members as it does today', () => {
-    seedSession();
+    seedSession(SESSION_ID, 'design');
     stageIntent({ state: 'needs_revision' });
     const sessionManager = makeSessionManager();
     const orchestrator = new PlanningOrchestrator(sessionManager);

@@ -1581,7 +1581,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     if (pr) {
       setPauseReason(pr.pr_number, pr.repo, 'api_overloaded_exhausted');
     }
-    if (this.taskId) {
+    if (this.taskId && getSession(this.sessionId)?.session_type !== 'groom') {
       setTaskPauseReason(
         this.taskId,
         'api_overloaded_exhausted',
