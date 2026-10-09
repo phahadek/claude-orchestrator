@@ -885,7 +885,7 @@ export class DeployOrchestrator {
         detail: `compensating step "${compensatingStep.id}" declined: no operator consent is available in a ${this.kind} run`,
         at: this.now(),
       });
-      return;
+      return 'declined';
     }
     const approved = await this.deps.waitForCompensatingConsent({
       runId,
