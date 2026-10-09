@@ -381,7 +381,7 @@ describe('loadOpsContext — milestone name resolution', () => {
     expect(byName.worklist.executable.map((t) => t.id)).toEqual(
       byId.worklist.executable.map((t) => t.id),
     );
-    expect(byName.boards.target.id).toBe(MILESTONE);
+    expect(byName.boards.target.milestone).toBe(MILESTONE);
   });
 
   it('throws UnknownMilestoneError naming known milestones for an unknown name with a project', async () => {
