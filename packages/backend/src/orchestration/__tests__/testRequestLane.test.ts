@@ -2106,20 +2106,22 @@ describe('global test-run concurrency cap', () => {
       github_repo: null,
       task_source: 'notion',
     });
-    const resolvers = queueingRunTestCommands();
-    const runs = Array.from({ length: count }, (_, i) =>
-      runProjectTestRequest(baseSpec({ projectId, contentHash: `mem-${i}` })),
+    let inFlight = 0;
+    let maxInFlight = 0;
+    mockRunTestCommands.mockImplementation(async () => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 30));
+      inFlight--;
+      return { passed: true, output: 'ok' };
+    });
+    await Promise.all(
+      Array.from({ length: count }, (_, i) =>
+        runProjectTestRequest(baseSpec({ projectId, contentHash: `mem-${i}` })),
+      ),
     );
-    await new Promise((r) => setTimeout(r, 50));
-    const admitted = mockRunTestCommands.mock.calls.length;
-    // Drain: resolve everything as it gets admitted.
-    while (mockRunTestCommands.mock.calls.length < count) {
-      resolvers.forEach((resolve) => resolve({ passed: true, output: 'ok' }));
-      await new Promise((r) => setTimeout(r, 10));
-    }
-    resolvers.forEach((resolve) => resolve({ passed: true, output: 'ok' }));
-    await Promise.all(runs);
-    return admitted;
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(count);
+    return maxInFlight;
   }
 
   it('memory ceiling bounds a burst: ceiling=1000, perRun=400 caps at 2 even with max_concurrent=5', async () => {
