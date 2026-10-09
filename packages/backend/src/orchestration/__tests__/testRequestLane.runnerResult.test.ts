@@ -30,6 +30,7 @@ vi.mock('../memoryAdmission', () => ({
 }));
 
 import { db } from '../../db/db';
+import { insertProject } from '../../db/queries';
 import {
   runProjectTestRequest,
   setTestRequestRunnerExecutor,
@@ -105,9 +106,14 @@ beforeEach(() => {
   db.prepare('DELETE FROM test_request_runs').run();
   db.prepare('DELETE FROM test_perf_baselines').run();
   db.prepare('DELETE FROM projects').run();
-  db.prepare(
-    `INSERT INTO projects (id, name, project_dir) VALUES ('proj-1','p','/tmp/p')`,
-  ).run();
+  insertProject({
+    id: 'proj-1',
+    name: 'P',
+    project_dir: '/tmp/p',
+    context_url: null,
+    github_repo: null,
+    task_source: 'notion',
+  });
   __resetProjectSemaphoresForTest();
 });
 
