@@ -315,7 +315,8 @@ export async function loadOpsContext(
     const row = resolveMilestoneRowForProject(opts.project, milestoneRef);
     milestone = getMilestoneById(row.id);
   }
-  if (!milestone) throw new Error(`ops-load: unknown milestone ${milestoneRef}`);
+  if (!milestone)
+    throw new Error(`ops-load: unknown milestone ${milestoneRef}`);
   const milestoneId = milestone.id;
   if (opts.project && opts.project !== milestone.project_id) {
     throw new Error(
