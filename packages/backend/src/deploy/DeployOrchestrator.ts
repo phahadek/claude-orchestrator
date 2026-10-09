@@ -158,6 +158,19 @@ type ConfirmGateWaiter = (input: {
   step: StepDescriptor;
 }) => Promise<boolean>;
 
+/** Operator consent to run a compensating step (`rollback_ref`); resolves to whether it was approved. */
+type CompensatingConsentWaiter = (input: {
+  runId: string;
+  project: string;
+  step: StepDescriptor;
+}) => Promise<boolean>;
+
+/** Disposition recorded for a deploy-run confirm-gate that was auto-approved, never shown to an operator. */
+const AUTO_APPROVED_DISPOSITION = 'auto_approved';
+
+/** Event type recording that a compensating step was declined for lack of a consent dependency; the step never ran. */
+const ROLLBACK_DECLINED_EVENT = 'rollback_declined';
+
 /** Computes the repo-relative changed paths between the deployed and target SHAs. */
 export type DiffProvider = (input: {
   project: string;
@@ -196,6 +209,12 @@ export interface DeployOrchestratorDeps {
   runShell?: ShellRunner;
   spawnAgenticStep: AgenticStepSpawner;
   waitForConfirmGate: ConfirmGateWaiter;
+  /**
+   * Operator consent for a compensating step. Absent means decline: the
+   * compensating step is never run (a deploy run has no live operator to
+   * consent). Supplied only by runs that park for a live operator (wrap).
+   */
+  waitForCompensatingConsent?: CompensatingConsentWaiter;
   getDiffPaths?: DiffProvider;
   resolveDeployTarget?: DeployTargetResolver;
   sink?: DeployOrchestratorSink;
@@ -835,8 +854,9 @@ export class DeployOrchestrator {
 
   /**
    * Runs the failed step's declared compensating step (its `rollback_ref`),
-   * gated behind an operator confirm — the engine offers, the operator
-   * consents, never silent. A compensating step that itself fails records
+   * gated behind operator consent via `waitForCompensatingConsent` — the
+   * engine offers, the operator consents, never silent; without that
+   * dependency it is declined and never run. A compensating step that itself fails records
    * `rollback_failed` and returns; it is never itself rolled back
    * (no recursion).
    */
@@ -857,7 +877,17 @@ export class DeployOrchestrator {
       );
       return 'skipped';
     }
-    const approved = await this.deps.waitForConfirmGate({
+    if (!this.deps.waitForCompensatingConsent) {
+      appendDeployRunEvent({
+        runId,
+        step: compensatingStep.id,
+        eventType: ROLLBACK_DECLINED_EVENT,
+        detail: `compensating step "${compensatingStep.id}" declined: no operator consent is available in a ${this.kind} run`,
+        at: this.now(),
+      });
+      return 'declined';
+    }
+    const approved = await this.deps.waitForCompensatingConsent({
       runId,
       project: this.project,
       step: compensatingStep,
@@ -1001,7 +1031,11 @@ export class DeployOrchestrator {
           runId,
           step: step.id,
           eventType: 'confirm_gate',
-          disposition: approved ? 'approved' : 'rejected',
+          disposition: !approved
+            ? 'rejected'
+            : this.kind === 'deploy'
+              ? AUTO_APPROVED_DISPOSITION
+              : 'approved',
           at: this.now(),
         });
         return {

@@ -1,11 +1,16 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import yaml from 'js-yaml';
 import { logger } from '../logger';
-import { DeployPlaybook, validatePlaybook } from './playbookSchema';
+import {
+  DeployPlaybook,
+  deployRunWarnings,
+  validatePlaybook,
+} from './playbookSchema';
 
 export type LoadPlaybookResult =
-  | { ok: true; playbook: DeployPlaybook }
+  | { ok: true; playbook: DeployPlaybook; warnings?: string[] }
   | { ok: false; reason: string };
 
 /**
@@ -41,5 +46,24 @@ export function loadDeployPlaybook(projectDir: string): LoadPlaybookResult {
     return { ok: false, reason };
   }
 
-  return { ok: true, playbook: result };
+  const warnings = deployRunWarnings(result);
+  const warnKey = `${playbookPath}:${crypto
+    .createHash('sha256')
+    .update(JSON.stringify(result))
+    .digest('hex')}`;
+  if (warnings.length > 0 && !warnedPlaybooks.has(warnKey)) {
+    warnedPlaybooks.add(warnKey);
+    for (const warning of warnings) {
+      logger.warn(`[loadPlaybook] ${playbookPath}: ${warning}`);
+    }
+  }
+  return { ok: true, playbook: result, warnings };
+}
+
+/** Playbook (path + content hash) pairs whose deploy-run warnings were already logged this process. */
+const warnedPlaybooks = new Set<string>();
+
+/** Test hook: forget which playbooks have already warned. */
+export function resetPlaybookWarningsForTests(): void {
+  warnedPlaybooks.clear();
 }

@@ -446,14 +446,16 @@ export class DeployAgenticStepSpawner {
 }
 
 /**
- * Lazily builds the one DeployOrchestrator per project. The two-phase
- * confirm gate lives client-side by design (GateReadinessPanel's
- * review-then-confirm sequence, gated on the DB-derived "behind" preview) —
- * by the time `/deploy/launch` is called, the operator has already
- * confirmed. Any `confirm-gate` step a playbook declares (e.g. this repo's
- * `confirm-restart`) is therefore intentionally auto-approved here — it is
- * not a second gate to pause on. An `agentic` step is instead settled by the
- * dispatched-session spawner wired up below.
+ * Lazily builds the one DeployOrchestrator per project. Consent is by run
+ * kind: the deploy confirm gate lives client-side (the launch gate and the
+ * DB-derived "behind" preview), so by the time `/deploy/launch` is called
+ * the operator has already confirmed and no operator is attached to the run.
+ * A declared `confirm-gate` step is therefore inert here — auto-approved and
+ * recorded as a non-operator disposition (the playbook validator warns it
+ * will not pause) — and a compensating step (`rollback_ref`) is declined,
+ * never run, because no `waitForCompensatingConsent` is supplied. A wrap run
+ * (createWrapOrchestrator) parks both for a live operator disposition. An
+ * `agentic` step is settled by the dispatched-session spawner wired up below.
  */
 function getOrchestrator(
   project: string,
@@ -704,6 +706,8 @@ function createWrapOrchestrator(
         );
       },
       waitForConfirmGate: (input) =>
+        wrapConfirmGates.wait(input.runId, input.step.id),
+      waitForCompensatingConsent: (input) =>
         wrapConfirmGates.wait(input.runId, input.step.id),
     },
     'wrap',
