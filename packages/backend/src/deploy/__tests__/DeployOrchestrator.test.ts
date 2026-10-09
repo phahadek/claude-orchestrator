@@ -393,6 +393,7 @@ describe('DeployOrchestrator: step failure halts + compensating step', () => {
     const deps = makeDeps(playbook, {
       sink: { onNeedsAttention },
       waitForConfirmGate,
+      waitForCompensatingConsent: waitForConfirmGate,
       runShell: vi.fn(async (command: string): Promise<ShellResult> => {
         shellCommands.push(command);
         if (command === 'run deploy')
@@ -439,7 +440,7 @@ describe('DeployOrchestrator: step failure halts + compensating step', () => {
     const onNeedsAttention = vi.fn();
     const deps = makeDeps(playbook, {
       sink: { onNeedsAttention },
-      waitForConfirmGate: vi.fn(async () => false),
+      waitForCompensatingConsent: vi.fn(async () => false),
       runShell: vi.fn(async (command: string): Promise<ShellResult> => {
         shellCommands.push(command);
         if (command === 'run deploy')
@@ -480,7 +481,7 @@ describe('DeployOrchestrator: step failure halts + compensating step', () => {
     ]);
     const shellCommands: string[] = [];
     const deps = makeDeps(playbook, {
-      waitForConfirmGate: vi.fn(async () => true),
+      waitForCompensatingConsent: vi.fn(async () => true),
       runShell: vi.fn(async (command: string): Promise<ShellResult> => {
         shellCommands.push(command);
         return { ok: false, output: `${command} exploded`, exitCode: 1 };
@@ -495,6 +496,106 @@ describe('DeployOrchestrator: step failure halts + compensating step', () => {
     expect(events).toContain('rollback_failed');
     expect(events.filter((e) => e === 'confirm_gate')).toHaveLength(1);
     expect(getDeployRun(run.run_id)?.status).toBe('failed');
+  });
+
+  it('declines a compensating step and fails the run when no consent dependency is supplied', async () => {
+    const playbook = playbookWith([
+      step({
+        id: 'deploy',
+        kind: 'shell',
+        is_prod_mutating: true,
+        rollback_ref: 'compensate',
+      }),
+      step({ id: 'compensate', kind: 'shell' }),
+    ]);
+    const shellCommands: string[] = [];
+    const waitForConfirmGate = vi.fn(async () => true);
+    const deps = makeDeps(playbook, {
+      waitForConfirmGate,
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        shellCommands.push(command);
+        return { ok: false, output: 'deploy exploded', exitCode: 1 };
+      }),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(shellCommands).toEqual(['run deploy']);
+    expect(waitForConfirmGate).not.toHaveBeenCalled();
+    const events = listDeployRunEvents(run.run_id).map((e) => e.event_type);
+    expect(events).toContain('rollback_declined');
+    expect(events).not.toContain('confirm_gate');
+    expect(events).not.toContain('rollback_succeeded');
+    expect(getDeployRun(run.run_id)?.status).toBe('failed');
+  });
+
+  it('parks a wrap run compensating step on the consent dependency', async () => {
+    const playbook = playbookWith([
+      step({
+        id: 'deploy',
+        kind: 'shell',
+        is_prod_mutating: true,
+        rollback_ref: 'compensate',
+      }),
+      step({ id: 'compensate', kind: 'shell' }),
+    ]);
+    const shellCommands: string[] = [];
+    const waitForCompensatingConsent = vi.fn(async () => true);
+    const deps = makeDeps(playbook, {
+      waitForCompensatingConsent,
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        shellCommands.push(command);
+        if (command === 'run deploy')
+          return { ok: false, output: 'deploy exploded', exitCode: 1 };
+        return { ok: true, output: '', exitCode: 0 };
+      }),
+    });
+    const orchestrator = new DeployOrchestrator(
+      'proj',
+      '/tmp/proj',
+      deps,
+      'wrap',
+    );
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(waitForCompensatingConsent).toHaveBeenCalledTimes(1);
+    expect(shellCommands).toEqual(['run deploy', 'run compensate']);
+    const gate = listDeployRunEvents(run.run_id).find(
+      (e) => e.event_type === 'confirm_gate',
+    );
+    expect(gate?.disposition).toBe('approved');
+  });
+
+  it('records a non-operator disposition for a deploy-run confirm-gate and approved for a wrap run', async () => {
+    const playbook = playbookWith([step({ id: 'confirm', kind: 'confirm-gate' })]);
+    const deployOrch = new DeployOrchestrator(
+      'proj',
+      '/tmp/proj',
+      makeDeps(playbook),
+    );
+    const deployRun = await deployOrch.startDeploy('sha-target');
+    await flush();
+    expect(
+      listDeployRunEvents(deployRun.run_id).find(
+        (e) => e.event_type === 'confirm_gate',
+      )?.disposition,
+    ).toBe('auto_approved');
+
+    const wrapOrch = new DeployOrchestrator(
+      'proj',
+      '/tmp/proj',
+      makeDeps(playbook),
+      'wrap',
+    );
+    const wrapRun = await wrapOrch.startDeploy('sha-target');
+    await flush();
+    expect(
+      listDeployRunEvents(wrapRun.run_id).find(
+        (e) => e.event_type === 'confirm_gate',
+      )?.disposition,
+    ).toBe('approved');
   });
 
   it('reaches a terminal failed state (not stuck running) when the final step fails with no rollback_ref', async () => {

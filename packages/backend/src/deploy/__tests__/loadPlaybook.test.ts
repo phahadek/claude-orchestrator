@@ -5,11 +5,15 @@
  * absent or invalid one is reported (not improvised) — /deploy stops on it.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { loadDeployPlaybook } from '../loadPlaybook';
+import { logger } from '../../logger';
+import {
+  loadDeployPlaybook,
+  resetPlaybookWarningsForTests,
+} from '../loadPlaybook';
 import type {
   StepDescriptor,
   StepKind,
@@ -406,5 +410,45 @@ steps:
     expect(result.reason).toMatch(
       /command_or_prompt must be absent for a report-in step/,
     );
+  });
+
+  it('warns once across repeated loads that a confirm-gate and rollback_ref are inert in a deploy run, never rejecting', () => {
+    resetPlaybookWarningsForTests();
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-deploy-playbook.yml'),
+      `
+steps:
+  - id: ship
+    kind: shell
+    command_or_prompt: "make ship"
+    is_prod_mutating: true
+    rollback_ref: undo
+  - id: undo
+    kind: shell
+    command_or_prompt: "make undo"
+    is_prod_mutating: false
+  - id: confirm
+    kind: confirm-gate
+    command_or_prompt: "systemctl restart app"
+    is_prod_mutating: false
+`,
+    );
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => logger);
+    try {
+      const first = loadDeployPlaybook(tmpDir);
+      loadDeployPlaybook(tmpDir);
+      loadDeployPlaybook(tmpDir);
+      expect(first.ok).toBe(true);
+      if (first.ok) expect(first.warnings).toHaveLength(2);
+      const messages = warn.mock.calls.map((c) => String(c[0]));
+      expect(messages.filter((m) => m.includes('will not pause'))).toHaveLength(
+        1,
+      );
+      expect(
+        messages.filter((m) => m.includes('will not auto-run')),
+      ).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

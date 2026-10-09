@@ -9,7 +9,7 @@ import styles from './DeployStepStrip.module.css';
 const STATE_GLYPH: Record<DeployStepState, string> = {
   pending: '○',
   running: '◐',
-  'awaiting-confirm': '?',
+  declined: '⊘',
   succeeded: '✓',
   failed: '✗',
 };
@@ -25,7 +25,7 @@ export function DeployStepStrip({ plan, events }: Props) {
   return (
     <ol className={styles.strip} data-testid="deploy-step-strip">
       {cells.map((cell) => {
-        const label = [cell.description, cell.failureDetail]
+        const label = [cell.description, cell.note, cell.failureDetail]
           .filter((v): v is string => Boolean(v))
           .join(' — ');
         return (
