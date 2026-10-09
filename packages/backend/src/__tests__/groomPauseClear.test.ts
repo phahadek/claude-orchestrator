@@ -139,14 +139,14 @@ describe('clearGroomAttributedTaskPauseReasons', () => {
       pauseReason,
     });
 
-    expect(
-      deriveDisplayStatus(input(getTaskPauseReason('groom-named'))),
-    ).toBe('needs_attention');
+    expect(deriveDisplayStatus(input(getTaskPauseReason('groom-named')))).toBe(
+      'needs_attention',
+    );
 
     clearGroomAttributedTaskPauseReasons();
 
-    expect(
-      deriveDisplayStatus(input(getTaskPauseReason('groom-named'))),
-    ).toBe('ready');
+    expect(deriveDisplayStatus(input(getTaskPauseReason('groom-named')))).toBe(
+      'ready',
+    );
   });
 });
