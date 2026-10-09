@@ -7,7 +7,7 @@
 
 import type { StructuredTestResult } from '../db/types';
 
-export interface RunnerCommandResult {
+interface RunnerCommandResult {
   command: string;
   /** null when the runner did not observe this command's verdict (e.g. skipped after a fail-fast stop). */
   passed: boolean | null;
@@ -34,12 +34,6 @@ export interface RunnerResultPackage {
   /** Already-normalized report parsed on the runner; null when acquisition failed or no report is configured. */
   structuredResult: StructuredTestResult | null;
 }
-
-export type RunnerResultExecutor = (ctx: {
-  runId: string;
-  worktreePath: string;
-  commands: string[];
-}) => Promise<RunnerResultPackage>;
 
 function isNonNegInt(v: unknown): v is number {
   return typeof v === 'number' && Number.isInteger(v) && v >= 0;
