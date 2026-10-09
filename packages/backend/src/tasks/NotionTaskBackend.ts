@@ -16,6 +16,7 @@ import {
   getTaskCache,
   getTasksByStatusFromCache,
   getRecentTaskStatusWrite,
+  updateTaskDependsOnInBoardCaches,
 } from '../db/queries';
 import {
   renderTaskBody,
@@ -238,6 +239,7 @@ export class NotionTaskBackend implements TaskBackend {
   async setDependsOn(taskId: string, dependsOn: string[]): Promise<void> {
     const normalizedId = normalizeTaskId(taskId);
     await this.client.setDependsOn(normalizedId, dependsOn);
+    updateTaskDependsOnInBoardCaches(normalizedId, dependsOn);
     const row = getTaskCache(normalizedId);
     if (!row) return;
     try {

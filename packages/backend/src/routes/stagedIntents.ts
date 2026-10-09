@@ -5168,6 +5168,9 @@ async function applyIntent(
         }
       }
       const payload = intent.payload as CreateTaskPayload;
+      if (payload.dependsOn?.length) {
+        assertNoDependencyCycle(intent.projectId, null, payload.dependsOn);
+      }
       const id = await commands.createTask(payload, { source: 'human' });
       setStagedIntentAppliedTaskId(intent.id, id);
       return { id };
@@ -5245,6 +5248,11 @@ async function applyIntent(
     }
     case 'task.setDependsOn': {
       const payload = intent.payload as SetDependsOnPayload;
+      assertNoDependencyCycle(
+        intent.projectId,
+        payload.taskId,
+        payload.dependsOn,
+      );
       await commands.setDependsOn(payload.taskId, payload.dependsOn, {
         source: 'human',
       });
@@ -9724,6 +9732,7 @@ export function createStagedIntentsRouter(
         }
         if (
           err instanceof DependsOnCompletenessError ||
+          err instanceof DependencyCycleError ||
           err instanceof ManualVerificationStripCompletenessError ||
           err instanceof SessionIncompleteError
         ) {
