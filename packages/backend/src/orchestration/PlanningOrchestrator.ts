@@ -9,7 +9,6 @@ import {
   clearPendingApproveTerminal,
   getSessionsWithPendingApproveTerminal,
   setTaskPauseReason,
-  setTaskPauseReasonForSession,
   getPRBySessionId,
   setSessionTerminalCompletionReason,
   TERMINAL_SESSION_STATUSES,
@@ -675,9 +674,9 @@ export class PlanningOrchestrator {
     }
 
     const row = getSession(sessionId);
-    if (row?.task_id) {
-      setTaskPauseReasonForSession(
-        sessionId,
+    // A groom never pauses its task — its outcome lives in its staged intents.
+    if (row?.task_id && row.session_type !== 'groom') {
+      setTaskPauseReason(
         row.task_id,
         'planning_terminal_no_decision',
         'Planning session reached terminal with no staged decision, ops journal transition, or explicit no-op — twice, after one self-correct nudge.',
@@ -1295,8 +1294,10 @@ export class PlanningOrchestrator {
       (i) => i.state === 'needs_revision' || i.state === 'pending_verification',
     );
     if (blockedMembers.length === 0) return false;
-    setTaskPauseReasonForSession(
-      sessionId,
+    // A groom never pauses its task; the blocked intents stay visible on the
+    // operator's disposition surface.
+    if (row.session_type === 'groom') return true;
+    setTaskPauseReason(
       row.task_id,
       'planning_terminal_blocked_members',
       `Planning session ${sessionId} reached terminal (${reason}) with ` +

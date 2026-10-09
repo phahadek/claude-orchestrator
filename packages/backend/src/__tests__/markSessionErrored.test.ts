@@ -698,6 +698,31 @@ describe('SessionManager.markSessionErrored() — planning session (design) cras
   });
 });
 
+describe('SessionManager.markSessionErrored() — planning session (groom) crash path', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({ session_type: 'groom' }) as never,
+    );
+  });
+
+  it('reverts to Backlog on a repeated crash but writes no task pause', async () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(2);
+    const mockUpdate = setupFakeBackend();
+    const sm = new SessionManager();
+
+    sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(mockUpdate).toHaveBeenCalledWith(
+      'notion-task-id',
+      '🔲 Backlog',
+      expect.anything(),
+    );
+    expect(queries.setTaskPauseReason).not.toHaveBeenCalled();
+  });
+});
+
 describe('SessionManager.markSessionErrored() — planning session (ops) crash path', () => {
   beforeEach(() => {
     vi.clearAllMocks();

@@ -211,8 +211,8 @@ describe('PlanningOrchestrator.checkTerminal — kind-aware "staged a decision" 
 });
 
 describe('PlanningOrchestrator.checkTerminal — terminal-no-decision backstop', () => {
-  it('nudges exactly once, then on a second empty terminal sets planning_terminal_no_decision', () => {
-    seedSession();
+  it('nudges exactly once, then on a second empty terminal sets planning_terminal_no_decision (docs session)', () => {
+    seedSession(SESSION_ID, 'docs');
     const sessionManager = makeSessionManager();
     const orchestrator = new PlanningOrchestrator(sessionManager);
 
@@ -292,9 +292,7 @@ describe('PlanningOrchestrator.checkTerminal — terminal-no-decision backstop',
     expect(sessionManager.endSession).toHaveBeenCalledWith(SESSION_ID);
     // Still bounded to exactly one nudge across both parks.
     expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
-    const paused = getTaskPauseReason(TASK_ID);
-    expect(paused?.reason).toBe('planning_terminal_no_decision');
-    expect(paused?.severity).toBe('needs_attention');
+    expect(getTaskPauseReason(TASK_ID)).toBeNull();
   });
 });
 
@@ -429,7 +427,11 @@ describe('PlanningOrchestrator.checkTerminal — non-design session types keep t
       expect(sessionManager.endSession).toHaveBeenCalledWith(SESSION_ID);
       expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
       const paused = getTaskPauseReason(TASK_ID);
-      expect(paused?.reason).toBe('planning_terminal_no_decision');
+      if (sessionType === 'groom') {
+        expect(paused).toBeNull();
+      } else {
+        expect(paused?.reason).toBe('planning_terminal_no_decision');
+      }
     },
   );
 });

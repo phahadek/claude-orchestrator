@@ -94,8 +94,18 @@ beforeEach(() => {
 });
 
 describe('PlanningOrchestrator — escalate outstanding blocked members on session terminal', () => {
-  it('raises planning_terminal_blocked_members naming the task when a needs_revision member is still outstanding', () => {
+  it('a groom session with a needs_revision member writes no task pause', () => {
     seedSession();
+    stageIntent({ state: 'needs_revision' });
+    const orchestrator = new PlanningOrchestrator(makeSessionManager());
+
+    orchestrator.endSession(SESSION_ID);
+
+    expect(getTaskPauseReason(TASK_ID)).toBeNull();
+  });
+
+  it('raises planning_terminal_blocked_members naming the task when a needs_revision member is still outstanding', () => {
+    seedSession(SESSION_ID, 'design');
     stageIntent({ state: 'needs_revision' });
     const sessionManager = makeSessionManager();
     const orchestrator = new PlanningOrchestrator(sessionManager);
@@ -109,7 +119,7 @@ describe('PlanningOrchestrator — escalate outstanding blocked members on sessi
   });
 
   it('raises the same escalation for a pending_verification member', () => {
-    seedSession();
+    seedSession(SESSION_ID, 'design');
     stageIntent({ state: 'pending_verification' });
     const sessionManager = makeSessionManager();
     const orchestrator = new PlanningOrchestrator(sessionManager);

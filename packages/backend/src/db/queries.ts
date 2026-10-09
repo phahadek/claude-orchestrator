@@ -5003,24 +5003,6 @@ export function clearTaskPauseReasonsByReason(reason: string): number {
   return deleteTaskPauseReasonsForTaskIds(taskIds);
 }
 
-/**
- * Writes a task-level pause unless the originating session is a groom
- * session — a groom's outcome lives in its staged intents and groups, never
- * in a task-level Needs Attention. Returns true when the pause was written.
- */
-export function setTaskPauseReasonForSession(
-  sessionId: string | null | undefined,
-  taskId: string,
-  reason: PauseReason,
-  detail: string,
-): boolean {
-  if (sessionId && getSession(sessionId)?.session_type === 'groom') {
-    return false;
-  }
-  setTaskPauseReason(taskId, reason, detail);
-  return true;
-}
-
 const GROOM_ATTRIBUTABLE_PAUSE_REASONS = new Set<string>([
   'planning_terminal_blocked_members',
   'planning_terminal_no_decision',
