@@ -40,7 +40,10 @@ import {
   requireRunnerAuth,
   validateWsToken,
 } from '../DeviceAuth';
-import { createRunnerApp, startRunnerListener } from '../../routes/runnerChannel';
+import {
+  createRunnerApp,
+  startRunnerListener,
+} from '../../routes/runnerChannel';
 
 function mainApp() {
   const app = express();
