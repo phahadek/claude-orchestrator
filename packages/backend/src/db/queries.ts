@@ -9559,6 +9559,15 @@ export function markTestRequestRunRunning(
   ).run(startedAt, concurrentRunCount, foreignConcurrentRunCount, id);
 }
 
+export function setTestRequestRunConcurrentCount(
+  id: string,
+  concurrentRunCount: number,
+): void {
+  db.prepare(
+    `UPDATE test_request_runs SET concurrent_run_count = ? WHERE id = ?`,
+  ).run(concurrentRunCount, id);
+}
+
 export function completeTestRequestRun(
   id: string,
   state: TestRequestRunState,

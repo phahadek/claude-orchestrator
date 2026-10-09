@@ -41,6 +41,10 @@ import {
   isTestIdTouchedByChangedFiles,
   type TestCommandResult,
 } from '../session/test-runner';
+import {
+  validateRunnerResultPackage,
+  type RunnerResultPackage,
+} from './runnerResultPackage';
 import { hasTestRequestAdmission } from './memoryAdmission';
 import {
   loadOrchestratorConfig,
@@ -56,6 +60,7 @@ import { typedGetSetting } from '../config/settings';
 import {
   insertTestRequestRun,
   markTestRequestRunRunning,
+  setTestRequestRunConcurrentCount,
   completeTestRequestRun,
   clearSupersededStructuredResults,
   clearExtractedStructuredResultsBatch,
@@ -1173,6 +1178,94 @@ export function runProjectTestRequest(
   return admitTestRequest(spec).result;
 }
 
+interface LaneExecutorCtx {
+  runId: string;
+  spec: TestRequestRunSpec;
+  startedAt: number;
+  concurrentRunCount: number;
+  testReportGlob: string | undefined;
+}
+
+type LaneRunnerExecutor = (
+  ctx: LaneExecutorCtx,
+) => Promise<RunnerResultPackage>;
+
+let runnerExecutorOverride: LaneRunnerExecutor | null = null;
+
+/** Injects a remote executor supplying the runner's own result package; null restores the local one. */
+export function setTestRequestRunnerExecutor(
+  fn: LaneRunnerExecutor | null,
+): void {
+  runnerExecutorOverride = fn;
+}
+
+// Default executor: today's local run, reporting the semaphore-derived count.
+// failFast is false for ordinary callers (full per-command failing set) and
+// true for verify runs; timeoutSec applies per command.
+const localRunnerExecutor: LaneRunnerExecutor = async ({
+  runId,
+  spec,
+  startedAt,
+  concurrentRunCount,
+  testReportGlob,
+}) => {
+  const runCommands = () =>
+    runTestCommands(
+      spec.worktreePath,
+      spec.commands,
+      spec.timeoutSec,
+      (msg) => logger.info(`[testRequestLane] ${msg}`),
+      // runId keys the per-run cgroup leaf teardown is verified against.
+      {
+        maxRssMb: spec.maxRssMb,
+        failFast: spec.failFast ?? false,
+        runId,
+        env: spec.env,
+      },
+    );
+  // A worktree with no bootstrap_script resolves modules through the project
+  // checkout's node_modules; serialize against a concurrent install-deps.
+  const checkoutDir = getProjectRowById(spec.projectId)?.project_dir;
+  const raw =
+    checkoutDir && sharesCheckoutNodeModules(spec.worktreePath)
+      ? await withCheckoutTestRunLock(checkoutDir, runCommands)
+      : await runCommands();
+  let structuredResult: StructuredTestResult | null = null;
+  if (testReportGlob) {
+    try {
+      // Awaited so structured_result is computed before the run settles.
+      structuredResult = await collectStructuredTestResultOffMainThread(
+        spec.worktreePath,
+        testReportGlob,
+        spec.commands.length,
+        startedAt,
+      );
+    } catch (err) {
+      logger.warn(
+        `[testRequestLane] structured_result acquisition failed for run ${runId}:`,
+        err,
+      );
+    }
+  }
+  return {
+    passed: raw.passed,
+    output: raw.output,
+    commandResults: spec.commands.map((command) => ({
+      command,
+      passed: raw.passed ? true : command === raw.failedCommand ? false : null,
+    })),
+    failedCommand: raw.passed ? undefined : raw.failedCommand,
+    oomKilled: raw.oomKilled ?? false,
+    timedOut: raw.timedOut,
+    spawnFailed: raw.spawnFailed,
+    teardownVerificationFailed: raw.teardownVerificationFailed,
+    startedAt,
+    finishedAt: Date.now(),
+    runnerConcurrentRunCount: concurrentRunCount,
+    structuredResult,
+  };
+};
+
 async function executeTestRequestRun(
   spec: TestRequestRunSpec,
   runId: string,
@@ -1301,69 +1394,35 @@ async function executeTestRequestRun(
     if (testReportGlob) {
       clearReportFiles(spec.worktreePath, testReportGlob);
     }
-    // Every ordinary test.request caller wants failFast: false — every
-    // declared command runs regardless of an earlier one failing, so a base
-    // probe or session run always yields a complete per-command failing set.
-    // A verify run (spec.failFast) wants the opposite, matching
-    // runVerifyAsGate's own fail-fast semantics. Each command is still
-    // bounded independently — timeoutSec applies per loop iteration inside
-    // runCommandWithTimeout — so this cannot push a run past its configured
-    // timeout, only make a run with an early failure run longer.
-    const runCommands = () =>
-      runTestCommands(
-        spec.worktreePath,
-        spec.commands,
-        spec.timeoutSec,
-        (msg) => logger.info(`[testRequestLane] ${msg}`),
-        // runId keys the per-run cgroup leaf teardown is verified against
-        // (see sessionCgroup.ts's spawnIntoTestRunCgroup) — reusing this
-        // run's own durable id means a surviving process is traceable back
-        // to this exact test_request_runs row.
-        {
-          maxRssMb: spec.maxRssMb,
-          failFast: spec.failFast ?? false,
-          runId,
-          env: spec.env,
-        },
+    const executor = runnerExecutorOverride ?? localRunnerExecutor;
+    const rawPkg = await executor({
+      runId,
+      spec,
+      startedAt,
+      concurrentRunCount,
+      testReportGlob,
+    });
+    const pkgProblems = validateRunnerResultPackage(rawPkg);
+    if (pkgProblems.length > 0) {
+      throw new Error(
+        `invalid runner result package: ${pkgProblems.join('; ')}`,
       );
-    // A worktree with no bootstrap_script has no node_modules of its own —
-    // it resolves modules through the project checkout's, the same tree a
-    // concurrent deploy's install-deps step (npm ci) rewrites wholesale.
-    // Serialize against that step; a project whose worktrees provision
-    // their own dependencies shares nothing with the checkout and must not
-    // pay this lock. See checkoutInstallLock.ts.
-    const checkoutDir = getProjectRowById(spec.projectId)?.project_dir;
-    const rawResult =
-      checkoutDir && sharesCheckoutNodeModules(spec.worktreePath)
-        ? await withCheckoutTestRunLock(checkoutDir, runCommands)
-        : await runCommands();
-    const result = outputPrefix
-      ? { ...rawResult, output: outputPrefix + rawResult.output }
-      : rawResult;
-    const oomKilled = result.oomKilled ?? false;
-    let structuredResult: StructuredTestResult | null = null;
-    if (testReportGlob) {
-      try {
-        // Off the main thread — for a large suite, collectStructuredTestResult's
-        // readFileSync + JUnit-XML regex parse is real synchronous I/O+CPU
-        // work, and this handler is shared with every other request the
-        // backend serves. Awaited (not fire-and-forget): structured_result
-        // must be computed as one atomic step before completeTestRequestRun
-        // writes it and the run is broadcast as settled, exactly as before
-        // this moved off-thread — only the I/O itself no longer blocks the
-        // event loop while in flight.
-        structuredResult = await collectStructuredTestResultOffMainThread(
-          spec.worktreePath,
-          testReportGlob,
-          spec.commands.length,
-          startedAt,
-        );
-      } catch (err) {
-        logger.warn(
-          `[testRequestLane] structured_result acquisition failed for run ${runId}:`,
-          err,
-        );
-      }
+    }
+    const pkg: RunnerResultPackage = rawPkg;
+    const result: TestCommandResult = {
+      passed: pkg.passed,
+      output: outputPrefix ? outputPrefix + pkg.output : pkg.output,
+      oomKilled: pkg.oomKilled,
+      timedOut: pkg.timedOut,
+      spawnFailed: pkg.spawnFailed,
+      teardownVerificationFailed: pkg.teardownVerificationFailed,
+      failedCommand: pkg.failedCommand,
+    };
+    const oomKilled = pkg.oomKilled;
+    const structuredResult = pkg.structuredResult;
+    const runConcurrentRunCount = pkg.runnerConcurrentRunCount;
+    if (runConcurrentRunCount !== concurrentRunCount) {
+      setTestRequestRunConcurrentCount(runId, runConcurrentRunCount);
     }
     const structuredResultJson = structuredResult
       ? JSON.stringify(structuredResult)
@@ -1414,13 +1473,13 @@ async function executeTestRequestRun(
       state: result.passed ? 'passed' : 'failed',
       output: result.output,
       requested_at: requestedAt,
-      started_at: startedAt,
-      finished_at: Date.now(),
+      started_at: pkg.startedAt,
+      finished_at: pkg.finishedAt,
       failure_reason: result.passed
         ? null
         : failureReasonFor(result, crashSignatures),
       structured_result: structuredResultJson,
-      concurrent_run_count: concurrentRunCount,
+      concurrent_run_count: runConcurrentRunCount,
       oom_killed: oomKilled ? 1 : 0,
       test_report_acquisition_attempted: acquisitionAttempted ? 1 : 0,
       run_origin: spec.runOrigin,
