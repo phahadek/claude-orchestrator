@@ -574,7 +574,7 @@ describe('isSessionComplete — session parked on its blocked members', () => {
 
     const res = await agent
       .post(`/api/staged-intents/group/${GROUP}/reject`)
-      .send({ reason: 'declined by operator' });
+      .send({ outcome: 'decline', reason: 'declined by operator' });
     expect(res.status).toBe(200);
     const row = db
       .prepare('SELECT state FROM staged_intent WHERE id = ?')
