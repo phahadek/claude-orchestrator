@@ -84,7 +84,8 @@ export const RUNNER_TLS_KEY_PATH = process.env.RUNNER_TLS_KEY_PATH ?? '';
 export const RUNNER_LISTENER_PORT = Number(
   process.env.RUNNER_LISTENER_PORT ?? 3443,
 );
-export const RUNNER_LISTENER_HOST = process.env.RUNNER_LISTENER_HOST ?? '0.0.0.0';
+export const RUNNER_LISTENER_HOST =
+  process.env.RUNNER_LISTENER_HOST ?? '0.0.0.0';
 
 export const GITHUB_TOKEN = _oc.github.token;
 export const GITHUB_REPO = _oc.github.repo;

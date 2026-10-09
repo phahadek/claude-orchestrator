@@ -104,9 +104,7 @@ export function requireRunnerAuth(
     return;
   }
   if (device.role !== 'runner') {
-    res
-      .status(403)
-      .json({ error: 'forbidden', code: 'runner_role_required' });
+    res.status(403).json({ error: 'forbidden', code: 'runner_role_required' });
     return;
   }
   const ip = req.socket.remoteAddress ?? null;

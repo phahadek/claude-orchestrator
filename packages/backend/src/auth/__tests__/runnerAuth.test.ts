@@ -124,9 +124,9 @@ describe('runner listener', () => {
   it('serves only runner routes', async () => {
     const app = createRunnerApp();
     const auth = { Authorization: `Bearer ${runnerToken}` };
-    expect(
-      (await supertest(app).get('/api/sessions').set(auth)).status,
-    ).toBe(404);
+    expect((await supertest(app).get('/api/sessions').set(auth)).status).toBe(
+      404,
+    );
     expect(
       (await supertest(app).get('/api/enrollment/devices').set(auth)).status,
     ).toBe(404);
@@ -145,11 +145,25 @@ describe('runner listener', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-tls-'));
     const keyPath = path.join(dir, 'k.pem');
     const certPath = path.join(dir, 'c.pem');
-    execFileSync('openssl', [
-      'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
-      '-keyout', keyPath, '-out', certPath,
-      '-days', '1', '-subj', '/CN=localhost',
-    ], { stdio: 'ignore' });
+    execFileSync(
+      'openssl',
+      [
+        'req',
+        '-x509',
+        '-newkey',
+        'rsa:2048',
+        '-nodes',
+        '-keyout',
+        keyPath,
+        '-out',
+        certPath,
+        '-days',
+        '1',
+        '-subj',
+        '/CN=localhost',
+      ],
+      { stdio: 'ignore' },
+    );
     const server = https.createServer(
       { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) },
       createRunnerApp(),
