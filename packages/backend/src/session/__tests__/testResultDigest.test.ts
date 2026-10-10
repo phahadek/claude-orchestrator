@@ -2,7 +2,53 @@ import { describe, it, expect } from 'vitest';
 import {
   appendAwaitingDispositionInstruction,
   buildTestResultDigest,
+  buildTestResultDigestFromOutcomes,
 } from '../testResultDigest';
+
+function outcomes(failed: number, incomplete: boolean) {
+  return {
+    incomplete,
+    failingTests: Array.from({ length: failed }, (_, i) => ({
+      test_id: `t${i}`,
+      name: `n${i}`,
+    })),
+    totals: { passed: 10, failed, skipped: 0, errors: 0, total: 10 + failed },
+  };
+}
+const runFailure = {
+  failedCommand: 'uv run task test-static',
+  outputTail: 'FAILED tests/test_mock_boundary_audit.py::x',
+};
+
+describe('buildTestResultDigestFromOutcomes runFailure', () => {
+  it('renders command and tail when incomplete with 0 failed', () => {
+    const d = buildTestResultDigestFromOutcomes(outcomes(0, true), {
+      runFailure,
+    });
+    expect(d).toContain('uv run task test-static');
+    expect(d).toContain('FAILED tests/test_mock_boundary_audit.py::x');
+  });
+
+  it('renders the block when complete with 0 failed', () => {
+    const d = buildTestResultDigestFromOutcomes(outcomes(0, false), {
+      runFailure,
+    });
+    expect(d).toContain('Failure outside the structured report');
+  });
+
+  it('is unchanged when failures are attributed and report is complete', () => {
+    const base = buildTestResultDigestFromOutcomes(outcomes(2, false));
+    expect(
+      buildTestResultDigestFromOutcomes(outcomes(2, false), { runFailure }),
+    ).toBe(base);
+  });
+
+  it('is unchanged without runFailure', () => {
+    expect(buildTestResultDigestFromOutcomes(outcomes(0, true))).not.toContain(
+      'Failure outside',
+    );
+  });
+});
 
 describe('appendAwaitingDispositionInstruction', () => {
   it('appends the wait instruction only when the marker is present', () => {

@@ -1075,6 +1075,14 @@ export class PRMergeWatcher extends EventEmitter {
                   : null;
               const digest = buildTestResultDigestFromOutcomes(
                 readRunTestOutcomes(testResult),
+                {
+                  runFailure: {
+                    failedCommand: testResult.failed_command,
+                    outputTail: testResult.output
+                      ? tailOfLog(testResult.output, 1000)
+                      : '',
+                  },
+                },
               );
               setPauseReason(
                 pr.pr_number,
