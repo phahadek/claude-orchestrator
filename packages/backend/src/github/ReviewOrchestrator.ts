@@ -62,8 +62,15 @@ import { formatReviewFeedback, formatCIFailureFeedback } from './reviewUtils';
 import type { DispositionsParsedPayload } from './types';
 import {
   runVerifyAsGate,
+  tailOfLog,
   type VerifyResult,
 } from '../orchestration/verifyRunner';
+import {
+  detectCrashSignature,
+  buildWorkerCrashMessage,
+} from '../orchestration/workerCrashDetection';
+import { buildScopedEnv } from '../orchestration/gateEnv';
+import type { TestRequestRunRow } from '../db/types';
 import {
   filterVerifyFailureByBaseHealth,
   renderBaseAttributableFilterDigest,
@@ -73,7 +80,10 @@ import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { runTestCommands } from '../session/test-runner';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
 import { computeWholeTreeContentHash } from '../session/analyzeGating';
-import { runProjectTestRequest } from '../orchestration/testRequestLane';
+import {
+  runProjectTestRequest,
+  admitTestRequest,
+} from '../orchestration/testRequestLane';
 import { recordEvent } from '../audit/AuditLog';
 import { opensPr } from '../session/sessionPredicates';
 import type { ServerMessage } from '../ws/types';
@@ -1086,6 +1096,7 @@ export class ReviewOrchestrator {
     project: ProjectConfig,
     job: LocalBranchJob,
     result: VerifyResult,
+    runId: string | null = null,
   ): Promise<VerifyResult> {
     const localBranchId = job.localBranchId;
     if (result.passed) return result;
@@ -1093,8 +1104,8 @@ export class ReviewOrchestrator {
     try {
       filtered = await filterVerifyFailureByBaseHealth(
         project,
-        null,
-        result.structuredResult,
+        runId,
+        runId ? null : (result.structuredResult ?? null),
         { sessionId: job.sessionId, worktreePath: job.worktreePath },
       );
     } catch (err) {
@@ -1121,23 +1132,165 @@ export class ReviewOrchestrator {
     };
   }
 
+  /**
+   * Runs verify for a local branch through the governed test lane
+   * (run_kind 'verify', content-hash cached, semaphore-bounded, recorded in
+   * test_request_runs), applying the base-attributable filter against the
+   * persisted runId. Falls back to runVerifyAsGate only when the content
+   * hash can't be computed. Returns null when every admission was
+   * superseded (no verdict).
+   */
+  private async runLocalBranchVerify(
+    project: ProjectConfig,
+    job: LocalBranchJob,
+    config: ReturnType<typeof loadOrchestratorConfig>,
+  ): Promise<VerifyResult | null> {
+    const MAX_VERIFY_ADMISSIONS = 6;
+    const crashSignatures = config.test_crash_signatures ?? [];
+
+    const fromRun = (
+      run: TestRequestRunRow | undefined,
+      base: {
+        passed: boolean;
+        failedCommand?: string;
+        output: string;
+        isToolInfraFailure?: boolean;
+        toolFailureReason?: string;
+      },
+    ): { result: VerifyResult; runId: string | null } => {
+      let truncatedOutput = tailOfLog(base.output);
+      if (!base.passed) {
+        if (base.isToolInfraFailure) {
+          truncatedOutput = `Toolchain/infra failure: ${base.toolFailureReason ?? truncatedOutput}`;
+        } else if (run?.failure_reason === 'worker_crash') {
+          truncatedOutput = buildWorkerCrashMessage(
+            detectCrashSignature(run.output, crashSignatures) ?? {
+              matchedLines: [],
+            },
+          );
+        } else if (run?.failure_reason === 'timeout') {
+          truncatedOutput = `Verify timed out.\n${truncatedOutput}`;
+        }
+      }
+      return {
+        result: {
+          passed: base.passed,
+          failedCommand: base.failedCommand,
+          truncatedOutput,
+        },
+        runId: run?.id ?? null,
+      };
+    };
+
+    let admissions = 0;
+    while (admissions < MAX_VERIFY_ADMISSIONS) {
+      const contentHash = await computeWholeTreeContentHash(job.worktreePath);
+      if (!contentHash) break;
+      admissions++;
+
+      const laneResult = await admitTestRequest({
+        projectId: project.id,
+        contentHash,
+        worktreePath: job.worktreePath,
+        commands: config.verify,
+        timeoutSec: config.test_timeout_sec,
+        maxRssMb: config.test_max_rss_mb,
+        sessionId: null,
+        runOrigin: 'pr_pipeline',
+        producer: 'pr_gate',
+        runKind: 'verify',
+        failFast: true,
+        env: buildScopedEnv(job.worktreePath, config.cache_env),
+        expectedToolVersions: config.expected_tool_versions,
+      }).result;
+
+      if (!laneResult.superseded) {
+        const { result } = fromRun(getTestRequestRunById(laneResult.runId), {
+          passed: laneResult.passed,
+          failedCommand: laneResult.failedCommand,
+          output: laneResult.output,
+          isToolInfraFailure: laneResult.isToolInfraFailure,
+          toolFailureReason: laneResult.toolFailureReason,
+        });
+        return this.applyVerifyBaseAttributionFilter(
+          project,
+          job,
+          result,
+          laneResult.runId,
+        );
+      }
+
+      logger.info(
+        `[ReviewOrchestrator] verify run for local branch ${job.localBranchId} superseded by ${laneResult.supersededBy ?? 'unknown'} — following`,
+      );
+      const visited = new Set<string>();
+      let by = laneResult.supersededBy;
+      while (by) {
+        if (by === 'head_moved' || visited.has(by)) break;
+        visited.add(by);
+        const followed = getTestRequestRunById(by);
+        if (!followed) break;
+        if (
+          followed.state === 'failed' &&
+          followed.failure_reason === 'superseded'
+        ) {
+          by = followed.superseded_by ?? undefined;
+          continue;
+        }
+        if (followed.state === 'passed' || followed.state === 'failed') {
+          const toolInfra = followed.failure_reason === 'tool_infra_failure';
+          const { result, runId } = fromRun(followed, {
+            passed: followed.state === 'passed',
+            failedCommand: followed.failed_command ?? undefined,
+            output: followed.output,
+            isToolInfraFailure: toolInfra,
+            toolFailureReason: toolInfra
+              ? tailOfLog(followed.output)
+              : undefined,
+          });
+          return this.applyVerifyBaseAttributionFilter(
+            project,
+            job,
+            result,
+            runId,
+          );
+        }
+        break;
+      }
+    }
+
+    if (admissions >= MAX_VERIFY_ADMISSIONS) {
+      logger.warn(
+        `[ReviewOrchestrator] local branch ${job.localBranchId}: verify admission budget (${MAX_VERIFY_ADMISSIONS}) exhausted while every run was superseded`,
+      );
+      return null;
+    }
+
+    const gateResult = await runVerifyAsGate(
+      job.worktreePath,
+      config.verify,
+      config.test_report_glob,
+      {
+        cacheEnv: config.cache_env,
+        expectedToolVersions: config.expected_tool_versions,
+        timeoutSec: config.test_timeout_sec,
+        maxRssMb: config.test_max_rss_mb,
+        crashSignatures,
+      },
+    );
+    return this.applyVerifyBaseAttributionFilter(project, job, gateResult);
+  }
+
   private async executeLocalBranchReview(job: LocalBranchJob): Promise<void> {
     const project = getProjectById(job.projectId);
     if (project) {
       const config = loadOrchestratorConfig(project.projectDir);
-      const verifyResult = await this.applyVerifyBaseAttributionFilter(
+      const verifyResult = await this.runLocalBranchVerify(
         project,
         job,
-        await runVerifyAsGate(
-          job.worktreePath,
-          config.verify,
-          config.test_report_glob,
-          {
-            cacheEnv: config.cache_env,
-            expectedToolVersions: config.expected_tool_versions,
-          },
-        ),
+        config,
       );
+      if (!verifyResult) return;
       if (!verifyResult.passed) {
         const autofixCommands = loadAutofixCommands(project.projectDir);
         if (autofixCommands.length > 0) {
@@ -1172,19 +1325,12 @@ export class ReviewOrchestrator {
                 },
               });
               // Re-run verify to see if autofix resolved it
-              const retryResult = await this.applyVerifyBaseAttributionFilter(
+              const retryResult = await this.runLocalBranchVerify(
                 project,
                 job,
-                await runVerifyAsGate(
-                  job.worktreePath,
-                  config.verify,
-                  config.test_report_glob,
-                  {
-                    cacheEnv: config.cache_env,
-                    expectedToolVersions: config.expected_tool_versions,
-                  },
-                ),
+                config,
               );
+              if (!retryResult) return;
               if (retryResult.passed) {
                 // Autofix fixed the gate — fall through to AI review
               } else {

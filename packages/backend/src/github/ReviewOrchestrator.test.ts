@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { mockDbQueries } from '../__tests__/helpers/mockDbQueries';
 
@@ -85,6 +85,19 @@ vi.mock('../config.js', () => ({
 
 vi.mock('../orchestration/verifyRunner.js', () => ({
   runVerifyAsGate: vi.fn().mockResolvedValue({ passed: true }),
+  tailOfLog: (s: string) => s,
+}));
+
+vi.mock('../session/analyzeGating.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../session/analyzeGating')>()),
+  computeWholeTreeContentHash: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock('../orchestration/testRequestLane.js', async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import('../orchestration/testRequestLane')
+  >()),
+  admitTestRequest: vi.fn(),
 }));
 
 vi.mock('../orchestration/baseAttributableFilter.js', () => ({
@@ -136,6 +149,8 @@ import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
 import { recordEvent } from '../audit/AuditLog';
 import { runVerifyAsGate } from '../orchestration/verifyRunner';
+import { computeWholeTreeContentHash } from '../session/analyzeGating';
+import { admitTestRequest } from '../orchestration/testRequestLane';
 import { filterVerifyFailureByBaseHealth } from '../orchestration/baseAttributableFilter';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import type { PRReviewService } from './PRReviewService';
@@ -6146,5 +6161,165 @@ describe('ReviewOrchestrator — head-already-reviewed admission gate', () => {
     await new Promise((r) => setTimeout(r, 20));
 
     expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
+  });
+});
+
+describe('ReviewOrchestrator — local-branch verify through the test lane', () => {
+  const laneConfig = {
+    verify: ['npm run lint'],
+    autofix: [],
+    ci_check_name: [],
+    allowed_tools: [],
+    bash_rules: [],
+    bootstrap_script: '',
+    test_timeout_sec: 123,
+    test_max_rss_mb: 456,
+  };
+
+  function admission(result: object, runId = 'run-1') {
+    return { runId, result: Promise.resolve({ runId, ...result }) } as any;
+  }
+
+  async function submit() {
+    vi.mocked(getSession).mockReturnValue(verifySessionRow as any);
+    vi.mocked(getLocalBranchBySession).mockReturnValue(
+      verifyLocalBranchRow as any,
+    );
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+    sm.emit('message', {
+      type: 'local_branch_submitted',
+      projectId: 'proj-local',
+      sessionId: 'coding-session-local',
+      branchName: 'feature/my-task',
+      baseBranch: 'dev',
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    return { sm, rs };
+  }
+
+  beforeEach(() => {
+    vi.mocked(computeWholeTreeContentHash).mockResolvedValue('hash-1');
+    vi.mocked(loadOrchestratorConfig).mockReturnValue(laneConfig as any);
+    vi.mocked(admitTestRequest).mockReset();
+    vi.mocked(loadAutofixCommands).mockReturnValue([]);
+  });
+
+  afterEach(() => {
+    vi.mocked(computeWholeTreeContentHash).mockResolvedValue(null);
+    vi.mocked(loadAutofixCommands).mockReturnValue([]);
+  });
+
+  it('admits a verify run with the project limits and does not call runVerifyAsGate', async () => {
+    vi.mocked(admitTestRequest).mockReturnValue(
+      admission({ passed: true, output: '' }),
+    );
+    const { rs } = await submit();
+
+    expect(vi.mocked(runVerifyAsGate)).not.toHaveBeenCalled();
+    expect(vi.mocked(admitTestRequest)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runKind: 'verify',
+        producer: 'pr_gate',
+        sessionId: null,
+        commands: ['npm run lint'],
+        timeoutSec: 123,
+        maxRssMb: 456,
+        contentHash: 'hash-1',
+      }),
+    );
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalled();
+  });
+
+  it('pauses with ci_failing and feedback when the lane run fails, filtering by runId', async () => {
+    vi.mocked(admitTestRequest).mockReturnValue(
+      admission(
+        { passed: false, failedCommand: 'npm run lint', output: 'lint boom' },
+        'run-fail',
+      ),
+    );
+    const { sm, rs } = await submit();
+
+    expect(vi.mocked(filterVerifyFailureByBaseHealth)).toHaveBeenCalledWith(
+      expect.anything(),
+      'run-fail',
+      null,
+      expect.any(Object),
+    );
+    expect(vi.mocked(setLocalBranchPauseReason)).toHaveBeenCalledWith(
+      5,
+      'ci_failing',
+    );
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledOnce();
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+  });
+
+  it('re-verifies through the lane after a successful autofix', async () => {
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run fix'] as any);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      summary: 'fixed',
+      commitSha: 'fix-sha',
+    } as any);
+    vi.mocked(admitTestRequest)
+      .mockReturnValueOnce(
+        admission({
+          passed: false,
+          failedCommand: 'npm run lint',
+          output: 'x',
+        }),
+      )
+      .mockReturnValueOnce(admission({ passed: true, output: '' }, 'run-2'));
+    const { rs } = await submit();
+
+    expect(vi.mocked(admitTestRequest)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(setLocalBranchPauseReason)).not.toHaveBeenCalled();
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalled();
+  });
+
+  it('follows a superseded result to the superseding run verdict', async () => {
+    vi.mocked(admitTestRequest).mockReturnValue(
+      admission({ superseded: true, supersededBy: 'run-next' }),
+    );
+    vi.mocked(getTestRequestRunById).mockReturnValue({
+      id: 'run-next',
+      state: 'passed',
+      output: '',
+      failure_reason: null,
+    } as any);
+    const { rs } = await submit();
+
+    expect(vi.mocked(admitTestRequest)).toHaveBeenCalledOnce();
+    expect(vi.mocked(setLocalBranchPauseReason)).not.toHaveBeenCalled();
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalled();
+  });
+
+  it('re-hashes and re-admits on head_moved, never treating supersession as pass/fail', async () => {
+    vi.mocked(admitTestRequest)
+      .mockReturnValueOnce(
+        admission({ superseded: true, supersededBy: 'head_moved' }),
+      )
+      .mockReturnValueOnce(admission({ passed: true, output: '' }, 'run-2'));
+    const { rs } = await submit();
+
+    expect(vi.mocked(admitTestRequest)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(computeWholeTreeContentHash)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalled();
+  });
+
+  it('falls back to runVerifyAsGate with limits when the content hash cannot be computed', async () => {
+    vi.mocked(computeWholeTreeContentHash).mockResolvedValue(null);
+    vi.mocked(runVerifyAsGate).mockResolvedValue({ passed: true });
+    const { rs } = await submit();
+
+    expect(vi.mocked(admitTestRequest)).not.toHaveBeenCalled();
+    expect(vi.mocked(runVerifyAsGate)).toHaveBeenCalledWith(
+      expect.any(String),
+      ['npm run lint'],
+      undefined,
+      expect.objectContaining({ timeoutSec: 123, maxRssMb: 456 }),
+    );
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalled();
   });
 });
