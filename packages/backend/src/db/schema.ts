@@ -2585,6 +2585,15 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+  // Distinct-origin evidence count a push-written excuse rested on, so the
+  // breadth bar can be tuned from data. NULL for pull-written/unexcused rows.
+  try {
+    target.exec(
+      `ALTER TABLE test_run_results ADD COLUMN excused_evidence_count INTEGER`,
+    );
+  } catch {
+    /* already exists */
+  }
   // Replaces the getFlakyRollupCandidates/getCandidates join through
   // test_request_runs with a direct project-scoped range scan — see the
   // comment above those functions in queries.ts/flakyTestRollupWorker.ts.

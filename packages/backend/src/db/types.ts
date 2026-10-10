@@ -1410,6 +1410,8 @@ export interface TestRunResultRow {
   excused_at: number | null;
   /** Which path excused this failure — see TestExcusalSource. Null when never excused. */
   excused_reason: string | null;
+  /** Distinct-origin evidence count a push-written excuse rested on; null for pull-written and unexcused rows. */
+  excused_evidence_count: number | null;
   created_at: number;
 }
 
@@ -1425,7 +1427,8 @@ export interface TestRunResultRow {
 export type TestExcusalSource =
   | 'flaky_confirm'
   | 'breadth_corpus'
-  | 'flaky_rollup';
+  | 'flaky_rollup'
+  | 'push_reattribution';
 
 export interface NewTestRunResultRow {
   test_id: string;
