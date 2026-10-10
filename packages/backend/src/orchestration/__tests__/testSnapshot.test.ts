@@ -126,8 +126,20 @@ describe('testSnapshot', () => {
     it('refuses to write through a chained symlink that escapes only on the real filesystem', () => {
       const snap = craft(
         [
-          { path: 'sub/s', type: 'symlink', mode: 0o777, size: 0, target: '../' },
-          { path: 'sub/t', type: 'symlink', mode: 0o777, size: 0, target: 's/../../x' },
+          {
+            path: 'sub/s',
+            type: 'symlink',
+            mode: 0o777,
+            size: 0,
+            target: '../',
+          },
+          {
+            path: 'sub/t',
+            type: 'symlink',
+            mode: 0o777,
+            size: 0,
+            target: 's/../../x',
+          },
           { path: 'sub/t/foo', type: 'file', mode: 0o644, size: 3 },
         ],
         'bad',

@@ -237,7 +237,9 @@ export function materializeAndVerifySnapshot(
     const seen = new Set<string>();
     for (const entry of manifest.entries) {
       if (seen.has(entry.path)) {
-        throw new SnapshotIntegrityError(`Duplicate snapshot path: ${entry.path}`);
+        throw new SnapshotIntegrityError(
+          `Duplicate snapshot path: ${entry.path}`,
+        );
       }
       seen.add(entry.path);
     }
@@ -252,7 +254,9 @@ export function materializeAndVerifySnapshot(
         entry.size < 0 ||
         !Number.isInteger(entry.mode)
       ) {
-        throw new SnapshotIntegrityError(`Invalid entry metadata: ${entry.path}`);
+        throw new SnapshotIntegrityError(
+          `Invalid entry metadata: ${entry.path}`,
+        );
       }
       if (offset + entry.size > raw.length) {
         throw new SnapshotIntegrityError('Snapshot archive truncated');
