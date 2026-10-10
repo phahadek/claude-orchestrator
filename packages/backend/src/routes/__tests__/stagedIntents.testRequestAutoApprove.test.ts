@@ -73,6 +73,8 @@ import {
   setStagedIntentGroup,
   transitionStagedIntent,
   getSessionTestRequestCycleCount,
+  insertTestRequestRun,
+  completeTestRequestRun,
 } from '../../db/queries';
 import { typedSetSetting } from '../../config/settings';
 import { logger } from '../../logger';
@@ -502,6 +504,60 @@ describe('test.request held for operator approval (broken prior run on this tree
       )
       .get() as { n: number };
     expect(stagedCount.n).toBe(1);
+  });
+
+  describe('with the real hold decision over a prior run row', () => {
+    async function useRealHold() {
+      const actual = await vi.importActual<
+        typeof import('../../orchestration/testRequestLane')
+      >('../../orchestration/testRequestLane');
+      mockCheckTestRequestHold.mockImplementation(actual.checkTestRequestHold);
+      db.prepare('DELETE FROM test_request_runs').run();
+    }
+
+    function insertPriorRun(
+      reason: 'interrupted_running' | 'interrupted_queued' | 'execution_failed',
+    ) {
+      insertTestRequestRun(
+        'run-prior',
+        'proj-1',
+        'hash-1',
+        'session-prior',
+        Date.now(),
+      );
+      completeTestRequestRun('run-prior', 'failed', 'x', reason);
+    }
+
+    it.each(['interrupted_running', 'interrupted_queued'] as const)(
+      'auto-approves and admits when the last run on the tree is %s (no testRequestHeld annotation)',
+      async (reason) => {
+        await useRealHold();
+        setUpSession('session-prior');
+        insertPriorRun(reason);
+
+        const intent = stageTestRequest('session-prior');
+        const checked = await routeStageTimeBlock(intent, undefined);
+
+        expect(checked.state).toBe('approved');
+        expect(mockAdmitTestRequest).toHaveBeenCalledTimes(1);
+        expect(checked.annotation).not.toHaveProperty('testRequestHeld');
+      },
+    );
+
+    it('still holds for a spawn-failure execution_failed prior run', async () => {
+      await useRealHold();
+      setUpSession('session-prior');
+      insertPriorRun('execution_failed');
+
+      const intent = stageTestRequest('session-prior');
+      const checked = await routeStageTimeBlock(intent, undefined);
+
+      expect(checked.state).toBe('staged');
+      expect(mockAdmitTestRequest).not.toHaveBeenCalled();
+      expect(checked.annotation).toMatchObject({
+        testRequestHeld: { failureReason: 'execution_failed' },
+      });
+    });
   });
 
   it('a tree with no held prior run auto-approves as today (hold check returns held: false)', async () => {

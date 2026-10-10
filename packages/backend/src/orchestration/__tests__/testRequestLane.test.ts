@@ -347,6 +347,32 @@ describe('checkTestRequestHold', () => {
     },
   );
 
+  it.each(['interrupted_running', 'interrupted_queued'] as const)(
+    'does not hold when the latest row is a boot-sweep %s interruption',
+    (reason) => {
+      const runId = `interrupted-${reason}`;
+      insertTestRequestRun(runId, 'proj-hold', 'hold-hash', null, Date.now());
+      completeTestRequestRun(runId, 'failed', 'restarted', reason);
+      expect(checkTestRequestHold(holdParams())).toEqual({ held: false });
+    },
+  );
+
+  it('does not hold when a real sweep marked the running row interrupted_running', () => {
+    insertTestRequestRun(
+      'swept-run',
+      'proj-hold',
+      'hold-hash',
+      null,
+      Date.now(),
+    );
+    recoverInterruptedTestRequestRuns();
+    expect(
+      getLatestTestRequestRun('proj-hold', 'hold-hash', 'full', null, true)
+        ?.failure_reason,
+    ).toBe('interrupted_running');
+    expect(checkTestRequestHold(holdParams())).toEqual({ held: false });
+  });
+
   it('does not hold when the settled failed run carries a structured_result (report-bearing failure) — that one still replays as unchangedReplay', () => {
     const runId = 'report-bearing-fail';
     insertTestRequestRun(runId, 'proj-hold', 'hold-hash', null, Date.now());
@@ -833,6 +859,28 @@ describe('runProjectTestRequest — coalescing', () => {
     expect(admission.unchangedReplay).toBe(false);
     expect(retryResult.unchangedReplay).toBe(false);
     expect(retryResult.passed).toBe(true);
+  });
+
+  it('an interrupted_running row is never replayed as an unchangedReplay verdict — a retry re-executes', async () => {
+    insertTestRequestRun(
+      'interrupted-run',
+      'proj-1',
+      'hash-interrupted',
+      null,
+      Date.now(),
+    );
+    recoverInterruptedTestRequestRuns();
+
+    mockRunTestCommands.mockResolvedValueOnce({ passed: true, output: 'ok' });
+    const admission = admitTestRequest(
+      baseSpec({ contentHash: 'hash-interrupted' }),
+    );
+    const result = await admission.result;
+
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    expect(admission.unchangedReplay).toBe(false);
+    expect(result.unchangedReplay).toBe(false);
+    expect(result.passed).toBe(true);
   });
 
   it('an ordinary settled failure IS replayed as unchangedReplay on a subsequent request against the same tree', async () => {
@@ -1617,7 +1665,7 @@ describe('run_kind=verify samples in the per-test flip-rate / duration rollups',
 });
 
 describe('recoverInterruptedTestRequestRuns', () => {
-  it('marks a leftover running row as failed with failure_reason execution_failed and its existing output string, and invokes clearSupersededStructuredResults + broadcastRunStatus', () => {
+  it('marks a leftover running row as failed with failure_reason interrupted_running and its existing output string, and invokes clearSupersededStructuredResults + broadcastRunStatus', () => {
     insertTestRequestRun('run-1', 'proj-1', 'hash-x', null, Date.now());
     // A superseded sibling row so clearSupersededStructuredResults' effect
     // (clearing an already-extracted older row's structured_result for the
@@ -1660,7 +1708,7 @@ describe('recoverInterruptedTestRequestRuns', () => {
       output: string;
     };
     expect(row.state).toBe('failed');
-    expect(row.failure_reason).toBe('execution_failed');
+    expect(row.failure_reason).toBe('interrupted_running');
     expect(row.output).toBe(
       '[testRequestLane] backend restarted mid-run — treated as failed',
     );
@@ -1747,7 +1795,7 @@ describe('recoverInterruptedTestRequestRuns', () => {
     const reasons = Object.fromEntries(
       rows.map((r) => [r.id, r.failure_reason]),
     );
-    expect(reasons['run-mixed-running']).toBe('execution_failed');
+    expect(reasons['run-mixed-running']).toBe('interrupted_running');
     expect(reasons['run-mixed-queued']).toBe('interrupted_queued');
     expect(reasons['run-mixed-running']).not.toBe(reasons['run-mixed-queued']);
   });

@@ -1207,9 +1207,13 @@ export type TestRunKind = 'full' | 'scoped' | 'verify';
  * 'interrupted_queued' is recoverInterruptedTestRequestRuns' boot-sweep
  * reason for a row that was still `queued` — never dequeued, so its test
  * commands never started — when the backend restarted. Distinct from
- * 'execution_failed', which the same sweep uses for a `running` row that had
+ * 'interrupted_running', the same sweep's reason for a `running` row that had
  * actually started executing: collapsing the two loses whether the
  * interruption happened before or during execution.
+ *
+ * 'interrupted_running': the run was executing when the backend restarted; no
+ * verdict about the tree. Neither interrupted reason triggers the test.request
+ * hold, and neither is ever replayed as a verdict.
  */
 export type TestRequestFailureReason =
   | 'timeout'
@@ -1218,6 +1222,7 @@ export type TestRequestFailureReason =
   | 'teardown_failed'
   | 'generic'
   | 'interrupted_queued'
+  | 'interrupted_running'
   | 'superseded'
   | 'tool_infra_failure'
   /**

@@ -6817,6 +6817,9 @@ function describeTestRequestFailure(
       return 'failed to execute — the test runner process never started';
     case 'runner_unreachable':
       return 'failed because the remote test runner never returned a result';
+    case 'interrupted_running':
+    case 'interrupted_queued':
+      return 'was interrupted by a backend restart';
     default:
       return 'crashed';
   }

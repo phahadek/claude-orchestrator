@@ -843,6 +843,7 @@ export function admitTestRequest(
   if (
     settled &&
     settled.failure_reason !== 'execution_failed' &&
+    settled.failure_reason !== 'interrupted_running' &&
     settled.failure_reason !== 'runner_unreachable' &&
     settled.failure_reason !== 'superseded'
   ) {
@@ -1128,6 +1129,13 @@ export function checkTestRequestHold(params: {
     true,
   );
   if (!withCrashRows || withCrashRows.failure_reason === 'superseded') {
+    return { held: false };
+  }
+
+  if (
+    withCrashRows.failure_reason === 'interrupted_running' ||
+    withCrashRows.failure_reason === 'interrupted_queued'
+  ) {
     return { held: false };
   }
 
@@ -1631,7 +1639,7 @@ export function announceRunnerUnreachableRun(
  * Boot-time crash recovery: a `running` row left over from a prior process
  * (the backend was killed/crashed mid-run) can never resolve its own
  * coalescing promise again — that in-memory state died with the process —
- * so it is marked `failed` (failure_reason 'execution_failed') rather than
+ * so it is marked `failed` (failure_reason 'interrupted_running') rather than
  * left stuck. The request that started it already spent its cycle-counter
  * increment at stage time, so this does not grant a free retry against the
  * escalation budget.
@@ -1640,7 +1648,7 @@ export function announceRunnerUnreachableRun(
  * only in the crashed process's in-memory Semaphore, so it can never acquire
  * a permit on its own — but it never dequeued, so its test commands never
  * started. It is marked `failed` with failure_reason 'interrupted_queued'
- * rather than 'execution_failed', so the durable record still distinguishes
+ * rather than 'interrupted_running', so the durable record still distinguishes
  * "was executing when the backend restarted" from "was merely waiting for a
  * concurrency slot" — collapsing the two into one output/reason made the two
  * cases indistinguishable after the fact (started_at is populated on a
@@ -1663,7 +1671,7 @@ export function recoverInterruptedTestRequestRuns(): void {
   }> = [
     {
       runs: listRunningTestRequestRuns(),
-      failureReason: 'execution_failed',
+      failureReason: 'interrupted_running',
       output: '[testRequestLane] backend restarted mid-run — treated as failed',
     },
     {
@@ -1942,6 +1950,7 @@ export function classifyTestRunOutcome(
   } else if (
     run.failure_reason === 'execution_failed' ||
     run.failure_reason === 'interrupted_queued' ||
+    run.failure_reason === 'interrupted_running' ||
     run.failure_reason === 'runner_unreachable'
   ) {
     outcome = 'execution-failed';
