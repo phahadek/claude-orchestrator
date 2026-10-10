@@ -1205,21 +1205,18 @@ export class ReviewOrchestrator {
       }).result;
 
       if (!laneResult.superseded) {
-        const { result, runId } = fromRun(
-          getTestRequestRunById(laneResult.runId),
-          {
-            passed: laneResult.passed,
-            failedCommand: laneResult.failedCommand,
-            output: laneResult.output,
-            isToolInfraFailure: laneResult.isToolInfraFailure,
-            toolFailureReason: laneResult.toolFailureReason,
-          },
-        );
+        const { result } = fromRun(getTestRequestRunById(laneResult.runId), {
+          passed: laneResult.passed,
+          failedCommand: laneResult.failedCommand,
+          output: laneResult.output,
+          isToolInfraFailure: laneResult.isToolInfraFailure,
+          toolFailureReason: laneResult.toolFailureReason,
+        });
         return this.applyVerifyBaseAttributionFilter(
           project,
           job,
           result,
-          runId,
+          laneResult.runId,
         );
       }
 
