@@ -270,6 +270,12 @@ export async function runBootSequence(deps: BootDeps): Promise<void> {
       resolve();
     }),
   );
+  try {
+    const { startRunnerListener } = await import('./routes/runnerChannel');
+    startRunnerListener();
+  } catch (err) {
+    logger.error('[runner-channel] failed to start runner listener:', err);
+  }
   void runReconciliationChain(deps).catch((err) =>
     logger.error('[server] background boot reconciliation crashed:', err),
   );

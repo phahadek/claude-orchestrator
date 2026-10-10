@@ -349,11 +349,15 @@ export interface DeviceRow {
   enrolled_at: number;
   token: string;
   revoked: number; // 0 | 1 (SQLite boolean)
+  role: DeviceRole;
 }
 
-export type NewDeviceRow = Omit<DeviceRow, 'last_seen' | 'revoked'> & {
+type DeviceRole = 'operator' | 'runner';
+
+export type NewDeviceRow = Omit<DeviceRow, 'last_seen' | 'revoked' | 'role'> & {
   last_seen?: number | null;
   revoked?: number;
+  role?: DeviceRole;
 };
 
 // ─── session_pause_intervals ────────────────────────────────────────────────

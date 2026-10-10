@@ -3639,6 +3639,16 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // devices.role: 'operator' (full device API) or 'runner' (remote
+  // test-execution runner, confined to the runner listener's routes).
+  try {
+    target.exec(
+      `ALTER TABLE devices ADD COLUMN role TEXT NOT NULL DEFAULT 'operator'`,
+    );
+  } catch {
+    /* already exists */
+  }
 }
 
 /**
