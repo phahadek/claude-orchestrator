@@ -16,6 +16,11 @@ vi.mock('../../session/orchestrator-config', () => ({
   loadOrchestratorConfig: vi.fn(() => ({ test_report_glob: '' })),
 }));
 
+const { mockTreeHash } = vi.hoisted(() => ({ mockTreeHash: { value: '' } }));
+vi.mock('../../session/analyzeGating', () => ({
+  computeWholeTreeContentHash: vi.fn(async () => mockTreeHash.value),
+}));
+
 vi.mock('../memoryAdmission', () => ({
   hasTestRequestAdmission: vi.fn(() => true),
 }));
@@ -186,6 +191,7 @@ describe('settled-run replay guard', () => {
     await runProjectTestRequest(spec('h-generic'));
     expect(executor).not.toHaveBeenCalled();
 
+    mockTreeHash.value = 'h-unreach';
     await runProjectTestRequest(spec('h-unreach'));
     expect(executor).toHaveBeenCalledTimes(1);
   });
