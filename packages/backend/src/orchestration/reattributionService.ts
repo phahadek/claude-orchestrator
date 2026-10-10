@@ -81,6 +81,8 @@ export async function evaluateSubject(
     changedFiles,
     session.task_id ?? null,
   );
+  // The per-test excused markers are written by the filter itself
+  // (applyF2GateMaskingGuards -> writeExcusedMarkers, on every return path).
   if (gated.result.outcome !== 'filtered_pass') return 'not_excused';
 
   const payload = JSON.stringify({
