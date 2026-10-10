@@ -77,6 +77,20 @@ describe('classifyTestRunOutcome', () => {
     expect(result.outcome).toBe('failed-with-no-report-acquired');
   });
 
+  it.each(['interrupted_running', 'interrupted_queued'] as const)(
+    'classifies failure_reason=%s as execution-failed',
+    (reason) => {
+      const result = classifyTestRunOutcome(
+        makeRun({
+          state: 'failed',
+          structured_result: null,
+          failure_reason: reason,
+        }),
+      );
+      expect(result.outcome).toBe('execution-failed');
+    },
+  );
+
   it('classifies a failed run with oom_killed=1 as crashed-oom', () => {
     const result = classifyTestRunOutcome(
       makeRun({
