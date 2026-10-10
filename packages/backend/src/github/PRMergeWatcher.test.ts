@@ -3721,6 +3721,68 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
     expect(vi.mocked(github.categorizeMergeability)).not.toHaveBeenCalled();
   });
 
+  it('names the failed command in the pause reason and verify feedback when structured outcomes show 0 failures', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-fail',
+      session_id: 'coding-session',
+      ci_remediation_attempted_sha: null,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeClean(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['uv run task test'],
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-1',
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
+      state: 'failed',
+      failed_command: 'uv run task test-static',
+      output: 'FAILED tests/test_audit.py::test_over_budget',
+      structured_result: JSON.stringify({
+        suites: [
+          {
+            name: 's',
+            tests: [{ id: 't1', name: 'ok', outcome: 'passed', durationMs: 1 }],
+          },
+        ],
+        totals: { passed: 1, failed: 0, skipped: 0, errors: 0 },
+        incomplete: true,
+      }),
+      started_at: 1000,
+      finished_at: 2000,
+    } as any);
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    const detail = vi
+      .mocked(setPauseReason)
+      .mock.calls.find((call) => call[2] === 'ci_failing')?.[3] as string;
+    expect(detail).toContain('uv run task test-static');
+    const sent = vi.mocked(sessions.sendOrResume).mock.calls[0]?.[1] as string;
+    expect(sent).toContain('uv run task test-static');
+    expect(sent).toContain('test_over_budget');
+  });
+
   it('pauses with ci_failing using the log tail, not the head, when the failure summary is only at the end', async () => {
     const banner =
       '===== test session starts =====\n' +
