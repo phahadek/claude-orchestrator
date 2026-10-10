@@ -34,10 +34,11 @@ export function buildScopedEnv(
 function runVersionCommand(
   cmd: string,
   cwd: string,
+  env?: NodeJS.ProcessEnv,
 ): Promise<{ exitCode: number; output: string }> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = [];
-    const proc = spawn(cmd, { shell: true, cwd });
+    const proc = spawn(cmd, { shell: true, cwd, env });
     proc.stdout.on('data', (d: Buffer) => chunks.push(d));
     proc.stderr.on('data', (d: Buffer) => chunks.push(d));
     proc.on('close', (code) => {
@@ -72,12 +73,14 @@ export interface ToolchainMismatch {
 export async function checkToolchainVersions(
   worktreePath: string,
   checks: ToolVersionCheck[] | undefined,
+  env?: NodeJS.ProcessEnv,
 ): Promise<ToolchainMismatch | null> {
   if (!checks || checks.length === 0) return null;
   for (const check of checks) {
     const { output } = await runVersionCommand(
       check.version_command,
       worktreePath,
+      env,
     );
     if (!output.includes(check.expected)) {
       return {
