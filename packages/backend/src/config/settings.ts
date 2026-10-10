@@ -62,6 +62,10 @@ const SettingsSchema = z.object({
   dependency_cache_max_age_hours: z.coerce.number().int().min(1),
   dependency_cache_max_total_size_mb: z.coerce.number().int().min(1),
   session_cgroup_prod_reserve_mb: z.coerce.number().int().min(0),
+  // Runner backstop ceiling in MB; 0 = auto (90% of os.totalmem()).
+  runner_cgroup_memory_max_mb: z.coerce.number().int().min(0),
+  runner_min_free_memory_mb: z.coerce.number().int().min(0),
+  runner_per_run_reserve_mb: z.coerce.number().int().min(0),
   session_cgroup_memory_high_fraction: z.coerce.number().min(0).max(1),
   // Absolute write-bandwidth ceiling (bytes/sec) written to io.max's wbps=
   // field for the sessions/ and tests/ cgroup leaves — the block device is
@@ -210,6 +214,9 @@ export const SETTING_DEFAULTS: Settings = {
   dependency_cache_max_age_hours: 168,
   dependency_cache_max_total_size_mb: 10_240,
   session_cgroup_prod_reserve_mb: 4096,
+  runner_cgroup_memory_max_mb: 0,
+  runner_min_free_memory_mb: 1024,
+  runner_per_run_reserve_mb: 3072,
   session_cgroup_memory_high_fraction: 0.9,
   test_run_io_max_wbps: 100 * 1024 * 1024,
   test_run_io_weight: 50,

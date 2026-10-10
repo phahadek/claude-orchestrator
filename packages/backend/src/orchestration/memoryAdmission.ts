@@ -11,6 +11,8 @@ import { runtimeSettings } from '../config';
 // incomplete mock silently gate every respawn in that suite.
 const DEFAULT_MIN_HOST_FREE_MEMORY_MB = 4096;
 const DEFAULT_PER_SESSION_RESERVE_MB = 3072;
+const DEFAULT_RUNNER_MIN_FREE_MEMORY_MB = 1024;
+const DEFAULT_RUNNER_PER_RUN_RESERVE_MB = 3072;
 
 export interface MemoryHeadroomInputs {
   /** Current host free memory, in MB. */
@@ -85,6 +87,37 @@ export function hasMemoryHeadroom(
     minHostFreeMemoryMB,
     perSessionReserveMB,
     projectedFreeMB,
+  };
+}
+
+/**
+ * Runner-side self-gating admission: same pure check as hasMemoryHeadroom
+ * but against the runner's own free memory and runner_* settings.
+ */
+export function hasRunnerMemoryHeadroom(
+  freeMemBytes: number = os.freemem(),
+): MemoryHeadroomResult {
+  const freeMemMB = freeMemBytes / (1024 * 1024);
+  const minHostFreeMemoryMB = Number.isFinite(
+    runtimeSettings.runner_min_free_memory_mb,
+  )
+    ? runtimeSettings.runner_min_free_memory_mb
+    : DEFAULT_RUNNER_MIN_FREE_MEMORY_MB;
+  const perSessionReserveMB = Number.isFinite(
+    runtimeSettings.runner_per_run_reserve_mb,
+  )
+    ? runtimeSettings.runner_per_run_reserve_mb
+    : DEFAULT_RUNNER_PER_RUN_RESERVE_MB;
+  return {
+    allowed: evaluateMemoryHeadroom({
+      freeMemMB,
+      minHostFreeMemoryMB,
+      perSessionReserveMB,
+    }),
+    freeMemMB,
+    minHostFreeMemoryMB,
+    perSessionReserveMB,
+    projectedFreeMB: freeMemMB - perSessionReserveMB,
   };
 }
 
