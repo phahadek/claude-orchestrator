@@ -6708,7 +6708,19 @@ export async function triggerTestRequestExecution(
 
   if (!intent.sessionId || !sessionManager) return;
   const outcomesDigest = runId
-    ? buildTestResultDigestFromOutcomes(await getRunTestOutcomes(runId))
+    ? buildTestResultDigestFromOutcomes(await getRunTestOutcomes(runId), {
+        ...(result.passed
+          ? {}
+          : {
+              runFailure: {
+                failedCommand: result.failedCommand ?? null,
+                outputTail: truncateForDelivery(
+                  result.output,
+                  TEST_REQUEST_DELIVERY_OUTPUT_CAP,
+                ),
+              },
+            }),
+      })
     : null;
   const baseOutput = superseded
     ? `[test.request] This run was withdrawn before it executed — a newer request (or a PR merge/close/push) superseded it. Nothing to act on here; the tree this ran against is no longer current.`

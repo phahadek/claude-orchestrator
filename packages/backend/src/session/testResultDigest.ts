@@ -9,6 +9,8 @@ const DEFAULT_MAX_FAILURES_SHOWN = 20;
 
 export interface TestResultDigestOptions {
   maxFailuresShown?: number;
+  /** Supplied by callers for a run that did not pass. */
+  runFailure?: { failedCommand: string | null; outputTail: string };
 }
 
 const AWAITING_DISPOSITION_INSTRUCTION =
@@ -32,6 +34,7 @@ export function appendAwaitingDispositionInstruction(
  */
 export function buildTestResultDigestFromOutcomes(
   outcomes: {
+    incomplete?: boolean;
     failingTests: { test_id: string; name: string }[];
     totals: {
       passed: number;
@@ -71,6 +74,16 @@ export function buildTestResultDigestFromOutcomes(
         `_...${elidedCount} more failing test${elidedCount === 1 ? '' : 's'} elided._`,
       );
     }
+  }
+  if (opts.runFailure && (failedCount === 0 || outcomes.incomplete)) {
+    lines.push(
+      '',
+      `**Failure outside the structured report:** \`${opts.runFailure.failedCommand ?? 'unknown command'}\` exited non-zero.`,
+      '',
+      '```',
+      opts.runFailure.outputTail,
+      '```',
+    );
   }
   return lines.join('\n');
 }
