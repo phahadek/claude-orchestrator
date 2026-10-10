@@ -3,10 +3,7 @@ import os from 'os';
 import path from 'path';
 import { execFile } from 'child_process';
 import { gunzipSync, gzipSync } from 'zlib';
-import {
-  hashWorktreeFiles,
-  listWorktreeFiles,
-} from '../session/analyzeGating';
+import { hashWorktreeFiles, listWorktreeFiles } from '../session/analyzeGating';
 
 /** Raw (uncompressed) byte cap on a snapshot's regular-file content. */
 export const MAX_SNAPSHOT_RAW_BYTES = 100 * 1024 * 1024;
@@ -74,8 +71,7 @@ function listUntrackedFiles(worktreePath: string): Promise<string[]> {
       'git',
       ['ls-files', '--others', '--exclude-standard'],
       { cwd: worktreePath, maxBuffer: 64 * 1024 * 1024 },
-      (err, stdout) =>
-        resolve(err ? [] : stdout.split('\n').filter(Boolean)),
+      (err, stdout) => resolve(err ? [] : stdout.split('\n').filter(Boolean)),
     );
   });
 }
@@ -223,7 +219,10 @@ export function materializeAndVerifySnapshot(
       fs.mkdirSync(path.dirname(full), { recursive: true });
       if (entry.type === 'symlink') {
         const resolved = path.resolve(path.dirname(full), entry.target);
-        if (path.isAbsolute(entry.target) || !(resolved + path.sep).startsWith(dir + path.sep)) {
+        if (
+          path.isAbsolute(entry.target) ||
+          !(resolved + path.sep).startsWith(dir + path.sep)
+        ) {
           throw new SnapshotIntegrityError(
             `Symlink escapes snapshot root: ${entry.path} -> ${entry.target}`,
           );

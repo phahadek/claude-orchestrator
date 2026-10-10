@@ -94,7 +94,10 @@ export async function computeTriggerContentHash(
   return hashWorktreeFiles(worktreePath, matched);
 }
 
-export function hashWorktreeFiles(worktreePath: string, files: string[]): string {
+export function hashWorktreeFiles(
+  worktreePath: string,
+  files: string[],
+): string {
   const hash = createHash('sha256');
   for (const file of files) {
     hash.update(file);

@@ -42,9 +42,13 @@ describe('testSnapshot', () => {
     expect(snap.manifest.contentHash).toBe(expected);
 
     const out = materializeAndVerifySnapshot(snap, expected!, runBase);
-    expect(fs.readFileSync(path.join(out.dir, 'untracked.txt'), 'utf8')).toBe('new');
+    expect(fs.readFileSync(path.join(out.dir, 'untracked.txt'), 'utf8')).toBe(
+      'new',
+    );
     expect(fs.readlinkSync(path.join(out.dir, 'link.txt'))).toBe('a.txt');
-    expect(fs.statSync(path.join(out.dir, 'sub', 'run.sh')).mode & 0o777).toBe(0o755);
+    expect(fs.statSync(path.join(out.dir, 'sub', 'run.sh')).mode & 0o777).toBe(
+      0o755,
+    );
   });
 
   it('refuses a corrupted transfer and leaves no run directory', async () => {
@@ -56,17 +60,17 @@ describe('testSnapshot', () => {
     raw[0] = raw[0] ^ 0xff;
     const corrupted = { ...snap, archive: gzipSync(raw) };
 
-    expect(() => materializeAndVerifySnapshot(corrupted, expected, runBase)).toThrow(
-      SnapshotHashMismatchError,
-    );
+    expect(() =>
+      materializeAndVerifySnapshot(corrupted, expected, runBase),
+    ).toThrow(SnapshotHashMismatchError);
     expect(fs.readdirSync(runBase)).toEqual([]);
   });
 
   it('refuses when the manifest hash differs from the expected hash', async () => {
     const snap = (await packTestSnapshot(worktree))!;
-    expect(() => materializeAndVerifySnapshot(snap, 'deadbeef', runBase)).toThrow(
-      SnapshotHashMismatchError,
-    );
+    expect(() =>
+      materializeAndVerifySnapshot(snap, 'deadbeef', runBase),
+    ).toThrow(SnapshotHashMismatchError);
     expect(fs.readdirSync(runBase)).toEqual([]);
   });
 
@@ -75,14 +79,25 @@ describe('testSnapshot', () => {
     const expected = (await computeWholeTreeContentHash(worktree))!;
     const { gunzipSync, gzipSync } = await import('zlib');
     const raw = gunzipSync(snap.archive);
-    const truncated = { ...snap, archive: gzipSync(raw.subarray(0, raw.length - 2)) };
-    expect(() => materializeAndVerifySnapshot(truncated, expected, runBase)).toThrow();
+    const truncated = {
+      ...snap,
+      archive: gzipSync(raw.subarray(0, raw.length - 2)),
+    };
+    expect(() =>
+      materializeAndVerifySnapshot(truncated, expected, runBase),
+    ).toThrow();
     expect(fs.readdirSync(runBase)).toEqual([]);
   });
 
   it('fails closed over the size cap, naming the largest untracked files', async () => {
-    fs.writeFileSync(path.join(worktree, 'big-untracked.bin'), Buffer.alloc(5000));
-    fs.writeFileSync(path.join(worktree, 'small-untracked.bin'), Buffer.alloc(10));
+    fs.writeFileSync(
+      path.join(worktree, 'big-untracked.bin'),
+      Buffer.alloc(5000),
+    );
+    fs.writeFileSync(
+      path.join(worktree, 'small-untracked.bin'),
+      Buffer.alloc(10),
+    );
     const err = await packTestSnapshot(worktree, 1000).catch((e) => e);
     expect(err).toBeInstanceOf(SnapshotTooLargeError);
     expect(err.largestUntracked[0].path).toBe('big-untracked.bin');
