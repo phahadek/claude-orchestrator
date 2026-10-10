@@ -62,7 +62,7 @@ export interface DependencyCacheStore {
   listBuilding(): DependencyCacheEntryRow[];
 }
 
-export const defaultDependencyCacheStore: DependencyCacheStore = {
+const defaultDependencyCacheStore: DependencyCacheStore = {
   insertBuilding: (p, h) => insertBuildingDependencyCacheEntry(p, h),
   markStatus: (p, h, s) => markDependencyCacheEntryStatus(p, h, s),
   getReady: (p, h) => getReadyDependencyCacheEntry(p, h),
