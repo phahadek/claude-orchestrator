@@ -330,8 +330,12 @@ function runtimeSettingsAsRecord(): {
     runner_cgroup_memory_max_mb: String(
       runtimeSettings.runner_cgroup_memory_max_mb,
     ),
-    runner_min_free_memory_mb: String(runtimeSettings.runner_min_free_memory_mb),
-    runner_per_run_reserve_mb: String(runtimeSettings.runner_per_run_reserve_mb),
+    runner_min_free_memory_mb: String(
+      runtimeSettings.runner_min_free_memory_mb,
+    ),
+    runner_per_run_reserve_mb: String(
+      runtimeSettings.runner_per_run_reserve_mb,
+    ),
     session_cgroup_memory_high_fraction: String(
       runtimeSettings.session_cgroup_memory_high_fraction,
     ),
