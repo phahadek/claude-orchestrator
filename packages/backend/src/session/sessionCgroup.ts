@@ -75,7 +75,7 @@ export function computeSessionCgroupLimits(inputs: {
 
 export type SessionCgroupProfile = 'backend' | 'runner';
 
-export class RunnerCgroupDelegationError extends Error {}
+class RunnerCgroupDelegationError extends Error {}
 
 /** Which limit derivation reapply/write uses; set by setupSessionCgroup. */
 let activeProfile: SessionCgroupProfile = 'backend';
