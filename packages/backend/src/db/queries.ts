@@ -9751,6 +9751,63 @@ export function updateTestRequestRunState(
   );
 }
 
+/**
+ * Compare-and-set flip of a run from 'failed' to 'passed' plus the wake's
+ * inbox row, in one transaction. Returns false (and writes nothing) when the
+ * row was no longer 'failed' — i.e. another observer already won the
+ * transition — so the wake is inserted at most once per run by construction.
+ * The inbox row is durable the moment this commits, so a crash before
+ * delivery is covered by the undelivered-inbox retry sweep / boot reconcile.
+ */
+export function flipRunToPassedAndEnqueueWake(
+  runId: string,
+  sessionId: string,
+  source: string,
+  payload: string,
+  dedupeKey: string,
+): boolean {
+  const tx = db.transaction((): boolean => {
+    const res = db
+      .prepare(
+        `UPDATE test_request_runs SET state = 'passed'
+         WHERE id = ? AND state = 'failed'`,
+      )
+      .run(runId);
+    if (res.changes === 0) return false;
+    enqueueFeedbackItem(sessionId, source, payload, dedupeKey);
+    return true;
+  });
+  return tx();
+}
+
+/**
+ * The confirmed-waiting subject set: failed runs carrying the
+ * awaiting-disposition marker. When `failingTestIds` is given, narrowed to
+ * runs whose own recorded failures include at least one of those test ids.
+ */
+export function listAwaitingDispositionRuns(
+  opts: { failingTestIds?: string[]; limit?: number } = {},
+): TestRequestRunRow[] {
+  const limit = opts.limit ?? 500;
+  const ids = opts.failingTestIds;
+  if (ids && ids.length === 0) return [];
+  const idClause = ids
+    ? `AND EXISTS (SELECT 1 FROM test_run_results r
+         WHERE r.test_request_run_id = test_request_runs.id
+           AND r.outcome IN ('failed', 'error')
+           AND r.test_id IN (${ids.map(() => '?').join(', ')}))`
+    : '';
+  return db
+    .prepare(
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
+       FROM test_request_runs
+       WHERE state = 'failed' AND awaiting_disposition_at IS NOT NULL
+         AND session_id IS NOT NULL ${idClause}
+       ORDER BY awaiting_disposition_at ASC LIMIT ?`,
+    )
+    .all(...(ids ?? []), limit) as TestRequestRunRow[];
+}
+
 export function markTestRequestRunAwaitingDisposition(id: string): void {
   db.prepare(
     `UPDATE test_request_runs SET awaiting_disposition_at = ? WHERE id = ?`,

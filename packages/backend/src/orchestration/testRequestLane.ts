@@ -144,6 +144,18 @@ function emitSettled(event: TestRequestLaneSettledEvent): void {
   testRequestLaneEvents.emit('settled', event);
 }
 
+/** Emitted once a run's per-test results have landed in test_run_results. */
+export interface TestRequestLaneIngestedEvent {
+  runId: string;
+  projectId: string;
+  contentHash: string;
+  state: 'passed' | 'failed';
+}
+
+function emitIngested(event: TestRequestLaneIngestedEvent): void {
+  testRequestLaneEvents.emit('ingested', event);
+}
+
 export interface TestRequestRunSpec {
   projectId: string;
   contentHash: string;
@@ -1546,12 +1558,21 @@ async function executeTestRequestRun(
       runner_executed: runnerExecutorOverride !== null ? 1 : 0,
     });
     trackRunIngestion(runId, ingestionPromise);
-    ingestionPromise.catch((err) => {
-      logger.error(
-        `[testRequestLane] ingestion dispatch failed for run ${runId}:`,
-        err,
-      );
-    });
+    ingestionPromise.then(
+      () =>
+        emitIngested({
+          runId,
+          projectId: spec.projectId,
+          contentHash: spec.contentHash,
+          state: result.passed ? 'passed' : 'failed',
+        }),
+      (err) => {
+        logger.error(
+          `[testRequestLane] ingestion dispatch failed for run ${runId}:`,
+          err,
+        );
+      },
+    );
     return { ...result, runId };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
