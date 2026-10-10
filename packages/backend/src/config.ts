@@ -803,6 +803,16 @@ export interface RuntimeSettings {
    */
   session_cgroup_prod_reserve_mb: number;
   /**
+   * Runner backstop memory ceiling in MB (no prod reserve on a dedicated
+   * runner). 0 = auto (90% of os.totalmem()); positive = explicit, clamped
+   * to os.totalmem().
+   */
+  runner_cgroup_memory_max_mb: number;
+  /** Runner admission floor: minimum projected free memory, in MB. */
+  runner_min_free_memory_mb: number;
+  /** Runner admission: memory reserved for the one run being admitted, in MB. */
+  runner_per_run_reserve_mb: number;
+  /**
    * Fraction (0-1) of memory.max used to derive the session cgroup's
    * memory.high soft ceiling.
    */
@@ -1016,6 +1026,15 @@ export const runtimeSettings: RuntimeSettings = {
   per_session_reserve_mb: Number(process.env.PER_SESSION_RESERVE_MB ?? 3072),
   session_cgroup_prod_reserve_mb: Number(
     process.env.SESSION_CGROUP_PROD_RESERVE_MB ?? 4096,
+  ),
+  runner_cgroup_memory_max_mb: Number(
+    process.env.RUNNER_CGROUP_MEMORY_MAX_MB ?? 0,
+  ),
+  runner_min_free_memory_mb: Number(
+    process.env.RUNNER_MIN_FREE_MEMORY_MB ?? 1024,
+  ),
+  runner_per_run_reserve_mb: Number(
+    process.env.RUNNER_PER_RUN_RESERVE_MB ?? 3072,
   ),
   session_cgroup_memory_high_fraction: Number(
     process.env.SESSION_CGROUP_MEMORY_HIGH_FRACTION ?? 0.9,

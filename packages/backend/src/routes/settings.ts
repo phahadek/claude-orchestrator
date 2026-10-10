@@ -38,6 +38,9 @@ const SETTING_KEYS = [
   'min_host_free_memory_mb',
   'per_session_reserve_mb',
   'session_cgroup_prod_reserve_mb',
+  'runner_cgroup_memory_max_mb',
+  'runner_min_free_memory_mb',
+  'runner_per_run_reserve_mb',
   'session_cgroup_memory_high_fraction',
   'session_cgroup_deny_swap',
   'test_run_io_max_wbps',
@@ -142,6 +145,16 @@ function applyToRuntime(
     case 'session_cgroup_prod_reserve_mb':
       runtimeSettings.session_cgroup_prod_reserve_mb = value as number;
       reapplySessionCgroupLimits();
+      break;
+    case 'runner_cgroup_memory_max_mb':
+      runtimeSettings.runner_cgroup_memory_max_mb = value as number;
+      reapplySessionCgroupLimits();
+      break;
+    case 'runner_min_free_memory_mb':
+      runtimeSettings.runner_min_free_memory_mb = value as number;
+      break;
+    case 'runner_per_run_reserve_mb':
+      runtimeSettings.runner_per_run_reserve_mb = value as number;
       break;
     case 'session_cgroup_memory_high_fraction':
       runtimeSettings.session_cgroup_memory_high_fraction = value as number;
@@ -314,6 +327,11 @@ function runtimeSettingsAsRecord(): {
     session_cgroup_prod_reserve_mb: String(
       runtimeSettings.session_cgroup_prod_reserve_mb,
     ),
+    runner_cgroup_memory_max_mb: String(
+      runtimeSettings.runner_cgroup_memory_max_mb,
+    ),
+    runner_min_free_memory_mb: String(runtimeSettings.runner_min_free_memory_mb),
+    runner_per_run_reserve_mb: String(runtimeSettings.runner_per_run_reserve_mb),
     session_cgroup_memory_high_fraction: String(
       runtimeSettings.session_cgroup_memory_high_fraction,
     ),

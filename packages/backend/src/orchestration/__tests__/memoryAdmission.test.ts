@@ -9,6 +9,8 @@ vi.mock('../../config.js', () => ({
   runtimeSettings: {
     min_host_free_memory_mb: 4096,
     per_session_reserve_mb: 3072,
+    runner_min_free_memory_mb: 1024,
+    runner_per_run_reserve_mb: 3072,
   },
 }));
 
@@ -17,8 +19,32 @@ import { runtimeSettings } from '../../config.js';
 import {
   evaluateMemoryHeadroom,
   hasMemoryHeadroom,
+  hasRunnerMemoryHeadroom,
   hasTestRequestAdmission,
 } from '../memoryAdmission';
+
+describe('hasRunnerMemoryHeadroom', () => {
+  const MB = 1024 * 1024;
+
+  it('refuses when free minus per-run reserve is below the floor', () => {
+    const r = hasRunnerMemoryHeadroom(4095 * MB);
+    expect(r.allowed).toBe(false);
+    expect(r.projectedFreeMB).toBe(1023);
+  });
+
+  it('admits at the floor', () => {
+    expect(hasRunnerMemoryHeadroom(4096 * MB).allowed).toBe(true);
+  });
+
+  it('uses runner settings, not host settings', () => {
+    // Host floor (4096 + 3072 = 7168 MB) would refuse 5000 MB; runner admits.
+    expect(hasRunnerMemoryHeadroom(5000 * MB).allowed).toBe(true);
+    expect(hasMemoryHeadroom(5000 * MB).allowed).toBe(false);
+    runtimeSettings.runner_min_free_memory_mb = 2048;
+    expect(hasRunnerMemoryHeadroom(5000 * MB).allowed).toBe(false);
+    runtimeSettings.runner_min_free_memory_mb = 1024;
+  });
+});
 
 describe('evaluateMemoryHeadroom', () => {
   it('permits dispatch when projected free memory is at or above the budget', () => {

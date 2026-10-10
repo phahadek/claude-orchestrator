@@ -73,7 +73,41 @@ export function computeSessionCgroupLimits(inputs: {
   return { maxBytes, highBytes, denySwap: inputs.denySwap };
 }
 
+export type SessionCgroupProfile = 'backend' | 'runner';
+
+export class RunnerCgroupDelegationError extends Error {}
+
+/** Which limit derivation reapply/write uses; set by setupSessionCgroup. */
+let activeProfile: SessionCgroupProfile = 'backend';
+
+/**
+ * Pure derivation of the runner's memory.max / memory.high. No prod reserve
+ * is subtracted (a dedicated runner has no co-hosted prod fleet).
+ * `ceilingMb` 0 = auto (90% of total); positive = explicit, clamped to total.
+ */
+export function computeRunnerCgroupLimits(inputs: {
+  totalMemBytes: number;
+  ceilingMb: number;
+  highFraction: number;
+  denySwap: boolean;
+}): SessionCgroupLimits {
+  const maxBytes =
+    inputs.ceilingMb > 0
+      ? Math.min(inputs.ceilingMb * 1024 * 1024, inputs.totalMemBytes)
+      : Math.floor(inputs.totalMemBytes * 0.9);
+  const highBytes = Math.floor(maxBytes * inputs.highFraction);
+  return { maxBytes, highBytes, denySwap: inputs.denySwap };
+}
+
 function currentLimits(): SessionCgroupLimits {
+  if (activeProfile === 'runner') {
+    return computeRunnerCgroupLimits({
+      totalMemBytes: os.totalmem(),
+      ceilingMb: runtimeSettings.runner_cgroup_memory_max_mb,
+      highFraction: runtimeSettings.session_cgroup_memory_high_fraction,
+      denySwap: runtimeSettings.session_cgroup_deny_swap,
+    });
+  }
   return computeSessionCgroupLimits({
     totalMemBytes: os.totalmem(),
     prodReserveMb: runtimeSettings.session_cgroup_prod_reserve_mb,
@@ -211,20 +245,33 @@ function writeLimits(
  * limits to sessions/. No-ops with a logged warning on any failure — a
  * missing Delegate=yes drop-in, non-Linux, or cgroup-v1 must never crash boot.
  */
-export function setupSessionCgroup(): void {
+export function setupSessionCgroup(
+  opts: { profile?: SessionCgroupProfile } = {},
+): void {
+  const strict = opts.profile === 'runner';
+  // Strict (runner) profile: any unavailable prerequisite is a visible
+  // failure rather than a silent degrade to unbounded.
+  const unavailable = (reason: string): void => {
+    if (strict) {
+      throw new RunnerCgroupDelegationError(
+        `runner cgroup-v2 governance unavailable: ${reason} (requires Linux, cgroup v2, and Delegate=yes with the memory controller)`,
+      );
+    }
+    warnNoop(reason);
+  };
   if (process.platform !== 'linux') {
-    warnNoop(`unsupported platform ${process.platform}`);
+    unavailable(`unsupported platform ${process.platform}`);
     return;
   }
   try {
     if (!fs.existsSync(path.join(CGROUP_ROOT, 'cgroup.controllers'))) {
-      warnNoop('not a cgroup-v2 unified hierarchy');
+      unavailable('not a cgroup-v2 unified hierarchy');
       return;
     }
 
     const ownPath = readOwnCgroupPath();
     if (!ownPath || !fs.existsSync(ownPath)) {
-      warnNoop('could not resolve own cgroup-v2 path');
+      unavailable('could not resolve own cgroup-v2 path');
       return;
     }
 
@@ -233,9 +280,10 @@ export function setupSessionCgroup(): void {
       'utf8',
     );
     if (!controllers.split(/\s+/).includes('memory')) {
-      warnNoop('memory controller not delegated to this cgroup');
+      unavailable('memory controller not delegated to this cgroup');
       return;
     }
+    activeProfile = strict ? 'runner' : 'backend';
 
     const mainPath = path.join(ownPath, MAIN_LEAF);
     const sessionsPath = path.join(ownPath, SESSIONS_LEAF);
@@ -272,11 +320,23 @@ export function setupSessionCgroup(): void {
     logger.info(
       `[sessionCgroup] delegated cgroup ready at ${ownPath} — sessions bounded via ${sessionsPath}, test-lane runs bounded via ${testsPath}`,
     );
+    if (strict) {
+      logger.info(
+        `[sessionCgroup] runner delegation status: cgroup=${ownPath} memory=yes io=${hasIo ? 'yes' : 'no'}`,
+      );
+    }
   } catch (err) {
     sessionsCgroupPath = null;
     mainCgroupPath = null;
     testsCgroupPath = null;
     ioControllerAvailable = false;
+    activeProfile = 'backend';
+    if (err instanceof RunnerCgroupDelegationError) throw err;
+    if (strict) {
+      throw new RunnerCgroupDelegationError(
+        `runner cgroup-v2 governance setup failed: ${(err as Error).message}`,
+      );
+    }
     warnNoop((err as Error).message);
   }
 }
@@ -898,6 +958,7 @@ export function _resetForTesting(): void {
   mainCgroupPath = null;
   testsCgroupPath = null;
   ioControllerAvailable = false;
+  activeProfile = 'backend';
 }
 
 export function _setSessionsPathForTesting(p: string | null): void {

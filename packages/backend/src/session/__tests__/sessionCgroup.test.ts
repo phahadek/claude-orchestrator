@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../../logger', () => ({
   logger: {
@@ -40,6 +40,7 @@ import { recordEvent } from '../../audit/AuditLog';
 import { getTestRequestRunById, getSession } from '../../db/queries';
 import {
   computeSessionCgroupLimits,
+  computeRunnerCgroupLimits,
   computeSessionCgroupIoLimits,
   resolveBlockDevice,
   formatIoMaxLine,
@@ -212,6 +213,126 @@ describe('setupSessionCgroup graceful no-op', () => {
         throw new Error('EACCES: permission denied');
       }
     });
+    expect(() => setupSessionCgroup()).not.toThrow();
+    expect(logger.warn).toHaveBeenCalled();
+  });
+});
+
+describe('computeRunnerCgroupLimits', () => {
+  const GB = 1024 * 1024 * 1024;
+  const base = { highFraction: 0.9, denySwap: true };
+
+  it('0 = auto: 90% of total, no prod reserve subtracted', () => {
+    const l = computeRunnerCgroupLimits({
+      ...base,
+      totalMemBytes: 32 * GB,
+      ceilingMb: 0,
+    });
+    expect(l.maxBytes).toBe(Math.floor(32 * GB * 0.9));
+  });
+
+  it('honors an explicit ceiling', () => {
+    const l = computeRunnerCgroupLimits({
+      ...base,
+      totalMemBytes: 32 * GB,
+      ceilingMb: 8192,
+    });
+    expect(l.maxBytes).toBe(8 * GB);
+  });
+
+  it('clamps an explicit ceiling to total memory', () => {
+    const l = computeRunnerCgroupLimits({
+      ...base,
+      totalMemBytes: 4 * GB,
+      ceilingMb: 65536,
+    });
+    expect(l.maxBytes).toBe(4 * GB);
+  });
+
+  it('highBytes is the fraction of max', () => {
+    const l = computeRunnerCgroupLimits({
+      ...base,
+      totalMemBytes: 10 * GB,
+      ceilingMb: 0,
+    });
+    expect(l.highBytes).toBe(Math.floor(l.maxBytes * 0.9));
+    expect(l.denySwap).toBe(true);
+  });
+});
+
+describe('setupSessionCgroup runner profile (strict)', () => {
+  const realPlatform = process.platform;
+  const setPlatform = (p: string) =>
+    Object.defineProperty(process, 'platform', { value: p });
+  const mockFs = (controllers: string | null, procCgroup = true) => {
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) =>
+      String(p).endsWith('/sys/fs/cgroup/cgroup.controllers')
+        ? controllers !== null
+        : true,
+    );
+    vi.spyOn(fs, 'readFileSync').mockImplementation((p) => {
+      if (String(p).endsWith('/proc/self/cgroup')) {
+        return procCgroup ? '0::/system.slice/runner.service' : '';
+      }
+      if (String(p).endsWith('cgroup.controllers')) return controllers ?? '';
+      return '';
+    });
+    vi.spyOn(fs, 'mkdirSync').mockImplementation(() => undefined as any);
+    vi.spyOn(fs, 'writeFileSync').mockImplementation(() => undefined);
+  };
+
+  beforeEach(() => {
+    _resetForTesting();
+    vi.clearAllMocks();
+    setPlatform(realPlatform);
+  });
+
+  afterEach(() => setPlatform(realPlatform));
+
+  it('throws on non-linux', () => {
+    setPlatform('darwin');
+    expect(() => setupSessionCgroup({ profile: 'runner' })).toThrow(
+      /unsupported platform/,
+    );
+  });
+
+  it('throws when cgroup.controllers is missing', () => {
+    setPlatform('linux');
+    mockFs(null);
+    expect(() => setupSessionCgroup({ profile: 'runner' })).toThrow(
+      /not a cgroup-v2/,
+    );
+  });
+
+  it('throws when the memory controller is missing', () => {
+    setPlatform('linux');
+    mockFs('cpu io');
+    expect(() => setupSessionCgroup({ profile: 'runner' })).toThrow(
+      /memory controller/,
+    );
+  });
+
+  it('succeeds and logs delegation status when delegated', () => {
+    setPlatform('linux');
+    mockFs('cpu memory io');
+    expect(() => setupSessionCgroup({ profile: 'runner' })).not.toThrow();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining('memory=yes io=yes'),
+    );
+  });
+
+  it('only warns when io is absent', () => {
+    setPlatform('linux');
+    mockFs('cpu memory');
+    expect(() => setupSessionCgroup({ profile: 'runner' })).not.toThrow();
+    expect(logger.warn).toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining('memory=yes io=no'),
+    );
+  });
+
+  it('default profile still no-ops with a warning', () => {
+    setPlatform('darwin');
     expect(() => setupSessionCgroup()).not.toThrow();
     expect(logger.warn).toHaveBeenCalled();
   });
