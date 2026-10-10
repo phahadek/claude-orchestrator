@@ -148,11 +148,22 @@ export async function sweepConfirmedWaiting(
 export function startReattributionService(
   scheduler: Scheduler,
   sink: ReattributionWakeSink,
+  pausedPRs?: { reattributePausedPRs(): Promise<number> },
 ): void {
+  const runPausedPRs = (): Promise<number> =>
+    pausedPRs
+      ? pausedPRs.reattributePausedPRs().catch((err) => {
+          logger.warn(
+            `[reattribution] paused-PR evaluation failed: ${err instanceof Error ? err.message : err}`,
+          );
+          return 0;
+        })
+      : Promise.resolve(0);
   testRequestLaneEvents.on(
     'ingested',
     (event: TestRequestLaneIngestedEvent) => {
       if (event.state !== 'failed') return;
+      void runPausedPRs();
       reattributeForIngestedRun(event.runId, sink).catch((err) =>
         logger.warn(
           `[reattribution] ingest-triggered evaluation failed for run ${event.runId}: ${err instanceof Error ? err.message : err}`,
@@ -165,7 +176,11 @@ export function startReattributionService(
     intervalMs: REATTRIBUTION_SWEEP_INTERVAL_MS,
     runOnBoot: true,
     concurrency: 'skip-if-running',
-    run: async () => sweepConfirmedWaiting(sink),
+    run: async () => {
+      const waiting = await sweepConfirmedWaiting(sink);
+      const paused = await runPausedPRs();
+      return { items_processed: waiting.items_processed + paused };
+    },
     onError: (err: unknown) =>
       logger.warn('[reattribution] sweep error:', (err as Error).message),
   });

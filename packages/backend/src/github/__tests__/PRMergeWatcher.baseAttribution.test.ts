@@ -48,7 +48,16 @@ vi.mock('../../db/queries', () => ({
   incrementFlakeRecoveryAttempts: vi.fn(),
   resetFlakeRecoveryAttempts: vi.fn(),
   setFlakeRecoveryBaseExhausted: vi.fn(),
+  updateTestRequestRunState: vi.fn(),
 }));
+
+vi.mock(
+  '../../orchestration/baseAttributableFilter',
+  async (importOriginal) => ({
+    ...(await importOriginal<object>()),
+    filterBaseAttributableFailuresForF2Gate: vi.fn(),
+  }),
+);
 
 vi.mock('../../config', () => ({
   getProjectByGithubRepo: vi.fn(),
@@ -95,6 +104,8 @@ import {
   isRunFailureBreadthAttributable,
 } from '../../db/queries';
 import { recordEvent } from '../../audit/AuditLog';
+import { updateTestRequestRunState } from '../../db/queries';
+import { filterBaseAttributableFailuresForF2Gate } from '../../orchestration/baseAttributableFilter';
 import { getProjectByGithubRepo } from '../../config';
 import { typedGetSetting } from '../../config/settings';
 import {
@@ -407,5 +418,63 @@ describe('PRMergeWatcher — flake_recovery_attempts breadth-attributable exempt
       'ci_failing',
       'flake-recovery-exhausted',
     );
+  });
+});
+
+describe('PRMergeWatcher — reattributePausedPR', () => {
+  function setup(outcome: 'filtered_pass' | 'filtered_partial') {
+    const github = makeMockGitHub();
+    (github as any).fetchDiff = vi
+      .fn()
+      .mockResolvedValue({ filesChanged: ['src/a.ts'] });
+    const { watcher, autoMerger, broadcast } = makeWatcher(github);
+    const pr = makePRRow({ flake_recovery_attempts: 1 });
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue({
+      id: 'run-latest',
+      state: 'failed',
+    } as any);
+    vi.mocked(filterBaseAttributableFailuresForF2Gate).mockResolvedValue({
+      result: { outcome, passed: outcome === 'filtered_pass' },
+      guardBlocked: [],
+    } as any);
+    const checkNow = vi
+      .spyOn(watcher as any, 'checkMergeabilityNow')
+      .mockResolvedValue(undefined);
+    return { watcher, autoMerger, broadcast, checkNow };
+  }
+
+  it('re-drives a paused PR whose failures are fully excused, without a rerun or counter increment', async () => {
+    const { watcher, autoMerger, broadcast, checkNow } = setup('filtered_pass');
+
+    const res = await watcher.reattributePausedPR(PR_NUMBER, REPO);
+
+    expect(res).toBe('redriven');
+    expect(updateTestRequestRunState).toHaveBeenCalledWith(
+      'run-latest',
+      'passed',
+    );
+    expect(setPauseReason).toHaveBeenCalledWith(PR_NUMBER, REPO, null);
+    expect(broadcast).toHaveBeenCalledWith({
+      type: 'pr_pause_cleared',
+      prNumber: PR_NUMBER,
+      repo: REPO,
+    });
+    expect(checkNow).toHaveBeenCalledWith(PR_NUMBER, REPO);
+    expect(autoMerger.attempt).toHaveBeenCalledWith(PR_NUMBER, REPO);
+    expect(incrementFlakeRecoveryAttempts).not.toHaveBeenCalled();
+  });
+
+  it('leaves a PR paused when evidence only partially excuses its failures', async () => {
+    const { watcher, autoMerger, checkNow } = setup('filtered_partial');
+
+    const res = await watcher.reattributePausedPR(PR_NUMBER, REPO);
+
+    expect(res).toBe('not_excused');
+    expect(updateTestRequestRunState).not.toHaveBeenCalled();
+    expect(setPauseReason).not.toHaveBeenCalled();
+    expect(checkNow).not.toHaveBeenCalled();
+    expect(autoMerger.attempt).not.toHaveBeenCalled();
+    expect(incrementFlakeRecoveryAttempts).not.toHaveBeenCalled();
   });
 });
