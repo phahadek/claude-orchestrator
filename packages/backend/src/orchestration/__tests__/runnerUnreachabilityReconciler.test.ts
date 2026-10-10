@@ -117,7 +117,10 @@ describe('sweepRunnerUnreachability', () => {
       expect(r.failure_reason).toBe('runner_unreachable');
       expect(r.finished_at).not.toBeNull();
     }
-    expect(getRow('lq')).toMatchObject({ state: 'queued', failure_reason: null });
+    expect(getRow('lq')).toMatchObject({
+      state: 'queued',
+      failure_reason: null,
+    });
     expect(getRow('lr')).toMatchObject({
       state: 'running',
       failure_reason: null,
