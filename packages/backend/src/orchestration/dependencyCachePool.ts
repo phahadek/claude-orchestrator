@@ -39,8 +39,36 @@ import {
   touchDependencyCacheEntryLastUsed,
   listBuildingDependencyCacheEntries,
 } from '../db/queries';
+import type {
+  DependencyCacheEntryRow,
+  DependencyCacheEntryStatus,
+} from '../db/types';
 
 const exec = promisify(execCb);
+
+/** Cache-entry bookkeeping the pool runs against; the orchestrator uses SQLite, a runner supplies its own local store. */
+export interface DependencyCacheStore {
+  insertBuilding(projectId: string, lockHash: string): void;
+  markStatus(
+    projectId: string,
+    lockHash: string,
+    status: DependencyCacheEntryStatus,
+  ): void;
+  getReady(
+    projectId: string,
+    lockHash: string,
+  ): DependencyCacheEntryRow | undefined;
+  touchLastUsed(projectId: string, lockHash: string): void;
+  listBuilding(): DependencyCacheEntryRow[];
+}
+
+export const defaultDependencyCacheStore: DependencyCacheStore = {
+  insertBuilding: insertBuildingDependencyCacheEntry,
+  markStatus: markDependencyCacheEntryStatus,
+  getReady: getReadyDependencyCacheEntry,
+  touchLastUsed: touchDependencyCacheEntryLastUsed,
+  listBuilding: listBuildingDependencyCacheEntries,
+};
 
 export interface DependencyCachePoolSpec {
   projectId: string;
@@ -51,13 +79,21 @@ export interface DependencyCachePoolSpec {
   cacheDirs: string[];
   verifyCommand: string;
   sessionId: string;
+  /** Defaults to the orchestrator's SQLite-backed store. */
+  store?: DependencyCacheStore;
+  /** Root for durable cache storage; defaults to getDataDir(). */
+  dataDir?: string;
 }
 
 const BOOTSTRAP_TIMEOUT_MS = 120_000;
 const VERIFY_TIMEOUT_MS = 120_000;
 
-export function cacheStorageDir(projectId: string, lockHash: string): string {
-  return path.join(getDataDir(), 'dependency-cache', projectId, lockHash);
+export function cacheStorageDir(
+  projectId: string,
+  lockHash: string,
+  dataDir: string = getDataDir(),
+): string {
+  return path.join(dataDir, 'dependency-cache', projectId, lockHash);
 }
 
 function coalesceKey(projectId: string, lockHash: string): string {
@@ -77,8 +113,9 @@ function materializeCacheDirs(
   lockHash: string,
   cacheDirs: string[],
   worktreePath: string,
+  dataDir?: string,
 ): boolean {
-  const storageDir = cacheStorageDir(projectId, lockHash);
+  const storageDir = cacheStorageDir(projectId, lockHash, dataDir);
   for (const rel of cacheDirs) {
     const src = path.join(storageDir, rel);
     if (!fs.existsSync(src)) return false;
@@ -100,8 +137,9 @@ function publishCacheDirs(
   lockHash: string,
   cacheDirs: string[],
   worktreePath: string,
+  dataDir?: string,
 ): boolean {
-  const storageDir = cacheStorageDir(projectId, lockHash);
+  const storageDir = cacheStorageDir(projectId, lockHash, dataDir);
   for (const rel of cacheDirs) {
     const src = path.join(worktreePath, rel);
     if (!fs.existsSync(src)) return false;
@@ -158,7 +196,8 @@ async function executeBuild(
   spec: DependencyCachePoolSpec,
   lockHash: string,
 ): Promise<boolean> {
-  insertBuildingDependencyCacheEntry(spec.projectId, lockHash);
+  const store = spec.store ?? defaultDependencyCacheStore;
+  store.insertBuilding(spec.projectId, lockHash);
   try {
     await exec(`bash "${spec.bootstrapScript}" "${spec.worktreePath}"`, {
       cwd: spec.projectDir,
@@ -170,18 +209,19 @@ async function executeBuild(
         lockHash,
         spec.cacheDirs,
         spec.worktreePath,
+        spec.dataDir,
       )
     ) {
-      markDependencyCacheEntryStatus(spec.projectId, lockHash, 'failed');
+      store.markStatus(spec.projectId, lockHash, 'failed');
       return false;
     }
-    markDependencyCacheEntryStatus(spec.projectId, lockHash, 'ready');
+    store.markStatus(spec.projectId, lockHash, 'ready');
     return true;
   } catch (err) {
     logger.warn(
       `[dependencyCachePool] bootstrap build failed for project ${spec.projectId}: ${err}`,
     );
-    markDependencyCacheEntryStatus(spec.projectId, lockHash, 'failed');
+    store.markStatus(spec.projectId, lockHash, 'failed');
     return false;
   }
 }
@@ -204,20 +244,22 @@ export async function tryDependencyCachePool(
   );
   if (!lockHash) return false;
 
-  const existing = getReadyDependencyCacheEntry(spec.projectId, lockHash);
+  const store = spec.store ?? defaultDependencyCacheStore;
+  const existing = store.getReady(spec.projectId, lockHash);
   if (existing) {
     // Touched before materialization starts (not after) — the periodic
     // DependencyCacheReconciler sweep never evicts an entry it just saw
     // touched within its grace window, so this closes the race where the
     // sweep could delete a storage dir another launch is actively copying
     // from.
-    touchDependencyCacheEntryLastUsed(spec.projectId, lockHash);
+    store.touchLastUsed(spec.projectId, lockHash);
     if (
       materializeCacheDirs(
         spec.projectId,
         lockHash,
         spec.cacheDirs,
         spec.worktreePath,
+        spec.dataDir,
       ) &&
       (await runVerify(spec.worktreePath, spec.verifyCommand))
     ) {
@@ -241,13 +283,14 @@ export async function tryDependencyCachePool(
   }
 
   // Dependencies were built in a different session's worktree — materialize + verify locally.
-  touchDependencyCacheEntryLastUsed(spec.projectId, lockHash);
+  store.touchLastUsed(spec.projectId, lockHash);
   if (
     materializeCacheDirs(
       spec.projectId,
       lockHash,
       spec.cacheDirs,
       spec.worktreePath,
+      spec.dataDir,
     ) &&
     (await runVerify(spec.worktreePath, spec.verifyCommand))
   ) {
@@ -263,12 +306,14 @@ export async function tryDependencyCachePool(
  * so it is marked `failed` rather than left stuck, forcing the next
  * session launch for that (project, lockHash) to rebuild from scratch.
  */
-export function recoverInterruptedDependencyCacheBuilds(): void {
-  const building = listBuildingDependencyCacheEntries();
+export function recoverInterruptedDependencyCacheBuilds(
+  store: DependencyCacheStore = defaultDependencyCacheStore,
+): void {
+  const building = store.listBuilding();
   for (const entry of building) {
     logger.warn(
       `[dependencyCachePool] recovering interrupted build ${entry.project_id}:${entry.lock_hash.slice(0, 12)} as failed`,
     );
-    markDependencyCacheEntryStatus(entry.project_id, entry.lock_hash, 'failed');
+    store.markStatus(entry.project_id, entry.lock_hash, 'failed');
   }
 }
