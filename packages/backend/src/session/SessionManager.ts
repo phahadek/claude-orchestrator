@@ -242,7 +242,6 @@ const MAX_MCP_UNREACHABLE_RESPAWNS = 2;
  * the session's silence — not the run's — that this bounds.
  */
 const FEEDBACK_HOLD_CEILING_MS = 3 * 60 * 60 * 1000;
-
 /**
  * Extracts the `**Verdict:** ...` line formatReviewFeedback always emits
  * (reviewUtils.ts) and pairs it with the PR head_sha the caller observed at
@@ -6833,6 +6832,29 @@ export class SessionManager extends EventEmitter {
         ),
       ),
     );
+  }
+
+  /**
+   * Delivery half of the re-attribution wake. The inbox row (source
+   * 'reattribution', see orchestration/reattributionService.ts) was already inserted durably in the same
+   * transaction as the run's failed -> passed flip, so this only drives
+   * delivery. Unlike enqueueFeedback it never attempts a terminal resume (a
+   * terminal session just has the row recorded as delivered — no fresh
+   * session is spawned), and it does not borrow the 'test_request' hold
+   * exemption: a session with a queued/running lane run keeps the row
+   * undelivered for the inbox retry sweep.
+   */
+  async deliverReattributionWake(sessionId: string): Promise<void> {
+    const session = getSession(sessionId);
+    const run = session?.project_id
+      ? getLatestTestRequestRunForSession(session.project_id, sessionId)
+      : undefined;
+    if (run && (run.state === 'queued' || run.state === 'running')) return;
+    const liveSession = this.sessions.get(sessionId);
+    if (liveSession && liveSession.hasActiveTurn()) return;
+    await this.deliverUndeliveredInboxItems(sessionId, 'reattribution wake', {
+      attemptTerminalResume: false,
+    });
   }
 
   /**
