@@ -296,7 +296,8 @@ export function materializeAndVerifySnapshot(
       if (entry.type !== 'symlink') continue;
       let real: string;
       try {
-        real = fs.realpathSync(path.join(dir, entry.path));
+        // .native: the JS realpath collapses ".." lexically, which is what the check must not do.
+        real = fs.realpathSync.native(path.join(dir, entry.path));
       } catch {
         continue; // dangling or looping: hashes as MISSING, reads nothing
       }
