@@ -738,7 +738,7 @@ planUsagePoller.register(scheduler);
 convergenceSnapshotJob.register(scheduler);
 flowHealthRegressionSnapshotJob.register(scheduler);
 flakyTestRollupJob.register(scheduler);
-startReattributionService(scheduler, sessionManager);
+startReattributionService(scheduler, sessionManager, prMergeWatcher);
 registerWorktreeReconciler(scheduler);
 registerTempClusterReconciler(scheduler);
 registerDependencyCacheReconciler(scheduler);

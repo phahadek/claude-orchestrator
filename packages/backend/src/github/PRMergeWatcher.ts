@@ -36,6 +36,7 @@ import {
 import { tailOfLog } from '../orchestration/verifyRunner';
 import {
   filterBaseAttributableFailures,
+  filterBaseAttributableFailuresForF2Gate,
   applyF2GateMaskingGuards,
   renderBaseAttributableFilterDigest,
   type BaseAttributableFilterResult,
@@ -91,6 +92,7 @@ import {
   getLatestTestRequestRunForSession,
   isRunFailureBreadthAttributable,
   resolveBreadthOwnTree,
+  updateTestRequestRunState,
 } from '../db/queries';
 import { emitTaskUpdated } from '../routes/tasks';
 import { logger } from '../logger';
@@ -1770,30 +1772,11 @@ export class PRMergeWatcher extends EventEmitter {
     }
 
     if (outcome === 'passed') {
-      resetFlakeRecoveryAttempts(pr.pr_number, pr.repo);
-      setPauseReason(pr.pr_number, pr.repo, null);
-      this.broadcast({
-        type: 'pr_pause_cleared',
-        prNumber: pr.pr_number,
-        repo: pr.repo,
-      });
-      logger.info(
-        `[PRMergeWatcher] PR #${pr.pr_number}: verified-flaky re-run passed — pause cleared${redrive ? ', re-driving merge loop' : ''}`,
+      await this.applyPassedOutcomeTail(
+        pr,
+        redrive,
+        'verified-flaky re-run passed',
       );
-      if (redrive) {
-        const redriveKey = flakeRecoveryKey(pr.pr_number, pr.repo);
-        this.flakeRecoveryRedriving.add(redriveKey);
-        try {
-          // checkMergeabilityNow bypasses the approved-verdict gate that
-          // checkMergeability enforces, so a not-yet-approved PR is re-driven too.
-          await this.checkMergeabilityNow(pr.pr_number, pr.repo);
-          this.autoMerger?.attempt(pr.pr_number, pr.repo);
-        } finally {
-          this.flakeRecoveryRedriving.delete(redriveKey);
-        }
-      } else {
-        this.autoMerger?.attempt(pr.pr_number, pr.repo);
-      }
     } else {
       const attempt = baseAttributable
         ? pr.flake_recovery_attempts
@@ -1802,6 +1785,126 @@ export class PRMergeWatcher extends EventEmitter {
         `[PRMergeWatcher] PR #${pr.pr_number}: verified-flaky re-run still failing (attempt ${attempt}/${maxRetries})${baseAttributable ? ' — base-attributable, not charged' : ''}`,
       );
     }
+  }
+
+  /**
+   * Shared passed-outcome tail: resets the flake-recovery budget, clears the
+   * pause, broadcasts, and re-drives the merge loop. Callable without a
+   * preceding rerun (see reattributePausedPR).
+   */
+  private async applyPassedOutcomeTail(
+    pr: Pick<PullRequestRow, 'pr_number' | 'repo'>,
+    redrive: boolean,
+    cause: string,
+  ): Promise<void> {
+    resetFlakeRecoveryAttempts(pr.pr_number, pr.repo);
+    setPauseReason(pr.pr_number, pr.repo, null);
+    this.broadcast({
+      type: 'pr_pause_cleared',
+      prNumber: pr.pr_number,
+      repo: pr.repo,
+    });
+    logger.info(
+      `[PRMergeWatcher] PR #${pr.pr_number}: ${cause} — pause cleared${redrive ? ', re-driving merge loop' : ''}`,
+    );
+    if (redrive) {
+      const redriveKey = flakeRecoveryKey(pr.pr_number, pr.repo);
+      this.flakeRecoveryRedriving.add(redriveKey);
+      try {
+        // checkMergeabilityNow bypasses the approved-verdict gate that
+        // checkMergeability enforces, so a not-yet-approved PR is re-driven too.
+        await this.checkMergeabilityNow(pr.pr_number, pr.repo);
+        this.autoMerger?.attempt(pr.pr_number, pr.repo);
+      } finally {
+        this.flakeRecoveryRedriving.delete(redriveKey);
+      }
+    } else {
+      this.autoMerger?.attempt(pr.pr_number, pr.repo);
+    }
+  }
+
+  /**
+   * Re-attributes one already-paused PR against fresh cross-tree evidence,
+   * with no rerun and no flake_recovery_attempts increment. Only acts on a PR
+   * holding a live automatic ci/analyze pause (the lane's one rerun-based
+   * attempt per SHA has already run); never re-triggers that mechanism. A full
+   * excuse flips the cached failed run to passed and runs the shared
+   * passed-outcome tail. Partial/no excuse, or an unknown diff, leaves the PR
+   * untouched.
+   */
+  async reattributePausedPR(
+    prNumber: number,
+    repo: string,
+  ): Promise<'redriven' | 'not_excused' | 'skipped'> {
+    const pr = getPRByNumber(prNumber, repo);
+    if (!pr || pr.state !== 'open' || !pr.session_id) return 'skipped';
+    const entries = parsePauseReasonSet(pr.pause_reason ?? null);
+    if (
+      !findAutomaticGateRecoveryEntry(entries, 'ci') &&
+      !findAutomaticGateRecoveryEntry(entries, 'analyze')
+    ) {
+      return 'skipped';
+    }
+    const project = getProjectByGithubRepo(pr.repo);
+    if (!project) return 'skipped';
+    const run = getLatestTestRequestRunForSession(project.id, pr.session_id);
+    if (!run || run.state !== 'failed') return 'skipped';
+
+    let changedFiles: string[];
+    try {
+      const diff = await this.github.fetchDiff(pr.pr_number, pr.repo);
+      changedFiles = diff.filesChanged;
+    } catch (err) {
+      logger.warn(
+        `[PRMergeWatcher] PR #${pr.pr_number}: fetchDiff failed for re-attribution — failing closed: ${(err as Error).message}`,
+      );
+      return 'skipped';
+    }
+
+    let gate: Awaited<
+      ReturnType<typeof filterBaseAttributableFailuresForF2Gate>
+    >;
+    try {
+      gate = await filterBaseAttributableFailuresForF2Gate(
+        project,
+        run,
+        changedFiles,
+        pr.task_id ?? null,
+      );
+    } catch (err) {
+      logger.warn(
+        `[PRMergeWatcher] PR #${pr.pr_number}: re-attribution filter failed: ${(err as Error).message}`,
+      );
+      return 'skipped';
+    }
+    if (gate.result.outcome !== 'filtered_pass') return 'not_excused';
+
+    updateTestRequestRunState(run.id, 'passed');
+    await this.applyPassedOutcomeTail(
+      pr,
+      true,
+      're-attribution fully excused failures',
+    );
+    return 'redriven';
+  }
+
+  /** Re-attributes every open PR holding a live automatic ci/analyze pause. */
+  async reattributePausedPRs(): Promise<number> {
+    let redriven = 0;
+    for (const pr of getAllOpenPRs()) {
+      try {
+        if (
+          (await this.reattributePausedPR(pr.pr_number, pr.repo)) === 'redriven'
+        ) {
+          redriven++;
+        }
+      } catch (err) {
+        logger.warn(
+          `[PRMergeWatcher] PR #${pr.pr_number}: re-attribution failed: ${(err as Error).message}`,
+        );
+      }
+    }
+    return redriven;
   }
 
   /**
