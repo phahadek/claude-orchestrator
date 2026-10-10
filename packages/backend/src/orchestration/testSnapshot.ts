@@ -6,15 +6,15 @@ import { gunzipSync, gzipSync } from 'zlib';
 import { hashWorktreeFiles, listWorktreeFiles } from '../session/analyzeGating';
 
 /** Raw (uncompressed) byte cap on a snapshot's regular-file content. */
-export const MAX_SNAPSHOT_RAW_BYTES = 100 * 1024 * 1024;
+const MAX_SNAPSHOT_RAW_BYTES = 100 * 1024 * 1024;
 
-export type SnapshotEntry =
+type SnapshotEntry =
   | { path: string; type: 'file'; mode: number; size: number }
   | { path: string; type: 'symlink'; mode: number; size: 0; target: string }
   // Tracked-but-deleted/unreadable: contributes the MISSING marker to the hash.
   | { path: string; type: 'missing'; mode: 0; size: 0 };
 
-export interface SnapshotManifest {
+interface SnapshotManifest {
   /** Value of computeWholeTreeContentHash for the packed tree. */
   contentHash: string;
   /** Sorted exactly as computeWholeTreeContentHash sorts. */
@@ -58,7 +58,7 @@ export class SnapshotHashMismatchError extends Error {
   }
 }
 
-export class SnapshotIntegrityError extends Error {
+class SnapshotIntegrityError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'SnapshotIntegrityError';
