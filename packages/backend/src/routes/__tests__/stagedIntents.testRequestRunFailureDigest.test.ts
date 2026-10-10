@@ -53,7 +53,9 @@ vi.mock('../../orchestration/testRequestLane', () => ({
 
 vi.mock('../../orchestration/runTestOutcomes', async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import('../../orchestration/runTestOutcomes')>();
+    await importOriginal<
+      typeof import('../../orchestration/runTestOutcomes')
+    >();
   return { ...actual, getRunTestOutcomes: mockGetRunTestOutcomes };
 });
 
