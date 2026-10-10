@@ -63,6 +63,7 @@ export type CanonicalPauseReason =
   | 'mcp_unreachable_exhausted'
   | 'verdict_routing_failed'
   | 'base_attributable_test_excluded'
+  | 'test_runner_unreachable'
   | 'migration_reservation_overtaken'
   | 'orchestrator_mcp_connect_failed'
   | 'f2_verdict_missing';
@@ -478,6 +479,17 @@ export const PAUSE_REASON_REGISTRY: Record<
   // test_report_acquisition_failed. No RECOVERY_ACTION_MAP entry — nothing
   // for an operator to click, the pill clears itself once a subsequent run
   // is clean or newly attributable.
+  // A runner-executed test run never returned a result (runner never pulled
+  // it, or went silent mid-run) and was settled failed by the
+  // runner-unreachability sweep. Same non-blocking posture as
+  // test_report_acquisition_failed: infrastructure the operator should look
+  // at, not a verdict about the tree.
+  test_runner_unreachable: {
+    source: 'tests',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+    blocks_merge: false,
+  },
   base_attributable_test_excluded: {
     source: 'tests',
     severity: 'needs_attention',
@@ -629,6 +641,7 @@ const RECOVERY_ACTION_MAP: Record<
   ci_not_completing: 'none', // advisory-only: self-clears via the scheduled poll job or is superseded by a genuine ci_failing pause
   mcp_unreachable_exhausted: 'none', // an operator has to decide whether to keep retrying by hand or abandon the session
   verdict_routing_failed: 'none', // no session to nudge; permanent operator-action-required pause
+  test_runner_unreachable: 'none', // advisory-only: the run never executed, so a fresh test.request on the tree is the recovery
   base_attributable_test_excluded: 'none', // advisory-only: the pill clears itself once a subsequent run is clean or newly attributable
   orchestrator_mcp_connect_failed: 'none', // recoverable+automatic: reconcileMcpUnreachableSessions' bounded respawn already covers this session; it self-clears on reconnect or escalates to mcp_unreachable_exhausted on its own
   f2_verdict_missing: 'none', // recoverable+automatic: self-clears the moment a later poll reads a settled verdict for the current content hash; the real fix is a pipeline-durability look, not a one-click discharge

@@ -812,7 +812,7 @@ export function admitTestRequest(
   // worktree (computeWholeTreeContentHash) — a caller has no way to assert
   // "unchanged" independent of what the server itself recomputed.
   // A settled run that never actually executed (failure_reason ===
-  // 'execution_failed', e.g. spawn ENOENT) carries no verdict about this
+  // 'execution_failed', e.g. spawn ENOENT, or 'runner_unreachable') carries no verdict about this
   // tree at all — it must never be replayed as if it were one. Nor does a
   // settled 'passed' run whose structured_result never got extracted despite
   // a report glob being configured (test_report_acquisition_attempted = 1):
@@ -831,6 +831,7 @@ export function admitTestRequest(
   if (
     settled &&
     settled.failure_reason !== 'execution_failed' &&
+    settled.failure_reason !== 'runner_unreachable' &&
     settled.failure_reason !== 'superseded'
   ) {
     withdrawStaleSameWorktreeRuns(
@@ -979,6 +980,7 @@ export function admitTestRequest(
     baseSha,
     spec.worktreePath,
     spec.commands,
+    runnerExecutorOverride !== null,
   );
   withdrawStaleSameWorktreeRuns(
     spec.projectId,
@@ -1541,6 +1543,7 @@ async function executeTestRequestRun(
       commands: JSON.stringify(recordedCommands),
       coverage_source_run_id: null,
       awaiting_disposition_at: null,
+      runner_executed: runnerExecutorOverride !== null ? 1 : 0,
     });
     trackRunIngestion(runId, ingestionPromise);
     ingestionPromise.catch((err) => {
@@ -1576,6 +1579,31 @@ async function executeTestRequestRun(
   } finally {
     release();
   }
+}
+
+/** Announces a row the runner-unreachability sweep just settled as failed — mirrors recoverInterruptedTestRequestRuns' per-row side effects. */
+export function announceRunnerUnreachableRun(
+  run: TestRequestRunRow,
+  output: string,
+): void {
+  clearSupersededStructuredResults(run.project_id, run.content_hash, run.id);
+  broadcastRunStatus({
+    runId: run.id,
+    projectId: run.project_id,
+    contentHash: run.content_hash,
+    status: 'failed-with-cause',
+    output,
+    sessionId: run.session_id,
+    requestedAt: run.requested_at ?? undefined,
+    startedAt: run.started_at,
+    finishedAt: Date.now(),
+  });
+  emitSettled({
+    projectId: run.project_id,
+    contentHash: run.content_hash,
+    runKind: run.run_kind,
+    state: 'failed',
+  });
 }
 
 /**
@@ -1883,7 +1911,8 @@ export function classifyTestRunOutcome(
     outcome = run.run_kind === 'scoped' ? 'passed-scoped' : 'passed';
   } else if (
     run.failure_reason === 'execution_failed' ||
-    run.failure_reason === 'interrupted_queued'
+    run.failure_reason === 'interrupted_queued' ||
+    run.failure_reason === 'runner_unreachable'
   ) {
     outcome = 'execution-failed';
   } else if (run.failure_reason === 'worker_crash') {

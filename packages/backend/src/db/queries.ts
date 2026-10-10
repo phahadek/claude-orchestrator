@@ -9532,10 +9532,11 @@ export function insertTestRequestRun(
    * coverage source (see listSettledPassedTestRequestRunsForCoverage).
    */
   commands?: string[] | null,
+  runnerExecuted = false,
 ): void {
   db.prepare(
-    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, concurrent_run_count, run_origin, producer, run_kind, base_sha, worktree_path, commands, breadth_origin)
-     VALUES (?, ?, ?, ?, ?, '', ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, concurrent_run_count, run_origin, producer, run_kind, base_sha, worktree_path, commands, breadth_origin, runner_executed)
+     VALUES (?, ?, ?, ?, ?, '', ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     projectId,
@@ -9555,6 +9556,7 @@ export function insertTestRequestRun(
     worktreePath ?? null,
     commands ? JSON.stringify(commands) : null,
     resolveRunBreadthOrigin(projectId, contentHash, sessionId, worktreePath),
+    runnerExecuted ? 1 : 0,
   );
 }
 
@@ -9755,7 +9757,7 @@ export function markTestRequestRunAwaitingDisposition(id: string): void {
   ).run(Date.now(), id);
 }
 
-const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha, foreign_concurrent_run_count, worktree_path, superseded_by, failed_command, commands, coverage_source_run_id, awaiting_disposition_at`;
+const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha, foreign_concurrent_run_count, worktree_path, superseded_by, failed_command, commands, coverage_source_run_id, awaiting_disposition_at, runner_executed`;
 
 /**
  * Every settled `passed` run for (project_id, content_hash) that carries a
@@ -9796,6 +9798,45 @@ export function listSettledPassedTestRequestRunsForCoverage(
       project_id: projectId,
       content_hash: contentHash,
     }) as TestRequestRunRow[];
+}
+
+/**
+ * Runner-executed rows still `queued`/`running` whose last-known start
+ * (started_at — a queued row's placeholder is its requested_at) is at or
+ * before `cutoff`. Locally executed rows (runner_executed = 0) are never
+ * returned.
+ */
+export function listStaleRunnerExecutedTestRequestRuns(
+  cutoff: number,
+): TestRequestRunRow[] {
+  return db
+    .prepare(
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
+       FROM test_request_runs
+       WHERE runner_executed = 1 AND state IN ('queued', 'running') AND started_at <= ?`,
+    )
+    .all(cutoff) as TestRequestRunRow[];
+}
+
+/**
+ * Atomically settles a runner-executed row as `failed`/'runner_unreachable',
+ * but only while it is still `queued`/`running` and still past `cutoff` — a
+ * result package that settled the row first (or a re-start that moved
+ * started_at forward) makes this a no-op. Returns whether the write won.
+ */
+export function failStaleRunnerExecutedTestRequestRun(
+  id: string,
+  output: string,
+  cutoff: number,
+): boolean {
+  const info = db
+    .prepare(
+      `UPDATE test_request_runs
+       SET state = 'failed', output = ?, finished_at = ?, failure_reason = 'runner_unreachable'
+       WHERE id = ? AND runner_executed = 1 AND state IN ('queued', 'running') AND started_at <= ?`,
+    )
+    .run(output, Date.now(), id, cutoff);
+  return info.changes > 0;
 }
 
 /** Every run still `running` — used by the boot-time crash-recovery sweep. */
