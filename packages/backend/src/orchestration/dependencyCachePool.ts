@@ -63,11 +63,11 @@ export interface DependencyCacheStore {
 }
 
 export const defaultDependencyCacheStore: DependencyCacheStore = {
-  insertBuilding: insertBuildingDependencyCacheEntry,
-  markStatus: markDependencyCacheEntryStatus,
-  getReady: getReadyDependencyCacheEntry,
-  touchLastUsed: touchDependencyCacheEntryLastUsed,
-  listBuilding: listBuildingDependencyCacheEntries,
+  insertBuilding: (p, h) => insertBuildingDependencyCacheEntry(p, h),
+  markStatus: (p, h, s) => markDependencyCacheEntryStatus(p, h, s),
+  getReady: (p, h) => getReadyDependencyCacheEntry(p, h),
+  touchLastUsed: (p, h) => touchDependencyCacheEntryLastUsed(p, h),
+  listBuilding: () => listBuildingDependencyCacheEntries(),
 };
 
 export interface DependencyCachePoolSpec {
