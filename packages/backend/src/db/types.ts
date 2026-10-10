@@ -1227,7 +1227,15 @@ export type TestRequestFailureReason =
    * to the session as an ordinary failed-gate, never as
    * gate_timeout_infra_failure. See testRequestLane.ts's failureReasonFor.
    */
-  | 'worker_crash';
+  | 'worker_crash'
+  /**
+   * A runner-executed row stuck 'queued'/'running' past the reconciliation
+   * grace period with no result package heard back — the runner never pulled
+   * the run or went silent mid-run. The run never produced a verdict about
+   * the tree, so it is excluded from the settled-run replay guard like
+   * 'execution_failed'. Written only by runnerUnreachabilityReconciler.ts.
+   */
+  | 'runner_unreachable';
 
 /**
  * Explicit identity a caller states about the run it's originating —
@@ -1310,6 +1318,8 @@ export interface TestRequestRunRow {
   coverage_source_run_id: string | null;
   /** Epoch ms set at result delivery when every remaining failure is outside the session's diff and the report is complete — see stagedIntents.ts's test.request delivery. Null otherwise. */
   awaiting_disposition_at: number | null;
+  /** 1 when a remote runner executes this row (stamped at admission); 0 for locally executed rows. Only rows with 1 are eligible for the runner-unreachability sweep. */
+  runner_executed: number;
 }
 
 // ─── dependency_cache_entries ───────────────────────────────────────────────

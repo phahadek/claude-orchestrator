@@ -6803,6 +6803,8 @@ function describeTestRequestFailure(
       return 'failed due to a toolchain/infrastructure mismatch';
     case 'execution_failed':
       return 'failed to execute — the test runner process never started';
+    case 'runner_unreachable':
+      return 'failed because the remote test runner never returned a result';
     default:
       return 'crashed';
   }

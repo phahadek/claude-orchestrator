@@ -86,6 +86,7 @@ import { Scheduler } from './orchestration/Scheduler';
 import { register as registerWorktreeReconciler } from './orchestration/WorktreeReconciler';
 import { register as registerTempClusterReconciler } from './orchestration/TempClusterReconciler';
 import { register as registerDependencyCacheReconciler } from './orchestration/DependencyCacheReconciler';
+import { register as registerRunnerUnreachabilityReconciler } from './orchestration/runnerUnreachabilityReconciler';
 import { register as registerScheduledAuditSweep } from './orchestration/ScheduledAuditSweep';
 import {
   register as registerGateReconciler,
@@ -739,6 +740,7 @@ flakyTestRollupJob.register(scheduler);
 registerWorktreeReconciler(scheduler);
 registerTempClusterReconciler(scheduler);
 registerDependencyCacheReconciler(scheduler);
+registerRunnerUnreachabilityReconciler(scheduler);
 // Daily base-branch dependency/license-audit sweep — independent of any PR,
 // closes the gap the per-PR analyze gate's diff-triggered skip leaves for
 // manifests no PR ever touches.

@@ -3613,6 +3613,18 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
+  // runner_executed: 1 on a row stamped at admission because a remote runner
+  // executor was installed for it — the marker the runner-unreachability
+  // sweep (orchestration/runnerUnreachabilityReconciler.ts) keys on so it
+  // never touches a locally executed row. 0 for every other row.
+  try {
+    target.exec(
+      `ALTER TABLE test_request_runs ADD COLUMN runner_executed INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+
   // parked_at: the occupancy marker for a session left idle and resumable
   // by a machine path whose process was reclaimed or died without a
   // result — replaces archiveSession(id, 'machine_park') for that case (see
