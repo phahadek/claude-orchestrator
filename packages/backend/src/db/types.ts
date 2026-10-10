@@ -1308,6 +1308,8 @@ export interface TestRequestRunRow {
   commands: string | null;
   /** Set only on a row synthesized by coverage reuse (testRequestLane.ts's admitTestRequest coverage layer): the covering run's id whose verdict was copied onto this row. Null for every genuinely executed row. Execution-shaped reads (test-duration baselines, flip-rate/breadth corpus, concurrency stats) filter this column to exclude coverage rows. */
   coverage_source_run_id: string | null;
+  /** Epoch ms set at result delivery when every remaining failure is outside the session's diff and the report is complete — see stagedIntents.ts's test.request delivery. Null otherwise. */
+  awaiting_disposition_at: number | null;
 }
 
 // ─── dependency_cache_entries ───────────────────────────────────────────────

@@ -11,6 +11,19 @@ export interface TestResultDigestOptions {
   maxFailuresShown?: number;
 }
 
+const AWAITING_DISPOSITION_INSTRUCTION =
+  '**Wait:** every remaining failure is outside your diff. You will be woken at most once when the orchestrator re-attributes them; do not re-run the tests or call flaky_confirm in the meantime.';
+
+/** Appends the wait instruction to a delivered digest only when the run row carries the awaiting-disposition marker. */
+export function appendAwaitingDispositionInstruction(
+  digest: string,
+  awaitingDisposition: boolean,
+): string {
+  return awaitingDisposition
+    ? `${digest}\n\n${AWAITING_DISPOSITION_INSTRUCTION}`
+    : digest;
+}
+
 /**
  * Same digest as buildTestResultDigest, rendered from a run-outcome accessor
  * result (orchestration/runTestOutcomes.ts) so it still works after the

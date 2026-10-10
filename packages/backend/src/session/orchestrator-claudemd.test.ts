@@ -389,6 +389,18 @@ describe('buildOrchestratorClaudeMd', () => {
     expect(flakySection).toContain('cross-SHA');
   });
 
+  it('Flaky/Transient section points at the digest wait instruction instead of re-calling flaky_confirm periodically', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    const flakySection = result.slice(
+      result.indexOf('## Flaky / Transient CI or F2 Gate Failures'),
+      result.indexOf('## Responding to Review Comments'),
+    );
+    expect(flakySection).not.toMatch(/re-calling it/);
+    expect(flakySection).not.toMatch(/periodically/);
+    expect(flakySection).toContain('**Wait** instruction');
+    expect(flakySection).toContain('woken at most once');
+  });
+
   it('includes worktree path in Git Isolation section', () => {
     const result = buildOrchestratorClaudeMd({
       ...defaultParams,

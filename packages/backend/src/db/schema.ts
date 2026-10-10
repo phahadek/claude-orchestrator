@@ -3599,6 +3599,20 @@ export function runMigrations(target: Database.Database): void {
     WHERE breadth_origin IS NULL
   `);
 
+  // awaiting_disposition_at: set on a failed test.request run row only when
+  // every remaining failure is outside the session's diff and the report is
+  // complete — the result digest then tells the session to wait for a
+  // push-based re-attribution wake. Scoped to the run row, so it clears
+  // implicitly (excuse, supersede by a new push, terminal session). NULL
+  // otherwise.
+  try {
+    target.exec(
+      `ALTER TABLE test_request_runs ADD COLUMN awaiting_disposition_at INTEGER`,
+    );
+  } catch {
+    /* already exists */
+  }
+
   // parked_at: the occupancy marker for a session left idle and resumable
   // by a machine path whose process was reclaimed or died without a
   // result — replaces archiveSession(id, 'machine_park') for that case (see
