@@ -183,6 +183,28 @@ function safeRelativePath(root: string, rel: string): string {
   return full;
 }
 
+/** Creates parent dirs one component at a time, refusing to traverse a symlink or non-directory. */
+function mkdirRealParents(root: string, full: string): void {
+  let current = root;
+  for (const part of path.relative(root, path.dirname(full)).split(path.sep)) {
+    if (!part) continue;
+    current = path.join(current, part);
+    let st: fs.Stats | null;
+    try {
+      st = fs.lstatSync(current);
+    } catch {
+      st = null;
+    }
+    if (!st) {
+      fs.mkdirSync(current);
+    } else if (!st.isDirectory()) {
+      throw new SnapshotIntegrityError(
+        `Snapshot path traverses a non-directory: ${current}`,
+      );
+    }
+  }
+}
+
 export interface MaterializedSnapshot {
   dir: string;
   contentHash: string;
@@ -212,35 +234,73 @@ export function materializeAndVerifySnapshot(
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(baseDir, 'test-run-')));
   try {
     const raw = gunzipSync(snapshot.archive, { maxOutputLength: capBytes });
+    const seen = new Set<string>();
+    for (const entry of manifest.entries) {
+      if (seen.has(entry.path)) {
+        throw new SnapshotIntegrityError(`Duplicate snapshot path: ${entry.path}`);
+      }
+      seen.add(entry.path);
+    }
+
+    // Pass 1 writes only regular files, so no symlink exists yet to write through.
     let offset = 0;
     for (const entry of manifest.entries) {
+      if (entry.type !== 'file') continue;
       const full = safeRelativePath(dir, entry.path);
-      if (entry.type === 'missing') continue;
-      fs.mkdirSync(path.dirname(full), { recursive: true });
-      if (entry.type === 'symlink') {
-        const resolved = path.resolve(path.dirname(full), entry.target);
-        if (
-          path.isAbsolute(entry.target) ||
-          !(resolved + path.sep).startsWith(dir + path.sep)
-        ) {
-          throw new SnapshotIntegrityError(
-            `Symlink escapes snapshot root: ${entry.path} -> ${entry.target}`,
-          );
-        }
-        fs.symlinkSync(entry.target, full);
-        continue;
+      if (
+        !Number.isInteger(entry.size) ||
+        entry.size < 0 ||
+        !Number.isInteger(entry.mode)
+      ) {
+        throw new SnapshotIntegrityError(`Invalid entry metadata: ${entry.path}`);
       }
       if (offset + entry.size > raw.length) {
         throw new SnapshotIntegrityError('Snapshot archive truncated');
       }
+      mkdirRealParents(dir, full);
+      // 'wx' refuses to follow or overwrite anything already at the path.
       fs.writeFileSync(full, raw.subarray(offset, offset + entry.size), {
-        mode: entry.mode,
+        flag: 'wx',
+        mode: entry.mode & 0o777,
       });
-      fs.chmodSync(full, entry.mode);
+      fs.chmodSync(full, entry.mode & 0o777);
       offset += entry.size;
     }
     if (offset !== raw.length) {
       throw new SnapshotIntegrityError('Snapshot archive has trailing bytes');
+    }
+
+    for (const entry of manifest.entries) {
+      if (entry.type !== 'symlink') continue;
+      const full = safeRelativePath(dir, entry.path);
+      const resolved = path.resolve(path.dirname(full), entry.target);
+      if (
+        typeof entry.target !== 'string' ||
+        path.isAbsolute(entry.target) ||
+        !(resolved + path.sep).startsWith(dir + path.sep)
+      ) {
+        throw new SnapshotIntegrityError(
+          `Symlink escapes snapshot root: ${entry.path} -> ${entry.target}`,
+        );
+      }
+      mkdirRealParents(dir, full);
+      fs.symlinkSync(entry.target, full);
+    }
+
+    // Lexical checks can't see chained symlinks; verify against the real filesystem.
+    for (const entry of manifest.entries) {
+      if (entry.type !== 'symlink') continue;
+      let real: string;
+      try {
+        real = fs.realpathSync(path.join(dir, entry.path));
+      } catch {
+        continue; // dangling or looping: hashes as MISSING, reads nothing
+      }
+      if (real !== dir && !real.startsWith(dir + path.sep)) {
+        throw new SnapshotIntegrityError(
+          `Symlink resolves outside snapshot root: ${entry.path}`,
+        );
+      }
     }
 
     const actual = hashWorktreeFiles(

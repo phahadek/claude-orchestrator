@@ -3,6 +3,8 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { execSync } from 'child_process';
+import { createHash } from 'crypto';
+import { gzipSync } from 'zlib';
 import { computeWholeTreeContentHash } from '../../session/analyzeGating';
 import {
   packTestSnapshot,
@@ -102,6 +104,79 @@ describe('testSnapshot', () => {
     expect(err).toBeInstanceOf(SnapshotTooLargeError);
     expect(err.largestUntracked[0].path).toBe('big-untracked.bin');
     expect(err.message).toContain('big-untracked.bin');
+  });
+
+  describe('hostile manifests', () => {
+    const craft = (
+      entries: unknown[],
+      content = '',
+    ): Parameters<typeof materializeAndVerifySnapshot>[0] =>
+      ({
+        manifest: {
+          contentHash: 'h',
+          entries,
+          totalBytes: Buffer.byteLength(content),
+        },
+        archive: gzipSync(Buffer.from(content)),
+      }) as never;
+
+    const outsideEmpty = () =>
+      expect(fs.existsSync(path.join(runBase, 'x'))).toBe(false);
+
+    it('refuses to write through a chained symlink that escapes only on the real filesystem', () => {
+      const snap = craft(
+        [
+          { path: 'sub/s', type: 'symlink', mode: 0o777, size: 0, target: '../' },
+          { path: 'sub/t', type: 'symlink', mode: 0o777, size: 0, target: 's/../../x' },
+          { path: 'sub/t/foo', type: 'file', mode: 0o644, size: 3 },
+        ],
+        'bad',
+      );
+      expect(() => materializeAndVerifySnapshot(snap, 'h', runBase)).toThrow();
+      expect(fs.readdirSync(runBase)).toEqual([]);
+      outsideEmpty();
+    });
+
+    it('refuses a symlink that resolves outside the root via a chain', () => {
+      const snap = craft([
+        { path: 'a', type: 'symlink', mode: 0o777, size: 0, target: '.' },
+        { path: 'b', type: 'symlink', mode: 0o777, size: 0, target: 'a/..' },
+      ]);
+      expect(() => materializeAndVerifySnapshot(snap, 'h', runBase)).toThrow(
+        /outside snapshot root|escapes/,
+      );
+      expect(fs.readdirSync(runBase)).toEqual([]);
+    });
+
+    it('refuses duplicate paths', () => {
+      const snap = craft(
+        [
+          { path: 'a', type: 'file', mode: 0o644, size: 1 },
+          { path: 'a', type: 'file', mode: 0o644, size: 1 },
+        ],
+        'xx',
+      );
+      expect(() => materializeAndVerifySnapshot(snap, 'h', runBase)).toThrow(
+        /Duplicate/,
+      );
+    });
+
+    it('masks setuid/setgid/sticky bits from manifest modes', () => {
+      const snap = craft(
+        [{ path: 'a', type: 'file', mode: 0o7777, size: 1 }],
+        'x',
+      );
+      // Hash will mismatch, but mode handling happens before; assert via a matching hash.
+      const expected = createHash('sha256')
+        .update('a')
+        .update('\0')
+        .update('x')
+        .update('\0')
+        .digest('hex');
+      snap.manifest.contentHash = expected;
+      const out = materializeAndVerifySnapshot(snap, expected, runBase);
+      expect(fs.statSync(path.join(out.dir, 'a')).mode & 0o7000).toBe(0);
+    });
   });
 
   it('returns null for an empty tree', async () => {
