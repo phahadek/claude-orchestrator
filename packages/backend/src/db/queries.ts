@@ -11750,15 +11750,18 @@ export function markTestResultExcused(
   testRequestRunId: string,
   testId: string,
   source: TestExcusalSource,
+  evidenceCount?: number,
 ): void {
   _stmtMarkTestResultExcused ??= db.prepare<{
     test_request_run_id: string;
     test_id: string;
     excused_at: number;
     excused_reason: string;
+    excused_evidence_count: number | null;
   }>(`
     UPDATE test_run_results
-    SET excused_at = @excused_at, excused_reason = @excused_reason
+    SET excused_at = @excused_at, excused_reason = @excused_reason,
+        excused_evidence_count = @excused_evidence_count
     WHERE test_request_run_id = @test_request_run_id AND test_id = @test_id
   `);
   _stmtMarkTestResultExcused.run({
@@ -11766,7 +11769,34 @@ export function markTestResultExcused(
     test_id: testId,
     excused_at: Date.now(),
     excused_reason: source,
+    excused_evidence_count: evidenceCount ?? null,
   });
+}
+
+/**
+ * Failed test-request runs with no per-test report (no summary row with any
+ * tests, and no live structured_result) grouped by failure_reason — the
+ * measured base for deciding whether whole-run failures merit a
+ * failure-signature corpus. SQL twin of hasNoPerTestReport in
+ * orchestration/testRequestLane.ts.
+ */
+export function countFailedRunsWithoutPerTestReport(): Array<{
+  failure_reason: string;
+  count: number;
+}> {
+  return db
+    .prepare(
+      `SELECT COALESCE(r.failure_reason, 'generic') AS failure_reason, COUNT(*) AS count
+       FROM test_request_runs r
+       WHERE r.state = 'failed'
+         AND r.structured_result IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM test_run_summaries s
+           WHERE s.test_request_run_id = r.id AND s.total_count > 0
+         )
+       GROUP BY COALESCE(r.failure_reason, 'generic')`,
+    )
+    .all() as Array<{ failure_reason: string; count: number }>;
 }
 
 export interface FlaggedFlakyTest {

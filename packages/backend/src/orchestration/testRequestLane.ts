@@ -1865,8 +1865,17 @@ function classifyFailedRun(
   run: TestRequestRunRow,
 ): 'partial_fail' | 'total_fail' {
   const outcomes = readRunTestOutcomes(run);
-  if (outcomes.source === 'none' || outcomes.incomplete) return 'total_fail';
-  return outcomes.totals.total > 0 ? 'partial_fail' : 'total_fail';
+  if (outcomes.incomplete) return 'total_fail';
+  return hasNoPerTestReport(run) ? 'total_fail' : 'partial_fail';
+}
+
+/**
+ * True when a failed run carries no per-test rows at all (no breadth evidence
+ * possible). countFailedRunsWithoutPerTestReport in db/queries.ts is its SQL twin.
+ */
+export function hasNoPerTestReport(run: TestRequestRunRow): boolean {
+  const outcomes = readRunTestOutcomes(run);
+  return outcomes.source === 'none' || outcomes.totals.total === 0;
 }
 
 /**
