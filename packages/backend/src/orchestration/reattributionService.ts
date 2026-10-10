@@ -35,7 +35,7 @@ import type { Scheduler } from './Scheduler';
 /** Dedicated inbox source — deliberately not 'test_request'. */
 export const REATTRIBUTION_FEEDBACK_SOURCE = 'reattribution';
 
-export const REATTRIBUTION_SWEEP_INTERVAL_MS = 5 * 60_000;
+const REATTRIBUTION_SWEEP_INTERVAL_MS = 5 * 60_000;
 
 export interface ReattributionWakeSink {
   deliverReattributionWake(sessionId: string): Promise<void>;
@@ -43,7 +43,7 @@ export interface ReattributionWakeSink {
 
 export type EvaluateOutcome = 'woken' | 'not_excused' | 'lost_race' | 'skipped';
 
-export function buildWakeDedupeKey(runId: string): string {
+function buildWakeDedupeKey(runId: string): string {
   return `reattribution:${runId}`;
 }
 
@@ -112,7 +112,7 @@ export async function evaluateSubject(
   return 'woken';
 }
 
-export async function reattributeForIngestedRun(
+async function reattributeForIngestedRun(
   ingestedRunId: string,
   sink: ReattributionWakeSink | null,
 ): Promise<number> {
