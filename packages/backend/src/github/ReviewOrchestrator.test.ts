@@ -85,6 +85,7 @@ vi.mock('../config.js', () => ({
 
 vi.mock('../orchestration/verifyRunner.js', () => ({
   runVerifyAsGate: vi.fn().mockResolvedValue({ passed: true }),
+  tailOfLog: (s: string) => s,
 }));
 
 vi.mock('../session/analyzeGating.js', async (importOriginal) => ({
