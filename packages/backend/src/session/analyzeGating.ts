@@ -49,7 +49,7 @@ export function matchesTransientOutputPattern(
   });
 }
 
-function listWorktreeFiles(worktreePath: string): Promise<string[]> {
+export function listWorktreeFiles(worktreePath: string): Promise<string[]> {
   return new Promise((resolve) => {
     const proc = spawn(
       'git',
@@ -94,7 +94,7 @@ export async function computeTriggerContentHash(
   return hashWorktreeFiles(worktreePath, matched);
 }
 
-function hashWorktreeFiles(worktreePath: string, files: string[]): string {
+export function hashWorktreeFiles(worktreePath: string, files: string[]): string {
   const hash = createHash('sha256');
   for (const file of files) {
     hash.update(file);
