@@ -7,12 +7,12 @@ import { logger } from '../logger';
 import type { Scheduler } from './Scheduler';
 
 /** Longest legitimate runner-executed run; the grace period must exceed it. */
-export const RUNNER_RUN_TIMEOUT_MS = 60 * 60_000;
+const RUNNER_RUN_TIMEOUT_MS = 60 * 60_000;
 /** Slack on top of the run timeout before silence is presumed unreachability. */
-export const RUNNER_UNREACHABLE_MARGIN_MS = 5 * 60_000;
+const RUNNER_UNREACHABLE_MARGIN_MS = 5 * 60_000;
 export const RUNNER_UNREACHABLE_GRACE_MS =
   RUNNER_RUN_TIMEOUT_MS + RUNNER_UNREACHABLE_MARGIN_MS;
-export const RUNNER_UNREACHABILITY_SWEEP_INTERVAL_MS = 60_000;
+const RUNNER_UNREACHABILITY_SWEEP_INTERVAL_MS = 60_000;
 
 /**
  * Settles runner-executed rows stuck 'queued'/'running' past the grace period
