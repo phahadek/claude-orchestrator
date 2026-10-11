@@ -111,7 +111,7 @@ describe('groom planning.noOp operator disposition', () => {
     );
   });
 
-  it('reject with pushback rejects the noOp, enqueues the reason to the live session, and does not suppress the task', async () => {
+  it('reject with pushback sends the noOp back for revision, enqueues the reason to the live session, and does not suppress the task', async () => {
     seedSession('groom');
     const { app, sessionManager } = setup();
     const intent = stageNoOp();
@@ -121,7 +121,7 @@ describe('groom planning.noOp operator disposition', () => {
       .send({ outcome: 'pushback', reason: 'this task needs a split first' });
 
     expect(res.status).toBe(200);
-    expect(getStagedIntent(intent.id)?.state).toBe('rejected');
+    expect(getStagedIntent(intent.id)?.state).toBe('needs_revision');
     expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
     expect(sessionManager.enqueueFeedback.mock.calls[0][0]).toBe(SESSION_ID);
     expect(
