@@ -424,8 +424,11 @@ Must-know rules even if you don't open the full standard:
 - **New tasks always start at `🔲 Backlog`** — never create one directly at Ready; only
   a human review promotes to Ready. (Enforced by the `check-task-status.mjs` PreToolUse
   hook.)
-- **Draft in conversation first; publishing to the task source is a separate,
-  human-approved step.** "Write a task" authorizes the intent, not the draft.
+- **Never draft a task body in chat.** File the task at `🔲 Backlog` directly via the
+  task source; the operator reviews it on the board, and grooming is the review gate
+  before Ready. What stays in chat is the finding, the root cause, and (for
+  design-adjacent work) the lever / solution space. "Write a task" authorizes filing it
+  at `🔲 Backlog`.
 - **The page body is the spec; Notes is one human-facing sentence.**
 
 ---

@@ -257,16 +257,11 @@ Seed **📐 Design tasks with decision-shaped Open Questions grounded in real co
 `config/task-writing.md` at the moment you author — it is reference content, not a
 skim-once summary.
 
-**Two separate operator gates. Do not collapse them:**
-
-1. **The seed set** — how many tasks, what each covers, what its open questions are.
-2. **The task bodies** — the drafted content. `procedures.md` § Task authoring: *"Draft
-   in conversation first; publishing to Notion is a separate, human-approved step.
-   'Write a task' authorizes the intent, not the draft."*
-
-If you judge gate 2 satisfied by a detailed gate-1 approval, **say so explicitly** so
-the operator can cheaply disagree. Filing on an unregistered board is inert and fully
-reversible — that is the mitigation, not a reason to skip the gate.
+**One operator gate, then file directly.** The operator approves **the seed set** — how
+many tasks, what each covers, what its open questions are. Task bodies are never drafted
+in chat: file them at `🔲 Backlog` directly; the operator reviews them on the board and
+grooming is the review gate. Filing on an unregistered board is inert and fully
+reversible.
 
 **Authoring rules specific to seeding:**
 
