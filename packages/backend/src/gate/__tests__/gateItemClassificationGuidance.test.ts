@@ -95,3 +95,44 @@ describe('skills/gate/SKILL.md gate-item classification parity', () => {
     );
   });
 });
+
+describe('skills/gate/SKILL.md managed-project prod-read rule', () => {
+  const skill = readFileSync(GATE_SKILL_MD_PATH, 'utf8');
+  const start = skill.indexOf('Reading a managed project');
+  const rule = start >= 0 ? skill.slice(start, start + 2500) : '';
+
+  it('is placed after "Verify by reading history first"', () => {
+    expect(start).toBeGreaterThan(
+      skill.indexOf('Verify by reading history first'),
+    );
+  });
+
+  it('requires loading the sanctioned read surface from context.md', () => {
+    expect(rule).toContain('config/projects/<dir>/context.md');
+    expect(rule).toContain('sanctioned read surface');
+  });
+
+  it('forbids env-file DSNs and write-capable roles', () => {
+    expect(rule).toContain('/etc/<project>/*.env');
+    expect(rule).toMatch(/DSN or credential/);
+    expect(rule).toMatch(/write-capable role/);
+  });
+
+  it('forbids session-level SET and names the pooling reason', () => {
+    expect(rule).toMatch(/session-level `SET`/);
+    expect(rule).toContain('default_transaction_read_only');
+    expect(rule).toContain('transaction-pooled');
+  });
+
+  it('requires verifier sub-agent briefs to carry the read path and no raw DSN', () => {
+    expect(rule).toContain('Verifier sub-agent briefs');
+    expect(rule).toContain('verbatim');
+    expect(rule).toMatch(
+      /raw DSN, an env-file path to source, or a\s+credential/,
+    );
+  });
+
+  it('cites the 2026-10-11 incident', () => {
+    expect(rule).toContain('2026-10-11');
+  });
+});

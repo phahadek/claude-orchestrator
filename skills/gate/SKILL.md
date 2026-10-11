@@ -110,6 +110,30 @@ The six disciplines below are how that rule is kept:
   log/show …`, `gh pr/run …`). This was the single most productive method across a
   full gate run; **staging is the fallback for behaviors history can't show.**
 
+- **Reading a managed project's production data.** When a gate item targets a
+  managed project's data (not the orchestrator's own record), observe it only
+  through that project's sanctioned read surface:
+  1. **Load the read surface first.** Read `config/projects/<dir>/context.md` (its
+     operator read surface / inspecting-live-state section) and use only what it
+     names, in the order it gives.
+  2. **No env-file DSNs, no write-capable roles.** Never source a DSN or credential
+     from a host env file (`/etc/<project>/*.env` or similar), and never use a
+     write-capable role to read. Gate verification is observation; a read needs no
+     write credential.
+  3. **No session-level `SET`** (including `default_transaction_read_only`) on a
+     production connection. If read-only enforcement is needed, it comes from the
+     role, not a session setting — on a transaction-pooled connection a session
+     setting leaks to every other client of that pool.
+  4. **Verifier sub-agent briefs.** When fanning items out to sub-agents, the brief
+     must carry the project's sanctioned read path verbatim and restate rules 2–3.
+     A brief may never hand a sub-agent a raw DSN, an env-file path to source, or a
+     credential.
+
+  *Real run (2026-10-11, polimarket-analyser M18):* verifier sub-agents briefed with
+  the write-capable pooled `$POSTGRES_DSN` set a session-level
+  `default_transaction_read_only` that stuck to shared PgBouncer connections, failing
+  ~12k daemon writes and taking the fleet down until a PgBouncer restart.
+
 - **Exhaust observe-by-reading before declaring "needs a human."** "Hand this to
   you / not this session" is **buck-passing** when the read-history path hasn't
   been exhausted. Concrete tells of the failure, all seen in real runs: **giving
