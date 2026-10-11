@@ -1771,10 +1771,11 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'setDependsOn for the Ready path, task.setStatus for the Deferred ' +
         'path, or planning.noOp for the no-decision-needed path) is the ' +
         'terminal action; the operator applies the Ready/Deferred paths from ' +
-        'the shared staged-intent display, while a `planning.noOp` needs no ' +
-        'operator disposition at all — it is informational/auditable, ' +
-        'rendered so the operator can see the turn was a deliberate no-op ' +
-        'rather than a silent park. DO NOT drive the write to applied or ' +
+        'the shared staged-intent display, while a standalone `planning.noOp` ' +
+        'is also operator-dispositioned: the session stays open while it is ' +
+        'staged, the operator Acknowledges it (the session then ends and the ' +
+        'task stays at Backlog) or Rejects it with a reason (the reason ' +
+        'resumes this session to keep grooming). DO NOT drive the write to applied or ' +
         'wait in chat for confirmation of an applied result. DO end the ' +
         'turn the moment it is staged.',
       split:

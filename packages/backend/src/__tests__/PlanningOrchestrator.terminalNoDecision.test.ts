@@ -172,7 +172,7 @@ describe('PlanningOrchestrator.checkTerminal — kind-aware "staged a decision" 
   });
 
   it('a staged explicit no-op marker (planning.noOp) counts — reaches terminal, no nudge', () => {
-    seedSession();
+    seedSession(SESSION_ID, 'design');
     const sessionManager = makeSessionManager();
     const orchestrator = new PlanningOrchestrator(sessionManager);
 

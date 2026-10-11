@@ -46,7 +46,11 @@ import {
 } from '../routes/stagedIntents';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { emitTaskUpdated, broadcastTaskStatusChanged } from '../routes/tasks';
-import { NO_OP_INTENT_KIND, hasStagedDecision } from './planningDecisionKinds';
+import {
+  NO_OP_INTENT_KIND,
+  hasStagedDecision,
+  isGroomNoOpAwaitingOperator,
+} from './planningDecisionKinds';
 import { runtimeSettings } from '../config';
 import { recordEvent } from '../audit/AuditLog';
 import type { Scheduler } from './Scheduler';
@@ -292,8 +296,11 @@ export class PlanningOrchestrator {
     // longer complete, so fall through to the normal park path (the caller's
     // session_ended handling, or the next park) instead of going terminal —
     // it needs to stay alive awaiting disposition of what it just staged.
+    const approveSessionType = getSession(sessionId)?.session_type;
     const stillPending = listStagedIntentsBySession(sessionId).some(
-      (i) => i.kind !== NO_OP_INTENT_KIND && i.state === 'staged',
+      (i) =>
+        (i.kind !== NO_OP_INTENT_KIND && i.state === 'staged') ||
+        isGroomNoOpAwaitingOperator(i, approveSessionType),
     );
     if (stillPending) {
       logger.info(
@@ -433,7 +440,10 @@ export class PlanningOrchestrator {
   } {
     const all = listStagedIntentsBySession(sessionId);
     const countable = all.filter((i) => i.kind !== NO_OP_INTENT_KIND);
-    const stillPending = countable.some((i) => i.state === 'staged');
+    const sessionType = getSession(sessionId)?.session_type;
+    const stillPending =
+      countable.some((i) => i.state === 'staged') ||
+      all.some((i) => isGroomNoOpAwaitingOperator(i, sessionType));
     const owesGatedArtifacts = sessionOwesGatedDesignArtifacts(sessionId);
     return { all, countable, stillPending, owesGatedArtifacts };
   }
@@ -505,6 +515,23 @@ export class PlanningOrchestrator {
     }
 
     return { blockedMembers, blockedBudgetExhausted };
+  }
+
+  /**
+   * Re-runs the terminal check for a groom session that was held open on a
+   * standalone planning.noOp the operator has now acknowledged. No-op for a
+   * missing, terminal, or non-groom session.
+   */
+  recheckTerminalAfterNoOpAcknowledge(sessionId: string): boolean {
+    const row = getSession(sessionId);
+    if (
+      !row ||
+      row.session_type !== 'groom' ||
+      TERMINAL_SESSION_STATUSES.has(row.status)
+    ) {
+      return false;
+    }
+    return this.checkTerminal(sessionId);
   }
 
   checkTerminal(sessionId: string): boolean {
@@ -705,10 +732,11 @@ export class PlanningOrchestrator {
     if (reason !== 'planning_operator_end' && row.status !== 'done') {
       const live = listStagedIntentsBySession(sessionId).some(
         (i) =>
-          i.kind !== NO_OP_INTENT_KIND &&
-          (i.state === 'staged' ||
-            i.state === 'needs_revision' ||
-            i.state === 'pending_verification'),
+          (i.kind !== NO_OP_INTENT_KIND &&
+            (i.state === 'staged' ||
+              i.state === 'needs_revision' ||
+              i.state === 'pending_verification')) ||
+          isGroomNoOpAwaitingOperator(i, row.session_type),
       );
       if (live) {
         this.surfaceBlockedMembersPauseReason(sessionId, row, reason);

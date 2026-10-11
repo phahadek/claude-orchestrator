@@ -716,6 +716,53 @@ describe('StagedIntentPanel', () => {
     });
   });
 
+  describe('standalone planning.noOp from a groom session', () => {
+    const groomNoOp = () =>
+      makeIntent({
+        kind: 'planning.noOp',
+        payload: { taskId: 'notion:abc', reason: 'nothing to groom' },
+        groupKind: 'groom',
+        groupId: null,
+      });
+
+    it('renders Acknowledge and a Reject that requires a reason', async () => {
+      const reject = vi
+        .spyOn(stagedIntentsApi, 'reject')
+        .mockResolvedValue({ ok: true });
+      render(<StagedIntentPanel intent={groomNoOp()} />);
+
+      expect(screen.getByTestId('staged-intent-acknowledge')).toBeTruthy();
+      const rejectButton = screen.getByTestId('staged-intent-noop-reject');
+      expect(rejectButton).toHaveProperty('disabled', true);
+
+      fireEvent.change(screen.getByTestId('staged-intent-noop-reject-reason'), {
+        target: { value: 'this task needs a split' },
+      });
+      fireEvent.click(rejectButton);
+
+      await waitFor(() =>
+        expect(reject).toHaveBeenCalledWith('intent-1', {
+          outcome: 'pushback',
+          reason: 'this task needs a split',
+        }),
+      );
+    });
+
+    it('a design noOp stays Acknowledge-only', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'planning.noOp',
+            payload: { taskId: 'notion:abc', reason: 'nothing' },
+            groupKind: 'other',
+          })}
+        />,
+      );
+      expect(screen.getByTestId('staged-intent-acknowledge')).toBeTruthy();
+      expect(screen.queryByTestId('staged-intent-noop-reject')).toBeNull();
+    });
+  });
+
   describe('task.create body contrast', () => {
     function hexToRgb(hex: string) {
       const clean = hex.replace('#', '');
