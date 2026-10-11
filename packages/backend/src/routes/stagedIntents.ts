@@ -10093,6 +10093,12 @@ export function createStagedIntentsRouter(
         payload: { intentId: row.id, disposition: 'acknowledge' },
       });
 
+      if (row.session_id && !row.group_id) {
+        planningOrchestrator?.recheckTerminalAfterNoOpAcknowledge(
+          row.session_id,
+        );
+      }
+
       res.json(committedIntent);
     },
   );

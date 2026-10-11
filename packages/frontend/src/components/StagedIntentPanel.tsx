@@ -1290,6 +1290,8 @@ export function StagedIntentPanel({
   // informational/auditable — no operator disposition (commit/approve/
   // reject) is ever offered for it, only Acknowledge.
   const isNoOp = intent.kind === 'planning.noOp' && !isOperatorNoOp;
+  // A standalone groom noOp is operator-dispositioned: Acknowledge or Reject.
+  const isGroomNoOp = isNoOp && intent.groupKind === 'groom' && !intent.groupId;
   const isGrouped = !!intent.groupId;
   // A Human-Observation mirror, or an 'unresolved-source' merge-commit
   // escalation, carries no pre-set disposition — no verifier ever observed
@@ -1460,14 +1462,14 @@ export function StagedIntentPanel({
     }
   };
 
-  const handleReject = async () => {
+  const handleReject = async (outcomeOverride?: StagedIntentRejectOutcome) => {
     const reason = rejectReason.trim();
     if (!reason) return;
     setInFlight('reject');
     setError(null);
     try {
       await stagedIntentsApi.reject(intent.id, {
-        outcome: rejectOutcome,
+        outcome: outcomeOverride ?? rejectOutcome,
         reason,
       });
       onRejected?.(intent);
@@ -1637,6 +1639,26 @@ export function StagedIntentPanel({
           >
             {inFlight === 'acknowledge' ? 'Acknowledging…' : 'Acknowledge'}
           </button>
+          {isGroomNoOp && (
+            <>
+              <textarea
+                className={styles.feedbackInput}
+                placeholder="Why is this no-op being rejected? (required)"
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                data-testid="staged-intent-noop-reject-reason"
+              />
+              <button
+                type="button"
+                className={styles.denyButton}
+                disabled={inFlight !== null || disabled || !rejectReason.trim()}
+                data-testid="staged-intent-noop-reject"
+                onClick={() => void handleReject('pushback')}
+              >
+                {inFlight === 'reject' ? 'Submitting…' : 'Reject'}
+              </button>
+            </>
+          )}
         </div>
       ) : (
         <>

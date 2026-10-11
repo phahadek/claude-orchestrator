@@ -49,6 +49,23 @@ const DECISION_INTENT_KINDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * True for a standalone, staged planning.noOp staged by a groom session —
+ * the one noOp that is operator-dispositioned (Acknowledge or Reject), so the
+ * groom session must stay open until the operator acts on it.
+ */
+export function isGroomNoOpAwaitingOperator(
+  intent: Pick<StagedIntentRow, 'kind' | 'group_id' | 'state'>,
+  sessionType: string | null | undefined,
+): boolean {
+  return (
+    intent.kind === NO_OP_INTENT_KIND &&
+    !intent.group_id &&
+    intent.state === 'staged' &&
+    sessionType === 'groom'
+  );
+}
+
+/**
  * True once the session has ever staged (any lifecycle state — even a
  * since-rejected intent still proves the session produced a real decision)
  * at least one intent of a kind that counts as "staged a decision": a
@@ -90,7 +107,9 @@ export function hasStagedDecision(intents: StagedIntentRow[]): boolean {
 export function groomSessionConcludedWithDecision(sessionId: string): boolean {
   const intents = listStagedIntentsBySession(sessionId);
   const stillPending = intents.some(
-    (i) => i.kind !== NO_OP_INTENT_KIND && i.state === 'staged',
+    (i) =>
+      (i.kind !== NO_OP_INTENT_KIND && i.state === 'staged') ||
+      isGroomNoOpAwaitingOperator(i, 'groom'),
   );
   const hasBlocked = intents.some(
     (i) => i.state === 'needs_revision' || i.state === 'pending_verification',
