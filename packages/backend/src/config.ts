@@ -88,7 +88,7 @@ export const RUNNER_LISTENER_HOST =
   process.env.RUNNER_LISTENER_HOST ?? '0.0.0.0';
 
 /** Explicit opt-in: a remote test runner is expected to be enrolled. Default off. */
-export const REMOTE_RUNNER_CONFIGURED =
+const REMOTE_RUNNER_CONFIGURED =
   process.env.REMOTE_RUNNER_CONFIGURED === 'true' ||
   process.env.REMOTE_RUNNER_CONFIGURED === '1';
 

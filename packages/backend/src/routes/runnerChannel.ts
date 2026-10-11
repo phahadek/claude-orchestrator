@@ -19,6 +19,7 @@ import {
   RUNNER_TLS_KEY_PATH,
   RUNNER_LISTENER_PORT,
   RUNNER_LISTENER_HOST,
+  isRemoteRunnerConfigured,
 } from '../config';
 
 const RESULT_BODY_LIMIT = '8mb';
@@ -117,7 +118,7 @@ export function startRunnerListener(): https.Server | null {
   );
   server.listen(RUNNER_LISTENER_PORT, RUNNER_LISTENER_HOST, () => {
     logger.info(
-      `[runner-channel] https listener on ${RUNNER_LISTENER_HOST}:${RUNNER_LISTENER_PORT}`,
+      `[runner-channel] https listener on ${RUNNER_LISTENER_HOST}:${RUNNER_LISTENER_PORT} (remote runner configured: ${isRemoteRunnerConfigured()})`,
     );
   });
   return server;
