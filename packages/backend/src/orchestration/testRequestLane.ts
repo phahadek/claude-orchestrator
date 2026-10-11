@@ -1585,7 +1585,19 @@ async function executeTestRequestRun(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const output = `[testRequestLane] execution error: ${message}`;
-    completeTestRequestRun(runId, 'failed', output, 'generic', null, false);
+    // Matched by name: importing runnerJobQueue here would be circular.
+    const unreachable =
+      err instanceof Error &&
+      (err.name === 'RunnerUnreachableError' ||
+        err.name === 'SnapshotTooLargeError');
+    completeTestRequestRun(
+      runId,
+      'failed',
+      output,
+      unreachable ? 'runner_unreachable' : 'generic',
+      null,
+      false,
+    );
     clearSupersededStructuredResults(spec.projectId, spec.contentHash, runId);
     broadcastRunStatus({
       runId,
