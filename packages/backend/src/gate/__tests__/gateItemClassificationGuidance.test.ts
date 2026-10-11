@@ -127,7 +127,9 @@ describe('skills/gate/SKILL.md managed-project prod-read rule', () => {
   it('requires verifier sub-agent briefs to carry the read path and no raw DSN', () => {
     expect(rule).toContain('Verifier sub-agent briefs');
     expect(rule).toContain('verbatim');
-    expect(rule).toMatch(/raw DSN, an env-file path to source, or a\s+credential/);
+    expect(rule).toMatch(
+      /raw DSN, an env-file path to source, or a\s+credential/,
+    );
   });
 
   it('cites the 2026-10-11 incident', () => {
