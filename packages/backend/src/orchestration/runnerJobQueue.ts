@@ -98,10 +98,7 @@ export function claimRunnerJob(
   };
 }
 
-export function isRunnerJobClaimedBy(
-  runId: string,
-  deviceId: string,
-): boolean {
+export function isRunnerJobClaimedBy(runId: string, deviceId: string): boolean {
   return jobs.get(runId)?.claimedBy === deviceId;
 }
 
