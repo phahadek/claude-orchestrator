@@ -11,8 +11,11 @@ import {
 import { runGitConfigIntegrityCheck } from './orchestration/gitConfigIntegrity';
 import {
   recoverInterruptedTestRequestRuns,
+  setTestRequestRunnerExecutor,
   sweepTestRunResultsExtraction,
 } from './orchestration/testRequestLane';
+import { createLaneRunnerExecutor } from './orchestration/laneRunnerExecutor';
+import { isRemoteRunnerConfigured } from './config';
 import { recoverInterruptedDependencyCacheBuilds } from './orchestration/dependencyCachePool';
 import { logger } from './logger';
 import { getCorporateMode } from './config/corporateMode';
@@ -318,6 +321,11 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   await tracker.runStep('git_config_integrity_check', () =>
     runGitConfigIntegrityCheck(),
   );
+  await tracker.runStep('test_request_runner_executor', () => {
+    if (isRemoteRunnerConfigured()) {
+      setTestRequestRunnerExecutor(createLaneRunnerExecutor());
+    }
+  });
   await tracker.runStep('test_request_run_recovery', () =>
     recoverInterruptedTestRequestRuns(),
   );
