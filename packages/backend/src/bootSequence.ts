@@ -292,6 +292,7 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
     'token_backfill',
     'session_events_pruner_at_boot',
     'git_config_integrity_check',
+    'test_request_runner_executor',
     'test_request_run_recovery',
     'dependency_cache_build_recovery',
     'test_run_results_extraction_sweep',
