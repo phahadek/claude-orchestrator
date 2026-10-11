@@ -167,3 +167,85 @@ describe('LaneRunnerExecutor', () => {
     expect(row('big1').failure_reason).toBe('runner_unreachable');
   });
 });
+
+const PRODUCERS = [
+  {
+    name: 'session_request',
+    producer: 'session_request' as const,
+    runOrigin: null,
+    runKind: undefined,
+  },
+  {
+    name: 'pr_gate-tests',
+    producer: 'pr_gate' as const,
+    runOrigin: 'pr_pipeline' as const,
+    runKind: undefined,
+  },
+  {
+    name: 'pr_gate-verify',
+    producer: 'pr_gate' as const,
+    runOrigin: 'pr_pipeline' as const,
+    runKind: 'verify' as const,
+  },
+  {
+    name: 'base_health',
+    producer: 'base_health' as const,
+    runOrigin: 'base_health_probe' as const,
+    runKind: 'verify' as const,
+  },
+];
+
+describe.each(PRODUCERS)(
+  'producer routing: $name',
+  ({ name, producer, runOrigin, runKind }) => {
+    const hash = `route-${name}`;
+    const producerSpec = () => ({
+      ...spec(hash),
+      producer,
+      runOrigin,
+      ...(runKind ? { runKind } : {}),
+    });
+
+    it('is executed by the remote executor when one is configured', async () => {
+      setTestRequestRunnerExecutor(createLaneRunnerExecutor());
+      const p = runProjectTestRequest(producerSpec());
+      let runId: string | undefined;
+      await vi.waitFor(() => {
+        const r = db
+          .prepare(
+            `SELECT id, producer FROM test_request_runs WHERE content_hash = ?`,
+          )
+          .get(hash) as { id: string; producer: string } | undefined;
+        runId = r?.id;
+        expect(r?.producer).toBe(producer);
+        expect(claimRunnerJob(runId ?? '', 'dev1')).toBeTruthy();
+      });
+      submitRunnerResult(runId!, 'dev1', {
+        passed: true,
+        output: 'remote ok',
+        commandResults: [{ command: 'npm test', passed: true }],
+        oomKilled: false,
+        startedAt: 1,
+        finishedAt: 2,
+        runnerConcurrentRunCount: 1,
+        structuredResult: null,
+      } as never);
+      const res = await p;
+      expect(res.passed).toBe(true);
+      expect(row(hash).output).toBe('remote ok');
+      expect(runTestCommands).not.toHaveBeenCalled();
+    });
+
+    it('runs locally with identical results when no remote executor is configured', async () => {
+      vi.mocked(runTestCommands).mockResolvedValue({
+        passed: true,
+        output: 'local ok',
+      } as never);
+      const res = await runProjectTestRequest(producerSpec());
+      expect(res.passed).toBe(true);
+      expect(row(hash).state).toBe('passed');
+      expect(runTestCommands).toHaveBeenCalled();
+      expect(packTestSnapshot).not.toHaveBeenCalled();
+    });
+  },
+);
