@@ -3,7 +3,7 @@ import { packTestSnapshot } from './testSnapshot';
 import type { RunnerResultPackage } from './runnerResultPackage';
 import type { TestRequestRunSpec } from './testRequestLane';
 
-export interface LaneRunnerExecutorCtx {
+interface LaneRunnerExecutorCtx {
   runId: string;
   spec: TestRequestRunSpec;
   startedAt: number;
@@ -11,7 +11,7 @@ export interface LaneRunnerExecutorCtx {
   testReportGlob: string | undefined;
 }
 
-export type LaneRunnerExecutorFn = (
+type LaneRunnerExecutorFn = (
   ctx: LaneRunnerExecutorCtx,
 ) => Promise<RunnerResultPackage>;
 
