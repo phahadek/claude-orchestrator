@@ -54,7 +54,10 @@ describe('appendAwaitingDispositionInstruction', () => {
   it('appends the wait instruction only when the marker is present', () => {
     const withMarker = appendAwaitingDispositionInstruction('digest', true);
     expect(withMarker).toContain('digest');
-    expect(withMarker).toContain('outside your diff');
+    expect(withMarker).toContain('**Wait:**');
+    expect(withMarker).not.toContain('outside your diff');
+    expect(withMarker).not.toMatch(/unrelated to your change(?!;)/);
+    expect(withMarker).toContain('possibly yours');
     expect(withMarker).toContain('woken at most once');
     expect(withMarker).toContain('flaky_confirm');
     expect(appendAwaitingDispositionInstruction('digest', false)).toBe(
