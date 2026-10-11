@@ -391,7 +391,7 @@ entry point differs.
 
 ## The procedure loop
 
-**reconstruct → root-cause → frame → classify → draft → present → file.** Each stage carries a
+**reconstruct → root-cause → frame → classify → file.** Each stage carries a
 discipline that, skipped, is how investigations go wrong.
 
 > **The loader orients; the logs produce findings.** The snapshot points at threads. Almost every
@@ -626,9 +626,9 @@ Design; § Task types):
   prod/env change → `🔧 Operational`; a live-data decision needing the board's machinery → a `🔎
   Investigation` task for `/ops`.
 
-### 5. Draft → present → file `🔲 Backlog`
+### 5. Author → file `🔲 Backlog`
 
-- **Draft in conversation first** (`task-writing.md` is the authoring standard). The body is the spec:
+- **Never draft a task body in chat — file it at `🔲 Backlog` directly** (`task-writing.md` is the authoring standard). The operator reviews it on the board; grooming is the review gate. The body is the spec:
   **Summary · Dependencies · Context (the proven mechanism, anchored to `file:line`) · Acceptance
   criteria (🤖 Automated + 👁️ Manual, 5–10 items) · Files/paths affected · Implementation notes
   (empty)**. Set Priority from the *verified* severity.
@@ -690,24 +690,16 @@ Design; § Task types):
   payoff is that a groom/design session can read the cited lines and **refute** the task if it is
   wrong (a real groom refuted a task outright by reading `gateService.ts:219-225`). A refutable claim
   is safer than a plausible one. Cite the lines you verified, not an approximate region.
-- **Present the draft before filing** — especially a prescriptive Code task that dictates a fix; the
-  operator may reframe, defer, reject, or point out subsumption. Accurate-the-first-time beats
-  file-then-correct: run the one-level-deeper check *before* presenting.
-  - **Standing authorization is real — take it, and stop re-asking.** When the operator says "file
-    it" / "just file them" as an **instruction rather than a response** — typically once the first
-    task or two have established the shape — that is a **standing grant for the batch**. File without
-    presenting each body. **Acknowledge it once** ("filing the rest without presenting"), then file.
-    Re-presenting every body after a standing grant is the same failure as re-asking a settled
-    question (§ Invariants — acknowledgement is not compliance), and it spends exactly the throughput
-    the grant was given to buy. The grant **lapses on a material scope change** — a new defect class,
-    a different milestone, or a task prescribing a fix in a region the operator has not seen — where
-    you present again and say why.
+- **Run the one-level-deeper check *before* filing.** Accurate-the-first-time beats
+  file-then-correct. The body is not presented for approval first — the operator reviews it on the
+  board and grooming is the review gate — so a prescriptive Code task that dictates a fix must carry
+  its own evidence and anchors.
 - **For a design-adjacent finding, present the *lever* before drafting.** When the fix turns on a
   settled-or-open architectural decision (which knob to turn, wrong-fix-lever, Future-Scope-vs-task,
   settled-design-vs-new-design), present the **root cause + proposed lever** in a sentence or two and
   ask *"is this the right lever, or is it already-decided / Future Scope?"* Operators repeatedly
   reframe exactly these, and a full draft on the wrong lever is wasted. Draft the body once the lever
-  is agreed. A cleanly root-caused bug goes straight to draft-then-present.
+  is agreed. A cleanly root-caused bug goes straight to filing.
   - **When the diagnosis does not *force* the fix, present the solution *space* — two or three
     candidate levers with their trade-offs — not one recommendation.** "Present the lever" is written
     as a singular and reads as one; that is the defect. A clean root cause manufactures the feeling
@@ -815,9 +807,9 @@ difference.
 5. **Classify** (loop step 4) — Code-vs-Design, check ✅ Done designs, recognize subsumption /
    Future-Scope promotion, **consolidate same-region findings**, **stop at the third finding in one
    subsystem**, don't smuggle.
-6. **Draft → present → file** (loop step 5) — draft per `task-writing.md` (evidence stamped with its
-   **observation SHA**, `file:line` anchors precise enough to be refutable), present to the operator,
-   file at `🔲 Backlog` on confirmation. Never flip Code→Ready.
+6. **File** (loop step 5) — author per `task-writing.md` (evidence stamped with its
+   **observation SHA**, `file:line` anchors precise enough to be refutable) and file directly at
+   `🔲 Backlog`; never draft the body in chat. Never flip Code→Ready.
 7. **Capture-don't-drop** — before closing, fold any durable learning into `context.md` /
    `task-writing.md` / `procedures.md`, or surface the gap. Report what you filed and what you
    captured; stop. Don't propose wrapping (`procedures.md` § Don't propose wrapping).
@@ -843,7 +835,7 @@ All read-only or draft-then-confirm; all sanctioned by `procedures.md` / `contex
   loader prints the path).
 - **`notion-query.mjs`** — paginating board/DB enumerator (never the 25-capped MCP search);
   `--no-done --json --env <path>/packages/backend/.env`. Used for prior-board dedupe and Done-design
-  search. **`notion-create-pages`** (MCP) — file the drafted Backlog task(s), on confirmation.
+  search. **`notion-create-pages`** (MCP) — file the Backlog task(s) directly.
 - **Scoped, read-only `journalctl` / `git -C` / `gh`** — `journalctl -u orchestrator.service` for the
   running service; `git -C <checkout> show/log/blame` to anchor a mechanism to a commit and check
   whether it is in the deployed SHA; `gh -R phahadek/claude-orchestrator …` for CI/PR state. All
