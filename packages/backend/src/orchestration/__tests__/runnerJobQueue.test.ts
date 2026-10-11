@@ -145,6 +145,42 @@ describe('runner channel routes', () => {
     await expect(p).resolves.toMatchObject({ passed: true });
   });
 
+  it('accepts a >64kb result on a mixed-case path', async () => {
+    const p = enqueueRunnerJob(job());
+    claimRunnerJob('r1', 'runner-a');
+    const res = await supertest(app)
+      .post('/API/Runner/jobs/r1/RESULT')
+      .set(auth)
+      .send({ ...validPkg(), output: 'x'.repeat(200 * 1024) });
+    expect(res.status).toBe(200);
+    await expect(p).resolves.toMatchObject({ passed: true });
+  });
+
+  it('rejects an oversized body on non-result routes with 413', async () => {
+    enqueueRunnerJob(job()).catch(() => undefined);
+    const res = await supertest(app)
+      .post('/api/runner/jobs/r1/claim')
+      .set(auth)
+      .send({ junk: 'x'.repeat(200 * 1024) });
+    expect(res.status).toBe(413);
+  });
+
+  it('returns 400 for a non-JSON result body and 404 when unclaimed', async () => {
+    enqueueRunnerJob(job()).catch(() => undefined);
+    const r = supertest(app);
+    expect(
+      (await r.post('/api/runner/jobs/r1/result').set(auth).send(validPkg()))
+        .status,
+    ).toBe(404);
+    claimRunnerJob('r1', 'runner-a');
+    const res = await r
+      .post('/api/runner/jobs/r1/result')
+      .set(auth)
+      .set('Content-Type', 'text/plain')
+      .send('hello');
+    expect(res.status).toBe(400);
+  });
+
   it('rejects an invalid result with 400 and leaves the job pending', async () => {
     const p = enqueueRunnerJob(job(), 400);
     const assertion = expect(p).rejects.toBeInstanceOf(RunnerUnreachableError);

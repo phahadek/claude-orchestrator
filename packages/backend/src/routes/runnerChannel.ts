@@ -1,5 +1,5 @@
 import express, { Router } from 'express';
-import type { Request, Response } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import https from 'https';
 import fs from 'fs';
 import { requireRunnerAuth } from '../auth/DeviceAuth';
@@ -9,6 +9,7 @@ import {
   claimRunnerJob,
   getRunnerJobSnapshot,
   submitRunnerResult,
+  isRunnerJobClaimedBy,
 } from '../orchestration/runnerJobQueue';
 import {
   validateRunnerResultPackage,
@@ -23,17 +24,50 @@ import {
 } from '../config';
 
 const RESULT_BODY_LIMIT = '8mb';
-const RESULT_PATH_RE = /^\/api\/runner\/jobs\/[^/]+\/result\/?$/;
+const DEFAULT_BODY_LIMIT = '64kb';
 
-/** Runner-only routes. The poll response carries admitted-work descriptors
- *  only — never project secrets (.env etc.). Empty until the dispatch-payload
- *  and snapshot-transport siblings land. */
 function deviceIdOf(req: Request): string {
   return (req as Request & { device: { id: string } }).device.id;
 }
 
+/** Runner-only routes. The poll response carries admitted-work descriptors
+ *  only — never project secrets (.env etc.). The large result body limit is
+ *  scoped to the result route by registering it before the default parser,
+ *  so the router's own matching decides which parser runs. */
 function createRunnerRouter(): Router {
   const router = Router();
+  router.post(
+    '/jobs/:runId/result',
+    (req: Request, res: Response, next: NextFunction) => {
+      if (!isRunnerJobClaimedBy(String(req.params.runId), deviceIdOf(req))) {
+        res.status(404).json({ error: 'not_found' });
+        return;
+      }
+      next();
+    },
+    express.json({ limit: RESULT_BODY_LIMIT }),
+    (req: Request, res: Response) => {
+      const body: unknown = req.body ?? null;
+      const errs = validateRunnerResultPackage(body);
+      if (errs.length > 0) {
+        res
+          .status(400)
+          .json({ error: 'invalid_result_package', problems: errs });
+        return;
+      }
+      const ok = submitRunnerResult(
+        String(req.params.runId),
+        deviceIdOf(req),
+        body as RunnerResultPackage,
+      );
+      if (!ok) {
+        res.status(404).json({ error: 'not_found' });
+        return;
+      }
+      res.json({ ok: true });
+    },
+  );
+  router.use(express.json({ limit: DEFAULT_BODY_LIMIT }));
   router.get('/poll', (_req: Request, res: Response) => {
     res.json({ work: listClaimableJobs() });
   });
@@ -58,29 +92,6 @@ function createRunnerRouter(): Router {
     res.setHeader('Content-Length', String(archive.length));
     res.end(archive);
   });
-  router.post(
-    '/jobs/:runId/result',
-    express.json({ limit: RESULT_BODY_LIMIT }),
-    (req: Request, res: Response) => {
-      const errs = validateRunnerResultPackage(req.body);
-      if (errs.length > 0) {
-        res
-          .status(400)
-          .json({ error: 'invalid_result_package', problems: errs });
-        return;
-      }
-      const ok = submitRunnerResult(
-        String(req.params.runId),
-        deviceIdOf(req),
-        req.body as RunnerResultPackage,
-      );
-      if (!ok) {
-        res.status(404).json({ error: 'not_found' });
-        return;
-      }
-      res.json({ ok: true });
-    },
-  );
   return router;
 }
 
@@ -88,10 +99,6 @@ function createRunnerRouter(): Router {
 export function createRunnerApp(): express.Express {
   const app = express();
   app.disable('x-powered-by');
-  const smallJson = express.json({ limit: '64kb' });
-  app.use((req, res, next) =>
-    RESULT_PATH_RE.test(req.path) ? next() : smallJson(req, res, next),
-  );
   app.use('/api/runner', requireRunnerAuth, createRunnerRouter());
   app.use((_req: Request, res: Response) => {
     res.status(404).json({ error: 'not_found' });

@@ -98,6 +98,13 @@ export function claimRunnerJob(
   };
 }
 
+export function isRunnerJobClaimedBy(
+  runId: string,
+  deviceId: string,
+): boolean {
+  return jobs.get(runId)?.claimedBy === deviceId;
+}
+
 /** The gzip archive, only for the device that claimed the job. */
 export function getRunnerJobSnapshot(
   runId: string,
