@@ -63,7 +63,9 @@ function createRunnerRouter(): Router {
     (req: Request, res: Response) => {
       const errs = validateRunnerResultPackage(req.body);
       if (errs.length > 0) {
-        res.status(400).json({ error: 'invalid_result_package', problems: errs });
+        res
+          .status(400)
+          .json({ error: 'invalid_result_package', problems: errs });
         return;
       }
       const ok = submitRunnerResult(

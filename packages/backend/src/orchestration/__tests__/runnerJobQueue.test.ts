@@ -121,12 +121,12 @@ describe('runner channel routes', () => {
     const poll = await r.get('/api/runner/poll').set(auth);
     expect(poll.body.work).toHaveLength(1);
     expect(JSON.stringify(poll.body)).not.toContain('commands');
-    expect(
-      (await r.post('/api/runner/jobs/r1/claim').set(auth)).status,
-    ).toBe(200);
-    expect(
-      (await r.post('/api/runner/jobs/r1/claim').set(auth)).status,
-    ).toBe(404);
+    expect((await r.post('/api/runner/jobs/r1/claim').set(auth)).status).toBe(
+      200,
+    );
+    expect((await r.post('/api/runner/jobs/r1/claim').set(auth)).status).toBe(
+      404,
+    );
     const snap = await r
       .get('/api/runner/jobs/r1/snapshot')
       .set(auth)
