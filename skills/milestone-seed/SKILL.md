@@ -31,9 +31,9 @@ a charter, a seed set, four homes updated.
 > next milestone active — repointing `projects.auto_launch_milestone_id`, the Notion
 > "Active Task Board" callout, the phase line. This skill registers the milestone (a
 > `milestones` row + grooming-manifest entry, via `POST /api/projects/<id>/milestones`
-> in Step 4) but stops short of activating it. Every flow's arm defaults to
-> `armed=false` (`DEFAULT_ARM`), so a registered-but-unactivated milestone is still
-> inert — nothing on it can be groomed or dispatched. That boundary is what makes it
+> in Step 4) but stops short of activating it. A registered-but-unactivated milestone is
+> inactive because `auto_launch_milestone_id` does not point at it; activation (the
+> repoint) belongs to `/milestone-wrap`. That boundary is what makes it
 > safe to seed while the prior milestone is still running.
 
 > **Not `/groom` or `/design`.** Those work an existing milestone's backlog. This
@@ -50,8 +50,8 @@ a charter, a seed set, four homes updated.
   describes reality. Read both, and when they disagree, say so.
 - **Two gates, not one.** Approving the *seed set* and approving the *task bodies* are
   separate operator decisions. See Step 5.
-- **Don't hand the work back.** Find the prior charter, the deferral list, the live arm
-  state yourself. Ask the operator for decisions, not for locations.
+- **Don't hand the work back.** Find the prior charter, the deferral list, the live
+  switches yourself. Ask the operator for decisions, not for locations.
 
 ---
 
@@ -71,7 +71,6 @@ is set; this skill deliberately does not hardcode either.
 const db = require('better-sqlite3')(process.env.ORCHESTRATOR_DB_PATH, { readonly: true });
 db.prepare('SELECT id,name,canonical_short_id,wrapped_at FROM milestones WHERE project_id=? ORDER BY display_order DESC LIMIT 4').all('<projectId>');
 db.prepare('SELECT id,auto_launch_enabled,auto_launch_milestone_id FROM projects').all();
-db.prepare('SELECT * FROM flow_arm').all();
 ```
 
 > Put a non-trivial query in a `.cjs` file rather than a `node -e` one-liner: in `node -e` a
@@ -80,22 +79,17 @@ db.prepare('SELECT * FROM flow_arm').all();
 
 **Report any disagreement between `context.md` and the DB to the operator.** On the M15
 seed, `context.md` said `auto_launch_milestone_id` pointed at M13 and described the
-switch as deliberately unflipped; it had since been repointed to M14 with the `groom`
-arm `armed=1`. That changes whether filing anything is live.
+switch as deliberately unflipped; it had since been repointed to M14.
 
-**Three things you must know before filing anything:**
+**Two things you must know before filing anything:**
 
-1. **Is the prior milestone's `groom` arm armed?** If yes, filing a 🔲 Backlog task on
-   *that* board is a live action — it consumes a dispatch slot and a groom session's
-   tokens, and adds a decision to the operator's queue.
-2. **Where does `auto_launch_milestone_id` point?** That is the only milestone
-   `AutoLauncher` polls.
-3. **A brand-new board is inert.** It has no `milestones` row (those come from
+1. **Where does `auto_launch_milestone_id` point?** That is the only milestone
+   `AutoLauncher` polls; filing on that milestone's board is a live action.
+2. **A brand-new board is inactive.** It has no `milestones` row (those come from
    `ProjectService.insertMilestone`, an explicit API action — there is no
-   auto-discovery from Notion), so nothing on it can be groomed or dispatched.
-   `DEFAULT_ARM` is `false` for every flow. **State this to the operator** — it is the
-   safety property that makes seeding during an active milestone fine, and it should
-   not be nervously re-derived every time.
+   auto-discovery from Notion), and `auto_launch_milestone_id` does not point at it.
+   **State this to the operator** — it is the safety property that makes seeding during
+   an active milestone fine, and it should not be nervously re-derived every time.
 
 ---
 
@@ -106,7 +100,7 @@ Never reason from memory about what the last milestone did.
 - **Enumerate its board fully** — `node ~/.claude/scripts/notion-query.mjs <db-id> --env
   <repo>/packages/backend/.env --json`. Summarize by Status × Type. What is still open
   tells you what is about to spill into the new milestone.
-- **Read its charter** (the board's own description) and the master Project Context page.
+- **Read its charter** (the board's own description) and the project's context page.
 - **Read the code** any candidate theme touches, before asserting a gap exists.
 
 > ⚠️ `notion-query.mjs --json` keys the title under `Task Name` / `_title`, **never**
@@ -189,7 +183,7 @@ This is the step that matters. Do it as **dialogue**, not a document drop.
 | Content | Home |
 | --- | --- |
 | The charter (premise, principle, tracks, non-goals) | **The milestone board's own description** |
-| One concise sentence | The master page's 🏁 Project Milestones table |
+| One concise sentence | The project's 🏁 Project Milestones table |
 | Deferrals | 🔭 Future Scope |
 | Universal procedure | `config/procedures.md` |
 
@@ -200,7 +194,10 @@ re-add one.
 
 ## Step 4 — Create the board
 
-A milestone board is a Notion **database child of the master Project Context page**.
+A milestone board is a Notion **database**. Its parent is the **prior milestone board's
+parent** (read it: `GET /v1/databases/<prior-board-id>` → `parent`), unless the project's
+`context.md` overrides it. Do not assume the master Project Context page — some projects
+keep boards under a milestones hub page.
 
 **The schema must mirror the prior board's Status / Type / Priority options exactly** —
 same option names, same colors — or the orchestrator's board reader breaks. Fetch the
@@ -236,13 +233,16 @@ Authorization: Bearer $ORCHESTRATOR_DEVICE_TOKEN
 {"name": "<milestone display name>", "sourceId": "<new board's data-source id>"}
 ```
 
+`displayOrder` defaults to `max(display_order of the project's milestones) + 1` (0 for the
+first), so the newest milestone sorts last and its grooming-manifest neighbour is the prior
+milestone. Pass an explicit `displayOrder` only to insert out of order.
+
 This is `ProjectService.createMilestone` — it inserts the `milestones` row **and**
 registers the `canonicalShortId`/board/neighbour entry into
 `config/projects/<dir>/grooming.json` (a no-op if that project has no manifest file;
 idempotent if the `canonicalShortId` is already registered). It does **not** activate
-the milestone — `auto_launch_milestone_id` is untouched and every flow's arm defaults
-to `armed=false`, so the milestone stays inert for groom/design/dispatch purposes until
-`/milestone-wrap` repoints and arms it.
+the milestone — `auto_launch_milestone_id` is untouched and does not point at it, so the
+milestone stays inactive until `/milestone-wrap` repoints it.
 
 **Verify by reading it back**, through a different path than the one you wrote it
 with: `GET /api/projects/<projectId>/milestones` and confirm the new row is present
@@ -285,8 +285,8 @@ reversible — that is the mitigation, not a reason to skip the gate.
   task, testing and docs tasks are **deliberately deferred to grooming**. Creating them
   at seed time is premature.
 - **State the milestone key space at every call site.** `gate_item.milestone` /
-  `seed_item.milestone` store the **display name**; `ops_journal.milestone` /
-  `flow_arm.milestone_id` store the **UUID**. Two shipped bugs came from resolving one
+  `seed_item.milestone` store the **display name**; `ops_journal.milestone`
+  stores the **UUID**. Two shipped bugs came from resolving one
   and querying the other — neither errored; both matched zero rows.
 
 ---
@@ -309,10 +309,11 @@ separate.
 - **The project's `context.md`** — board link, data-source id, and a short note that the
   milestone is seeded and registered (has a `milestones` row + grooming-manifest entry)
   but **not activated**, so a future session knows filing on it is still inert until
-  `/milestone-wrap` flips `auto_launch_milestone_id` and arms it. Include the charter's
+  `/milestone-wrap` repoints `auto_launch_milestone_id`. Include the charter's
   most load-bearing non-goal.
-- **The master Project Context page** — add one row to 🏁 Project Milestones (one concise
-  sentence). **Do not** change the "Active Task Board" callout or the phase line; the
+- **The project's 🏁 Project Milestones table** — add one row (one concise sentence). It
+  lives wherever this project keeps it (the master Project Context page, or a hub page —
+  per `context.md`). **Do not** change the "Active Task Board" callout or the phase line; the
   prior milestone is still active and `/milestone-wrap` owns that flip.
 
 > Anchor a `update_content` edit on **plain prose or a heading**, never a markdown table
@@ -320,19 +321,19 @@ separate.
 > straight quotes may curl, tildes escape). On a match failure, re-fetch and copy the
 > exact serialized text.
 
-Then **report and stop.** Do not offer to register, activate, or arm the milestone.
+Then **report and stop.** Do not offer to register, or activate the milestone.
 
 ---
 
 ## Rules (hard)
 
 1. **Nothing is created before the charter is signed off.** Not the board, not a task.
-2. **Never activate the milestone.** No `auto_launch_milestone_id` repoint, no arming.
+2. **Never activate the milestone.** No `auto_launch_milestone_id` repoint.
    That is `/milestone-wrap`. (Registering it — the `milestones` row + grooming-manifest
    entry, Step 4 — is this skill's job and does not by itself activate anything.)
 3. **Never create a task at `🗂️ Ready`.**
 4. **Never file on the *prior* milestone's board** to park an idea without telling the
-   operator its groom arm state — on an armed milestone that is a live dispatch.
+   operator you are filing there — it is a live action on the active board.
 5. **Falsify before you file.** An apparent defect is often a doc imprecision. Read the
    code.
 6. **Verify every write by reading it back**, through a different path than the one you

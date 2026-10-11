@@ -123,6 +123,39 @@ describe('PATCH /api/projects/:id — archStoreAdopted', () => {
   });
 });
 
+describe('POST /api/projects/:id/milestones — displayOrder default', () => {
+  const post = (body: Record<string, unknown>) =>
+    request(makeApp())
+      .post(`/api/projects/${PROJECT}/milestones`)
+      .set('Authorization', `Bearer ${DEVICE_TOKEN}`)
+      .send(body);
+
+  it('defaults to max(display_order) + 1 when none is supplied', async () => {
+    db.prepare('UPDATE milestones SET display_order = 16 WHERE id = ?').run(
+      MILESTONE,
+    );
+    const res = await post({ name: 'M17 Next' });
+    expect(res.status).toBe(201);
+    expect(res.body.displayOrder).toBe(17);
+  });
+
+  it('honours an explicit displayOrder', async () => {
+    db.prepare('UPDATE milestones SET display_order = 16 WHERE id = ?').run(
+      MILESTONE,
+    );
+    const res = await post({ name: 'Inserted', displayOrder: 5 });
+    expect(res.status).toBe(201);
+    expect(res.body.displayOrder).toBe(5);
+  });
+
+  it('gives the first milestone of a project displayOrder 0', async () => {
+    db.prepare('DELETE FROM milestones').run();
+    const res = await post({ name: 'First' });
+    expect(res.status).toBe(201);
+    expect(res.body.displayOrder).toBe(0);
+  });
+});
+
 describe('POST /api/milestones/:id/wrapped', () => {
   it('sets wrapped_at through updateMilestone (no raw SQL) and records a milestone_wrapped audit event', async () => {
     const before = Date.now();

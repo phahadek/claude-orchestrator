@@ -588,7 +588,12 @@ projectsRouter.post(
         name,
         sourceId: rawSourceId,
         displayOrder:
-          typeof body.displayOrder === 'number' ? body.displayOrder : 0,
+          typeof body.displayOrder === 'number'
+            ? body.displayOrder
+            : ProjectService.listMilestones(projectId).reduce(
+                (max, m) => Math.max(max, m.displayOrder + 1),
+                0,
+              ),
       });
     } catch (err) {
       if (err instanceof MilestoneCanonicalShortIdCollisionError) {
