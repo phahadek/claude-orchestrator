@@ -91,10 +91,16 @@ describe('isGroomNoOpAwaitingOperator', () => {
       isGroomNoOpAwaitingOperator({ ...base, group_id: 'g' } as never, 'groom'),
     ).toBe(false);
     expect(
-      isGroomNoOpAwaitingOperator({ ...base, state: 'committed' } as never, 'groom'),
+      isGroomNoOpAwaitingOperator(
+        { ...base, state: 'committed' } as never,
+        'groom',
+      ),
     ).toBe(false);
     expect(
-      isGroomNoOpAwaitingOperator({ ...base, kind: 'task.create' } as never, 'groom'),
+      isGroomNoOpAwaitingOperator(
+        { ...base, kind: 'task.create' } as never,
+        'groom',
+      ),
     ).toBe(false);
   });
 });
