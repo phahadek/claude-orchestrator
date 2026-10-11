@@ -25,6 +25,17 @@ vi.mock('../../session/orchestrator-config', () => ({
   loadOrchestratorConfig: mockLoadOrchestratorConfig,
 }));
 
+const { hashState } = vi.hoisted(() => ({ hashState: { current: '' } }));
+
+vi.mock('../../session/analyzeGating', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../session/analyzeGating')>();
+  return {
+    ...actual,
+    computeWholeTreeContentHash: vi.fn(async () => hashState.current),
+  };
+});
+
 vi.mock('../memoryAdmission', () => ({
   hasTestRequestAdmission: vi.fn(() => true),
 }));
@@ -78,6 +89,7 @@ function pkg(over: Partial<RunnerResultPackage> = {}): RunnerResultPackage {
 }
 
 function spec(contentHash: string) {
+  hashState.current = contentHash;
   return {
     projectId: 'proj-1',
     contentHash,

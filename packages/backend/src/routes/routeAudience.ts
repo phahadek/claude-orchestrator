@@ -370,6 +370,16 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
     reason: 'no frontend dispatch surface exists yet for investigate batches',
     fixTask: 'investigate dispatch UI (follow-on task)',
   },
+
+  // -- runnerChannel.ts -----------------------------------------------------
+  'POST /api/runner/jobs/:runId/claim': {
+    audience: 'tooling',
+    reason: 'called by the enrolled test-runner device, not a UI or session',
+  },
+  'POST /api/runner/jobs/:runId/result': {
+    audience: 'tooling',
+    reason: 'called by the enrolled test-runner device, not a UI or session',
+  },
 };
 
 /**
@@ -397,6 +407,7 @@ export const ROUTE_FILE_MOUNT_PREFIX: Record<string, string> = {
   'stagedIntents.ts': '/api',
   'reportState.ts': '/api',
   'investigate.ts': '/api',
+  'runnerChannel.ts': '/api/runner',
 };
 
 /**
