@@ -143,7 +143,7 @@ describe('PlanningOrchestrator — escalate outstanding blocked members on sessi
   });
 
   it('broadcasts session_completeness complete:true once the pause row is written', () => {
-    seedSession();
+    seedSession(SESSION_ID, 'design');
     db.prepare('UPDATE sessions SET status = ? WHERE session_id = ?').run(
       'idle',
       SESSION_ID,
