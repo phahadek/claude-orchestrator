@@ -237,6 +237,7 @@ describe.each(PRODUCERS)(
     });
 
     it('runs locally with identical results when no remote executor is configured', async () => {
+      vi.mocked(packTestSnapshot).mockClear();
       vi.mocked(runTestCommands).mockResolvedValue({
         passed: true,
         output: 'local ok',
