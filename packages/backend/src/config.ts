@@ -87,6 +87,15 @@ export const RUNNER_LISTENER_PORT = Number(
 export const RUNNER_LISTENER_HOST =
   process.env.RUNNER_LISTENER_HOST ?? '0.0.0.0';
 
+/** Explicit opt-in: a remote test runner is expected to be enrolled. Default off. */
+export const REMOTE_RUNNER_CONFIGURED =
+  process.env.REMOTE_RUNNER_CONFIGURED === 'true' ||
+  process.env.REMOTE_RUNNER_CONFIGURED === '1';
+
+export function isRemoteRunnerConfigured(): boolean {
+  return REMOTE_RUNNER_CONFIGURED;
+}
+
 export const GITHUB_TOKEN = _oc.github.token;
 export const GITHUB_REPO = _oc.github.repo;
 
