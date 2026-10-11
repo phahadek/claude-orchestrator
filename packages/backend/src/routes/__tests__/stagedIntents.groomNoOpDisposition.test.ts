@@ -101,6 +101,7 @@ describe('groom planning.noOp operator disposition', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.state).toBe('committed');
+    expect(res.body.noOpOperatorApprovable).toBe(false);
     const row = db
       .prepare(
         'SELECT terminal_completion_reason FROM sessions WHERE session_id = ?',
@@ -121,6 +122,9 @@ describe('groom planning.noOp operator disposition', () => {
       .send({ outcome: 'pushback', reason: 'this task needs a split first' });
 
     expect(res.status).toBe(200);
+    // The existing /reject route lands a pushback in needs_revision (only a
+    // decline reaches 'rejected'); either way the row is not committed or
+    // superseded, so findSuppressingNoOpForTask returns nothing for it.
     expect(getStagedIntent(intent.id)?.state).toBe('needs_revision');
     expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
     expect(sessionManager.enqueueFeedback.mock.calls[0][0]).toBe(SESSION_ID);
@@ -137,6 +141,18 @@ describe('standard/ops planning.noOp regression', () => {
     seedSession('standard');
     const { app } = setup();
     const intent = stageNoOp();
+
+    // isOperatorNoOpCandidate surfaces as noOpOperatorApprovable on the API row.
+    const list = await supertest(app).get(
+      `/api/staged-intents?sessionId=${SESSION_ID}`,
+    );
+    const listed = (
+      list.body.intents as Array<{
+        id: string;
+        noOpOperatorApprovable?: boolean;
+      }>
+    ).find((i) => i.id === intent.id);
+    expect(listed?.noOpOperatorApprovable).toBe(true);
 
     const res = await supertest(app).post(
       `/api/staged-intents/${intent.id}/approve`,
