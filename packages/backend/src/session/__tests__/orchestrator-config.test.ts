@@ -486,7 +486,7 @@ describe('getSessionAllowedTools', () => {
     expect(ops).toContain('mcp__orchestrator__session_requestCapability');
     expect(ops).toContain('mcp__orchestrator__gate_verify');
     expect(ops).not.toContain('mcp__orchestrator__gate_accrete');
-    expect(ops).not.toContain('mcp__orchestrator__task_setDependsOn');
+    expect(ops).toContain('mcp__orchestrator__task_setDependsOn');
     expect(groom).toContain('mcp__orchestrator__gate_accrete');
     expect(groom).toContain('mcp__orchestrator__task_setDependsOn');
     expect(groom).not.toContain('mcp__orchestrator__journal_setState');

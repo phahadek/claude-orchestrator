@@ -1106,6 +1106,14 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'resulting id" follow-up, and DO NOT fabricate a plausible-looking task id ' +
       'to unblock staging — both were the only recourse before this affordance ' +
       'existed, and both leave the dependency unenforced or the stage rejected. ' +
+      'The same placeholder works as the `task.setDependsOn` subject, so you can ' +
+      'link two tasks staged in this pass (new → new): stage `task.setDependsOn` ' +
+      "with `taskId: staged-intent:<A's intent id>` and `dependsOn: " +
+      "[staged-intent:<B's intent id>]` to make A depend on B. DO NOT put a " +
+      '`staged-intent:` entry in `task.create.dependsOn` — it is literal-only ' +
+      'and rejects placeholders; stage a separate `task.setDependsOn` instead. ' +
+      'A placeholder subject is accepted for `task.setDependsOn` only, never ' +
+      'for `task.setStatus` / `task.updateBody` / `task.patchBodySection`. ' +
       'The symbolic reference resolves only within its own staged-intent group — ' +
       'it can never name a `task.create` staged in a different group.',
   },
@@ -1532,7 +1540,9 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         "with the narrowing it belongs to, exactly like the Ready path's other " +
         'grouped members above. Stage ' +
         '`task.setDependsOn` where the cut creates a genuine ordering ' +
-        'constraint between the narrowed original and a sibling, then take the ' +
+        'constraint between the narrowed original and a sibling, or between two ' +
+        'siblings (sibling → sibling: use `taskId: staged-intent:<intent id>` ' +
+        'as the subject and a `staged-intent:<id>` entry in `dependsOn`), then take the ' +
         'Ready path for the narrowed original as normal — it has been groomed, ' +
         "not abandoned. Recommend the narrowed original's body also carry a " +
         'short one-line note (e.g. in Context) naming the siblings it was ' +

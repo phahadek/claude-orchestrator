@@ -3393,10 +3393,20 @@ export async function validateAndNormalizeTaskReferences(
   }
   const p = { ...(payload as Record<string, unknown>) };
 
+  let symbolicSubject = false;
   if (SUBJECT_TASK_ID_KINDS.has(kind)) {
-    const normalized = normalizeOrRejectTaskId(p.taskId, 'taskId');
-    await assertTaskIdResolves(normalized, projectId);
-    p.taskId = normalized;
+    const subjectIntentId =
+      kind === 'task.setDependsOn' && typeof p.taskId === 'string'
+        ? parseSymbolicCreateRef(p.taskId)
+        : null;
+    if (subjectIntentId) {
+      assertSymbolicCreateRefResolves(subjectIntentId, groupId, 'taskId');
+      symbolicSubject = true;
+    } else {
+      const normalized = normalizeOrRejectTaskId(p.taskId, 'taskId');
+      await assertTaskIdResolves(normalized, projectId);
+      p.taskId = normalized;
+    }
   }
 
   if (
@@ -3419,13 +3429,20 @@ export async function validateAndNormalizeTaskReferences(
       const normalizedDependsOn: string[] = [];
       const literalDependsOn: string[] = [];
       for (const [i, dep] of rawDependsOn.entries()) {
-        // Symbolic references are accepted only for task.setDependsOn — an
-        // existing task wiring onto a sibling task.create. task.create's own
-        // dependsOn names dependencies of the task being created itself; a
-        // symbolic reference there would be a sibling-create-depends-on-
-        // sibling-create (a symbolic *subject* id) case, out of this task's
-        // scope (see e3d05d03-6a79-4a48-86cd-defcbfd51aed) and unresolved by
-        // the commit loop below.
+        // Symbolic references are accepted only for task.setDependsOn.
+        // task.create.dependsOn stays literal-only: the commit loop does not
+        // resolve placeholders there.
+        if (
+          kind === 'task.create' &&
+          typeof dep === 'string' &&
+          parseSymbolicCreateRef(dep)
+        ) {
+          throw new TaskReferenceValidationError(
+            `dependsOn[${i}] "${dep}" is a staged-intent placeholder, which task.create.dependsOn does not accept. ` +
+              'To depend on a task staged in this pass, stage a separate task.setDependsOn with ' +
+              "taskId: staged-intent:<this create's intent id> and dependsOn naming the other task (a real id or staged-intent:<id>).",
+          );
+        }
         const symbolicIntentId =
           kind === 'task.setDependsOn' && typeof dep === 'string'
             ? parseSymbolicCreateRef(dep)
@@ -3446,7 +3463,9 @@ export async function validateAndNormalizeTaskReferences(
       }
       assertNoDependencyCycle(
         projectId,
-        kind === 'task.setDependsOn' ? (p.taskId as string) : null,
+        kind === 'task.setDependsOn' && !symbolicSubject
+          ? (p.taskId as string)
+          : null,
         literalDependsOn,
       );
       p.dependsOn = normalizedDependsOn;
@@ -8748,6 +8767,48 @@ type ApplyGroupMemberOutcome =
  * settle before deciding how to report a failure, instead of an unhandled
  * rejection aborting its siblings mid-flight.
  */
+/**
+ * Detects a cycle among the placeholder-to-placeholder task.setDependsOn
+ * edges of a group before anything applies: the per-intent cycle check at
+ * apply time reads the board cache, which does not yet hold the group's
+ * just-created tasks or its earlier edges, so it cannot see A->B + B->A.
+ */
+function findPlaceholderEdgeCycle(
+  members: readonly StagedIntentRow[],
+): string[] | null {
+  const edges = new Map<string, string[]>();
+  for (const row of members) {
+    if (row.kind !== 'task.setDependsOn') continue;
+    const payload = JSON.parse(row.payload) as SetDependsOnPayload;
+    const subject = parseSymbolicCreateRef(payload.taskId);
+    if (!subject) continue;
+    const targets = payload.dependsOn
+      .map(parseSymbolicCreateRef)
+      .filter((t): t is string => t !== null);
+    edges.set(subject, [...(edges.get(subject) ?? []), ...targets]);
+  }
+  const done = new Set<string>();
+  const stack: string[] = [];
+  const visit = (node: string): string[] | null => {
+    const at = stack.indexOf(node);
+    if (at !== -1) return stack.slice(at).map(symbolicCreateRef);
+    if (done.has(node)) return null;
+    stack.push(node);
+    for (const next of edges.get(node) ?? []) {
+      const cycle = visit(next);
+      if (cycle) return cycle;
+    }
+    stack.pop();
+    done.add(node);
+    return null;
+  };
+  for (const node of edges.keys()) {
+    const cycle = visit(node);
+    if (cycle) return cycle;
+  }
+  return null;
+}
+
 async function applyGroupMember(
   row: StagedIntentRow,
   cache: RowToApiCache,
@@ -8982,6 +9043,18 @@ export async function commitGroupIntents(
       status: precheckFailure.status,
       body: {
         ...precheckFailure.body,
+        committed: [],
+        remaining: ordered.map((r) => r.id),
+      },
+    };
+  }
+
+  const placeholderCycle = findPlaceholderEdgeCycle(ordered);
+  if (placeholderCycle) {
+    return {
+      status: 409,
+      body: {
+        error: new DependencyCycleError(placeholderCycle).message,
         committed: [],
         remaining: ordered.map((r) => r.id),
       },

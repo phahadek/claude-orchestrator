@@ -2489,6 +2489,112 @@ describe('task.setDependsOn symbolic reference to a sibling task.create — comm
   });
 });
 
+describe('task.setDependsOn placeholder subject (new -> new) — commit-loop resolution', () => {
+  async function stageTwoCreates(
+    agent: ReturnType<typeof supertest>,
+    projectId: string,
+    groupId: string,
+  ) {
+    const mk = (title: string) =>
+      agent.post('/api/staged-intents').send({
+        kind: 'task.create',
+        projectId,
+        groupId,
+        payload: { databaseId: 'db-1', title, type: '💻 Code' },
+      });
+    const a = await mk('Task A');
+    const b = await mk('Task B');
+    expect(a.status).toBe(201);
+    expect(b.status).toBe(201);
+    return { a: a.body.id as string, b: b.body.id as string };
+  }
+
+  function stageLink(
+    agent: ReturnType<typeof supertest>,
+    projectId: string,
+    groupId: string,
+    from: string,
+    to: string,
+  ) {
+    return agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId,
+      groupId,
+      payload: {
+        taskId: `staged-intent:${from}`,
+        dependsOn: [`staged-intent:${to}`],
+      },
+    });
+  }
+
+  it("writes A's real task Depends On = B's real id after commit", async () => {
+    const setDependsOn = vi.fn().mockResolvedValue(undefined);
+    const createTask = vi
+      .fn()
+      .mockImplementation(async (fields: { title: string }) =>
+        fields.title === 'Task A' ? 'notion:real-a' : 'notion:real-b',
+      );
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      setDependsOn,
+      createTask,
+    });
+    const agent = supertest(makeApp());
+    const projectId = 'proj-newnew';
+    const groupId = 'g-newnew';
+    const { a, b } = await stageTwoCreates(agent, projectId, groupId);
+    const link = await stageLink(agent, projectId, groupId, a, b);
+    expect(link.status).toBe(201);
+
+    for (const id of [a, b, link.body.id]) {
+      await agent.post(`/api/staged-intents/${id}/approve`).send({});
+    }
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(setDependsOn).toHaveBeenCalledTimes(1);
+    expect(setDependsOn).toHaveBeenCalledWith(
+      'notion:real-a',
+      ['notion:real-b'],
+      expect.objectContaining({ source: 'human' }),
+    );
+  });
+
+  it('fails the commit with the dependency-cycle error for A->B + B->A and writes neither edge', async () => {
+    const setDependsOn = vi.fn().mockResolvedValue(undefined);
+    const createTask = vi.fn().mockResolvedValue('notion:real-x');
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      setDependsOn,
+      createTask,
+    });
+    const agent = supertest(makeApp());
+    const projectId = 'proj-cycle';
+    const groupId = 'g-cycle';
+    const { a, b } = await stageTwoCreates(agent, projectId, groupId);
+    const ab = await stageLink(agent, projectId, groupId, a, b);
+    const ba = await stageLink(agent, projectId, groupId, b, a);
+    expect(ab.status).toBe(201);
+    expect(ba.status).toBe(201);
+
+    for (const id of [a, b, ab.body.id, ba.body.id]) {
+      await agent.post(`/api/staged-intents/${id}/approve`).send({});
+    }
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(409);
+    expect(commit.body.error).toMatch(/would close a dependency cycle/);
+    expect(setDependsOn).not.toHaveBeenCalled();
+    expect(createTask).not.toHaveBeenCalled();
+  });
+});
+
 /**
  * A session.requestCapability must never carry a groupId (enforced at stage
  * time — see stagedIntents.capabilityRequest.test.ts), but a group already
