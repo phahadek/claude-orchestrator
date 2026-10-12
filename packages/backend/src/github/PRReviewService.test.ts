@@ -3114,9 +3114,9 @@ describe('PRReviewService — baseline escalation floor', () => {
       matchBaselineEscalationFloor(paths).map((m) => m.category);
 
     it('does not match migration paths', () => {
-      expect(
-        cats(['migrations/001_x.sql', 'db/migrations/002_y.sql']),
-      ).toEqual([]);
+      expect(cats(['migrations/001_x.sql', 'db/migrations/002_y.sql'])).toEqual(
+        [],
+      );
     });
 
     it('still matches workflow, auth and secrets runtime paths', () => {
