@@ -7,7 +7,7 @@ import type { SessionManager } from '../session/SessionManager';
 import { emitTaskUpdated } from '../routes/tasks';
 import type { GitHubClient } from './GitHubClient';
 
-export interface MigrationNumberCollision {
+interface MigrationNumberCollision {
   prFile: string;
   number: number;
   baseFile: string;
