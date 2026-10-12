@@ -19,6 +19,8 @@ vi.mock('./GitHubClient', () => ({
     exceededAbsoluteFloor: false,
   }),
   isOversized: vi.fn().mockReturnValue(false),
+  parseDiffFiles: (diff: string) =>
+    [...diff.matchAll(/^diff --git a\/(\S+) b\//gm)].map((m) => m[1]),
   SIZE_ABSOLUTE_FLOOR: 800,
   SIZE_FILE_RATIO_LIMIT: 3,
 }));
@@ -408,6 +410,69 @@ describe('DepthReviewService.runDepthReview() — session dispatch', () => {
     expect(opts.taskId).toBe('notion:task-abc');
     expect(opts.taskName).toContain('7');
     expect(opts.customPrompt).toContain('PR #7');
+  });
+});
+
+// ── runDepthReview() — migration-safety criterion ────────────────────────────
+
+describe('DepthReviewService.runDepthReview() — migration-safety criterion', () => {
+  async function promptFor(diff: string, verdict?: unknown) {
+    const sm = makeMockSessionManager();
+    wireVerdict(
+      sm,
+      verdict ?? {
+        verdict: 'pass',
+        dimensions: fourPassedDims,
+        summary: 'ok',
+      },
+    );
+    const service = new DepthReviewService(
+      sm as unknown as SessionManager,
+      undefined,
+    );
+    const result = await service.runDepthReview(
+      7,
+      'owner/repo',
+      makeMockDiffSource(diff),
+      'proj-1',
+      'https://notion.so/ctx',
+      'notion:task-abc',
+    );
+    const [, , opts] = (sm.start as ReturnType<typeof vi.fn>).mock.calls[0];
+    return { prompt: opts.customPrompt as string, result };
+  }
+
+  it('includes the criterion when the diff touches a migration path', async () => {
+    const { prompt } = await promptFor(
+      'diff --git a/packages/backend/src/db/migrations/042_x.sql b/packages/backend/src/db/migrations/042_x.sql',
+    );
+    expect(prompt).toContain('"Migration safety"');
+    expect(prompt).toContain('exactly these 6 dimensions');
+  });
+
+  it('omits the criterion and keeps 5 dimensions for a non-migration diff', async () => {
+    const { prompt } = await promptFor(
+      'diff --git a/src/migrationHelper.ts b/src/migrationHelper.ts',
+    );
+    expect(prompt).not.toContain('Migration safety');
+    expect(prompt).toContain('exactly these 5 dimensions');
+    expect(prompt).toContain('all 5 passed');
+  });
+
+  it('routes a failing migration-safety dimension as a non-size failure', async () => {
+    const { result } = await promptFor(
+      'diff --git a/db/migrations/001_x.sql b/db/migrations/001_x.sql',
+      {
+        verdict: 'fail',
+        dimensions: [
+          ...fourPassedDims,
+          { name: 'Migration safety', passed: false, notes: 'DROP TABLE' },
+        ],
+        summary: 'bad',
+      },
+    );
+    expect(result!.hasNonSizeFailure).toBe(true);
+    expect(result!.sizeOnlyFailure).toBe(false);
   });
 });
 
