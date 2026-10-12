@@ -120,7 +120,10 @@ describe('procedureCore', () => {
       const rule = principlesFor(skill, { dispatched: true }).find(
         (p) => p.id === 'create-then-wire-dependency',
       );
-      expect(rule, `${skill} carries create-then-wire-dependency`).toBeDefined();
+      expect(
+        rule,
+        `${skill} carries create-then-wire-dependency`,
+      ).toBeDefined();
       const text = renderPrinciple(rule!, skill);
       expect(text).toContain('new → new');
       expect(text).toContain("taskId: staged-intent:<A's intent id>");
