@@ -128,11 +128,10 @@ describe('GET /api/ops-journal', () => {
     expect(states.sort()).toEqual(['candidate', 'pending']);
   });
 
-  it('returns an empty list when no entries exist for the milestone', async () => {
+  it('returns 404 when the milestone ref resolves to nothing', async () => {
     seedEntry('task-1', 'M12');
     const res = await request(makeApp()).get('/api/ops-journal?milestone=M99');
-    expect(res.status).toBe(200);
-    expect(res.body.entries).toEqual([]);
+    expect(res.status).toBe(404);
   });
 });
 

@@ -29,6 +29,10 @@ import { NotionClient } from '../notion/NotionClient';
 import { getMilestoneById } from '../db/queries';
 import { formatTaskId, normalizeBoardId } from '../tasks/taskId';
 import { ProjectService } from '../projects/ProjectService';
+import {
+  resolveMilestoneRowForProject,
+  UnknownMilestoneError,
+} from '../projects/milestoneResolver';
 import { GroomTaskSourceUnsupportedError } from '../planning/errors';
 import { selectUnitsFromStore } from '../architecture/selectiveInjection';
 import { queryUnits } from '../architecture/ArchUnitStore';
@@ -286,7 +290,16 @@ export async function loadDesignContext(
 ): Promise<DesignLoadResult> {
   // We need the target task's board to locate it among the board rows (for
   // status/type/url) — resolved via the caller-supplied milestone's board.
-  const milestone = getMilestoneById(milestoneId);
+  let milestone = getMilestoneById(milestoneId);
+  if (!milestone && opts.project) {
+    try {
+      milestone = getMilestoneById(
+        resolveMilestoneRowForProject(opts.project, milestoneId).id,
+      );
+    } catch (err) {
+      if (!(err instanceof UnknownMilestoneError)) throw err;
+    }
+  }
   if (!milestone)
     throw new Error(`design-load: unknown milestone ${milestoneId}`);
   if (opts.project && opts.project !== milestone.project_id) {

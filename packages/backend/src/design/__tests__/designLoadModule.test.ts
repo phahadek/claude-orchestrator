@@ -544,6 +544,25 @@ describe('loadDesignContext', () => {
     ).rejects.toThrow(/not found/);
   });
 
+  it('resolves a canonical milestone name (M1) via opts.project', async () => {
+    const result = await loadDesignContext('M1', TASK_ID, {
+      project: PROJECT,
+      repoRoot: '/tmp/design-load-test-nonexistent-repo',
+      manifest: { context_pages: [] },
+    });
+
+    expect(result.task.id).toBe(TASK_ID);
+  });
+
+  it('still throws for an unknown milestone ref when opts.project is given', async () => {
+    await expect(
+      loadDesignContext('M99', TASK_ID, {
+        project: PROJECT,
+        manifest: { context_pages: [] },
+      }),
+    ).rejects.toThrow(/unknown milestone/);
+  });
+
   it('throws for an unknown milestone', async () => {
     await expect(
       loadDesignContext('unknown-milestone', TASK_ID, {

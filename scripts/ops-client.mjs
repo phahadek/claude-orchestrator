@@ -41,7 +41,7 @@
  *
  * Usage:
  *   node ops-client.mjs context --milestone <id> [--project <id>]
- *   node ops-client.mjs journal --milestone <id>
+ *   node ops-client.mjs journal --milestone <id> [--project <id>]
  *   node ops-client.mjs set-state --task <id> --state <state> \
  *     [--resolution '<json>'] [--disposition pass|blocked-pending-fix|pass-with-caveat]
  *
@@ -149,8 +149,10 @@ switch (command) {
   }
   case 'journal': {
     const milestone = option('--milestone');
+    const project = option('--project');
     if (!milestone) fail('journal requires --milestone <id>');
     const qs = new URLSearchParams({ milestone });
+    if (project) qs.set('project', project);
     const result = await callApi(`/api/ops-journal?${qs.toString()}`);
     console.log(JSON.stringify(result, null, 2));
     break;

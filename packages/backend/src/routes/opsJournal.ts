@@ -10,7 +10,11 @@ import {
 import { requireDeviceAuth } from '../auth/DeviceAuth';
 import { requireDeviceOrSessionRouteAuth } from '../auth/SessionRouteAuth';
 import { stageJournalDecision, STAGED_PROPOSAL_STATE } from './stagedIntents';
-import { getLatestOpsSessionByTaskId } from '../db/queries';
+import { getLatestOpsSessionByTaskId, getMilestoneById } from '../db/queries';
+import {
+  resolveMilestoneRowForProject,
+  UnknownMilestoneError,
+} from '../projects/milestoneResolver';
 import { closeDeferredOpsTask } from '../orchestration/PlanningOrchestrator';
 import { logger } from '../logger';
 import { asyncHandler } from './asyncHandler';
@@ -45,7 +49,35 @@ export function createOpsJournalRouter(): Router {
         res.status(400).json({ error: 'milestone is required' });
         return;
       }
-      const entries = listEntriesForMilestone(milestone);
+      const project =
+        typeof req.query.project === 'string' && req.query.project
+          ? req.query.project
+          : null;
+      let milestoneId = getMilestoneById(milestone)?.id ?? null;
+      if (!milestoneId && project) {
+        try {
+          milestoneId = resolveMilestoneRowForProject(project, milestone).id;
+        } catch (err) {
+          if (!(err instanceof UnknownMilestoneError)) throw err;
+        }
+      }
+      if (!milestoneId) {
+        // Back-compat: a ref that is already the stored journal key.
+        const direct = listEntriesForMilestone(milestone);
+        if (direct.length > 0) {
+          res.json({ entries: direct });
+          return;
+        }
+        res.status(404).json({
+          error:
+            `unknown milestone "${milestone}"` +
+            (project
+              ? ` for project "${project}"`
+              : ' (pass project= to resolve a canonical name)'),
+        });
+        return;
+      }
+      const entries = listEntriesForMilestone(milestoneId);
       res.json({ entries });
     },
   );
