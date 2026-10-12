@@ -119,6 +119,23 @@ const DEPTH_REVIEW_DISPATCH_CEILING_MS = 20 * 60 * 1000; // 20 minutes
 // escalates instead of cycling forever.
 const MAX_DEPTH_REVIEW_ROUTE_ATTEMPTS = 2;
 
+// Floor-only: the baseline floor is the sole escalation cause — a merge-only
+// sign-off hold that must not halt feedback routing or depth review.
+function isFloorOnlyEscalation(result: PRReviewResult): boolean {
+  return (
+    result.baselineEscalationFloor === true &&
+    result.escalatedBeforeFloor !== true &&
+    result.migrationReservationOvertaken !== true
+  );
+}
+
+function floorSignOffLine(result: PRReviewResult): string {
+  const categories = /touches (.+?) path\(s\)/.exec(
+    result.escalationReason ?? '',
+  )?.[1];
+  return `\n\nNote: this PR touches baseline-floor paths (${categories ?? 'high-blast-radius paths'}) and needs operator sign-off before merge. That hold is not your blocker — address the feedback above.`;
+}
+
 export class ReviewOrchestrator {
   private queue: QueuedJob[] = [];
   private running = 0;
@@ -1434,33 +1451,43 @@ export class ReviewOrchestrator {
       summary: result.summary,
     });
 
+    const localFloorOnly = result.escalate && isFloorOnlyEscalation(result);
     if (result.escalate) {
       const message =
         result.escalationReason ??
         `Review for local branch ${job.branchName} was escalated per project review rules.`;
       logger.warn(`[ReviewOrchestrator] ${message}`);
-      setLocalBranchPauseReason(
-        job.localBranchId,
-        result.migrationReservationOvertaken
-          ? 'migration_reservation_overtaken'
-          : result.baselineEscalationFloor
-            ? 'baseline_escalation_floor'
-            : 'review_rules_escalation',
-      );
+      if (localFloorOnly) {
+        setLocalBranchPauseReason(
+          job.localBranchId,
+          'baseline_escalation_floor',
+          result.escalationReason,
+        );
+      } else {
+        setLocalBranchPauseReason(
+          job.localBranchId,
+          result.migrationReservationOvertaken
+            ? 'migration_reservation_overtaken'
+            : result.baselineEscalationFloor
+              ? 'baseline_escalation_floor'
+              : 'review_rules_escalation',
+        );
+      }
       this.sessionManager.emit('message', {
         type: 'review_escalated',
         prNumber: job.localBranchId,
         repo: `local/${job.branchName}`,
         message,
       });
-      return;
+      if (!localFloorOnly) return;
     }
 
     if (result.verdict === 'needs_changes') {
       enqueueFeedbackItem(
         job.sessionId,
         'ai-reviewer',
-        formatReviewFeedback(result, 0),
+        formatReviewFeedback(result, 0) +
+          (localFloorOnly ? floorSignOffLine(result) : ''),
       );
     }
   }
@@ -1757,23 +1784,35 @@ export class ReviewOrchestrator {
         result.escalationReason ??
         `Review for PR #${job.prNumber} was escalated per project review rules.`;
       logger.warn(`[ReviewOrchestrator] ${message}`);
-      setPauseReason(
-        job.prNumber,
-        job.repo,
-        result.migrationReservationOvertaken
-          ? 'migration_reservation_overtaken'
-          : result.baselineEscalationFloor
-            ? 'baseline_escalation_floor'
-            : 'review_rules_escalation',
-      );
+      const floorOnly = isFloorOnlyEscalation(result);
+      if (floorOnly) {
+        setPauseReason(
+          job.prNumber,
+          job.repo,
+          'baseline_escalation_floor',
+          result.escalationReason,
+        );
+      } else {
+        setPauseReason(
+          job.prNumber,
+          job.repo,
+          result.migrationReservationOvertaken
+            ? 'migration_reservation_overtaken'
+            : result.baselineEscalationFloor
+              ? 'baseline_escalation_floor'
+              : 'review_rules_escalation',
+        );
+      }
       this.sessionManager.emit('message', {
         type: 'review_escalated',
         prNumber: job.prNumber,
         repo: job.repo,
         message,
       });
-      this.consumePendingPushIfSet(job.prNumber, job.repo);
-      return;
+      if (!floorOnly) {
+        this.consumePendingPushIfSet(job.prNumber, job.repo);
+        return;
+      }
     }
 
     // Route feedback to coding session via the inbox — delivered immediately if the
@@ -1787,7 +1826,7 @@ export class ReviewOrchestrator {
           formatReviewFeedback(result, reviewIteration, {
             conflicted: prRow?.merge_state === 'dirty',
             baseBranch: prRow?.base_branch ?? undefined,
-          }),
+          }) + (isFloorOnlyEscalation(result) ? floorSignOffLine(result) : ''),
           { headSha: prRow.head_sha ?? undefined },
         );
       } else {

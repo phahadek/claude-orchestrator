@@ -408,6 +408,12 @@ export interface PRReviewResult {
    */
   baselineEscalationFloor?: boolean;
   /**
+   * The incoming `escalate` value before the baseline floor overwrote it.
+   * Floor-only (merge-hold, not a halt) is baselineEscalationFloor with this
+   * false and no migration overtake.
+   */
+  escalatedBeforeFloor?: boolean;
+  /**
    * True when `escalate` was force-set by applyMigrationReservationOverride
    * detecting an out-of-band overtake: the shipped migration number belongs,
    * per the reservation table, to a different task whose PR/branch has
@@ -1870,6 +1876,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
         ? `${result.escalationReason} | ${floorReason}`
         : floorReason,
       baselineEscalationFloor: true,
+      escalatedBeforeFloor: result.escalate === true,
     };
   }
 

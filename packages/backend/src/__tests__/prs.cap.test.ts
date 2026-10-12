@@ -299,11 +299,19 @@ describe('POST /prs/:owner/:repoName/:prNumber/approve — cap-escalated PR', ()
 
 const BASELINE_FLOOR_PAUSE_JSON = JSON.stringify({
   reason: 'baseline_escalation_floor',
-  source: 'review',
+  source: 'baseline_floor',
   severity: 'needs_attention',
   retry_strategy: 'manual_action',
   blocks_merge: true,
 });
+
+const DEPTH_REVIEW_PENDING_ENTRY = {
+  reason: 'depth_review_pending',
+  source: 'review',
+  severity: 'needs_attention',
+  retry_strategy: 'none',
+  blocks_merge: true,
+};
 
 const MERGE_CONFLICT_PAUSE_JSON = JSON.stringify({
   reason: 'merge_conflict',
@@ -355,6 +363,41 @@ describe('POST /prs/:owner/:repoName/:prNumber/approve — baseline_escalation_f
     );
     // Re-running review would just re-escalate against the same diff.
     expect(runAutofixPipeline).not.toHaveBeenCalled();
+  });
+
+  it('still clears the hold when the floor entry is stacked alongside a depth-review hold', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(
+      makeCapPRRow({
+        pause_reason: JSON.stringify([
+          DEPTH_REVIEW_PENDING_ENTRY,
+          JSON.parse(BASELINE_FLOOR_PAUSE_JSON),
+        ]),
+        reconcile_exhausted: 0,
+      }) as never,
+    );
+
+    const app = express();
+    app.use(express.json());
+    app.use(
+      '/api',
+      createPrsRouter(
+        makeGithub(),
+        makePRReviewService(),
+        makeSessionManager(),
+        undefined,
+        undefined,
+        undefined,
+        { runAutofixPipeline: vi.fn() },
+      ),
+    );
+
+    await supertest(app).post('/api/prs/owner/repo/42/approve').expect(200);
+
+    expect(queries.clearTerminalPRFlags).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'human_unpark',
+    );
   });
 
   it('does NOT clear the pause for merge_conflict — approval cannot resolve an unmergeable PR', async () => {
