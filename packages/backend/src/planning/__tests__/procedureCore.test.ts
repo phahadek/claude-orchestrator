@@ -115,6 +115,30 @@ describe('procedureCore', () => {
     }
   });
 
+  it('design, ops and groom render the create-then-wire rule with the new -> new placeholder-subject example', () => {
+    for (const skill of ['design', 'ops', 'groom'] as const) {
+      const rule = principlesFor(skill, { dispatched: true }).find(
+        (p) => p.id === 'create-then-wire-dependency',
+      );
+      expect(rule, `${skill} carries create-then-wire-dependency`).toBeDefined();
+      const text = renderPrinciple(rule!, skill);
+      expect(text).toContain('new → new');
+      expect(text).toContain("taskId: staged-intent:<A's intent id>");
+      expect(text).toContain('task.create.dependsOn');
+    }
+  });
+
+  it('groom in-place split text covers sibling -> sibling links with a placeholder subject', () => {
+    const rendered = [
+      ...ORDERED_STEPS.filter((s) => s.appliesTo.includes('groom')).map((s) =>
+        stepSummaryFor(s, 'groom'),
+      ),
+      ...principlesFor('groom').map((p) => renderPrinciple(p, 'groom')),
+    ].join('\n');
+    expect(rendered).toContain('sibling → sibling');
+    expect(rendered).toContain('taskId: staged-intent:<intent id>');
+  });
+
   it('the vendored shared reference file is byte-for-byte the module render', () => {
     const onDisk = readFileSync(sharedHardRulesPath, 'utf8');
     expect(onDisk).toBe(renderHardRulesMarkdown());

@@ -59,6 +59,8 @@ vi.mock('../../audit/AuditLog', () => ({
 }));
 
 import { db } from '../../db/db';
+import { transitionStagedIntent } from '../../db/queries';
+import { TaskReferenceValidationError } from '../../tasks/taskReferenceValidation';
 import {
   createStagedIntentsRouter,
   stageIntent,
@@ -488,16 +490,79 @@ describe('task.setDependsOn symbolic reference to a sibling task.create — stag
     expect(link.body.error).toMatch(/does not resolve to a live task\.create/);
   });
 
-  it('still rejects a placeholder subject on task.setStatus', async () => {
-    const agent = supertest(buildApp());
-    const res = await agent.post('/api/staged-intents').send({
-      kind: 'task.setStatus',
-      projectId: 'proj-1',
-      groupId: 'g-status',
-      payload: { taskId: 'staged-intent:abc', status: '🔲 Backlog' },
+  it('rejects a placeholder subject naming a rejected (no longer live) task.create', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      createTask: vi.fn(),
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
     });
-    expect(res.status).toBe(400);
+    const agent = supertest(buildApp());
+    const a = await agent.post('/api/staged-intents').send({
+      kind: 'task.create',
+      projectId: 'proj-1',
+      groupId: 'g-subj-dead',
+      payload: { databaseId: 'db-1', title: 'A', type: '💻 Code' },
+    });
+    transitionStagedIntent(a.body.id, 'rejected');
+    const link = await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-1',
+      groupId: 'g-subj-dead',
+      payload: { taskId: `staged-intent:${a.body.id}`, dependsOn: [] },
+    });
+    expect(link.status).toBe(400);
+    expect(link.body.error).toMatch(/does not resolve to a live task\.create/);
   });
+
+  it('rejects a placeholder subject naming a non-task.create intent', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+    });
+    const agent = supertest(buildApp());
+    const other = await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-1',
+      groupId: 'g-subj-kind',
+      payload: { taskId: 't-1', dependsOn: [] },
+    });
+    expect(other.status).toBe(201);
+    const link = await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-1',
+      groupId: 'g-subj-kind',
+      payload: { taskId: `staged-intent:${other.body.id}`, dependsOn: [] },
+    });
+    expect(link.status).toBe(400);
+    expect(link.body.error).toMatch(/does not resolve to a live task\.create/);
+  });
+
+  it.each(['task.setStatus', 'task.updateBody', 'task.patchBodySection'])(
+    'still rejects a live task.create placeholder as the %s subject',
+    async (kind) => {
+      mockGetTaskBackend.mockReturnValue({
+        type: 'notion',
+        createTask: vi.fn(),
+        fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      });
+      const agent = supertest(buildApp());
+      const a = await agent.post('/api/staged-intents').send({
+        kind: 'task.create',
+        projectId: 'proj-1',
+        groupId: `g-subj-${kind}`,
+        payload: { databaseId: 'db-1', title: 'A', type: '💻 Code' },
+      });
+      const taskId = `staged-intent:${a.body.id}`;
+      await expect(
+        validateAndNormalizeTaskReferences(
+          kind,
+          { taskId },
+          'proj-1',
+          `g-subj-${kind}`,
+        ),
+      ).rejects.toBeInstanceOf(TaskReferenceValidationError);
+    },
+  );
 
   it('rejects a placeholder in task.create.dependsOn and points at task.setDependsOn', async () => {
     const agent = supertest(buildApp());

@@ -8767,6 +8767,48 @@ type ApplyGroupMemberOutcome =
  * settle before deciding how to report a failure, instead of an unhandled
  * rejection aborting its siblings mid-flight.
  */
+/**
+ * Detects a cycle among the placeholder-to-placeholder task.setDependsOn
+ * edges of a group before anything applies: the per-intent cycle check at
+ * apply time reads the board cache, which does not yet hold the group's
+ * just-created tasks or its earlier edges, so it cannot see A->B + B->A.
+ */
+function findPlaceholderEdgeCycle(
+  members: readonly StagedIntentRow[],
+): string[] | null {
+  const edges = new Map<string, string[]>();
+  for (const row of members) {
+    if (row.kind !== 'task.setDependsOn') continue;
+    const payload = JSON.parse(row.payload) as SetDependsOnPayload;
+    const subject = parseSymbolicCreateRef(payload.taskId);
+    if (!subject) continue;
+    const targets = payload.dependsOn
+      .map(parseSymbolicCreateRef)
+      .filter((t): t is string => t !== null);
+    edges.set(subject, [...(edges.get(subject) ?? []), ...targets]);
+  }
+  const done = new Set<string>();
+  const stack: string[] = [];
+  const visit = (node: string): string[] | null => {
+    const at = stack.indexOf(node);
+    if (at !== -1) return stack.slice(at).map(symbolicCreateRef);
+    if (done.has(node)) return null;
+    stack.push(node);
+    for (const next of edges.get(node) ?? []) {
+      const cycle = visit(next);
+      if (cycle) return cycle;
+    }
+    stack.pop();
+    done.add(node);
+    return null;
+  };
+  for (const node of edges.keys()) {
+    const cycle = visit(node);
+    if (cycle) return cycle;
+  }
+  return null;
+}
+
 async function applyGroupMember(
   row: StagedIntentRow,
   cache: RowToApiCache,
@@ -9001,6 +9043,18 @@ export async function commitGroupIntents(
       status: precheckFailure.status,
       body: {
         ...precheckFailure.body,
+        committed: [],
+        remaining: ordered.map((r) => r.id),
+      },
+    };
+  }
+
+  const placeholderCycle = findPlaceholderEdgeCycle(ordered);
+  if (placeholderCycle) {
+    return {
+      status: 409,
+      body: {
+        error: new DependencyCycleError(placeholderCycle).message,
         committed: [],
         remaining: ordered.map((r) => r.id),
       },
