@@ -1302,7 +1302,15 @@ describe('buildShellInvocation: REMOTE_HOST', () => {
       bindings: { A: '1' },
     });
     expect(cmd).toBe('sudo');
-    expect(args).toEqual(['-u', 'deploy', 'NODE_ENV=development', 'A=1', 'bash', '-uc', 'x']);
+    expect(args).toEqual([
+      '-u',
+      'deploy',
+      'NODE_ENV=development',
+      'A=1',
+      'bash',
+      '-uc',
+      'x',
+    ]);
   });
 });
 
