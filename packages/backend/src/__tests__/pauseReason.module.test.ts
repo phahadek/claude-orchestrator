@@ -105,6 +105,7 @@ describe('PAUSE_REASON_REGISTRY', () => {
       'tests',
       'ci',
       'review',
+      'baseline_floor',
       'merge',
       'notion',
       'launch',
