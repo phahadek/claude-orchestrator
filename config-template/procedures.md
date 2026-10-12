@@ -316,6 +316,13 @@ To allow a new command prefix, add `Bash(<command>:*)` to the `--allowed-tools` 
 the backend (`AgentSession.ts`). Only add commands safe for automated use.
 **Never add:** `rm`, `sudo`, `curl`, `wget`, `docker`, `ssh`, `kill`.
 
+Sanctioned host wrappers are not ssh. A project may grant a host-installed wrapper (e.g.
+pm-host, pm-ro-query) whose remote side is a forced-command allowlist on a dedicated
+least-privilege account, and whose local side fixes every SSH option (-F /dev/null,
+BatchMode=yes, no caller-supplied options). Grant the wrapper's name, never ssh itself — a
+raw Bash(ssh <host>:\*) grant admits -o ProxyCommand=…, i.e. arbitrary local execution. The
+allowlist, not the grant, is the security boundary; widen it on the remote host, not here.
+
 ---
 
 ## Task-source access — scripts first, MCP for the rest
