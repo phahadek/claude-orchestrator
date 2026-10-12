@@ -3440,7 +3440,7 @@ export async function validateAndNormalizeTaskReferences(
           throw new TaskReferenceValidationError(
             `dependsOn[${i}] "${dep}" is a staged-intent placeholder, which task.create.dependsOn does not accept. ` +
               'To depend on a task staged in this pass, stage a separate task.setDependsOn with ' +
-              'taskId: staged-intent:<this create\'s intent id> and dependsOn naming the other task (a real id or staged-intent:<id>).',
+              "taskId: staged-intent:<this create's intent id> and dependsOn naming the other task (a real id or staged-intent:<id>).",
           );
         }
         const symbolicIntentId =
