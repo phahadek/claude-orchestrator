@@ -35,17 +35,18 @@ const EXCLUDED_OPS_ONLY_TOOLS = [
 ];
 
 describe('investigate staged-intent-kind allowlist parity with INVESTIGATE_INTENT_KINDS', () => {
-  it('contains exactly task.create, decision.pickOne, session.requestCapability, intent.withdraw, planning.noOp', () => {
+  it('contains exactly task.create, task.setDependsOn, decision.pickOne, session.requestCapability, intent.withdraw, planning.noOp', () => {
     expect(new Set(INVESTIGATE_INTENT_KINDS)).toEqual(
       new Set([
         'task.create',
+        'task.setDependsOn',
         'decision.pickOne',
         'session.requestCapability',
         'intent.withdraw',
         'planning.noOp',
       ]),
     );
-    expect(INVESTIGATE_INTENT_KINDS.length).toBe(5);
+    expect(INVESTIGATE_INTENT_KINDS.length).toBe(6);
   });
 
   it('INVESTIGATE_ALLOWED_TOOLS staged-intent MCP entries equal INVESTIGATE_INTENT_KINDS mapped through orchestratorMcpToolName', () => {

@@ -918,11 +918,14 @@ describe('task.setDependsOn — investigate-dispatched session subject restricti
   });
 
   it('a non-investigate session can still stage a literal subject', async () => {
-    seedSession('task-own');
+    seedSession('t-1');
     const { client, close } = await connectedClient();
     const result = (await client.callTool({
       name: 'task.setDependsOn',
-      arguments: { payload: { taskId: 'task-own', dependsOn: [] } },
+      arguments: {
+        payload: { taskId: 't-1', dependsOn: [] },
+        groupId: 'group-ops',
+      },
     })) as { isError?: boolean };
     expect(result.isError).toBeFalsy();
     await close();
