@@ -66,6 +66,44 @@ function seedEntry(taskId: string, state = 'candidate') {
   } as any);
 }
 
+describe('GET /api/ops-journal', () => {
+  function seedMs12(taskId: string) {
+    seedEntry(taskId);
+    db.prepare('UPDATE ops_journal SET milestone = ? WHERE task_id = ?').run(
+      'ms-12',
+      taskId,
+    );
+  }
+
+  it('resolves a canonical name with project to the same entries as the row id', async () => {
+    seedMs12('task-g1');
+    db.prepare(
+      `INSERT OR IGNORE INTO projects (id, name, project_dir, task_source) VALUES ('polimarket-analyser', 'P', '/tmp/p', 'notion')`,
+    ).run();
+    db.prepare(
+      `INSERT OR IGNORE INTO milestones (id, project_id, name, canonical_short_id, display_order) VALUES ('ms-12', 'polimarket-analyser', 'M12', 'M12', 1)`,
+    ).run();
+
+    const byName = await request(makeApp()).get(
+      '/api/ops-journal?milestone=M12&project=polimarket-analyser',
+    );
+    const byId = await request(makeApp()).get(
+      '/api/ops-journal?milestone=ms-12',
+    );
+    expect(byName.status).toBe(200);
+    expect(byName.body.entries).toHaveLength(1);
+    expect(byName.body).toEqual(byId.body);
+  });
+
+  it('returns 404, not an empty 200, for an unknown milestone ref', async () => {
+    const res = await request(makeApp()).get(
+      '/api/ops-journal?milestone=M99&project=polimarket-analyser',
+    );
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/M99/);
+  });
+});
+
 describe('POST /api/ops-journal/:taskId/state', () => {
   it('accepts a candidate -> resolved write carrying a resolution object and persists it', async () => {
     seedEntry('task-1', 'candidate');
