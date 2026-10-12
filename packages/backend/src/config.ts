@@ -144,7 +144,17 @@ const TIER_B_READ_MCP_TOOLS = [
 // session/orchestrator-config.ts, applied in CliSessionRunner/
 // DockerSessionRunner), which blocks test-invocation commands specifically
 // without touching this allowlist.
+// architecture.getUnit / architecture.queryUnits — the read-only arch_unit
+// store surface (mcp/tools/architectureReadTools.ts), available to every
+// session type. Not a staged-intent kind, so it isn't in
+// PLANNING_INTENT_KINDS — added here explicitly, mirroring groom.precheck.
+export const ARCHITECTURE_READ_MCP_TOOLS = [
+  orchestratorMcpToolName('architecture.getUnit'),
+  orchestratorMcpToolName('architecture.queryUnits'),
+];
+
 export const ALLOWED_TOOLS = [
+  ...ARCHITECTURE_READ_MCP_TOOLS,
   'Bash(git:*)',
   'Bash(npm:*)',
   'Bash(npx:*)',
@@ -363,16 +373,6 @@ const ORCHESTRATOR_MCP_HEALTH_TOOL = orchestratorMcpToolName('health');
 // nothing — see the tool's doc comment), so it isn't in
 // PLANNING_INTENT_KINDS.groom — added here explicitly, mirroring how
 // gate.verify is added to OPS_MCP_TOOLS below.
-// architecture.getUnit / architecture.queryUnits — the read-only arch_unit
-// store surface (mcp/tools/architectureReadTools.ts), always-on for
-// groom/design/ops (see that module's doc comment). Not a staged-intent
-// kind, so it isn't in PLANNING_INTENT_KINDS — added here explicitly,
-// mirroring groom.precheck.
-const ARCHITECTURE_READ_MCP_TOOLS = [
-  orchestratorMcpToolName('architecture.getUnit'),
-  orchestratorMcpToolName('architecture.queryUnits'),
-];
-
 // task.getById / task.queryTasks — the read-only task-summary
 // ({title, type, status}) lookup and board search (mcp/tools/taskReadTools.ts),
 // always-on for groom/design/ops by the same precedent as
@@ -677,6 +677,7 @@ export function docsWebFetchTools(sourceDomains: string[]): string[] {
 // its own since the depth pass never stages anything.
 const DEPTH_REVIEW_MCP_TOOLS = [
   ORCHESTRATOR_MCP_HEALTH_TOOL,
+  ...ARCHITECTURE_READ_MCP_TOOLS,
   ...PROJECT_READ_MCP_TOOLS,
   ...TIER_B_READ_MCP_TOOLS,
 ];

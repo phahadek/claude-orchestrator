@@ -15121,6 +15121,10 @@ export function queryArchUnits(query: ArchUnitQuery = {}): ArchUnitRow[] {
     clauses.push('regions LIKE @region');
     params.region = `%${query.region}%`;
   }
+  if (query.title) {
+    clauses.push(`LOWER(title) LIKE @title ESCAPE '\\'`);
+    params.title = `%${query.title.toLowerCase().replace(/[\\%_]/g, '\\$&')}%`;
+  }
   if (query.status) {
     clauses.push('status = @status');
     params.status = query.status;

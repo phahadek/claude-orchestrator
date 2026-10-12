@@ -25,7 +25,10 @@ import {
   resolvePreGrantCapabilities,
   PRE_GRANT_SESSION_KINDS,
 } from '../orchestrator-config';
-import { NOTION_READ_MCP_TOOLS } from '../../config';
+import {
+  NOTION_READ_MCP_TOOLS,
+  ARCHITECTURE_READ_MCP_TOOLS,
+} from '../../config';
 import {
   NOTION_MCP_SERVER_NAME,
   orchestratorMcpToolName,
@@ -330,6 +333,25 @@ describe('loadOrchestratorConfig', () => {
     const config = loadOrchestratorConfig(tmpDir);
     expect(config.capability_pre_grants).toEqual({});
     expect(warnSpy).toHaveBeenCalledOnce();
+  });
+});
+
+describe('getSessionAllowedTools — architecture read tools', () => {
+  it.each([
+    'standard',
+    'review',
+    'depth_review',
+    'docs',
+    'groom',
+    'design',
+    'ops',
+    'split',
+  ] as const)('%s includes both architecture read tools', (sessionType) => {
+    const tools = getSessionAllowedTools(sessionType, { allowed_tools: [] });
+    expect(ARCHITECTURE_READ_MCP_TOOLS).toHaveLength(2);
+    for (const name of ARCHITECTURE_READ_MCP_TOOLS) {
+      expect(tools).toContain(name);
+    }
   });
 });
 

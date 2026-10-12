@@ -85,6 +85,12 @@ describe('buildOrchestratorClaudeMd — behaviour preservation', () => {
     expect(output).toContain('git branch --show-current');
   });
 
+  it('architecture units: read via architecture tools, not Notion', () => {
+    const output = buildOrchestratorClaudeMd(baseParams);
+    expect(output).toContain('architecture.queryUnits({ title })');
+    expect(output).toContain('architecture.getUnit({ id })');
+  });
+
   it('status ownership: do not update task status', () => {
     const output = buildOrchestratorClaudeMd(baseParams);
     expect(output).toContain('Do NOT update Notion task status.');

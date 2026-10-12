@@ -363,7 +363,40 @@ describe('buildMcpServer — tool surface per session type', () => {
     expect(names).not.toContain('decision.pickOne');
   });
 
-  it('a standard session still exposes review.disposition and flaky.confirm, not the architecture read tools, but does get the Tier-A read tools', async () => {
+  it.each([
+    'standard',
+    'review',
+    'depth_review',
+    'docs',
+    'split',
+    'groom',
+    'design',
+    'ops',
+  ] as const)(
+    'a %s session with a project registers the architecture read tools',
+    async (sessionType) => {
+      const sessionId = `mcp-arch-read-${sessionType}`;
+      insertSession({
+        session_id: sessionId,
+        task_id: null,
+        task_url: null,
+        project_context_url: null,
+        project_id: 'proj-1',
+        status: 'running',
+        started_at: Date.now(),
+        session_type: sessionType,
+      });
+      const names = await toolNamesFor(sessionId);
+      expect(names).toContain('architecture.getUnit');
+      expect(names).toContain('architecture.queryUnits');
+      if (sessionType !== 'design') {
+        expect(names).not.toContain('arch.createUnit');
+        expect(names).not.toContain('arch.updateUnit');
+      }
+    },
+  );
+
+  it('a standard session still exposes review.disposition and flaky.confirm and the architecture read tools, but does get the Tier-A read tools', async () => {
     insertSession({
       session_id: 'mcp-standard-1',
       task_id: null,
@@ -377,8 +410,8 @@ describe('buildMcpServer — tool surface per session type', () => {
     const names = await toolNamesFor('mcp-standard-1');
     expect(names).toContain('review.disposition');
     expect(names).toContain('flaky.confirm');
-    expect(names).not.toContain('architecture.getUnit');
-    expect(names).not.toContain('architecture.queryUnits');
+    expect(names).toContain('architecture.getUnit');
+    expect(names).toContain('architecture.queryUnits');
     expect(names).not.toContain('task.getById');
     expect(names).not.toContain('task.queryTasks');
     expect(names).not.toContain('gate.verify');

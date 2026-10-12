@@ -1617,6 +1617,8 @@ export interface ArchUnitQuery {
   kind?: ArchUnitKind;
   /** Region substring filter — matches units whose regions array contains a path prefix match. */
   region?: string;
+  /** Case-insensitive substring match on the unit title. */
+  title?: string;
   status?: ArchUnitStatus;
   /** When true, includes superseded units. Default false (active-set query). */
   includeSuperseded?: boolean;

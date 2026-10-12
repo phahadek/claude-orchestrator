@@ -164,6 +164,35 @@ describe('architecture.queryUnits', () => {
     return JSON.parse(result.content[0]?.text ?? 'null');
   }
 
+  it('filters by case-insensitive title substring within the project, and returns an explicit empty result on no match', async () => {
+    const base = {
+      kind: 'reference' as const,
+      topic: 't',
+      regions: ['r'],
+      body: 'b',
+      at: '2024-01-01T00:00:00Z',
+    };
+    createUnit({
+      ...base,
+      project: 'proj-1',
+      title: 'Performance telemetry: store and emission',
+    });
+    createUnit({ ...base, project: 'proj-1', title: 'Unrelated unit' });
+    createUnit({
+      ...base,
+      project: 'proj-other',
+      title: 'Performance telemetry elsewhere',
+    });
+
+    const hit = await callQueryUnits({ title: 'PERFORMANCE TELEMETRY' });
+    expect(hit).toHaveLength(1);
+    expect(hit[0].title).toBe('Performance telemetry: store and emission');
+
+    const miss = await callQueryUnits({ title: 'no such title' });
+    expect(miss.units).toEqual([]);
+    expect(miss.title).toEqual({ value: 'no such title', matched: false });
+  });
+
   it('returns a bare array for a successful topic query', async () => {
     createUnit({
       project: 'proj-1',
