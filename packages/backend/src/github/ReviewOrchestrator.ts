@@ -1801,10 +1801,11 @@ export class ReviewOrchestrator {
             : result.baselineEscalationFloor
               ? 'baseline_escalation_floor'
               : 'review_rules_escalation',
-          result.baselineEscalationFloor &&
-            !result.migrationReservationOvertaken
-            ? result.escalationReason
-            : undefined,
+          ...(result.baselineEscalationFloor &&
+          !result.migrationReservationOvertaken &&
+          result.escalationReason
+            ? [result.escalationReason]
+            : []),
         );
       }
       this.sessionManager.emit('message', {
