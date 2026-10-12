@@ -34,7 +34,7 @@ const SECURITY_DIMENSION_NAME = 'Security';
 const CONCURRENCY_DIMENSION_NAME = 'Concurrency';
 const RELIABILITY_DIMENSION_NAME = 'Reliability / crash';
 const DATA_INTEGRITY_DIMENSION_NAME = 'Data integrity & parsing correctness';
-export const MIGRATION_SAFETY_DIMENSION_NAME = 'Migration safety';
+const MIGRATION_SAFETY_DIMENSION_NAME = 'Migration safety';
 
 /** Dimension names a depth-pass finding may fail on that route to escalate rather than auto-fix. */
 const NON_SIZE_DIMENSION_NAMES: ReadonlySet<string> = new Set([
