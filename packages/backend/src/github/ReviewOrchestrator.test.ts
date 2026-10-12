@@ -1096,7 +1096,6 @@ describe('ReviewOrchestrator — depth review finding routing', () => {
 
   it.each([
     ['CI/workflow config', '.github/workflows/ci.yml'],
-    ['database migration', 'db/migrations/0042_add_column.sql'],
     ['auth', 'src/auth/login.ts'],
     ['secrets', 'src/config/credentials.ts'],
   ])(

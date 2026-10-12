@@ -62,6 +62,7 @@ import {
   FetchRetryExhaustedError,
   FollowUpDeliveryExhaustedError,
   evaluateMigrationRenumberTolerance,
+  matchBaselineEscalationFloor,
   extractListedMigrationPaths,
   overrideFilesPathsDimension,
   supersedeReviewSession,
@@ -3096,7 +3097,7 @@ describe('PRReviewService — baseline escalation floor', () => {
     expect(result.escalationReason).toMatch(/CI\/workflow config/);
   });
 
-  it('forces escalate:true for a migration path', async () => {
+  it('does not force escalate for a migration path', async () => {
     const result = await runReview(
       makeDiffTouching('db/migrations/0042_add_column.sql'),
       {
@@ -3105,9 +3106,53 @@ describe('PRReviewService — baseline escalation floor', () => {
         summary: 'LLM saw nothing to escalate.',
       },
     );
-    expect(result.escalate).toBe(true);
-    expect(result.baselineEscalationFloor).toBe(true);
-    expect(result.escalationReason).toMatch(/database migration/);
+    expect(result.baselineEscalationFloor).toBeFalsy();
+  });
+
+  describe('matchBaselineEscalationFloor — narrowed categories', () => {
+    const cats = (paths: string[]) =>
+      matchBaselineEscalationFloor(paths).map((m) => m.category);
+
+    it('does not match migration paths', () => {
+      expect(cats(['migrations/001_x.sql', 'db/migrations/002_y.sql'])).toEqual(
+        [],
+      );
+    });
+
+    it('still matches workflow, auth and secrets runtime paths', () => {
+      expect(
+        cats([
+          '.github/workflows/build.yml',
+          'auth/DeviceAuth.ts',
+          'security/secrets.ts',
+          '.env',
+        ]),
+      ).toEqual(['CI/workflow config', 'auth', 'secrets', 'secrets']);
+    });
+
+    it('excludes test files from auth and secrets but not workflows', () => {
+      expect(
+        cats([
+          'auth/__tests__/runnerAuth.test.ts',
+          'security/secrets.test.ts',
+          'SessionManager.revokedCredentialTermination.test.ts',
+        ]),
+      ).toEqual([]);
+      expect(cats(['.github/workflows/test/x.yml'])).toEqual([
+        'CI/workflow config',
+      ]);
+    });
+
+    it('does not match author names but matches authToken', () => {
+      expect(cats(['author.ts', 'authors.md'])).toEqual([]);
+      expect(cats(['authToken.ts'])).toEqual(['auth']);
+    });
+
+    it('escalates a migration + auth diff with category auth only', () => {
+      expect(cats(['db/migrations/001_x.sql', 'src/auth/login.ts'])).toEqual([
+        'auth',
+      ]);
+    });
   });
 
   it('forces escalate:true for an auth-related path', async () => {
