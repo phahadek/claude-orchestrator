@@ -135,9 +135,17 @@ const BASELINE_ESCALATION_FLOOR_PATTERNS: Array<{
   },
   {
     category: 'auth',
-    test: (path) =>
-      !isTestPath(path) &&
-      /(^|\/)[Aa]uth(?:[A-Z0-9_-][A-Za-z0-9_-]*)?\.[A-Za-z]+$/.test(path),
+    test: (path) => {
+      if (isTestPath(path)) return false;
+      const basename = path.slice(path.lastIndexOf('/') + 1);
+      const dot = basename.lastIndexOf('.');
+      if (dot <= 0 || !/^[A-Za-z]+$/.test(basename.slice(dot + 1)))
+        return false;
+      const stem = basename.slice(0, dot);
+      if (!/^[Aa]uth/.test(stem)) return false;
+      const next = stem.charAt(4);
+      return next === '' || /[A-Z0-9_-]/.test(next);
+    },
   },
   {
     category: 'auth',
