@@ -54,6 +54,10 @@
    `💻 Code` task the Investigation files — never folded into the Investigation's own
    acceptance criteria. (See `procedures.md` § Task types for what each Type triggers
    once Ready, and the `🔧 Operational & 🔎 Investigation` section below for those two.)
+7. **No Code task without a located cause.** A `💻 Code` task that fixes a defect
+   is filed only after the cause is written in Context: the branch, the input that
+   takes it, and the fix that follows. A measurement or a desired end state is not
+   a cause. If the cause is not located, file nothing — that work is an Investigation.
 
 ---
 
@@ -92,11 +96,43 @@ The "why" and the spec.
   the constraints, what upstream tasks already settled, what downstream tasks consume
   this. Cross-link the architecture page(s) that will be updated.
 - **Code tasks:** the implementation spec — type signatures, function/class
-  skeletons, configuration values, file paths, event names.
+  skeletons, configuration values, file paths, event names. A defect fix also
+  carries the root-cause locks below. They are part of the spec, written before
+  the page is created.
 - **🔧 Operational / 🔎 Investigation tasks:** see the dedicated section below — they
   carry a **Mode declaration** and a different Context shape (target surface + audited
   path for Operational; observed anomaly + decision space + falsification for
   Investigation).
+
+#### Root cause, before a Code task is filed
+
+A `💻 Code` task that fixes a defect is filed only after the cause is located.
+This is a filing rule. It is not met by leaving the task at Backlog, and it is
+not met later at Ready. A gate follow-on is a Code task and the same rule applies.
+
+Context states three locks before the page exists:
+
+1. **The branch.** The file, the function, and the condition that produces the
+   bad result.
+2. **The input that takes that branch.** A real row, or a real run, from the
+   process that is running the code the task is filed against. A window that
+   still contains a previous process or a previous deploy is not that input.
+3. **The fix that follows from that branch.** What the branch must do instead,
+   and what it must still do for the input that is supposed to take it.
+
+These are not a cause, and they are not enough to file:
+
+- A count, a share, or a histogram of labels.
+- The desired end state — "under 10%", "drop this reason", "emit on real markets".
+- A label the branch already produces on purpose for that input. A flat price
+  recorded as `low_variance` is the branch working. Do not file a task to make
+  the label go away.
+- A write the current code no longer contains. If the current process does not
+  produce the symptom, the rows are from an older process. Do not file.
+
+If any of the three locks cannot be written, do not file a Code task. Locating
+the cause is an 🔎 Investigation. The implementing session does not re-investigate.
+A Context that leaves the cause as a choice was filed too early.
 
 **Write code skeletons, not essays.** A typed skeleton with stub bodies beats three
 paragraphs describing it. Where exact code isn't needed, be concrete about shapes:
@@ -573,8 +609,10 @@ shape, don't pre-hedge.)*
   import, fully specify the signature here — type signatures are load-bearing.
 - **Runtime items in code-task acceptance criteria.** They belong in the Manual
   Verification Gate (accreted as `gate_item` rows), not the code task's body.
-- **Creating tasks at Ready without investigation.** "Investigate and fix X" is
-  Backlog, not Ready — do the root-cause analysis first, then specify the fix.
+- **Filing a Code fix before the cause is located.** A share, a histogram, or
+  the desired end state is not a cause. See § Root cause, before a Code task is
+  filed. "Investigate and fix X" is not a Code task, and creating one at Ready
+  does not make the investigation done.
 - **Skipping open-question resolution.** Trade-offs unresolved → stays Backlog.
   Present options with pros/cons, get a human decision, then move to Ready.
 - **Deferring investigation to the implementing session.** "Decide during
