@@ -7,10 +7,14 @@ import {
   stageIntent,
   routeStageTimeBlock,
   validateAndNormalizeTaskReferences,
+  parseSymbolicCreateRef,
   withdrawIntent,
   type StagedIntent,
 } from '../../routes/stagedIntents';
 import type { SessionManager } from '../../session/SessionManager';
+import { getSession } from '../../db/queries';
+import { isInvestigateSession } from '../../session/sessionPredicates';
+import { TaskReferenceValidationError } from '../../tasks/taskReferenceValidation';
 import {
   taskTypeSchema,
   taskStatusSchema,
@@ -90,6 +94,18 @@ async function stage(
     supersedes?: string;
   },
 ): Promise<{ content: { type: 'text'; text: string }[] }> {
+  if (kind === 'task.setDependsOn') {
+    const session = getSession(ctx.sessionId);
+    if (session && isInvestigateSession(session.task_id)) {
+      const subject = (payload as { taskId?: unknown } | null)?.taskId;
+      if (typeof subject !== 'string' || !parseSymbolicCreateRef(subject)) {
+        throw new TaskReferenceValidationError(
+          'An investigate session may only link tasks it staged itself: task.setDependsOn.taskId must be a ' +
+            'staged-intent:<id> placeholder for a task.create in this group, never an existing task id.',
+        );
+      }
+    }
+  }
   const normalizedPayload = await validateAndNormalizeTaskReferences(
     kind,
     payload,

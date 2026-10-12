@@ -27,8 +27,15 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerStageProposalTools } from './stageProposalTools';
-import { CODE_INTENT_KINDS } from '../../planning/planningIntentKinds';
-import { getStagedIntent, listStagedIntentsByGroup } from '../../db/queries';
+import {
+  CODE_INTENT_KINDS,
+  INVESTIGATE_INTENT_KINDS,
+} from '../../planning/planningIntentKinds';
+import {
+  getStagedIntent,
+  listStagedIntentsByGroup,
+  insertSession,
+} from '../../db/queries';
 import {
   gateContributionDecisionSchema,
   gateContributionItemInputSchema,
@@ -826,6 +833,98 @@ describe('gate.accrete — classification tier guidance', () => {
       gateContributionItemInputSchema.shape.classification.description,
     ).toContain(GATE_ITEM_TIER_SELECTION_GUIDANCE);
     expect(tool?.description).toContain(GATE_ITEM_TIER_SELECTION_GUIDANCE);
+    await close();
+  });
+});
+
+describe('task.setDependsOn — investigate-dispatched session subject restriction', () => {
+  const GROUP = 'grp-inv';
+
+  function seedSession(taskId: string) {
+    db.prepare('DELETE FROM sessions').run();
+    insertSession({
+      session_id: SESSION_ID,
+      task_id: taskId,
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'ops' as never,
+    });
+  }
+
+  async function stageCreate(client: Client): Promise<string> {
+    const result = await client.callTool({
+      name: 'task.create',
+      arguments: {
+        payload: { title: 'T', priority: '🔴 High' },
+        groupId: GROUP,
+      },
+    });
+    return parseIntentResult(
+      result as { content: Array<{ type: string; text?: string }> },
+    ).id as string;
+  }
+
+  it('stages a placeholder subject depending on another placeholder', async () => {
+    seedSession('report-batch:b1');
+    const { client, close } = await connectedClient(INVESTIGATE_INTENT_KINDS);
+    const a = await stageCreate(client);
+    const b = await stageCreate(client);
+    const result = (await client.callTool({
+      name: 'task.setDependsOn',
+      arguments: {
+        payload: {
+          taskId: `staged-intent:${a}`,
+          dependsOn: [`staged-intent:${b}`],
+        },
+        groupId: GROUP,
+      },
+    })) as { isError?: boolean };
+    expect(result.isError).toBeFalsy();
+    await close();
+  });
+
+  it('accepts a placeholder subject with a literal existing dependsOn', async () => {
+    seedSession('report-batch:b1');
+    const { client, close } = await connectedClient(INVESTIGATE_INTENT_KINDS);
+    const a = await stageCreate(client);
+    const result = (await client.callTool({
+      name: 'task.setDependsOn',
+      arguments: {
+        payload: { taskId: `staged-intent:${a}`, dependsOn: ['task-existing'] },
+        groupId: GROUP,
+      },
+    })) as { isError?: boolean };
+    expect(result.isError).toBeFalsy();
+    await close();
+  });
+
+  it('rejects a literal existing subject and stages nothing', async () => {
+    seedSession('report-batch:b1');
+    const { client, close } = await connectedClient(INVESTIGATE_INTENT_KINDS);
+    await stageCreate(client);
+    const before = listStagedIntentsByGroup(GROUP).length;
+    const result = (await client.callTool({
+      name: 'task.setDependsOn',
+      arguments: {
+        payload: { taskId: 'task-existing', dependsOn: [] },
+        groupId: GROUP,
+      },
+    })) as { isError?: boolean };
+    expect(result.isError).toBe(true);
+    expect(listStagedIntentsByGroup(GROUP).length).toBe(before);
+    await close();
+  });
+
+  it('a non-investigate session can still stage a literal subject', async () => {
+    seedSession('task-own');
+    const { client, close } = await connectedClient();
+    const result = (await client.callTool({
+      name: 'task.setDependsOn',
+      arguments: { payload: { taskId: 'task-own', dependsOn: [] } },
+    })) as { isError?: boolean };
+    expect(result.isError).toBeFalsy();
     await close();
   });
 });
