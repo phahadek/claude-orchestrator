@@ -12,6 +12,8 @@ import {
   SIZE_FILE_RATIO_LIMIT,
   type SizeSignal,
 } from './GitHubClient';
+import { parseDiffFiles } from './GitHubClient';
+import { isMigrationPath } from './PRReviewService';
 import type { DiffSource } from './DiffSource';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
@@ -32,6 +34,7 @@ const SECURITY_DIMENSION_NAME = 'Security';
 const CONCURRENCY_DIMENSION_NAME = 'Concurrency';
 const RELIABILITY_DIMENSION_NAME = 'Reliability / crash';
 const DATA_INTEGRITY_DIMENSION_NAME = 'Data integrity & parsing correctness';
+export const MIGRATION_SAFETY_DIMENSION_NAME = 'Migration safety';
 
 /** Dimension names a depth-pass finding may fail on that route to escalate rather than auto-fix. */
 const NON_SIZE_DIMENSION_NAMES: ReadonlySet<string> = new Set([
@@ -39,6 +42,7 @@ const NON_SIZE_DIMENSION_NAMES: ReadonlySet<string> = new Set([
   CONCURRENCY_DIMENSION_NAME,
   RELIABILITY_DIMENSION_NAME,
   DATA_INTEGRITY_DIMENSION_NAME,
+  MIGRATION_SAFETY_DIMENSION_NAME,
 ]);
 
 export interface DepthReviewDimension {
@@ -59,14 +63,30 @@ export interface DepthReviewResult {
   sessionId: string;
 }
 
-const DEPTH_REVIEW_JSON_SCHEMA_BLOCK = `Respond ONLY with a JSON object — no preamble, no markdown fences.
+const MIGRATION_SAFETY_GUIDANCE = `- "${MIGRATION_SAFETY_DIMENSION_NAME}": Fail on destructive or irreversible DDL
+  (DROP/TRUNCATE, column drops or type-narrowing changes, data-losing
+  rewrites) without an explicit rollback or compensating path; lock-heavy
+  operations on large tables (non-concurrent index builds, table rewrites,
+  full-table backfills inside a single transaction); and backfill logic that is
+  not idempotent or not bounded.
+`;
+
+function buildDepthReviewSchemaBlock(includeMigrationSafety: boolean): string {
+  const count = includeMigrationSafety ? 6 : 5;
+  const migrationSchemaLine = includeMigrationSafety
+    ? `    { "name": "${MIGRATION_SAFETY_DIMENSION_NAME}",          "passed": bool, "notes": "..." },\n`
+    : '';
+  const migrationGuidance = includeMigrationSafety
+    ? MIGRATION_SAFETY_GUIDANCE
+    : '';
+  return `Respond ONLY with a JSON object — no preamble, no markdown fences.
 
 This is a DEPTH review — it runs only after the diff already passed conformance
 review (title/description vs Summary, diff vs Context spec, diff vs Acceptance
 Criteria, changed files vs Files/paths affected). Do NOT re-evaluate those —
 judge only whether the diff is correct and safe.
 
-Evaluate the diff across exactly these 5 dimensions, in priority order, and
+Evaluate the diff across exactly these ${count} dimensions, in priority order, and
 respond with this JSON schema:
 {
   "verdict": "pass" | "fail",
@@ -75,11 +95,11 @@ respond with this JSON schema:
     { "name": "${CONCURRENCY_DIMENSION_NAME}",         "passed": bool, "notes": "..." },
     { "name": "${RELIABILITY_DIMENSION_NAME}",         "passed": bool, "notes": "..." },
     { "name": "${DATA_INTEGRITY_DIMENSION_NAME}",      "passed": bool, "notes": "..." },
-    { "name": "${SIZE_DIMENSION_NAME}",                "passed": bool, "notes": "..." }
+${migrationSchemaLine}    { "name": "${SIZE_DIMENSION_NAME}",                "passed": bool, "notes": "..." }
   ],
   "summary": "2–4 sentence overall assessment"
 }
-verdict rules: "pass" = all 5 passed, "fail" = any dimension failed.
+verdict rules: "pass" = all ${count} passed, "fail" = any dimension failed.
 
 Dimension guidance:
 - "${SECURITY_DIMENSION_NAME}": Fail when unsafe or unvalidated input reaches an
@@ -97,12 +117,13 @@ Dimension guidance:
   can silently corrupt or misinterpret data — off-by-one or boundary errors,
   incorrect encoding/decoding, lossy type coercion, or a schema mismatch
   between what's written and what's read back.
-- "${SIZE_DIMENSION_NAME}": Pass when the PR is within the size budget signaled
+${migrationGuidance}- "${SIZE_DIMENSION_NAME}": Pass when the PR is within the size budget signaled
   below OR when any overflow is necessary corollary work (dead-code removal,
   forced call-site updates, test/fixture adjustments). Fail only when the diff
   is materially larger than the task scope demands — scope creep, unrelated
   cleanup, or speculative refactors. Note your reasoning so a re-reviewer can
   audit the call.`;
+}
 
 export class DepthReviewService {
   constructor(
@@ -229,7 +250,7 @@ ${taskBody || '(no task specification available)'}
 ${this.formatSizeSignalSection(sizeSignal)}
 
 ## Your task
-${DEPTH_REVIEW_JSON_SCHEMA_BLOCK}`;
+${buildDepthReviewSchemaBlock(parseDiffFiles(diff).some(isMigrationPath))}`;
   }
 
   private formatSizeSignalSection(signal: SizeSignal): string {
