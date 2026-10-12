@@ -258,6 +258,11 @@ conclusions.
   is never an option to present** — silently dropping the price side of a backfill and shipping
   trades-only is the exact failure this prevents. If a step can't be done now, file the follow-on
   that will and say so; never narrow the deliverable to what happened to work.
+- **Verification that must wait for a future event is a gate item, not a blocker.** If a
+  reconcile/capture step can't be observed until a future event (a live match, a timer firing),
+  accrete it on the task via `gate-state-client.mjs accrete` as an atomic item (classification
+  usually Read-Only; text naming the exact query + the expected observable). It does **not** block
+  proposing Done. Never a scheduled one-time self re-check, never a standing per-run check.
 - **Research-first: present before applying.** Pull authoritative per-entity data (the source's
   own page), verify each item exists the project's way, lay out **what the task assumed vs. what
   you found**, recommend, and get the operator's call on source/scope/breadth *before* the write.
@@ -588,8 +593,10 @@ that actuation here.
 
    > **GATE — do not start step 5 (resolving) until step 3 has advanced _every_ journal entry off
    > `pending`.** The ops-context load seeds one `ops_journal` row per eligible task at `pending`;
-   > the first-pass must move each to a worked state (`candidate` / `staged-proposal` /
-   > `applied-pending-confirm` / `blocked` / `incident-frozen`) via `ops-client.mjs set-state`. The
+   > the first-pass must move each off `pending` via `ops-client.mjs set-state` — **from `pending` the
+   > only legal targets are `candidate`, `blocked`, or `incident-frozen`** (the server rejects
+   > `pending → staged-proposal` with 400). `staged-proposal` / `applied-pending-confirm` follow from
+   > `candidate` (a second `set-state` once the proposal/application exists). The
    > dominant failure is grabbing the first interesting task and resolving it before the rest are
    > diagnosed — resist it; the cost is an uninformed order and missed cross-task context. **Any
    > `pending` entry means the first-pass isn't done.**
@@ -699,6 +706,10 @@ this session's to pre-flight before filing a task.
 - **🔧 Operational** is Done when the change is applied and **reconcile + capture** is verified on
   prod — not gated on anything downstream — **and no step was silently dropped** (every part of a
   multi-step task is closed or filed as a gap-closing follow-on; "accept the gap" is never offered).
+  A reconcile/capture step that **cannot be observed until a future event** (a live match, a
+  scheduled timer firing) does **not** block proposing Done: accrete it as an atomic gate item (see
+  § 🔧 Operational) and propose Done. Never keep the task In Progress to wait, and never schedule a
+  self re-check.
 - **🧪 Testing (observational/E2E variant)** reaches a **`disposition`, not a Done/fail verdict.**
   `pass` (verified *by value*, not a degenerate/zero that looks green) or `pass-with-caveat` → the
   task is Done. **`blocked-pending-fix` is NOT Done** — file the fix task and set this task to
