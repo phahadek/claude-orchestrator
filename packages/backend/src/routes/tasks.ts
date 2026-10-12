@@ -34,6 +34,7 @@ import type { PRReviewResult } from '../github/PRReviewService';
 import type { ServerMessage, TaskView } from '../ws/types';
 import {
   parsePauseReason,
+  parsePauseReasonSet,
   deriveTaskRecoveryDescriptor,
 } from '../db/pauseReason';
 import { computeOpsBlockingDeps, isOpsEligibleType } from '../ops/opsLoad';
@@ -448,6 +449,11 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     displayStatus,
     pauseReason: effectivePauseStruct?.reason ?? null,
     pauseDetail: effectivePauseStruct?.detail ?? null,
+    pauseEntries: parsePauseReasonSet(row.pr_pause_reason ?? null).map((e) => ({
+      reason: e.reason,
+      detail: e.detail ?? null,
+      blocks_merge: e.blocks_merge,
+    })),
     priority,
     notionUrl: notionTask?.notionUrl ?? '',
     taskType: notionTask?.type ?? '',
