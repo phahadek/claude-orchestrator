@@ -253,6 +253,53 @@ and put the restatement to the operator rather than recording a fail on the bad 
 
 ---
 
+## Run budget — a gate run is bounded in time
+
+**Wall-clock budget.** A gate run has a budget: the operator-stated one, else a default of
+**45 minutes** from session start. Note the start time at Step 0 and check elapsed time before each
+pull and each fan-out.
+
+**On reaching the budget**, every remaining pulled item gets `not-yet-triggerable` (when its
+trigger, window or flip is pending) with an exact-timestamp trace guide, or is left untouched
+(still `open`/`runnable`) for a separate session. Then the session reports. This is a time bound,
+not a hand-back: nothing is lost, state persists server-side. The completion contract's
+never-stop / never-check-in rule applies *within* the budget.
+
+**Never wait for an observation window, natural trigger or reconciler flip inside a run.** If an
+item's window has not elapsed, its natural trigger has not fired, or the gate reconciler has not yet
+flipped it to `runnable`, park it immediately as `not-yet-triggerable` with an **interim reading**
+(what the observable shows now) and a trace guide naming the **exact timestamp** at which the window
+completes and the query that settles it. "Stage it, never defer it" does not mean sit and wait: a
+window that has not elapsed cannot be staged, only parked. In-session sleeps, timers and watchers
+are capped at about **2 minutes in total per wait**; never start a longer one. The only exception is
+a live capture the operator explicitly requested.
+
+### Deploy landing mid-run
+
+If a deploy lands during the run: re-pull readiness **once**; park every window-gated item as
+`not-yet-triggerable` using the restart timestamp as the window start (re-check relative to that
+restart, per the rule above); and verify only checks observable immediately (an EXPLAIN, a single
+pass, a sentinel). Do not poll for the roll or the reconciler to converge.
+
+### Verifier subagent fan-out
+
+Beyond the DB-safety rules above, every verifier brief MUST:
+
+- **Carry a hard per-agent time budget** (e.g. 10 minutes). At the budget the agent stops and
+  returns what it has, marking unfinished items `not-yet-triggerable` or unverified.
+- **Forbid background watchers, polling loops, and sleeps** beyond ~2 minutes. An item whose window
+  is pending is reported as not-yet-triggerable with an interim reading and trace guide, not waited
+  on.
+- **Require the agent to write its results as a JSON array to a named file** in the worktree scratch
+  area (one entry per item: id, disposition, evidence, trace guide), and return only the path and a
+  one-line tally.
+
+The parent **records from that file** and spot-checks all fails plus a sample of passes against the
+evidence. It never hand-transcribes verifier evidence into JSON. Don't wait on the slowest agent
+past the run budget; record what has returned and park the rest.
+
+---
+
 ## Step 0 — Resolve the milestone
 
 Determine the milestone (e.g. "M12") from the user or the active context. Do
@@ -479,7 +526,10 @@ completion contract below.
 
 A gate run dispositions **every item it pulls** before it reports anything.
 Running out of items — not running out of appetite — is the only stopping
-condition available to the session:
+condition available to the session, **other than the wall-clock run budget**
+(§ Run budget — a gate run is bounded in time). The never-stop rule below holds
+*within* the budget; on reaching the budget the session parks what is left and
+reports:
 
 - **Never ask the operator whether to continue.** No "want me to keep going?",
   no continue/stop menu, no "continuing unless you'd rather I stop." The
