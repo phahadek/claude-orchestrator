@@ -27,8 +27,14 @@ export function parseFloorDetail(detail: string | null | undefined): {
   categories: string | null;
   paths: string | null;
 } {
-  const m = /touches (.+?) path\(s\)(?:: (.*))?$/s.exec(detail ?? '');
-  return { categories: m?.[1] ?? null, paths: m?.[2]?.trim() || null };
+  const text = detail ?? '';
+  const start = text.indexOf('touches ');
+  const end = text.indexOf(' path(s)', start);
+  if (start === -1 || end === -1) return { categories: null, paths: null };
+  const categories = text.slice(start + 'touches '.length, end).trim();
+  const rest = text.slice(end + ' path(s)'.length);
+  const paths = rest.startsWith(': ') ? rest.slice(2).trim() : '';
+  return { categories: categories || null, paths: paths || null };
 }
 
 export function deriveFloorSignOff(

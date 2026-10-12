@@ -53,7 +53,7 @@ const STATUS_LABELS: Record<DisplayStatus, string> = {
   deferred: '⏭️ Deferred',
 };
 
-export const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
+const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
   max_reviews: 'Max review iterations reached — re-review or close the PR.',
   stuck_timeout: 'Session stuck — no progress within the timeout window.',
   ci_failing: 'CI is failing — fix the failing checks and push.',
