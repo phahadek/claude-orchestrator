@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { PLANNING_INTENT_KINDS } from '../planningIntentKinds';
+import {
+  PLANNING_INTENT_KINDS,
+  INVESTIGATE_INTENT_KINDS,
+} from '../planningIntentKinds';
 import { registerStageProposalTools } from '../../mcp/tools/stageProposalTools';
 
 // Every PLANNING_INTENT_KINDS entry gets a `mcp__orchestrator__<kind>` tool
@@ -33,6 +36,26 @@ function registeredStageProposalToolKinds(): Set<string> {
   });
   return new Set(registered);
 }
+
+describe('INVESTIGATE_INTENT_KINDS', () => {
+  it('includes task.setDependsOn and no other task-edit kind', () => {
+    expect(INVESTIGATE_INTENT_KINDS).toContain('task.setDependsOn');
+    for (const k of [
+      'task.updateBody',
+      'task.patchBodySection',
+      'task.setStatus',
+    ]) {
+      expect(INVESTIGATE_INTENT_KINDS).not.toContain(k);
+    }
+  });
+
+  it('every kind has a registered stage-proposal tool', () => {
+    const registered = registeredStageProposalToolKinds();
+    for (const kind of INVESTIGATE_INTENT_KINDS) {
+      expect(registered.has(kind), kind).toBe(true);
+    }
+  });
+});
 
 describe('PLANNING_INTENT_KINDS', () => {
   it('carries a non-empty entry for every planning workflow, including docs', () => {

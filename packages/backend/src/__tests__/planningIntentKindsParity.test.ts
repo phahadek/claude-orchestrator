@@ -11,12 +11,16 @@ import {
   GROOM_ALLOWED_TOOLS,
   DESIGN_ALLOWED_TOOLS,
   OPS_ALLOWED_TOOLS,
+  INVESTIGATE_ALLOWED_TOOLS,
 } from '../config';
 import { orchestratorMcpToolName } from '../mcp/toolNaming';
 import { buildMcpServer } from '../mcp/orchestratorMcpServer';
 import { SessionManager } from '../session/SessionManager';
 import { insertSession } from '../db/queries';
-import { PLANNING_INTENT_KINDS } from '../planning/planningIntentKinds';
+import {
+  PLANNING_INTENT_KINDS,
+  INVESTIGATE_INTENT_KINDS,
+} from '../planning/planningIntentKinds';
 import { patchBodySectionPayloadSchema } from '../mcp/tools/schemas';
 
 const ORCHESTRATOR_MCP_PREFIX = 'mcp__orchestrator__';
@@ -154,6 +158,15 @@ const WORKFLOWS: {
     alwaysRegisteredNotAllowed: [],
   },
 ];
+
+describe('investigate allow-list parity', () => {
+  it('INVESTIGATE_ALLOWED_TOOLS grants task_setDependsOn', () => {
+    expect(INVESTIGATE_INTENT_KINDS).toContain('task.setDependsOn');
+    expect(INVESTIGATE_ALLOWED_TOOLS).toContain(
+      orchestratorMcpToolName('task.setDependsOn'),
+    );
+  });
+});
 
 describe('planning workflow --allowed-tools parity with PLANNING_INTENT_KINDS', () => {
   it('design session allow-list grants mcp__orchestrator__decision_pickOne', () => {

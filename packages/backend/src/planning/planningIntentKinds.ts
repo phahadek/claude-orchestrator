@@ -127,7 +127,11 @@ export const CODE_INTENT_KINDS: readonly string[] = [
  * new Backlog tasks, it never edits an existing one — see the /investigate
  * skill's "Never edit a filed task. File a new one."), no `gate.verify`/
  * `ops.prIntent` (no gate item or PR to report against). `task.create`
- * files the grounded Backlog output; `decision.pickOne` resolves an
+ * files the grounded Backlog output; `task.setDependsOn` links the tasks
+ * this session staged in the same pass and is not an edit of a filed task —
+ * stage-time (stageProposalTools.ts) restricts its subject to a same-group
+ * `staged-intent:<id>` placeholder, rejecting any literal existing task id;
+ * `decision.pickOne` resolves an
  * ambiguous input the skill's "resolve it before acting" rule requires;
  * `session.requestCapability` is the same mid-session escalation path every
  * planning workflow gets; `intent.withdraw` retracts a staged intent.
@@ -145,6 +149,7 @@ export const CODE_INTENT_KINDS: readonly string[] = [
  */
 export const INVESTIGATE_INTENT_KINDS: readonly string[] = [
   'task.create',
+  'task.setDependsOn',
   'decision.pickOne',
   'session.requestCapability',
   'intent.withdraw',

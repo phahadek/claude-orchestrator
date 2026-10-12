@@ -2958,7 +2958,7 @@ function validateReviewDisputePayload(
  */
 const SYMBOLIC_CREATE_REF_PREFIX = 'staged-intent:';
 
-function parseSymbolicCreateRef(value: string): string | null {
+export function parseSymbolicCreateRef(value: string): string | null {
   if (!value.startsWith(SYMBOLIC_CREATE_REF_PREFIX)) return null;
   const intentId = value.slice(SYMBOLIC_CREATE_REF_PREFIX.length).trim();
   return intentId || null;
