@@ -20,7 +20,7 @@ import {
   setPauseReason,
   getDepthReviewVerdict,
 } from '../db/queries';
-import { parsePauseReason, parsePauseReasonSet } from '../db/pauseReason';
+import { parsePauseReasonSet } from '../db/pauseReason';
 import { recordEvent } from '../audit/AuditLog';
 import { GitHubApiError } from '../github/types';
 import type { MergeabilityCategory, ReviewJob } from '../github/types';
@@ -767,7 +767,9 @@ export function createPrsRouter(
       // demands — clear it, but do not re-run review: the floor is
       // diff-driven, not verdict-driven, so re-reviewing the same diff would
       // just re-escalate it immediately.
-      const pauseStruct = parsePauseReason(prRow.pause_reason ?? null);
+      const hasFloorHold = parsePauseReasonSet(prRow.pause_reason ?? null).some(
+        (entry) => entry.reason === 'baseline_escalation_floor',
+      );
       if (prRow.reconcile_exhausted) {
         clearTerminalPRFlags(prNumber, repo, 'human_unpark');
         if (reviewOrchestrator) {
@@ -777,7 +779,7 @@ export function createPrsRouter(
               logger.error('[prs] approve runAutofixPipeline failed:', err),
             );
         }
-      } else if (pauseStruct?.reason === 'baseline_escalation_floor') {
+      } else if (hasFloorHold) {
         clearTerminalPRFlags(prNumber, repo, 'human_unpark');
       }
 

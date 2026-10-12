@@ -7,6 +7,7 @@ vi.mock('../db/db.js', async () => {
 
 import { db } from '../db/db.js';
 import {
+  clearPauseReasonEntry,
   clearTerminalPRFlags,
   getApprovedOpenPRs,
   getConflictNudgeCandidates,
@@ -340,6 +341,47 @@ describe("clearTerminalPRFlags('review_verdict') — depth-review holds survive 
     clearTerminalPRFlags(64, 'owner/repo', 'merged');
 
     expect(parsePauseReasonSet(rawPauseReason(64))).toEqual([]);
+  });
+});
+
+describe('baseline_escalation_floor — merge-safety alongside depth review', () => {
+  it('clearing depth_review_pending (passing depth review) leaves the floor entry and keeps the PR merge-blocking', () => {
+    insertPR({ pr_number: 70, task_id: 'notion:task-floor-2' });
+    setPauseReason(70, 'owner/repo', 'baseline_escalation_floor', 'detail');
+    setPauseReason(70, 'owner/repo', 'depth_review_pending');
+
+    clearPauseReasonEntry(70, 'owner/repo', 'depth_review_pending');
+
+    const raw = rawPauseReason(70);
+    expect(parsePauseReasonSet(raw).map((e) => e.reason)).toEqual([
+      'baseline_escalation_floor',
+    ]);
+    expect(isMergeBlockingPause(raw)).toBe(true);
+  });
+
+  it('a depth-review escalation stacks with the floor entry', () => {
+    insertPR({ pr_number: 71, task_id: 'notion:task-floor-3' });
+    setPauseReason(71, 'owner/repo', 'baseline_escalation_floor', 'detail');
+    setPauseReason(71, 'owner/repo', 'depth_review_pending');
+    setPauseReason(71, 'owner/repo', 'depth_review_escalation', 'finding');
+
+    const reasons = parsePauseReasonSet(rawPauseReason(71))
+      .map((e) => e.reason)
+      .sort();
+    expect(reasons).toEqual([
+      'baseline_escalation_floor',
+      'depth_review_escalation',
+    ]);
+  });
+
+  it('operator approve (human_unpark) clears every source including the floor hold', () => {
+    insertPR({ pr_number: 72, task_id: 'notion:task-floor-4' });
+    setPauseReason(72, 'owner/repo', 'baseline_escalation_floor', 'detail');
+    setPauseReason(72, 'owner/repo', 'depth_review_escalation');
+
+    clearTerminalPRFlags(72, 'owner/repo', 'human_unpark');
+
+    expect(parsePauseReasonSet(rawPauseReason(72))).toEqual([]);
   });
 });
 
