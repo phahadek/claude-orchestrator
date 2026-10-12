@@ -435,4 +435,84 @@ describe('task.setDependsOn symbolic reference to a sibling task.create — stag
 
     expect(dependsOn.status).toBe(400);
   });
+
+  it('accepts a placeholder subject and placeholder dependsOn for two creates in the same group', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      createTask: vi.fn(),
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+    });
+    const agent = supertest(buildApp());
+    const mk = (title: string) =>
+      agent.post('/api/staged-intents').send({
+        kind: 'task.create',
+        projectId: 'proj-1',
+        groupId: 'g-new-new',
+        payload: { databaseId: 'db-1', title, type: '💻 Code' },
+      });
+    const a = await mk('A');
+    const b = await mk('B');
+
+    const link = await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-1',
+      groupId: 'g-new-new',
+      payload: {
+        taskId: `staged-intent:${a.body.id}`,
+        dependsOn: [`staged-intent:${b.body.id}`],
+      },
+    });
+    expect(link.status).toBe(201);
+  });
+
+  it('rejects a placeholder subject naming a task.create in a different group', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      createTask: vi.fn(),
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+    });
+    const agent = supertest(buildApp());
+    const a = await agent.post('/api/staged-intents').send({
+      kind: 'task.create',
+      projectId: 'proj-1',
+      groupId: 'g-subj-other',
+      payload: { databaseId: 'db-1', title: 'A', type: '💻 Code' },
+    });
+    const link = await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-1',
+      groupId: 'g-subj-mine',
+      payload: { taskId: `staged-intent:${a.body.id}`, dependsOn: [] },
+    });
+    expect(link.status).toBe(400);
+    expect(link.body.error).toMatch(/does not resolve to a live task\.create/);
+  });
+
+  it('still rejects a placeholder subject on task.setStatus', async () => {
+    const agent = supertest(buildApp());
+    const res = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-1',
+      groupId: 'g-status',
+      payload: { taskId: 'staged-intent:abc', status: '🔲 Backlog' },
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a placeholder in task.create.dependsOn and points at task.setDependsOn', async () => {
+    const agent = supertest(buildApp());
+    const res = await agent.post('/api/staged-intents').send({
+      kind: 'task.create',
+      projectId: 'proj-1',
+      groupId: 'g-create-dep',
+      payload: {
+        databaseId: 'db-1',
+        title: 'C',
+        type: '💻 Code',
+        dependsOn: ['staged-intent:abc'],
+      },
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/task\.setDependsOn/);
+  });
 });

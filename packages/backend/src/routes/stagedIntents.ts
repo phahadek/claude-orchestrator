@@ -3393,10 +3393,20 @@ export async function validateAndNormalizeTaskReferences(
   }
   const p = { ...(payload as Record<string, unknown>) };
 
+  let symbolicSubject = false;
   if (SUBJECT_TASK_ID_KINDS.has(kind)) {
-    const normalized = normalizeOrRejectTaskId(p.taskId, 'taskId');
-    await assertTaskIdResolves(normalized, projectId);
-    p.taskId = normalized;
+    const subjectIntentId =
+      kind === 'task.setDependsOn' && typeof p.taskId === 'string'
+        ? parseSymbolicCreateRef(p.taskId)
+        : null;
+    if (subjectIntentId) {
+      assertSymbolicCreateRefResolves(subjectIntentId, groupId, 'taskId');
+      symbolicSubject = true;
+    } else {
+      const normalized = normalizeOrRejectTaskId(p.taskId, 'taskId');
+      await assertTaskIdResolves(normalized, projectId);
+      p.taskId = normalized;
+    }
   }
 
   if (
@@ -3419,13 +3429,20 @@ export async function validateAndNormalizeTaskReferences(
       const normalizedDependsOn: string[] = [];
       const literalDependsOn: string[] = [];
       for (const [i, dep] of rawDependsOn.entries()) {
-        // Symbolic references are accepted only for task.setDependsOn — an
-        // existing task wiring onto a sibling task.create. task.create's own
-        // dependsOn names dependencies of the task being created itself; a
-        // symbolic reference there would be a sibling-create-depends-on-
-        // sibling-create (a symbolic *subject* id) case, out of this task's
-        // scope (see e3d05d03-6a79-4a48-86cd-defcbfd51aed) and unresolved by
-        // the commit loop below.
+        // Symbolic references are accepted only for task.setDependsOn.
+        // task.create.dependsOn stays literal-only: the commit loop does not
+        // resolve placeholders there.
+        if (
+          kind === 'task.create' &&
+          typeof dep === 'string' &&
+          parseSymbolicCreateRef(dep)
+        ) {
+          throw new TaskReferenceValidationError(
+            `dependsOn[${i}] "${dep}" is a staged-intent placeholder, which task.create.dependsOn does not accept. ` +
+              'To depend on a task staged in this pass, stage a separate task.setDependsOn with ' +
+              'taskId: staged-intent:<this create\'s intent id> and dependsOn naming the other task (a real id or staged-intent:<id>).',
+          );
+        }
         const symbolicIntentId =
           kind === 'task.setDependsOn' && typeof dep === 'string'
             ? parseSymbolicCreateRef(dep)
@@ -3446,7 +3463,9 @@ export async function validateAndNormalizeTaskReferences(
       }
       assertNoDependencyCycle(
         projectId,
-        kind === 'task.setDependsOn' ? (p.taskId as string) : null,
+        kind === 'task.setDependsOn' && !symbolicSubject
+          ? (p.taskId as string)
+          : null,
         literalDependsOn,
       );
       p.dependsOn = normalizedDependsOn;

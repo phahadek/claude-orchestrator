@@ -70,6 +70,11 @@ describe('PLANNING_INTENT_KINDS', () => {
     }
   });
 
+  it('design and ops can stage task.setDependsOn', () => {
+    expect(PLANNING_INTENT_KINDS.design).toContain('task.setDependsOn');
+    expect(PLANNING_INTENT_KINDS.ops).toContain('task.setDependsOn');
+  });
+
   it('task.setType is a member of PLANNING_INTENT_KINDS.groom', () => {
     expect(PLANNING_INTENT_KINDS.groom).toContain('task.setType');
   });

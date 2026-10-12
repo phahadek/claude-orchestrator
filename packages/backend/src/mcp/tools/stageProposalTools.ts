@@ -140,7 +140,7 @@ export function registerStageProposalTools(
     {
       title: 'Stage a new task',
       description:
-        'Stages a task.create intent — lands a new task at Backlog once a human applies it. Pass the full page body (raw markdown, the authoring-standard section format) via `body` — it is written verbatim at create time. task.updateBody is for revising a task that already exists, not for a task being staged now. `priority` is required — one of "🔴 High", "🟡 Medium", "🟢 Low".',
+        'Stages a task.create intent — lands a new task at Backlog once a human applies it. Pass the full page body (raw markdown, the authoring-standard section format) via `body` — it is written verbatim at create time. task.updateBody is for revising a task that already exists, not for a task being staged now. `priority` is required — one of "🔴 High", "🟡 Medium", "🟢 Low". `dependsOn` takes real task ids only; to depend on a task staged in this pass, stage a separate task.setDependsOn with taskId: staged-intent:<this create\'s intent id>.',
       inputSchema: envelope({
         title: z.string(),
         type: taskTypeSchema.optional(),
@@ -174,7 +174,7 @@ export function registerStageProposalTools(
     {
       title: 'Stage a task Depends On change',
       description:
-        'Stages a task.setDependsOn intent — an empty array is a valid "no deps" classification.',
+        'Stages a task.setDependsOn intent — an empty array is a valid "no deps" classification. To link tasks staged in this same group, pass `taskId: "staged-intent:<task.create intent id>"` and/or `staged-intent:<id>` entries in `dependsOn`.',
       inputSchema: envelope({
         taskId: z.string(),
         dependsOn: z.array(z.string()),

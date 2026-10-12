@@ -37,6 +37,7 @@ export const PLANNING_INTENT_KINDS: Record<
     'task.updateBody',
     'task.setProperties',
     'task.setStatus',
+    'task.setDependsOn',
     'seed.stage',
     'task.create',
     'session.requestCapability',
@@ -56,6 +57,7 @@ export const PLANNING_INTENT_KINDS: Record<
   ops: [
     'journal.setState',
     'task.setStatus',
+    'task.setDependsOn',
     'session.requestCapability',
     'task.create',
     'task.updateBody',
