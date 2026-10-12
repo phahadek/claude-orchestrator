@@ -394,6 +394,7 @@ The orchestrator backend handles all status transitions (In Progress → In Revi
 Running in \`--print\` mode — optimize for speed and token efficiency:
 
 - **Do NOT use TodoWrite.** No one sees the todo list. Track your progress internally.
+- **Architecture units named in the task** (e.g. "as locked in arch unit X") are read with \`architecture.queryUnits({ title })\` / \`architecture.getUnit({ id })\`; never fetch Notion for them.
 - **Do NOT use Agent subagents for exploration.** Use Glob and Grep directly.
 - **Minimize tool calls.** Batch reads; don't re-read files you just wrote or edited.
 - **Prefer Edit over Write** for existing files; never re-emit unchanged file bodies.
