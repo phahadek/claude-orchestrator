@@ -234,6 +234,12 @@ interface StepOutcome {
   timedOut?: boolean;
 }
 
+const REMOTE_HOST_BINDING = 'REMOTE_HOST';
+
+function posixQuote(token: string): string {
+  return `'${token.replace(/'/g, `'\\''`)}'`;
+}
+
 /** Deploy steps build artifacts; they must not inherit the host service's
  *  NODE_ENV=production, which makes npm omit devDependencies (vite etc.).
  *  Host bindings are merged in last so a project can't clobber NODE_ENV. */
@@ -241,7 +247,8 @@ export function buildDeployStepEnv(
   base: NodeJS.ProcessEnv = process.env,
   bindings: DeployBindings = {},
 ): NodeJS.ProcessEnv {
-  return { ...base, NODE_ENV: 'development', ...bindings };
+  const { [REMOTE_HOST_BINDING]: _remoteHost, ...forwarded } = bindings;
+  return { ...base, NODE_ENV: 'development', ...forwarded };
 }
 
 /**
@@ -251,16 +258,61 @@ export function buildDeployStepEnv(
  * a `run_as` step threads each binding through as an explicit `NAME=value`
  * argv token (mirroring the existing `NODE_ENV=development` handling)
  * rather than relying on env inheritance into the sudo-invoked shell.
+ *
+ * Opt-in remote execution: when the reserved `REMOTE_HOST` binding (an SSH
+ * destination, e.g. an alias from the service user's ~/.ssh/config) is set
+ * AND the step has a `run_as`, the step instead runs on that host over SSH
+ * under `systemd-run --wait --pipe`, so a dropped SSH link fails the step
+ * without SIGHUPing a running command. `REMOTE_HOST` is never forwarded into
+ * the step env. The remote unit's cwd is NOT the registered checkout, so
+ * remote steps must not rely on cwd (e.g. `cd "$PROD_CHECKOUT"` explicitly).
+ * Without `REMOTE_HOST`, or without `run_as`, behaviour is unchanged.
  */
 export function buildShellInvocation(
   command: string,
   opts: { runAs?: string; bindings?: DeployBindings },
 ): { cmd: string; args: string[] } {
+  const { [REMOTE_HOST_BINDING]: remoteHost, ...forwarded } =
+    opts.bindings ?? {};
   const bindingTokens = Object.entries(opts.bindings ?? {}).map(
     ([name, value]) => `${name}=${value}`,
   );
   if (!opts.runAs) {
     return { cmd: 'bash', args: ['-uc', command] };
+  }
+  if (remoteHost) {
+    const remoteCommand = [
+      'sudo',
+      'systemd-run',
+      '--quiet',
+      '--wait',
+      '--pipe',
+      '--collect',
+      `--uid=${opts.runAs}`,
+      '--setenv=NODE_ENV=development',
+      ...Object.entries(forwarded).map(
+        ([name, value]) => `--setenv=${name}=${value}`,
+      ),
+      'bash',
+      '-uc',
+      command,
+    ]
+      .map(posixQuote)
+      .join(' ');
+    return {
+      cmd: 'ssh',
+      args: [
+        '-o',
+        'BatchMode=yes',
+        '-o',
+        'ServerAliveInterval=15',
+        '-o',
+        'ServerAliveCountMax=4',
+        remoteHost,
+        '--',
+        remoteCommand,
+      ],
+    };
   }
   return {
     cmd: 'sudo',
