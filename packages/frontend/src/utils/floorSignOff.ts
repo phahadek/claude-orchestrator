@@ -23,7 +23,7 @@ export const FLOOR_IN_PROGRESS_COPY = 'Review in progress';
 export const FLOOR_DETAILS_UNAVAILABLE =
   'matched categories unavailable (recorded before details were persisted)';
 
-export function parseFloorDetail(detail: string | null | undefined): {
+function parseFloorDetail(detail: string | null | undefined): {
   categories: string | null;
   paths: string | null;
 } {
