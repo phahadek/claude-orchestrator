@@ -24,9 +24,7 @@ export function FloorSignOffDetail({
       className={styles.floorSignOff}
       data-floor-ready={floor.ready ? 'true' : 'false'}
     >
-      {showHeadline && (
-        <div className={styles.headline}>{FLOOR_HEADLINE}</div>
-      )}
+      {showHeadline && <div className={styles.headline}>{FLOOR_HEADLINE}</div>}
       <div className={styles.matched}>
         {floor.categories
           ? `Touches ${floor.categories}${floor.paths ? `: ${floor.paths}` : ''}`

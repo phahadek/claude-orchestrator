@@ -38,7 +38,8 @@ export function deriveFloorSignOff(
   if (!floor) return null;
   const others = (entries ?? [])
     .filter(
-      (e) => e.reason !== 'baseline_escalation_floor' && e.blocks_merge !== false,
+      (e) =>
+        e.reason !== 'baseline_escalation_floor' && e.blocks_merge !== false,
     )
     .map((e) => e.reason);
   return {

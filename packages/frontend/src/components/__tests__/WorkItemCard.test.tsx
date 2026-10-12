@@ -324,7 +324,9 @@ describe('WorkItemCard — baseline escalation floor sign-off', () => {
       pauseReasonFromCanonical('baseline_escalation_floor'),
       pauseReasonFromCanonical('depth_review_pending'),
     ]);
-    render(<WorkItemCard item={makePR({ pauseReason: raw })} {...defaultProps} />);
+    render(
+      <WorkItemCard item={makePR({ pauseReason: raw })} {...defaultProps} />,
+    );
     expect(screen.getByText(/Review in progress/)).toBeDefined();
     expect(screen.getByText(/categories unavailable/)).toBeDefined();
   });
