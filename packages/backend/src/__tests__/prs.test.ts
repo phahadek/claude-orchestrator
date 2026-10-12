@@ -1066,9 +1066,7 @@ describe('POST /api/prs/:prNumber/merge', () => {
       expect(res.status).toBe(409);
       expect(res.body.error).toMatch(/migration number collision/i);
       expect(github.mergePR).not.toHaveBeenCalled();
-      expect(
-        vi.mocked(sessionManager.enqueueFeedback),
-      ).toHaveBeenCalledWith(
+      expect(vi.mocked(sessionManager.enqueueFeedback)).toHaveBeenCalledWith(
         'session-xyz',
         'migration-collision',
         expect.stringContaining(`${DIR}/0255_other.sql`),

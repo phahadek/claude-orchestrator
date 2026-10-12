@@ -557,9 +557,7 @@ export function validateGateCommandsAgainstAllowedTools(
   return findings;
 }
 
-function parseMigrationsConfig(
-  raw: unknown,
-): OrchestratorConfig['migrations'] {
+function parseMigrationsConfig(raw: unknown): OrchestratorConfig['migrations'] {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     return undefined;
   }

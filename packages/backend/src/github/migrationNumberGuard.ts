@@ -90,8 +90,7 @@ export async function checkMigrationNumberCollision(
   }
   if (collisions.length === 0) return { ok: true };
 
-  const nextFree =
-    baseFiles.reduce((max, f) => Math.max(max, f.number), 0) + 1;
+  const nextFree = baseFiles.reduce((max, f) => Math.max(max, f.number), 0) + 1;
   return { ok: false, collisions, nextFree };
 }
 

@@ -138,7 +138,11 @@ describe('guardMigrationNumbersBeforeMerge', () => {
   it('is disabled (no GitHub calls) when the project has no migrations config', async () => {
     vi.mocked(loadOrchestratorConfig).mockReturnValue({} as never);
     const gh = colliding();
-    const res = await guardMigrationNumbersBeforeMerge(gh as never, undefined, row);
+    const res = await guardMigrationNumbersBeforeMerge(
+      gh as never,
+      undefined,
+      row,
+    );
     expect(res).toEqual({ ok: true });
     expect(gh.getPRFiles).not.toHaveBeenCalled();
     expect(gh.listFilePathsAtRef).not.toHaveBeenCalled();
@@ -182,7 +186,11 @@ describe('guardMigrationNumbersBeforeMerge', () => {
 
   it('fails closed on a base-listing failure without pausing, and re-checks next time', async () => {
     const failing = makeGithub([], new Error('502'));
-    const res = await guardMigrationNumbersBeforeMerge(failing as never, undefined, row);
+    const res = await guardMigrationNumbersBeforeMerge(
+      failing as never,
+      undefined,
+      row,
+    );
     expect(res).toMatchObject({ ok: false, kind: 'check_failed' });
     expect(setPauseReason).not.toHaveBeenCalled();
 
