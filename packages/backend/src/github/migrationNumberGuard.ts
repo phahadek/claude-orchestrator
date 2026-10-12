@@ -123,6 +123,7 @@ export async function guardMigrationNumbersBeforeMerge(
       { prNumber: pr.pr_number, repo: pr.repo, baseBranch },
       {
         dir: migrations.dir,
+        // eslint-disable-next-line security/detect-non-literal-regexp -- pattern comes from the project's own .claude-orchestrator.yml config, already regex-validated by loadOrchestratorConfig.
         filenamePattern: new RegExp(migrations.filename_pattern),
       },
     );

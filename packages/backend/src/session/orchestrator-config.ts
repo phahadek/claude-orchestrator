@@ -565,6 +565,7 @@ function parseMigrationsConfig(raw: unknown): OrchestratorConfig['migrations'] {
   if (typeof dir !== 'string' || dir.trim() === '') return undefined;
   if (typeof filename_pattern !== 'string') return undefined;
   try {
+    // eslint-disable-next-line security/detect-non-literal-regexp -- pattern comes from the project's own .claude-orchestrator.yml config, never external/user input.
     new RegExp(filename_pattern);
   } catch {
     logger.warn(
