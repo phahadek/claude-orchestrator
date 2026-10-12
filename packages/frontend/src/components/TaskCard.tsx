@@ -110,8 +110,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Reviewer escalated per project-specific review rules — see the review summary for details and resolve manually.',
   baseline_escalation_floor:
     'Sign-off required — the diff touches CI/workflow config, migrations, auth, or secrets (baseline escalation floor). Approve the PR to sign off.',
-  migration_reservation_overtaken:
-    'Shipped migration number was overtaken out-of-band: it belongs, per the reservation table, to a different task whose PR/branch already merged — see the review summary and resolve manually via the reassignment remedy flow.',
+  migration_number_collision:
+    "This PR's new migration number already exists on the base branch — the session has been asked to renumber it; the merge is retried after the next push.",
   depth_review_escalation:
     'Depth review found a security/concurrency/reliability/data-integrity defect beyond spec-conformance — see the review summary for details and resolve manually.',
   depth_review_pending:

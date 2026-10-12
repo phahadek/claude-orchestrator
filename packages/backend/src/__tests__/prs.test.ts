@@ -25,6 +25,7 @@ vi.mock('../db/queries.js', () => ({
   clearTerminalPRFlags: vi.fn(),
   lookupSessionByBranch: vi.fn().mockReturnValue(null),
   getDepthReviewVerdict: vi.fn().mockReturnValue(null),
+  setPauseReason: vi.fn(),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -105,6 +106,19 @@ vi.mock('../config.js', () => ({
     (repo: string) => mockProjectsByGithubRepo[repo],
   ),
   getAllProjects: vi.fn(() => Object.values(mockProjectsByGithubRepo)),
+}));
+
+const { orchestratorConfigFixture } = vi.hoisted(() => ({
+  orchestratorConfigFixture: {
+    ci_check_name: [] as string[],
+    migrations: undefined as
+      | { dir: string; filename_pattern: string }
+      | undefined,
+  },
+}));
+
+vi.mock('../session/orchestrator-config.js', () => ({
+  loadOrchestratorConfig: vi.fn(() => orchestratorConfigFixture),
 }));
 
 import { createPrsRouter, setPRBroadcast } from '../routes/prs.js';
@@ -238,6 +252,8 @@ function makeMockGitHub(): GitHubClient {
       rawMergeableState: 'dirty',
       failingChecks: [],
     }),
+    getPRFiles: vi.fn().mockResolvedValue([]),
+    listFilePathsAtRef: vi.fn().mockResolvedValue([]),
   } as unknown as GitHubClient;
 }
 
@@ -305,6 +321,7 @@ function buildApp(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  orchestratorConfigFixture.migrations = undefined;
 });
 
 // ── GET /api/prs/depth-dispositions ─────────────────────────────────────────
@@ -1018,6 +1035,77 @@ describe('POST /api/prs/:prNumber/merge', () => {
   // broadcast) is now performed inside PRMergeWatcher.handleMerged — see the
   // "delegates post-merge handling" test above and handleMerged's own coverage
   // (e.g. clearTerminalPRFlags.test.ts, pruneBranches.test.ts).
+
+  describe('migration-number collision guard', () => {
+    const DIR = 'migrations/postgres';
+
+    beforeEach(() => {
+      orchestratorConfigFixture.migrations = {
+        dir: DIR,
+        filename_pattern: '^(\\d+)_.+\\.sql$',
+      };
+    });
+
+    it('refuses to merge a colliding PR with a 409 and does not call mergePR', async () => {
+      vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+      const github = makeMockGitHub();
+      vi.mocked(github.getPRFiles).mockResolvedValue([
+        { filename: `${DIR}/0255_new.sql`, status: 'added' },
+      ] as never);
+      vi.mocked(github.listFilePathsAtRef).mockResolvedValue([
+        `${DIR}/0255_other.sql`,
+      ]);
+      const sessionManager = makeMockSessionManager();
+
+      const res = await supertest(
+        buildApp(github, makeMockPRReviewService(), sessionManager),
+      )
+        .post('/api/prs/owner/repo/42/merge')
+        .send({});
+
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/migration number collision/i);
+      expect(github.mergePR).not.toHaveBeenCalled();
+      expect(vi.mocked(sessionManager.enqueueFeedback)).toHaveBeenCalledWith(
+        'session-xyz',
+        'migration-collision',
+        expect.stringContaining(`${DIR}/0255_other.sql`),
+      );
+    });
+
+    it('merges normally when the PR has no migration-number collision', async () => {
+      vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+      const github = makeMockGitHub();
+      vi.mocked(github.getPRFiles).mockResolvedValue([
+        { filename: `${DIR}/0260_new.sql`, status: 'added' },
+      ] as never);
+      vi.mocked(github.listFilePathsAtRef).mockResolvedValue([
+        `${DIR}/0255_other.sql`,
+      ]);
+
+      const res = await supertest(buildApp(github))
+        .post('/api/prs/owner/repo/42/merge')
+        .send({});
+
+      expect(res.status).toBe(200);
+      expect(github.mergePR).toHaveBeenCalled();
+    });
+
+    it('is never checked (no GitHub file-listing calls, merges normally) for a project with no migrations config', async () => {
+      orchestratorConfigFixture.migrations = undefined;
+      vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+      const github = makeMockGitHub();
+
+      const res = await supertest(buildApp(github))
+        .post('/api/prs/owner/repo/42/merge')
+        .send({});
+
+      expect(res.status).toBe(200);
+      expect(github.getPRFiles).not.toHaveBeenCalled();
+      expect(github.listFilePathsAtRef).not.toHaveBeenCalled();
+      expect(github.mergePR).toHaveBeenCalled();
+    });
+  });
 });
 
 // ── POST /api/prs/:prNumber/merge — draft → ready flip ───────────────────────
