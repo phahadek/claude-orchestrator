@@ -354,6 +354,20 @@ record — there is no dated run-note written back into a task body).
   from the body without accreting them to the gate is the same class of failure as locking
   sequencing in the task body instead of the `Depends On` property: the downstream artifact
   (here, the `gate_item` store) is the only place the information survives.
+- **Write each item against the behaviour, not one instance.** A gate item that hard-codes a
+  single market, command id, or payload becomes unverifiable when that instance closes or can no
+  longer be issued, though the behaviour stays verifiable. Phrase the item as the behaviour; a named
+  instance is only an example.
+- **Re-checks are relative to deployment, never a calendar date.** When an item is deferred or
+  parked awaiting a fix, its trace guide says "re-check N days after the fix deploys (window starts
+  at the relevant daemon's restart onto the fix)", not "re-check at <date>".
+- **Sanity-check literal thresholds at accretion.** State the threshold's derivation, or phrase the
+  item as the property rather than the number. A literal that contradicts the query's own
+  structure (e.g. "<100 shared buffers" for a query that touches ≥6×20 heap pages by construction),
+  comes from a different population, or assumes a cadence the system does not run on (calendar
+  15-min buckets vs 15 min after the last success) fails the item on the number, not the behaviour.
+- **Never accrete an item that manufactures host load.** Load and isolation properties are verified
+  from historical telemetry, not by forcing a heavy run on a shared prod host.
 - **Follow-up tasks** that depend on confirmed runtime behaviour cannot list a gate *task* in
   `Depends On` (there is none) — sequence them after the milestone's gate run, or on the specific
   Code task whose behaviour they need.

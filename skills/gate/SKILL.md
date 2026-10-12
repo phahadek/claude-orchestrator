@@ -222,6 +222,37 @@ The six disciplines below are how that rule is kept:
 
 ---
 
+## Subagent delegation — DB-safety and no manufactured load
+
+Any brief this session hands to a subagent that reads a project database MUST:
+
+- **(a) Name the direct, non-pooled DSN.** Never the pooled (PgBouncer) one. Resolve the concrete
+  DSN names from the project's `context.md` § Running production commands; do not guess them.
+- **(b) Forbid session-level settings.** The subagent must never execute a SET (including
+  `default_transaction_read_only`); any setting is passed as a connect-time option (e.g. the
+  connection's `options`/`-c` parameter). State "never execute a SET" in the brief verbatim.
+- **(c) Forbid shared helper scripts across verifiers.** Each verifier writes and uses its own
+  connection code; none reuses another's helper.
+
+Why: on 2026-10-11 verifier helpers issued a session-level `SET default_transaction_read_only=on`
+through the pooled DSN. It leaked via transaction pooling onto shared server connections; every
+pooled daemon write failed for ~28 minutes and the fleet crash-looped.
+
+**No manufactured load.** Never stage a load or isolation test against a shared prod host (e.g.
+forcing an unscoped heavy recompute). Park the item with a trace guide for historical-telemetry
+verification instead — no manufactured load, ever.
+
+**Deferred re-checks are relative to deployment, never a calendar date.** A parked/deferred item's
+trace guide says "re-check N days after the fix deploys (window starts at the relevant daemon's
+restart onto the fix)", not "re-check at <date>".
+
+**Items are behaviours, not instances.** If an item hard-codes one market/command/payload that is no
+longer verifiable but the behaviour is, treat the item as malformed and verify the behaviour more
+broadly. If an item fails only on a mis-specified literal threshold, restate it with its derivation
+and put the restatement to the operator rather than recording a fail on the bad number.
+
+---
+
 ## Step 0 — Resolve the milestone
 
 Determine the milestone (e.g. "M12") from the user or the active context. Do

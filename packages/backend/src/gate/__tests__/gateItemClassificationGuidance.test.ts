@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { GateItemClassification } from '../../db/types';
+import { GATE_ITEM_TIER_SELECTION_GUIDANCE } from '../gateItemClassificationGuidance';
 
 const GATE_ITEM_CLASSIFICATIONS: readonly GateItemClassification[] = [
   'Read-Only',
@@ -93,6 +94,36 @@ describe('skills/gate/SKILL.md gate-item classification parity', () => {
     expect(skill).toMatch(
       /not-yet-triggerable.*evidence|evidence.*not-yet-triggerable/s,
     );
+  });
+});
+
+describe('gate item authoring guidance (M18 gate-run feedback)', () => {
+  it('tells accretion to write behaviours, not instances, and to derive thresholds', () => {
+    expect(GATE_ITEM_TIER_SELECTION_GUIDANCE).toContain(
+      'against the behaviour, not one named instance',
+    );
+    expect(GATE_ITEM_TIER_SELECTION_GUIDANCE).toContain(
+      "state the threshold's derivation",
+    );
+  });
+
+  it('gate skill carries the subagent DB-safety and no-load rules', () => {
+    const skill = readFileSync(GATE_SKILL_MD_PATH, 'utf8');
+    expect(skill).toContain('Subagent delegation');
+    expect(skill).toContain('direct, non-pooled DSN');
+    expect(skill).toContain('connect-time');
+    expect(skill).toContain('never execute a SET');
+    expect(skill).toContain('no manufactured load');
+  });
+
+  it('task-writing gate section states behaviour, deploy-relative and threshold rules', () => {
+    const tw = readFileSync(
+      join(__dirname, '../../../../../config-template/task-writing.md'),
+      'utf8',
+    );
+    expect(tw).toContain('against the behaviour, not one instance');
+    expect(tw).toContain('never a calendar date');
+    expect(tw).toContain('Sanity-check literal thresholds');
   });
 });
 
