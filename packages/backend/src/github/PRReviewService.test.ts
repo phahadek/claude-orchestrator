@@ -4459,3 +4459,4 @@ describe('buildGateChargedFailuresSection()', () => {
     expect(section).toContain('src/foo.test.ts.bar works');
     expect(section).toContain('in scope for the Files/paths dimension');
   });
+});
