@@ -295,6 +295,23 @@ describe("clearTerminalPRFlags('review_verdict') — depth-review holds survive 
     expect(set.map((e) => e.reason)).toEqual(['depth_review_escalation']);
   });
 
+  it('does not discharge a baseline_escalation_floor hold and it stacks with depth-review holds', () => {
+    insertPR({ pr_number: 64, task_id: 'notion:task-floor-1' });
+    setPauseReason(64, 'owner/repo', 'baseline_escalation_floor', 'detail');
+    setPauseReason(64, 'owner/repo', 'depth_review_pending');
+    setPauseReason(64, 'owner/repo', 'depth_review_escalation');
+
+    clearTerminalPRFlags(64, 'owner/repo', 'review_verdict');
+
+    const reasons = parsePauseReasonSet(rawPauseReason(64))
+      .map((e) => e.reason)
+      .sort();
+    expect(reasons).toEqual([
+      'baseline_escalation_floor',
+      'depth_review_escalation',
+    ]);
+  });
+
   it('still clears a plain review-source hold (e.g. review_failed) left from a prior cycle', () => {
     insertPR({ pr_number: 62, task_id: 'notion:task-depth-3' });
     setPauseReason(62, 'owner/repo', 'review_failed');

@@ -5,6 +5,7 @@ export type PauseSource =
   | 'tests'
   | 'ci'
   | 'review'
+  | 'baseline_floor'
   | 'merge'
   | 'notion'
   | 'launch'
@@ -294,8 +295,10 @@ export const PAUSE_REASON_REGISTRY: Record<
   // Code-enforced baseline floor (CI/workflow config, migrations, auth,
   // secrets) — always requires human sign-off regardless of review_rules, so
   // it is deliberately not marked automatic/none like other review reasons.
+  // Own source so the hold stacks alongside depth_review_* and survives
+  // source-scoped review writes / the review_verdict clear.
   baseline_escalation_floor: {
-    source: 'review',
+    source: 'baseline_floor',
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
   },

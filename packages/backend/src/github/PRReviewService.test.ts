@@ -3160,6 +3160,22 @@ describe('PRReviewService — baseline escalation floor', () => {
     );
     expect(result.escalate).toBe(true);
     expect(result.baselineEscalationFloor).toBe(true);
+    expect(result.escalatedBeforeFloor).toBe(false);
+  });
+
+  it('records escalatedBeforeFloor=true when the incoming result already escalated', async () => {
+    const result = await runReview(
+      makeDiffTouching('.github/workflows/deploy.yml'),
+      {
+        verdict: 'needs_changes',
+        dimensions: fourPassedDims,
+        summary: 'Rule-based escalation.',
+        escalate: true,
+        escalationReason: 'rule',
+      },
+    );
+    expect(result.escalate).toBe(true);
+    expect(result.escalatedBeforeFloor).toBe(true);
   });
 });
 

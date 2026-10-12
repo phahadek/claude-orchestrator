@@ -484,7 +484,52 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
     ).toBe(true);
   });
 
-  it('routes to baseline_escalation_floor (not review_rules_escalation) when the code-level floor forced escalate', async () => {
+  const floorReason =
+    'Baseline escalation floor: diff touches CI/workflow config path(s): .github/workflows/ci.yml';
+
+  it('floor-only needs_changes sets the floor pause with detail and still routes feedback with a sign-off line', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'needs_changes',
+      dimensions: [],
+      summary: 'Missing export.',
+      reviewedAt: new Date().toISOString(),
+      escalate: true,
+      escalationReason: floorReason,
+      baselineEscalationFloor: true,
+      escalatedBeforeFloor: false,
+    });
+
+    const messages: unknown[] = [];
+    sm.on('message', (m: unknown) => messages.push(m));
+
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'baseline_escalation_floor',
+      floorReason,
+    );
+    expect(
+      messages.some((m) => (m as { type: string }).type === 'review_escalated'),
+    ).toBe(true);
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledOnce();
+    const [sessionId, , message] = vi.mocked(sm.enqueueFeedback).mock.calls[0];
+    expect(sessionId).toBe('coding-session-id');
+    expect(message).toContain('Missing export.');
+    expect(message).toContain('CI/workflow config');
+    expect(message).toContain('operator sign-off');
+  });
+
+  it('floor-only approved sets the floor pause and dispatches depth review', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
 
     const sm = makeMockSessionManager();
@@ -496,28 +541,50 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
       summary: 'Touches CI workflow config.',
       reviewedAt: new Date().toISOString(),
       escalate: true,
-      escalationReason:
-        'Baseline escalation floor: diff touches CI/workflow config path(s): .github/workflows/ci.yml',
+      escalationReason: floorReason,
       baselineEscalationFloor: true,
+      escalatedBeforeFloor: false,
     });
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    const dispatch = vi
+      .spyOn(orch as any, 'dispatchDepthReview')
+      .mockResolvedValue(undefined);
 
-    const messages: unknown[] = [];
-    sm.on('message', (m: unknown) => messages.push(m));
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
 
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'baseline_escalation_floor',
+      floorReason,
+    );
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(vi.mocked(sm.enqueueFeedback)).not.toHaveBeenCalled();
+  });
+
+  it('floor combined with a review_rules escalation keeps escalate-and-return', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'needs_changes',
+      dimensions: [],
+      summary: 'x',
+      reviewedAt: new Date().toISOString(),
+      escalate: true,
+      escalationReason: `rule | ${floorReason}`,
+      baselineEscalationFloor: true,
+      escalatedBeforeFloor: true,
+    });
     new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
-    expect(vi.mocked(sm.sendOrResume)).not.toHaveBeenCalled();
-    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
-      1,
-      'owner/repo',
-      'baseline_escalation_floor',
-    );
-    expect(
-      messages.some((m) => (m as { type: string }).type === 'review_escalated'),
-    ).toBe(true);
+    expect(vi.mocked(sm.enqueueFeedback)).not.toHaveBeenCalled();
   });
 
   it('routes to migration_reservation_overtaken (not baseline_escalation_floor) when the shipped number was overtaken by a different, already-merged task', async () => {
@@ -738,7 +805,7 @@ describe('ReviewOrchestrator — depth review dispatch gating', () => {
     expect(runDepthReview).not.toHaveBeenCalled();
   });
 
-  it('never dispatches the depth-review pass when the conformance verdict was escalated', async () => {
+  it('never dispatches the depth-review pass when the conformance verdict was escalated by review_rules', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
 
     const sm = makeMockSessionManager();
@@ -752,6 +819,7 @@ describe('ReviewOrchestrator — depth review dispatch gating', () => {
       escalate: true,
       escalationReason: 'Baseline escalation floor: diff touches CI config.',
       baselineEscalationFloor: true,
+      escalatedBeforeFloor: true,
     });
     const runDepthReview = vi.fn().mockResolvedValue(makeDepthResult({}));
     const orch = new ReviewOrchestrator(rs, sm as any, true);
