@@ -62,6 +62,12 @@ export function createOpsJournalRouter(): Router {
         }
       }
       if (!milestoneId) {
+        // Back-compat: a ref that is already the stored journal key.
+        const direct = listEntriesForMilestone(milestone);
+        if (direct.length > 0) {
+          res.json({ entries: direct });
+          return;
+        }
         res.status(404).json({
           error:
             `unknown milestone "${milestone}"` +

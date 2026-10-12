@@ -77,12 +77,6 @@ describe('GET /api/ops-journal', () => {
 
   it('resolves a canonical name with project to the same entries as the row id', async () => {
     seedMs12('task-g1');
-    db.prepare(
-      `INSERT OR IGNORE INTO projects (id, name, project_dir, task_source) VALUES ('polimarket-analyser', 'P', '/tmp/p', 'notion')`,
-    ).run();
-    db.prepare(
-      `INSERT OR IGNORE INTO milestones (id, project_id, name, canonical_short_id, display_order) VALUES ('ms-12', 'polimarket-analyser', 'M12', 'M12', 1)`,
-    ).run();
 
     const byName = await request(makeApp()).get(
       '/api/ops-journal?milestone=M12&project=polimarket-analyser',
