@@ -1231,6 +1231,89 @@ describe('buildShellInvocation: run_as binding threading', () => {
   });
 });
 
+function splitPosixWords(s: string): string[] {
+  const words: string[] = [];
+  let i = 0;
+  while (i < s.length) {
+    if (s[i] === ' ') {
+      i++;
+      continue;
+    }
+    let word = '';
+    while (i < s.length && s[i] !== ' ') {
+      if (s[i] === "'") {
+        const end = s.indexOf("'", i + 1);
+        word += s.slice(i + 1, end);
+        i = end + 1;
+      } else if (s[i] === '\\') {
+        word += s[i + 1];
+        i += 2;
+      } else {
+        word += s[i++];
+      }
+    }
+    words.push(word);
+  }
+  return words;
+}
+
+describe('buildShellInvocation: REMOTE_HOST', () => {
+  const nasty = `echo 'a' "b" $(id) && true\nline2`;
+
+  it('wraps a run_as step in ssh + systemd-run', () => {
+    const { cmd, args } = buildShellInvocation(nasty, {
+      runAs: 'polimarket',
+      bindings: { REMOTE_HOST: 'prod', FOO: 'a b', BAR: "x'y" },
+    });
+    expect(cmd).toBe('ssh');
+    expect(args).toContain('BatchMode=yes');
+    expect(args.slice(-2, -1)).toEqual(['--']);
+    expect(args[args.length - 3]).toBe('prod');
+    const words = splitPosixWords(args[args.length - 1]);
+    expect(words).toEqual([
+      'sudo',
+      'systemd-run',
+      '--quiet',
+      '--wait',
+      '--pipe',
+      '--collect',
+      '--uid=polimarket',
+      '--setenv=NODE_ENV=development',
+      '--setenv=FOO=a b',
+      "--setenv=BAR=x'y",
+      'bash',
+      '-uc',
+      nasty,
+    ]);
+    expect(words.filter((w) => w.includes('REMOTE_HOST'))).toEqual([]);
+  });
+
+  it('runs locally when REMOTE_HOST is set but there is no run_as', () => {
+    const { cmd, args } = buildShellInvocation('echo hi', {
+      bindings: { REMOTE_HOST: 'prod' },
+    });
+    expect(cmd).toBe('bash');
+    expect(args).toEqual(['-uc', 'echo hi']);
+  });
+
+  it('is unchanged for run_as without REMOTE_HOST', () => {
+    const { cmd, args } = buildShellInvocation('x', {
+      runAs: 'deploy',
+      bindings: { A: '1' },
+    });
+    expect(cmd).toBe('sudo');
+    expect(args).toEqual([
+      '-u',
+      'deploy',
+      'NODE_ENV=development',
+      'A=1',
+      'bash',
+      '-uc',
+      'x',
+    ]);
+  });
+});
+
 describe('DeployOrchestrator: binding substitution for confirm-gate/agentic step text', () => {
   it('resolves a binding reference in a confirm-gate step before handing it to waitForConfirmGate', async () => {
     const playbook = playbookWith([
