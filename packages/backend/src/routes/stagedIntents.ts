@@ -3,7 +3,7 @@ import type { Request, Response } from 'express';
 import { randomUUID } from 'crypto';
 import { execSync } from 'child_process';
 import { runWithConcurrency } from '../utils/concurrency';
-import { getTaskBackend, type TaskBackend } from '../tasks/TaskBackend';
+import { getTaskBackend } from '../tasks/TaskBackend';
 import {
   assertTaskIdResolves,
   assertNoDependencyCycle,
@@ -22,7 +22,7 @@ import {
   type MoveTaskTargetMilestone,
   type CreateTaskCommandFields,
 } from '../tasks/TaskWriteCommands';
-import { NotionClient, parseSection } from '../notion/NotionClient';
+import { NotionClient } from '../notion/NotionClient';
 import type {
   TaskPropertiesPatch,
   PatchBodySectionOperation,
@@ -46,12 +46,9 @@ import {
   GroomingGateError,
   checkGroomingPromotionGate,
   findAutoApproveIneligibleTaskCreate,
-  pendingMigrationReservations,
   type GroomingGateEntry,
-  type FilesPathsEntry,
 } from '../groom/groomGate';
 import type { TrackedFileSetCache } from '../groom/groomLoad';
-import { reserveMigrationNumber } from '../db/migrationReservation';
 import { isInteractiveTaskType } from '../planning/triage';
 import {
   isInvestigateSession,
@@ -178,10 +175,6 @@ import {
   updateReportState,
   getReportsForBatchTaskId,
 } from '../investigation/reportStore';
-import {
-  rederiveMigrationReassignment,
-  MIGRATION_REASSIGNMENT_REPORT_MARKER,
-} from '../db/migrationReservation';
 import { rankDecisions } from '../convergence/decisionRanking';
 import { resolveSessionCompleteForDisplay } from '../convergence/attentionSignals';
 import {
@@ -5109,69 +5102,6 @@ function readinessAdvisoryAnnotation(
   return JSON.stringify({ advisory: true, violations: advisory });
 }
 
-/**
- * Migration-number reservation: Ready-flip allocation + body-prose sync.
- *
- * Reads taskId's live `## Files / paths affected` section, finds any
- * `*(new)*` migration entries still carrying a placeholder number (see
- * groomLoad.ts's `parsePendingMigrationPathEntry`), reserves the next free
- * project-scoped number for each in the migration_reservation table, and
- * rewrites each entry's raw text in place with the allocated number — all
- * before returning to the caller, which is `applyIntent`'s task.setStatus
- * case, itself called strictly before the Ready flip's own
- * `commands.setStatus`. That ordering is what "dependency-ordered before
- * the Ready flip" means here: this isn't a separate staged_intent row, it's
- * a step this same apply performs first, synchronously with respect to the
- * reservation table (see migrationReservation.ts's no-await-between-
- * read-and-write guarantee) even though the surrounding apply is async.
- *
- * `./groomLoad` is imported dynamically, mirroring groomGate.ts's own
- * `resolveFilesPathsEntriesServerSide` — groomLoad.ts's git/Notion-client
- * dependency footprint is only worth paying for a Ready flip that actually
- * has a Files/paths section to check.
- *
- * No-ops when the backend can't patch body sections (patchBodySection is
- * optional on TaskBackend) or the task has no Files/paths section at all.
- */
-async function allocateMigrationReservations(
-  taskId: string,
-  projectId: string,
-  backend: TaskBackend,
-): Promise<void> {
-  if (!backend.patchBodySection) return;
-  const body = await backend.fetchTaskPage(taskId);
-  const section = parseSection(body, 'files');
-  if (!section) return;
-
-  const { parseFilesPathsRawItems } = await import('../groom/groomLoad');
-  const rawItems = parseFilesPathsRawItems(section);
-  const entries: FilesPathsEntry[] = rawItems.map((e) => ({
-    ...e,
-    existsInRepo: false,
-  }));
-  const pending = pendingMigrationReservations(entries);
-  if (pending.length === 0) return;
-
-  const at = new Date().toISOString();
-  for (const entry of pending) {
-    const reservation = reserveMigrationNumber({
-      project: projectId,
-      taskId,
-      dir: entry.dir,
-      suffix: entry.suffix,
-      at,
-    });
-    const paddedNumber = String(reservation.number).padStart(4, '0');
-    const newToken = `${entry.dir}${paddedNumber}_${entry.suffix}`;
-    const replaceWith = entry.raw.replace(entry.token, newToken);
-    await backend.patchBodySection(taskId, 'Files / paths affected', {
-      operation: 'replace',
-      find: entry.raw,
-      replaceWith,
-    });
-  }
-}
-
 async function applyIntent(
   intent: StagedIntent,
   override?: { reason: string },
@@ -5257,16 +5187,6 @@ async function applyIntent(
         payload.groomingGate?.triage && triageMilestoneLabel
           ? { milestoneLabel: triageMilestoneLabel }
           : undefined;
-      // Migration-number reservation: allocated and synced into the body
-      // strictly before the Ready flip itself commits — see
-      // allocateMigrationReservations's doc comment.
-      if (isReadyPathKind('task.setStatus', payload)) {
-        await allocateMigrationReservations(
-          payload.taskId,
-          intent.projectId,
-          backend,
-        );
-      }
       await commands.setStatus(payload.taskId, payload.status, {
         source: 'human',
         readinessOverride: override,
@@ -5530,64 +5450,6 @@ async function applyIntent(
       );
       const session = intent.sessionId ? getSession(intent.sessionId) : null;
       const headSha = resolveReportFileHeadSha(session?.worktree_path ?? null);
-
-      // A migration-number-reassignment claim (see mcp/tools/stageProposalTools.ts's
-      // report.file claimKind field) routes through the authoritative
-      // re-derivation in db/migrationReservation.ts instead of the generic
-      // insertReport-then-commit path below: only a claim the orchestrator
-      // itself confirms against the live reservation table stays visible for
-      // operator disposition — an unconfirmed claim is auto-dismissed
-      // (abandoned) with the discrepancy recorded, never left pending.
-      if (payload.claimKind === 'migration-number-reassignment') {
-        if (
-          !payload.taskId ||
-          payload.expectedNumber === undefined ||
-          payload.actualNumber === undefined
-        ) {
-          throw new Error(
-            `[stagedIntents] report.file apply: migration-number-reassignment claim on intent ${intent.id} is missing taskId/expectedNumber/actualNumber`,
-          );
-        }
-        const verdict = rederiveMigrationReassignment({
-          project: intent.projectId,
-          taskId: payload.taskId,
-          expectedNumber: payload.expectedNumber,
-          actualNumber: payload.actualNumber,
-        });
-        const evidenceText = [
-          `HEAD: ${headSha ?? 'unknown'}`,
-          MIGRATION_REASSIGNMENT_REPORT_MARKER,
-          `taskId: ${payload.taskId}, expectedNumber: ${payload.expectedNumber}, actualNumber: ${payload.actualNumber}`,
-          `re-derivation: ${verdict.reason}`,
-          payload.evidence_text,
-        ]
-          .filter((part): part is string => Boolean(part))
-          .join('\n\n');
-        const now = new Date().toISOString();
-        const report = insertReport({
-          projectId: intent.projectId,
-          milestoneId: milestoneRow.id,
-          title: payload.title,
-          symptomText: payload.symptom_text,
-          evidenceText,
-          source: 'session',
-          originSessionId: intent.sessionId ?? undefined,
-          originTaskId: session?.task_id ?? undefined,
-          createdAt: now,
-        });
-        const final = updateReportState(
-          report.id,
-          verdict.confirmed ? 'committed' : 'abandoned',
-          now,
-          verdict.confirmed ? undefined : verdict.reason,
-        );
-        return {
-          id: final.id,
-          state: final.state,
-          confirmed: verdict.confirmed,
-          reason: verdict.reason,
-        };
-      }
 
       const evidenceText = [
         `HEAD: ${headSha ?? 'unknown'}`,

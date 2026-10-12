@@ -30,6 +30,7 @@ import type { PRReviewResult } from '../github/PRReviewService';
 import type { DepthReviewDimension } from '../github/DepthReviewService';
 import type { PRMergeWatcher } from '../github/PRMergeWatcher';
 import type { AutoMerger } from '../github/AutoMerger';
+import { guardMigrationNumbersBeforeMerge } from '../github/migrationNumberGuard';
 import type { SessionManager } from '../session/SessionManager';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
@@ -486,6 +487,23 @@ export function createPrsRouter(
           `[prs] pre-merge mergeability check failed for PR #${prNumber}:`,
           (err as Error).message,
         );
+      }
+
+      if (prRow) {
+        const migrationGuard = await guardMigrationNumbersBeforeMerge(
+          github,
+          sessionManager,
+          prRow,
+        );
+        if (!migrationGuard.ok) {
+          res.status(migrationGuard.kind === 'collision' ? 409 : 502).json({
+            error:
+              migrationGuard.kind === 'collision'
+                ? `Migration number collision: ${migrationGuard.message}`
+                : `Merge blocked — ${migrationGuard.message}`,
+          });
+          return;
+        }
       }
 
       try {

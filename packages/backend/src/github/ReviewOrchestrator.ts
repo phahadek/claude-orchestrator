@@ -124,8 +124,7 @@ const MAX_DEPTH_REVIEW_ROUTE_ATTEMPTS = 2;
 function isFloorOnlyEscalation(result: PRReviewResult): boolean {
   return (
     result.baselineEscalationFloor === true &&
-    result.escalatedBeforeFloor !== true &&
-    result.migrationReservationOvertaken !== true
+    result.escalatedBeforeFloor !== true
   );
 }
 
@@ -1466,11 +1465,9 @@ export class ReviewOrchestrator {
       } else {
         setLocalBranchPauseReason(
           job.localBranchId,
-          result.migrationReservationOvertaken
-            ? 'migration_reservation_overtaken'
-            : result.baselineEscalationFloor
-              ? 'baseline_escalation_floor'
-              : 'review_rules_escalation',
+          result.baselineEscalationFloor
+            ? 'baseline_escalation_floor'
+            : 'review_rules_escalation',
         );
       }
       this.sessionManager.emit('message', {
@@ -1796,14 +1793,10 @@ export class ReviewOrchestrator {
         setPauseReason(
           job.prNumber,
           job.repo,
-          result.migrationReservationOvertaken
-            ? 'migration_reservation_overtaken'
-            : result.baselineEscalationFloor
-              ? 'baseline_escalation_floor'
-              : 'review_rules_escalation',
-          ...(result.baselineEscalationFloor &&
-          !result.migrationReservationOvertaken &&
-          result.escalationReason
+          result.baselineEscalationFloor
+            ? 'baseline_escalation_floor'
+            : 'review_rules_escalation',
+          ...(result.baselineEscalationFloor && result.escalationReason
             ? [result.escalationReason]
             : []),
         );

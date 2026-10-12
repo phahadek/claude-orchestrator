@@ -125,6 +125,13 @@ export interface OrchestratorConfig {
    * Undefined = no override (all user-level servers are inherited).
    */
   mcp_servers?: Record<string, unknown>;
+  /**
+   * Enables the merge-time migration-number duplicate guard (see
+   * github/migrationNumberGuard.ts). `dir` is repo-relative; capture group 1
+   * of `filename_pattern` is the migration number. Undefined (absent or
+   * invalid) = guard disabled.
+   */
+  migrations?: { dir: string; filename_pattern: string };
   /** Commands the orchestrator runs as authoritative tests, per head-SHA. Empty = feature off. */
   test: string[];
   /** Per-command timeout in seconds for test commands. Default 300. */
@@ -550,6 +557,26 @@ export function validateGateCommandsAgainstAllowedTools(
   return findings;
 }
 
+function parseMigrationsConfig(
+  raw: unknown,
+): OrchestratorConfig['migrations'] {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return undefined;
+  }
+  const { dir, filename_pattern } = raw as Record<string, unknown>;
+  if (typeof dir !== 'string' || dir.trim() === '') return undefined;
+  if (typeof filename_pattern !== 'string') return undefined;
+  try {
+    new RegExp(filename_pattern);
+  } catch {
+    logger.warn(
+      `[orchestrator-config] migrations.filename_pattern is not a valid regex — migration guard disabled`,
+    );
+    return undefined;
+  }
+  return { dir, filename_pattern };
+}
+
 /**
  * Load per-project orchestrator configuration from `<projectDir>/.claude-orchestrator.yml`.
  * Falls back to empty defaults if the file does not exist or is invalid.
@@ -697,6 +724,7 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
           ? (parsed.mcp_servers as Record<string, unknown>)
           : undefined,
       pr_body: parsePrBodyConfig(parsed.pr_body),
+      migrations: parseMigrationsConfig(parsed.migrations),
     };
   } catch (err) {
     logger.warn(

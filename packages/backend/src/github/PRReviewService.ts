@@ -13,8 +13,6 @@ import {
   getPRIntentForPR,
   setPauseReason,
   clearTerminalPRFlags,
-  getMergedPRForTask,
-  getMergedLocalBranchForTaskId,
   getAuthoritativeTestRunForPr,
   listTestRequestRunsForPrSession,
   getUnexcusedFailingTestIdsForRun,
@@ -30,10 +28,6 @@ import type {
   TestRequestRunRow,
 } from '../db/types';
 import { readRunTestOutcomes } from '../orchestration/runTestOutcomes';
-import {
-  getReservationForTaskDirSuffix,
-  getReservationByNumber,
-} from '../db/migrationReservation';
 import { getCachedType } from '../tasks/TaskWriteCommands';
 import { recordEvent } from '../audit/AuditLog';
 import type { GitHubClient } from './GitHubClient';
@@ -198,203 +192,8 @@ export interface ReviewDimension {
   notes: string;
 }
 
-/** Name of the dimension the migration-renumber pre-check overrides. Must match the JSON schema block below verbatim. */
-const FILES_PATHS_DIMENSION_NAME = 'Changed files vs Files/paths affected list';
-
 export function isMigrationPath(path: string): boolean {
   return /(^|\/)(db\/)?migrations?\//i.test(path);
-}
-
-interface MigrationPathParts {
-  dir: string;
-  number: string;
-  suffix: string;
-}
-
-function parseMigrationParts(path: string): MigrationPathParts | null {
-  const slashIdx = path.lastIndexOf('/');
-  const filename = slashIdx === -1 ? path : path.slice(slashIdx + 1);
-  const m = filename.match(/^(\d+)_(.+)$/);
-  if (!m) return null;
-  return {
-    dir: slashIdx === -1 ? '' : path.slice(0, slashIdx + 1),
-    number: m[1],
-    suffix: m[2],
-  };
-}
-
-/**
- * Parses a Files/paths migration entry's path token into dir+suffix,
- * tolerating either a concrete leading number or an unsynced `NNN...`
- * placeholder (see groomLoad.ts's MIGRATION_PLACEHOLDER_RE) — the
- * reservation-override lookup only needs the placeholder's identity
- * (dir+suffix), not whichever number currently sits in the entry's raw text.
- */
-function parseMigrationEntryDirSuffix(
-  token: string,
-): { dir: string; suffix: string } | null {
-  const slashIdx = token.lastIndexOf('/');
-  const filename = slashIdx === -1 ? token : token.slice(slashIdx + 1);
-  const m = filename.match(/^(?:\d+|N{2,})_(.+)$/i);
-  if (!m) return null;
-  return {
-    dir: slashIdx === -1 ? '' : token.slice(0, slashIdx + 1),
-    suffix: m[1],
-  };
-}
-
-interface MigrationRenumberMatch {
-  diffPath: string;
-  listedPath: string;
-  number: string;
-}
-
-interface MigrationCollision {
-  diffPath: string;
-  collidesWithPath: string;
-  number: string;
-}
-
-export interface MigrationRenumberEvaluation {
-  /**
-   * Diff migration files that suffix-match a task-listed migration but ship a
-   * different, self-picked number that happens to be free on the base
-   * branch. This is NOT tolerated: per the locked review branches, a session
-   * must either use the task-assigned number verbatim or escalate for
-   * reassignment — picking its own free number is not a valid resolution, so
-   * these must fail the Files/paths dimension exactly like a collision.
-   */
-  mismatches: MigrationRenumberMatch[];
-  /** Diff migration files whose new number is already used by a different migration on the base branch — not tolerated. */
-  collisions: MigrationCollision[];
-}
-
-/**
- * Deterministic pre-check for the "Changed files vs Files/paths affected
- * list" dimension: a migration file in the diff that isn't literally listed
- * in the task, but shares a directory and name-suffix with a listed
- * migration and differs only in its leading number, is a real deviation from
- * the assigned number — whether or not that number collides with another
- * migration on the base branch. Pure function so identical inputs always
- * produce identical output, independent of LLM judgement — see the
- * PRReviewService callers that fetch `baseBranchMigrationPaths` and apply
- * this as a code-level override.
- */
-export function evaluateMigrationRenumberTolerance(
-  diffMigrationPaths: string[],
-  listedMigrationPaths: string[],
-  baseBranchMigrationPaths: string[],
-): MigrationRenumberEvaluation {
-  const mismatches: MigrationRenumberMatch[] = [];
-  const collisions: MigrationCollision[] = [];
-  const listedSet = new Set(listedMigrationPaths);
-
-  for (const diffPath of diffMigrationPaths) {
-    if (listedSet.has(diffPath)) continue; // literal match — nothing to evaluate
-    const diffParts = parseMigrationParts(diffPath);
-    if (!diffParts) continue;
-
-    const listedMatch = listedMigrationPaths
-      .map((p) => ({ p, parts: parseMigrationParts(p) }))
-      .find(
-        ({ parts }) =>
-          parts &&
-          parts.dir === diffParts.dir &&
-          parts.suffix === diffParts.suffix &&
-          parts.number !== diffParts.number,
-      );
-    if (!listedMatch) continue; // not a recognizable renumber — leave to LLM judgement
-
-    const collidingBaseFile = baseBranchMigrationPaths.find((basePath) => {
-      if (basePath === diffPath) return false;
-      const baseParts = parseMigrationParts(basePath);
-      return (
-        baseParts !== null &&
-        baseParts.dir === diffParts.dir &&
-        baseParts.number === diffParts.number
-      );
-    });
-
-    if (collidingBaseFile) {
-      collisions.push({
-        diffPath,
-        collidesWithPath: collidingBaseFile,
-        number: diffParts.number,
-      });
-    } else {
-      mismatches.push({
-        diffPath,
-        listedPath: listedMatch.p,
-        number: diffParts.number,
-      });
-    }
-  }
-
-  return { mismatches, collisions };
-}
-
-/**
- * Extracts migration file paths named in the task body's "Files / paths
- * affected" section (or, if that heading isn't found, the whole body — a
- * loose fallback so minor heading-format drift doesn't silently disable the
- * check). Scoped to migration-looking paths only; non-migration entries are
- * irrelevant to this pre-check and are left for the LLM's existing
- * tolerance for downstream files.
- */
-export function extractListedMigrationPaths(taskBody: string): string[] {
-  const sectionMatch = taskBody.match(
-    /##+\s*Files\s*\/\s*paths[^\n]*\n([\s\S]*?)(?=\n##+\s|$)/i,
-  );
-  const section = sectionMatch ? sectionMatch[1] : taskBody;
-  const matches = section.match(/[\w./-]*\bmigrations?\/[\w./-]+\.\w+/gi) ?? [];
-  return [...new Set(matches)];
-}
-
-/**
- * Whether a task's own PR or local branch has already merged — the "already
- * merged" half of an out-of-band migration-reservation overtake (see
- * applyMigrationReservationOverride). A conflicting reservation whose owning
- * task hasn't merged yet is ordinary in-flight contention, not an overtake.
- */
-function isTaskAlreadyMerged(taskId: string): boolean {
-  return (
-    getMergedPRForTask(taskId) !== null ||
-    getMergedLocalBranchForTaskId(taskId) !== undefined
-  );
-}
-
-/**
- * Applies an `evaluateMigrationRenumberTolerance` verdict to the parsed
- * review result's Files/paths dimension, overriding the LLM's own
- * passed/notes for that dimension and recomputing the top-level verdict
- * from the resulting pass count (per the schema's verdict rules). No-ops
- * when there's nothing to override, leaving the LLM's verdict untouched.
- */
-export function overrideFilesPathsDimension(
-  result: PRReviewResult,
-  passed: boolean,
-  note: string,
-): PRReviewResult {
-  if (!result.dimensions) return result;
-  let found = false;
-  const dimensions = result.dimensions.map((d) => {
-    if (d.name !== FILES_PATHS_DIMENSION_NAME) return d;
-    found = true;
-    return {
-      ...d,
-      passed,
-      notes: d.notes ? `${d.notes} ${note}` : note,
-    };
-  });
-  if (!found) return result;
-  const passedCount = dimensions.filter((d) => d.passed).length;
-  const verdict: PRReviewResult['verdict'] =
-    passedCount === dimensions.length
-      ? 'approved'
-      : passedCount === 0
-        ? 'incomplete'
-        : 'needs_changes';
-  return { ...result, dimensions, verdict };
 }
 
 export interface PRReviewResult {
@@ -427,18 +226,9 @@ export interface PRReviewResult {
   /**
    * The incoming `escalate` value before the baseline floor overwrote it.
    * Floor-only (merge-hold, not a halt) is baselineEscalationFloor with this
-   * false and no migration overtake.
+   * false.
    */
   escalatedBeforeFloor?: boolean;
-  /**
-   * True when `escalate` was force-set by applyMigrationReservationOverride
-   * detecting an out-of-band overtake: the shipped migration number belongs,
-   * per the reservation table, to a different task whose PR/branch has
-   * already merged. Distinct from an ordinary same-task drift, which the
-   * dimension override already fails on its own without escalation — see
-   * ReviewOrchestrator.ts's pause-reason selection.
-   */
-  migrationReservationOvertaken?: boolean;
   /**
    * Set when an operator-requested review skipped the pre-review pipeline
    * while the PR was parked at a blocked gate. AutoMerger never merges such
@@ -991,22 +781,7 @@ export class PRReviewService {
           );
         }
         const aiResult = await verdictPromise;
-        const taskBodyForMigrationCheck = await this.fetchTaskBodyBestEffort(
-          projectId,
-          prRow.task_id,
-        );
-        const finalResult = await this.applyMigrationReservationOverride(
-          await this.applyMigrationRenumberOverride(
-            this.applyBaselineEscalationFloor(aiResult, diff),
-            diff,
-            taskBodyForMigrationCheck,
-            repo,
-            prData.baseBranch,
-          ),
-          diff,
-          taskBodyForMigrationCheck,
-          prRow.task_id,
-        );
+        const finalResult = this.applyBaselineEscalationFloor(aiResult, diff);
         // Persist immediately after parse — before any side effects (GitHub/Notion).
         const { result: persistedResult1, suppressed: suppressed1 } =
           this.persistVerdict(
@@ -1123,18 +898,7 @@ export class PRReviewService {
             prNumber,
             repo,
           );
-          const finalResult = await this.applyMigrationReservationOverride(
-            await this.applyMigrationRenumberOverride(
-              this.applyBaselineEscalationFloor(aiResult, diff),
-              diff,
-              taskBody,
-              repo,
-              prData.baseBranch,
-            ),
-            diff,
-            taskBody,
-            prRow.task_id,
-          );
+          const finalResult = this.applyBaselineEscalationFloor(aiResult, diff);
           // Persist immediately after parse — before any side effects (GitHub/Notion).
           const { result: persistedResult2, suppressed: suppressed2 } =
             this.persistVerdict(
@@ -1224,18 +988,7 @@ export class PRReviewService {
       });
 
       const aiResult = await verdictPromise;
-      const finalResult = await this.applyMigrationReservationOverride(
-        await this.applyMigrationRenumberOverride(
-          this.applyBaselineEscalationFloor(aiResult, diff),
-          diff,
-          taskBody,
-          repo,
-          prData.baseBranch,
-        ),
-        diff,
-        taskBody,
-        prRow.task_id,
-      );
+      const finalResult = this.applyBaselineEscalationFloor(aiResult, diff);
       // Persist immediately after parse — before any side effects (GitHub/Notion).
       // setLastReviewedSha was already called above the verdictPromise await for
       // the race-window guard; the verdict write here is the critical safety net.
@@ -1895,207 +1648,6 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       baselineEscalationFloor: true,
       escalatedBeforeFloor: result.escalate === true,
     };
-  }
-
-  /**
-   * Deterministic override for the "Changed files vs Files/paths affected
-   * list" dimension when a migration file ships under a different number
-   * than the task listed (see evaluateMigrationRenumberTolerance for the
-   * rule). A session must either use the task-assigned number verbatim or
-   * escalate for reassignment — shipping a self-picked free number is not a
-   * valid resolution, so both collisions and free-number mismatches fail the
-   * dimension. Fetches the base branch's file listing to check for a number
-   * collision; on fetch failure it fails open by leaving the LLM's verdict
-   * untouched rather than risking a false pass/fail from an unverifiable
-   * collision check. No-ops entirely (no network call) when the diff
-   * contains no migration file that isn't already listed verbatim.
-   */
-  private async applyMigrationRenumberOverride(
-    result: PRReviewResult,
-    diffText: string,
-    taskBody: string,
-    repo: string,
-    baseBranch: string,
-  ): Promise<PRReviewResult> {
-    const diffMigrationPaths = parseDiffFiles(diffText).filter(isMigrationPath);
-    if (diffMigrationPaths.length === 0) return result;
-
-    const listedMigrationPaths = extractListedMigrationPaths(taskBody);
-    const hasUnlistedMigration = diffMigrationPaths.some(
-      (p) => !listedMigrationPaths.includes(p),
-    );
-    if (!hasUnlistedMigration) return result;
-
-    let baseBranchMigrationPaths: string[];
-    try {
-      baseBranchMigrationPaths = (
-        await this.github.listFilePathsAtRef(repo, baseBranch)
-      ).filter(isMigrationPath);
-    } catch (e) {
-      logger.warn(
-        `[PRReviewService] failed to fetch base-branch file listing for migration-renumber check on ${repo}@${baseBranch}: ${(e as Error).message}`,
-      );
-      return result;
-    }
-
-    const evaluation = evaluateMigrationRenumberTolerance(
-      diffMigrationPaths,
-      listedMigrationPaths,
-      baseBranchMigrationPaths,
-    );
-
-    if (evaluation.collisions.length > 0) {
-      const note = `Deterministic migration-renumber check: ${evaluation.collisions
-        .map(
-          (c) =>
-            `${c.diffPath} reuses migration number ${c.number}, already claimed by ${c.collidesWithPath} on ${baseBranch}`,
-        )
-        .join('; ')}.`;
-      return overrideFilesPathsDimension(result, false, note);
-    }
-
-    if (evaluation.mismatches.length > 0) {
-      const note = `Deterministic migration-renumber check: ${evaluation.mismatches
-        .map(
-          (m) =>
-            `${m.diffPath} ships a different number than task-listed ${m.listedPath} (number ${m.number} is free on ${baseBranch} but was not assigned) — a self-picked free number is not a valid renumber`,
-        )
-        .join('; ')}.`;
-      return overrideFilesPathsDimension(result, false, note);
-    }
-
-    return result;
-  }
-
-  /**
-   * Deterministic override for the "Changed files vs Files/paths affected
-   * list" dimension: for each `*(new)*` migration entry in the task's
-   * Files/paths list, the migration_reservation table — not the LLM's own
-   * arithmetic — is the literal source of truth for which number that entry
-   * claimed (see migrationReservation.ts's Ready-flip allocation + body-prose
-   * sync). A shipped migration file whose number matches the reservation
-   * forces the dimension to pass regardless of the LLM's raw verdict; a
-   * mismatch forces it to fail, with the expected/actual numbers rendered
-   * explicitly rather than left to the LLM's prose. Applied after
-   * applyMigrationRenumberOverride so this literal check has the final say
-   * for entries it recognizes. No-ops (no DB call) when the task has no
-   * `*(new)*` migration entry or no linked task.
-   */
-  private async applyMigrationReservationOverride(
-    result: PRReviewResult,
-    diffText: string,
-    taskBody: string,
-    taskId: string | null | undefined,
-  ): Promise<PRReviewResult> {
-    if (!taskId) return result;
-    const sectionMatch = taskBody.match(
-      /##+\s*Files\s*\/\s*paths[^\n]*\n([\s\S]*?)(?=\n##+\s|$)/i,
-    );
-    if (!sectionMatch) return result;
-
-    const { parseFilesPathsRawItems, extractPathToken } =
-      await import('../groom/groomLoad');
-    const newMigrationEntries = parseFilesPathsRawItems(sectionMatch[1])
-      .filter((e) => e.isNew)
-      .map((e) => {
-        const token = extractPathToken(e.raw);
-        if (!token || !isMigrationPath(token)) return null;
-        const parts = parseMigrationEntryDirSuffix(token);
-        return parts
-          ? { raw: e.raw, dir: parts.dir, suffix: parts.suffix }
-          : null;
-      })
-      .filter(
-        (e): e is { raw: string; dir: string; suffix: string } => e !== null,
-      );
-    if (newMigrationEntries.length === 0) return result;
-
-    const diffMigrationPaths = parseDiffFiles(diffText).filter(isMigrationPath);
-
-    // Evaluate every *(new)* entry first and AND the verdicts together —
-    // overrideFilesPathsDimension overwrites `passed` per call (last call
-    // wins), so calling it once per entry would let a later matching entry
-    // silently clobber an earlier entry's mismatch. A single call with the
-    // aggregated pass/fail and all notes concatenated keeps the dimension
-    // failed if any *(new)* entry mismatches its reservation.
-    const checks: { passed: boolean; note: string }[] = [];
-    let anyOvertaken = false;
-    for (const entry of newMigrationEntries) {
-      const reservation = getReservationForTaskDirSuffix(
-        taskId,
-        entry.dir,
-        entry.suffix,
-      );
-      if (!reservation) continue; // nothing reserved for this entry — leave to LLM judgement
-
-      const shippedPath = diffMigrationPaths.find((p) => {
-        const parts = parseMigrationParts(p);
-        return (
-          parts !== null &&
-          parts.dir === entry.dir &&
-          parts.suffix === entry.suffix
-        );
-      });
-      const shippedNumber = shippedPath
-        ? Number(parseMigrationParts(shippedPath)!.number)
-        : null;
-
-      if (shippedNumber === reservation.number) {
-        checks.push({
-          passed: true,
-          note: `Deterministic migration-reservation check: ${entry.dir}${entry.suffix} ships as ${shippedPath}, matching its reserved number ${reservation.number} — override pass.`,
-        });
-      } else {
-        const conflicting =
-          shippedNumber !== null
-            ? getReservationByNumber(reservation.project, shippedNumber)
-            : undefined;
-        const overtaken =
-          conflicting !== undefined &&
-          conflicting.taskId !== taskId &&
-          isTaskAlreadyMerged(conflicting.taskId);
-        if (overtaken) anyOvertaken = true;
-        checks.push({
-          passed: false,
-          note: `Deterministic migration-reservation check: expected migration number ${reservation.number} (reserved) for ${entry.dir}${entry.suffix} but the PR ships ${shippedNumber ?? 'no matching migration file'}${
-            overtaken
-              ? `, already claimed and merged by task ${conflicting!.taskId} — out-of-band overtake`
-              : ''
-          } — override fail.`,
-        });
-      }
-    }
-    if (checks.length === 0) return result;
-
-    const allPassed = checks.every((c) => c.passed);
-    const note = checks.map((c) => c.note).join(' ');
-    const overridden = overrideFilesPathsDimension(result, allPassed, note);
-    if (anyOvertaken) {
-      return {
-        ...overridden,
-        escalate: true,
-        escalationReason: overridden.escalationReason
-          ? `${overridden.escalationReason} | ${note}`
-          : note,
-        migrationReservationOvertaken: true,
-      };
-    }
-    return overridden;
-  }
-
-  private async fetchTaskBodyBestEffort(
-    projectId: string,
-    taskId: string | null | undefined,
-  ): Promise<string> {
-    if (!taskId) return '';
-    try {
-      return await this.resolveBackend(projectId).fetchTaskPage(taskId);
-    } catch (e) {
-      logger.warn(
-        `[PRReviewService] fetchTaskPage failed for migration-renumber check (task ${taskId}): ${(e as Error).message}`,
-      );
-      return '';
-    }
   }
 
   /**

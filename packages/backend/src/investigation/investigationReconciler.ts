@@ -15,10 +15,12 @@ import {
   type InvestigationReportRow,
 } from './reportStore';
 import { launchInvestigateBatch } from './investigateDispatcher';
-import { MIGRATION_REASSIGNMENT_REPORT_MARKER } from '../db/migrationReservation';
 
 const DEFAULT_SCAN_LIMIT = 50;
 const DEFAULT_RESOLVE_SCAN_LIMIT = 200;
+
+const LEGACY_MIGRATION_REASSIGNMENT_MARKER =
+  'claimKind: migration-number-reassignment';
 
 /**
  * Count of live (non-terminal) investigate-dispatched sessions — task_id
@@ -72,13 +74,9 @@ export async function runInvestigationReconcilerTick(
   const armedByMilestone = new Map<string, boolean>();
   const armedCandidates: InvestigationReportRow[] = [];
   for (const report of candidates) {
-    // A migration-number-reassignment claim was already mechanically
-    // re-derived against the live reservation table at file time (see
-    // stagedIntents.ts's report.file apply case) — a committed row here
-    // means the orchestrator already confirmed it, so it needs only
-    // operator disposition via the report surface, never an investigate
-    // session digging further into an already-settled question.
-    if (report.evidence_text?.includes(MIGRATION_REASSIGNMENT_REPORT_MARKER)) {
+    // Legacy migration-number-reassignment reports were settled at file time
+    // and need only operator disposition, never an investigate session.
+    if (report.evidence_text?.includes(LEGACY_MIGRATION_REASSIGNMENT_MARKER)) {
       continue;
     }
     let armed = armedByMilestone.get(report.milestone_id);

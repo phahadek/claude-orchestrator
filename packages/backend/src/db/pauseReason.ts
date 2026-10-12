@@ -65,7 +65,7 @@ export type CanonicalPauseReason =
   | 'verdict_routing_failed'
   | 'base_attributable_test_excluded'
   | 'test_runner_unreachable'
-  | 'migration_reservation_overtaken'
+  | 'migration_number_collision'
   | 'orchestrator_mcp_connect_failed'
   | 'f2_verdict_missing';
 
@@ -302,18 +302,14 @@ export const PAUSE_REASON_REGISTRY: Record<
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
   },
-  // Out-of-band reservation overtake: the review-gate migration-reservation
-  // dimension override (PRReviewService.ts's applyMigrationReservationOverride)
-  // detected that the shipped migration number belongs, per the reservation
-  // table, to a *different* task whose PR/branch has already merged — not
-  // this task's own drift, which the dimension override fails on its own
-  // without escalation. Always requires human disposition: the reservation
-  // table and the live migrations directory have diverged in a way no
-  // automatic retry resolves.
-  migration_reservation_overtaken: {
-    source: 'review',
-    severity: 'needs_attention',
-    retry_strategy: 'manual_action',
+  // Merge-time guard (github/migrationNumberGuard.ts): the PR adds a
+  // migration whose number already exists on the base branch (or twice in
+  // the PR). The session is told to renumber; the next push re-runs the
+  // pipeline and the guard re-checks.
+  migration_number_collision: {
+    source: 'merge',
+    severity: 'recoverable',
+    retry_strategy: 'automatic',
   },
   // The depth review pass's own escalation — distinct from
   // review_rules_escalation (the conformance pass's project-review_rules
@@ -629,10 +625,7 @@ const RECOVERY_ACTION_MAP: Record<
   // flow. Mirrors the other non-automatable, human-adjudicated escalation
   // reasons rather than inventing new discharge machinery.
   baseline_escalation_floor: 'none',
-  // Same shape as baseline_escalation_floor: the reservation table vs. live
-  // migrations directory divergence is resolved via the reassignment remedy
-  // flow (report.file claim + re-derivation), not a one-click discharge.
-  migration_reservation_overtaken: 'none',
+  migration_number_collision: 'none', // recoverable+automatic: the session renumbers and pushes; the next merge attempt re-checks
   depth_review_escalation: 'none', // same shape as baseline_escalation_floor; can be raised with no linked session to route to
   depth_review_pending: 'none', // recoverable+automatic: clears itself within dispatchDepthReview's timeout ceiling
   planning_terminal_blocked_members: 'none', // fix is dispositioning stuck staged intents, not a task-level redispatch

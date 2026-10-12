@@ -988,14 +988,9 @@ export interface ReportFilePayload {
   evidence_text?: string;
   fingerprint: string;
   /**
-   * Optional structured claim carried by a migration-number-reassignment
-   * report — a filed claim that a shipped migration's number doesn't match
-   * its live reservation. When present, all three of expectedNumber,
-   * actualNumber, and taskId are also present (enforced by the MCP tool's
-   * input schema, not re-validated here) and the report.file apply case
-   * routes through migrationReservation.ts's rederiveMigrationReassignment
-   * instead of the generic insertReport-then-commit path — see
-   * routes/stagedIntents.ts's report.file apply case.
+   * Legacy: only historical, terminal migration-number-reassignment intents
+   * carry these fields. Nothing stages them any more; kept so those rows
+   * still parse and render.
    */
   claimKind?: 'migration-number-reassignment';
   /** The number the reservation table shows for taskId's reservation, per the filing session's claim. */
@@ -1570,45 +1565,6 @@ export interface ArchUnitEventRow {
 }
 
 export type NewArchUnitEventRow = Omit<ArchUnitEventRow, 'id'>;
-
-// ─── migration_reservation ──────────────────────────────────────────────────
-
-export interface MigrationReservationRow {
-  id: string;
-  /** Owning project's registry id — reservations are project-scoped (per-repo numbering). */
-  project: string;
-  number: number;
-  task_id: string;
-  /** Migration directory the reserved number was claimed within, e.g. `packages/backend/migrations/`. */
-  dir: string;
-  /** The migration filename's suffix (everything after the leading number and underscore). */
-  suffix: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export type NewMigrationReservationRow = Omit<
-  MigrationReservationRow,
-  'created_at' | 'updated_at'
-> & {
-  created_at: string;
-  updated_at: string;
-};
-
-type MigrationReservationEventType = 'reserved';
-
-interface MigrationReservationEventRow {
-  id: number;
-  migration_reservation_id: string;
-  event_type: MigrationReservationEventType;
-  payload: string | null;
-  at: string;
-}
-
-export type NewMigrationReservationEventRow = Omit<
-  MigrationReservationEventRow,
-  'id'
->;
 
 export interface ArchUnitQuery {
   /** Scope to one project's units. Omit only for cross-project admin surfaces. */

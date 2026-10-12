@@ -563,53 +563,36 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
     expect(vi.mocked(sm.enqueueFeedback)).not.toHaveBeenCalled();
   });
 
-  it.each([
-    [
-      'review_rules-only',
-      { escalate: true, escalationReason: 'rule' },
+  it('review_rules-only escalation keeps escalate-and-return: no feedback, no depth review', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'needs_changes',
+      dimensions: [],
+      summary: 'x',
+      reviewedAt: new Date().toISOString(),
+      escalate: true,
+      escalationReason: 'rule',
+    });
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    const dispatch = vi
+      .spyOn(orch as any, 'dispatchDepthReview')
+      .mockResolvedValue(undefined);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
       'review_rules_escalation',
-    ],
-    [
-      'migrationReservationOvertaken',
-      {
-        escalate: true,
-        escalationReason: 'overtaken',
-        migrationReservationOvertaken: true,
-      },
-      'migration_reservation_overtaken',
-    ],
-  ])(
-    '%s escalation keeps escalate-and-return: no feedback, no depth review',
-    async (_name, extra, expectedReason) => {
-      vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
-
-      const sm = makeMockSessionManager();
-      const rs = makeMockReviewService({
-        prNumber: 1,
-        repo: 'owner/repo',
-        verdict: 'needs_changes',
-        dimensions: [],
-        summary: 'x',
-        reviewedAt: new Date().toISOString(),
-        ...extra,
-      });
-      const orch = new ReviewOrchestrator(rs, sm as any, true);
-      const dispatch = vi
-        .spyOn(orch as any, 'dispatchDepthReview')
-        .mockResolvedValue(undefined);
-
-      sm.emit('pr_opened', baseJob);
-      await new Promise((r) => setTimeout(r, 30));
-
-      expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
-        1,
-        'owner/repo',
-        expectedReason,
-      );
-      expect(vi.mocked(sm.enqueueFeedback)).not.toHaveBeenCalled();
-      expect(dispatch).not.toHaveBeenCalled();
-    },
-  );
+    );
+    expect(vi.mocked(sm.enqueueFeedback)).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
 
   it('floor-only approved + passing depth review: only depth_review_pending is cleared and the floor entry survives the remerge', async () => {
     const floorEntry = pauseReasonFromCanonical(
@@ -745,45 +728,6 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
     await new Promise((r) => setTimeout(r, 30));
 
     expect(vi.mocked(sm.enqueueFeedback)).not.toHaveBeenCalled();
-  });
-
-  it('routes to migration_reservation_overtaken (not baseline_escalation_floor) when the shipped number was overtaken by a different, already-merged task', async () => {
-    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
-
-    const sm = makeMockSessionManager();
-    const rs = makeMockReviewService({
-      prNumber: 1,
-      repo: 'owner/repo',
-      verdict: 'needs_changes',
-      dimensions: [],
-      summary: 'Shipped migration number was overtaken by a merged task.',
-      reviewedAt: new Date().toISOString(),
-      escalate: true,
-      escalationReason:
-        'Deterministic migration-reservation check: expected migration number 100 (reserved) for migrations/postgres/widget_table.sql but the PR ships 101, already claimed and merged by task notion:task-b — out-of-band overtake — override fail.',
-      migrationReservationOvertaken: true,
-    });
-
-    const messages: unknown[] = [];
-    sm.on('message', (m: unknown) => messages.push(m));
-
-    new ReviewOrchestrator(rs, sm as any, true);
-
-    sm.emit('pr_opened', baseJob);
-    // Resubmitting the identical job a second time must not loop the pause —
-    // it should keep resolving to the same escalation, not clear/reset it.
-    sm.emit('pr_opened', baseJob);
-    await new Promise((r) => setTimeout(r, 30));
-
-    expect(vi.mocked(sm.sendOrResume)).not.toHaveBeenCalled();
-    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
-      1,
-      'owner/repo',
-      'migration_reservation_overtaken',
-    );
-    expect(
-      messages.some((m) => (m as { type: string }).type === 'review_escalated'),
-    ).toBe(true);
   });
 
   it('does not send feedback when verdict is approved', async () => {

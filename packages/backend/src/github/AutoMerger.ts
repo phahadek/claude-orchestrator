@@ -51,6 +51,7 @@ import { getTaskBackend } from '../tasks/TaskBackend';
 import { squashMergeLocal } from '../orchestration/localMergeRunner';
 import { detectMergeConflict } from '../orchestration/localBranchHelpers';
 import { formatMergeConflictFeedback } from './reviewUtils';
+import { guardMigrationNumbersBeforeMerge } from './migrationNumberGuard';
 import { sendConflictNudge, type ConflictNudgeCause } from './conflictNudge';
 import { logger } from '../logger';
 import type { Scheduler } from '../orchestration/Scheduler';
@@ -952,6 +953,32 @@ export class AutoMerger {
           sha: pr.head_sha,
           stage: 'eligibility',
           reason: eligibility.reason,
+        },
+      });
+      return;
+    }
+
+    const migrationGuard = await guardMigrationNumbersBeforeMerge(
+      this.github,
+      this.sessions,
+      pr,
+    );
+    if (!migrationGuard.ok) {
+      logger.info(
+        `[AutoMerger] PR #${pr.pr_number}: migration-number guard blocked merge (${migrationGuard.kind}) — ${migrationGuard.message}`,
+      );
+      recordEvent({
+        event_type: 'auto_merge_declined',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: getProjectByGithubRepo(pr.repo)?.id ?? null,
+        task_id: pr.task_id ?? null,
+        payload: {
+          pr_number: pr.pr_number,
+          repo: pr.repo,
+          sha: pr.head_sha,
+          stage: 'migration_number_guard',
+          reason: migrationGuard.message,
         },
       });
       return;
