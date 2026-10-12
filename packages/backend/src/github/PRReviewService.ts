@@ -109,6 +109,16 @@ function filterManualVerificationSentinel(
   return items.filter((item) => item !== MANUAL_VERIFICATION_SENTINEL);
 }
 
+const TEST_DIR_SEGMENTS = new Set(['__tests__', 'tests', 'test', 'fixtures']);
+
+function isTestPath(path: string): boolean {
+  const segments = path.split('/');
+  const basename = segments[segments.length - 1];
+  if (segments.slice(0, -1).some((seg) => TEST_DIR_SEGMENTS.has(seg)))
+    return true;
+  return /\.(test|spec)\./.test(basename);
+}
+
 /**
  * Code-enforced baseline escalation floor: high-blast-radius path categories that
  * always force escalate:true, independent of whether the project has any
@@ -124,26 +134,25 @@ const BASELINE_ESCALATION_FLOOR_PATTERNS: Array<{
     test: (path) => /(^|\/)\.github\/workflows\//.test(path),
   },
   {
-    category: 'database migration',
-    test: (path) => /(^|\/)(db\/)?migrations?\//i.test(path),
+    category: 'auth',
+    test: (path) =>
+      !isTestPath(path) &&
+      /(^|\/)[Aa]uth(?:[A-Z0-9_-][A-Za-z0-9_-]*)?\.[A-Za-z]+$/.test(path),
   },
   {
     category: 'auth',
-    test: (path) => /(^|\/)auth[a-z0-9_-]*\.[a-z]+$/i.test(path),
-  },
-  {
-    category: 'auth',
-    test: (path) => /(^|\/)auth(\/|$)/i.test(path),
+    test: (path) => !isTestPath(path) && /(^|\/)auth(\/|$)/i.test(path),
   },
   {
     category: 'secrets',
-    test: (path) => /secret|credential/i.test(path),
+    test: (path) => !isTestPath(path) && /secret|credential/i.test(path),
   },
   {
     category: 'secrets',
     // basename check instead of a single regex to avoid a false-positive
     // ReDoS flag on the optional-suffix + anchor combination.
     test: (path) => {
+      if (isTestPath(path)) return false;
       const basename = path.slice(path.lastIndexOf('/') + 1).toLowerCase();
       return basename === '.env' || basename.startsWith('.env.');
     },
