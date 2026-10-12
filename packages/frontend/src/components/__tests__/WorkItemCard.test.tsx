@@ -2,6 +2,10 @@ import { render, screen } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { WorkItemCard } from '../WorkItemCard';
 import type { PRWorkItem, LocalBranchWorkItem } from '../WorkItemCard';
+import {
+  pauseReasonFromCanonical,
+  serializePauseReasonSet,
+} from '@claude-orchestrator/backend/src/db/pauseReason';
 
 function makePR(overrides: Partial<PRWorkItem> = {}): PRWorkItem {
   return {
@@ -291,5 +295,47 @@ describe('WorkItemCard — verdict badge for both types', () => {
       />,
     );
     expect(screen.getByText('⚠️ Needs Changes')).toBeDefined();
+  });
+});
+
+describe('WorkItemCard — baseline escalation floor sign-off', () => {
+  const floorRaw = serializePauseReasonSet([
+    pauseReasonFromCanonical(
+      'baseline_escalation_floor',
+      'Baseline escalation floor: diff touches migrations path(s): db/001.sql',
+    ),
+  ]);
+
+  it('renders the sign-off state with categories, readiness, and sign-off action', () => {
+    render(
+      <WorkItemCard
+        item={makePR({ reviewVerdict: 'approved', pauseReason: floorRaw })}
+        {...defaultProps}
+      />,
+    );
+    expect(screen.getByText(/Sign-off required/)).toBeDefined();
+    expect(screen.getByText(/Touches migrations: db\/001\.sql/)).toBeDefined();
+    expect(screen.getByText(/Ready for sign-off/)).toBeDefined();
+    expect(screen.getByRole('button', { name: /sign off/i })).toBeDefined();
+  });
+
+  it('shows review in progress when another blocking entry is present', () => {
+    const raw = serializePauseReasonSet([
+      pauseReasonFromCanonical('baseline_escalation_floor'),
+      pauseReasonFromCanonical('depth_review_pending'),
+    ]);
+    render(<WorkItemCard item={makePR({ pauseReason: raw })} {...defaultProps} />);
+    expect(screen.getByText(/Review in progress/)).toBeDefined();
+    expect(screen.getByText(/categories unavailable/)).toBeDefined();
+  });
+
+  it('does not render the floor state for non-floor pauses', () => {
+    render(
+      <WorkItemCard
+        item={makePR({ pauseReason: 'review_rules_escalation' })}
+        {...defaultProps}
+      />,
+    );
+    expect(screen.queryByText(/Sign-off required/)).toBeNull();
   });
 });

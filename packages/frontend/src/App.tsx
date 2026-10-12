@@ -58,6 +58,10 @@ import type {
 } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { calculateCost } from '@claude-orchestrator/backend/src/utils/usage';
+import {
+  isFloorEscalationMessage,
+  floorToastMessage,
+} from './utils/floorSignOff';
 import type {
   TaskView,
   TasksActiveResponse,
@@ -898,7 +902,9 @@ export default function App() {
       ...prev,
       {
         id: notifId,
-        message: `⚠️ PR #${prNumber} needs your attention: ${message}`,
+        message: isFloorEscalationMessage(message)
+          ? `🔏 PR #${prNumber}: ${floorToastMessage(message)}`
+          : `⚠️ PR #${prNumber} needs your attention: ${message}`,
         status: 'review',
         onClick: () => setTopView('prs'),
       },

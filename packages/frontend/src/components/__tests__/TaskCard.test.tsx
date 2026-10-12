@@ -972,3 +972,73 @@ describe('TaskCard', () => {
     expect(screen.getByText(/Ops:\s*idle/)).toBeDefined();
   });
 });
+
+describe('TaskCard — baseline escalation floor sign-off', () => {
+  const floorDetail =
+    'Baseline escalation floor: diff touches migrations, auth path(s): db/migrations/001.sql, src/auth.ts';
+
+  function renderFloor(overrides: Partial<TaskView>) {
+    return render(
+      <TaskCard
+        task={makeTask({
+          displayStatus: 'needs_attention',
+          pauseReason: 'baseline_escalation_floor',
+          pr: makePr(),
+          ...overrides,
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+  }
+
+  it('renders Sign-off required with categories and paths', () => {
+    renderFloor({
+      pauseEntries: [
+        { reason: 'baseline_escalation_floor', detail: floorDetail },
+      ],
+    });
+    expect(screen.getByText('Sign-off required')).toBeDefined();
+    expect(
+      screen.getByText(/migrations, auth: db\/migrations\/001\.sql/),
+    ).toBeDefined();
+  });
+
+  it('shows ready-for-sign-off when floor is the only blocking entry', () => {
+    renderFloor({
+      pauseEntries: [
+        { reason: 'baseline_escalation_floor', detail: floorDetail },
+        { reason: 'test_report_acquisition_failed', blocks_merge: false },
+      ],
+    });
+    expect(screen.getByText(/Ready for sign-off/)).toBeDefined();
+  });
+
+  it('shows review-in-progress with the other entry label when depth review pending', () => {
+    renderFloor({
+      pauseEntries: [
+        { reason: 'baseline_escalation_floor', detail: floorDetail },
+        { reason: 'depth_review_pending' },
+      ],
+    });
+    expect(screen.getByText(/Review in progress/)).toBeDefined();
+    expect(screen.getByText(/Depth review pass is in flight/)).toBeDefined();
+    expect(screen.queryByText(/Ready for sign-off/)).toBeNull();
+  });
+
+  it('falls back when the pause has no detail', () => {
+    renderFloor({ pauseEntries: undefined, pauseDetail: null });
+    expect(screen.getByText('Sign-off required')).toBeDefined();
+    expect(screen.getByText(/categories unavailable/)).toBeDefined();
+  });
+
+  it('does not render the floor state for other escalations', () => {
+    renderFloor({
+      pauseReason: 'review_rules_escalation',
+      pauseEntries: [{ reason: 'review_rules_escalation' }],
+    });
+    expect(screen.queryByText('Sign-off required')).toBeNull();
+  });
+});

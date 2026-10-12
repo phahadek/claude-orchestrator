@@ -6,6 +6,8 @@ import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { parsePauseReason } from '@claude-orchestrator/backend/src/db/pauseReason';
 import { formatTokenCount } from '@claude-orchestrator/backend/src/utils/usage';
 import { CIBadges, PipelineStageBadge } from './CIBadges';
+import { FloorSignOffDetail } from './FloorSignOffDetail';
+import { deriveFloorSignOff } from '../utils/floorSignOff';
 import { ContextBadge } from './ContextBadge';
 import { getTaskSourceLinkLabel } from '../utils/taskSourceLabel';
 import { TaskMoveDialog } from './TaskMoveDialog';
@@ -51,7 +53,7 @@ const STATUS_LABELS: Record<DisplayStatus, string> = {
   deferred: '⏭️ Deferred',
 };
 
-const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
+export const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
   max_reviews: 'Max review iterations reached — re-review or close the PR.',
   stuck_timeout: 'Session stuck — no progress within the timeout window.',
   ci_failing: 'CI is failing — fix the failing checks and push.',
@@ -107,7 +109,7 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
   review_rules_escalation:
     'Reviewer escalated per project-specific review rules — see the review summary for details and resolve manually.',
   baseline_escalation_floor:
-    'Escalated by the baseline escalation floor — diff touches CI/workflow config, migrations, auth, or secrets — see the review summary for details and resolve manually.',
+    'Sign-off required — the diff touches CI/workflow config, migrations, auth, or secrets (baseline escalation floor). Approve the PR to sign off.',
   migration_reservation_overtaken:
     'Shipped migration number was overtaken out-of-band: it belongs, per the reservation table, to a different task whose PR/branch already merged — see the review summary and resolve manually via the reassignment remedy flow.',
   depth_review_escalation:
@@ -203,6 +205,12 @@ export function TaskCard({
   })();
   const isNonCode = !task.taskType.includes('💻');
   const pauseStruct = parsePauseReason(task.pauseReason);
+  const floor = deriveFloorSignOff(
+    task.pauseEntries ??
+      (task.pauseReason === 'baseline_escalation_floor'
+        ? [{ reason: task.pauseReason, detail: task.pauseDetail }]
+        : null),
+  );
   const [verifyInFlight, setVerifyInFlight] = useState(false);
 
   const handleRecover = async (e: React.MouseEvent) => {
@@ -356,6 +364,7 @@ export function TaskCard({
                 mergeState={pr.mergeState}
                 pauseReason={task.pauseReason}
                 prState={pr.state}
+                floorSignOff={null}
               />
               <PipelineStageBadge
                 stage={pr.preReviewStage ?? derivedPreStage}
@@ -371,6 +380,10 @@ export function TaskCard({
             <span className={styles.placeholder}>—</span>
           )}
         </>
+      )}
+
+      {floor && (
+        <FloorSignOffDetail floor={floor} reasonLabels={PAUSE_REASON_LABELS} />
       )}
 
       {manualVerificationPending && (

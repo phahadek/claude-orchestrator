@@ -16,6 +16,17 @@
   text-decoration: none;
 }
 
+.floorBadge {
+  font-size: 0.78rem;
+  padding: 2px 10px;
+  border-radius: 12px;
+  white-space: nowrap;
+  font-weight: 500;
+  background: rgba(137, 180, 250, 0.15);
+  color: #89b4fa;
+  border: 1px solid rgba(137, 180, 250, 0.4);
+}
+
 .unstableBadge {
   font-size: 0.78rem;
   padding: 2px 10px;

@@ -25,6 +25,12 @@ export interface TaskView {
   pauseReason: PauseReason | null;
   /** Optional free-text detail for the pause reason (e.g. stall kind + attempt count). */
   pauseDetail?: string | null;
+  /** Full concurrent pause set (not the severity-resolved single entry). */
+  pauseEntries?: {
+    reason: string;
+    detail?: string | null;
+    blocks_merge?: boolean;
+  }[];
   priority: string;
   notionUrl: string;
   taskType: string;

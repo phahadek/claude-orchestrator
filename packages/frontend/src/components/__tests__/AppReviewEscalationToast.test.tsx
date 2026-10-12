@@ -166,4 +166,29 @@ describe('App — review_escalated notification renders the supplied message', (
     );
     expect(alert.textContent).not.toContain('hit max iterations');
   });
+
+  it('renders a floor escalation as a sign-off request naming the categories', async () => {
+    vi.mocked(useSessionStore).mockReturnValue(
+      baseStoreReturn({
+        lastReviewEscalation: {
+          prNumber: 2544,
+          repo: 'owner/repo',
+          message:
+            'Baseline escalation floor: diff touches migrations, auth path(s): db/001.sql, src/auth.ts',
+          receivedAt: 2,
+        },
+      }) as ReturnType<typeof useSessionStore>,
+    );
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.queryAllByRole('alert')).toHaveLength(1);
+    });
+
+    const text = screen.getByRole('alert').textContent ?? '';
+    expect(text).toContain('Operator sign-off required');
+    expect(text).toContain('migrations, auth');
+    expect(text).not.toContain('needs your attention');
+  });
 });
