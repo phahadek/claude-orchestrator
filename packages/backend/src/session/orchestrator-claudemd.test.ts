@@ -419,7 +419,9 @@ describe('buildOrchestratorClaudeMd', () => {
       result.indexOf('## Pre-PR Gate'),
       result.indexOf('## Forbidden Actions'),
     );
-    expect(gate.indexOf('Investigate a Failing Test First')).toBeGreaterThan(-1);
+    expect(gate.indexOf('Investigate a Failing Test First')).toBeGreaterThan(
+      -1,
+    );
     expect(gate.indexOf('Investigate a Failing Test First')).toBeLessThan(
       gate.indexOf('flaky_confirm'),
     );
