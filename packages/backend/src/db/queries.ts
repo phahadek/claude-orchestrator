@@ -10456,14 +10456,21 @@ export function getAuthoritativeTestRunForPr(
     }>(
       `SELECT ${TEST_REQUEST_RUN_COLUMNS}
        FROM test_request_runs
-       WHERE project_id = @project_id
-         AND run_kind = 'full'
-         AND state NOT IN ('running', 'queued')
-         AND (failure_reason IS NULL OR failure_reason != 'superseded')
-         AND worktree_path IS NOT NULL
-         AND @worktree_path IS NOT NULL
-         AND worktree_path = @worktree_path
-         AND (session_id = @session_id OR session_id IS NULL)
+       WHERE rowid IN (
+         SELECT rowid FROM test_request_runs
+         WHERE project_id = @project_id AND session_id = @session_id
+           AND worktree_path = @worktree_path
+           AND run_kind = 'full'
+           AND state NOT IN ('running', 'queued')
+           AND (failure_reason IS NULL OR failure_reason != 'superseded')
+         UNION ALL
+         SELECT rowid FROM test_request_runs
+         WHERE project_id = @project_id AND session_id IS NULL
+           AND worktree_path = @worktree_path
+           AND run_kind = 'full'
+           AND state NOT IN ('running', 'queued')
+           AND (failure_reason IS NULL OR failure_reason != 'superseded')
+       )
        ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
     )
     .get({
@@ -10526,16 +10533,14 @@ export function listTestRequestRunsForPrSession(
     }>(
       `SELECT ${TEST_REQUEST_RUN_COLUMNS}
        FROM test_request_runs
-       WHERE project_id = @project_id
-         AND (
-           session_id = @session_id
-           OR (
-             session_id IS NULL
-             AND worktree_path IS NOT NULL
-             AND @worktree_path IS NOT NULL
-             AND worktree_path = @worktree_path
-           )
-         )
+       WHERE rowid IN (
+         SELECT rowid FROM test_request_runs
+         WHERE project_id = @project_id AND session_id = @session_id
+         UNION ALL
+         SELECT rowid FROM test_request_runs
+         WHERE project_id = @project_id AND session_id IS NULL
+           AND worktree_path = @worktree_path
+       )
        ORDER BY started_at DESC, rowid DESC LIMIT @limit`,
     )
     .all({
