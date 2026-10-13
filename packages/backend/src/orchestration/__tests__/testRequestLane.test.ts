@@ -5190,6 +5190,7 @@ describe('rebindWorktreeContentHash — pre-test merge hash rebind', () => {
         projectId: 'proj-rebind',
         worktreePath: wt,
         contentHash: 'pre',
+        commands: ['npm run scoped'],
         runKind: 'scoped',
         baseSha: 'base-1',
       }),
@@ -5211,8 +5212,8 @@ describe('rebindWorktreeContentHash — pre-test merge hash rebind', () => {
         contentHash: 'post',
       }),
     );
-    expect(joined.reused).toBe(true);
     expect(joined.runId).toBe(full.runId);
+    expect(joined.unchangedReplay).toBe(false);
 
     resolvers[0]({ passed: true, output: '' });
     await blocker.result;
