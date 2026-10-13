@@ -80,7 +80,9 @@ describe('query plans', () => {
     const plan = planFor(() =>
       listTestRequestRunsForPrSession('p', 's', '/wt', 10),
     );
-    expect(plan).not.toMatch(/idx_test_request_runs_project_(started|finished)/);
+    expect(plan).not.toMatch(
+      /idx_test_request_runs_project_(started|finished)/,
+    );
     expect(plan).toMatch(/idx_test_request_runs_session_/);
     expect(plan).toMatch(/idx_test_request_runs_project_worktree_state/);
     expect(plan).not.toMatch(/SCAN test_request_runs/);
@@ -88,7 +90,9 @@ describe('query plans', () => {
 
   it('getAuthoritativeTestRunForPr searches on project_id + worktree_path', () => {
     const plan = planFor(() => getAuthoritativeTestRunForPr('p', 's', '/wt'));
-    expect(plan).not.toMatch(/idx_test_request_runs_project_(started|finished)/);
+    expect(plan).not.toMatch(
+      /idx_test_request_runs_project_(started|finished)/,
+    );
     expect(plan).toMatch(/idx_test_request_runs_project_worktree_state/);
     expect(plan).not.toMatch(/SCAN test_request_runs/);
   });
@@ -114,9 +118,7 @@ describe('listTestRequestRunsForPrSession behaviour', () => {
     expect(
       listTestRequestRunsForPrSession('p', 's', null).map((r) => r.id),
     ).toEqual([a, expect.any(String)]);
-    expect(listTestRequestRunsForPrSession('p', 's', '/wt', 1)).toHaveLength(
-      1,
-    );
+    expect(listTestRequestRunsForPrSession('p', 's', '/wt', 1)).toHaveLength(1);
   });
 });
 
@@ -129,7 +131,12 @@ describe('getAuthoritativeTestRunForPr behaviour', () => {
       startedAt: 2,
       finishedAt: 20,
     });
-    insertRun({ session: null, worktree: '/other', startedAt: 3, finishedAt: 30 });
+    insertRun({
+      session: null,
+      worktree: '/other',
+      startedAt: 3,
+      finishedAt: 30,
+    });
     expect(getAuthoritativeTestRunForPr('p', 's', '/wt')?.id).toBe(b);
   });
 });
