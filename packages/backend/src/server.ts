@@ -54,6 +54,7 @@ import {
   listProjectRows,
   getJobBootSchedule,
   SCHEDULER_AUDIT_KEEP_PER_JOB,
+  sweepExpiredExecuteNow,
 } from './db/queries';
 import { importProjectsFromEnv } from './projects/projectImport';
 import { GitHubClient } from './github/GitHubClient';
@@ -767,6 +768,13 @@ scheduler.register({
     }
     return { items_processed: result.processed };
   },
+});
+scheduler.register({
+  name: 'execute_now_ttl_sweep',
+  intervalMs: 10 * 60_000,
+  runOnBoot: true,
+  concurrency: 'skip-if-running',
+  run: async () => ({ items_processed: sweepExpiredExecuteNow() }),
 });
 // Periodic counterpart to resumeOrphanSessions' boot-only reap of the
 // backend's own main/ cgroup: a process that gets reparented to ppid=1 (a

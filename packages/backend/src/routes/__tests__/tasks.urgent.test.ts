@@ -30,6 +30,7 @@ vi.mock('../../db/queries.js', () => ({
   setTaskRepoAssignment: vi.fn(),
   getTaskExecutionFlags: m.getTaskExecutionFlags,
   setTaskUrgent: m.setTaskUrgent,
+  isExecuteNowExpired: vi.fn().mockReturnValue(false),
   TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
   getTaskPauseReason: vi.fn().mockReturnValue(null),
   hasAwaitingDispositionIntentForTask: vi.fn().mockReturnValue(false),

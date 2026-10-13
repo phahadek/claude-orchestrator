@@ -59,7 +59,7 @@ describe('task_execution_flags', () => {
     expect(set.execute_now_set_at).toBeGreaterThan(0);
     expect(set.urgent).toBe(1);
 
-    clearTaskExecuteNow('a');
+    clearTaskExecuteNow('a', 'consumed');
     const cleared = getTaskExecutionFlags('a')!;
     expect(cleared.execute_now_reason).toBeNull();
     expect(cleared.execute_now_set_at).toBeNull();
