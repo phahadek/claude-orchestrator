@@ -166,9 +166,7 @@ export async function sweepConfirmedWaiting(
     // large dead backlog are still reached.
     if (subjects.length < batchSize || drained === 0) break;
   }
-  logger.info(
-    `[reattribution] sweep evaluated=${evaluated} woken=${woken}`,
-  );
+  logger.info(`[reattribution] sweep evaluated=${evaluated} woken=${woken}`);
   return { items_processed: woken, evaluated };
 }
 
