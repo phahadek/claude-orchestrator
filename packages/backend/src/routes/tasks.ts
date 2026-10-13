@@ -43,7 +43,10 @@ import { computeOpsBlockingDeps, isOpsEligibleType } from '../ops/opsLoad';
 import { groomBlockingDepTitles } from '../orchestration/planningCandidates';
 import { resolveProjectDepStatus } from '../orchestration/DispatchTriggerEvaluator';
 import { normalizeTaskId, normalizeBoardId } from '../tasks/taskId';
-import { loadExecutionRanks } from '../orchestration/executionPriority';
+import {
+  loadExecutionRanks,
+  executionSortKey,
+} from '../orchestration/executionPriority';
 import { rerankTestLaneProject } from '../orchestration/testRequestLane';
 import yaml from 'js-yaml';
 import { asyncHandler } from './asyncHandler';
@@ -163,8 +166,12 @@ function applyExecutionRanks(
 ): void {
   try {
     const ranks = loadExecutionRanks(projectId, boardTasks);
+    const createdAtById = new Map(
+      boardTasks.map((t) => [normalizeTaskId(t.id), t.createdAt]),
+    );
     for (const view of views) {
-      const r = ranks.get(normalizeTaskId(view.taskId));
+      const key = normalizeTaskId(view.taskId);
+      const r = ranks.get(key);
       view.executionRank = r
         ? {
             group: r.group,
@@ -172,6 +179,7 @@ function applyExecutionRanks(
             urgentInherited: r.urgentInherited,
             urgentVia: r.urgentVia,
             blocksCount: r.blocksCount,
+            sortKey: executionSortKey(r, createdAtById.get(key), view.taskId),
           }
         : null;
     }

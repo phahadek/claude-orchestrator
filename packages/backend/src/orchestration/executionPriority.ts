@@ -199,6 +199,27 @@ export function executionRankKey(r: ExecutionRank): (number | string)[] {
   }
 }
 
+/** Finite stand-in for Infinity (which JSON serialises to null) that still sorts last. */
+export const SORT_KEY_LAST = Number.MAX_SAFE_INTEGER;
+
+/**
+ * Self-contained, JSON-safe sort key: ascending lexicographic order (numbers
+ * numerically, strings by code unit) equals compareExecutionRank with
+ * AutoLauncher's tieBreak [createdAt ?? Infinity, normalizeTaskId(id)].
+ */
+export function executionSortKey(
+  r: ExecutionRank,
+  createdAt: number | undefined,
+  taskId: string,
+): (number | string)[] {
+  return [
+    GROUP_ORDER[r.group],
+    ...executionRankKey(r).map((k) => (k === Infinity ? SORT_KEY_LAST : k)),
+    createdAt ?? SORT_KEY_LAST,
+    normalizeTaskId(taskId),
+  ];
+}
+
 export function countEffectiveUrgent(ranks: Iterable<ExecutionRank>): {
   direct: number;
   effective: number;

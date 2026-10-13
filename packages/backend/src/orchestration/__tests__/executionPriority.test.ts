@@ -3,6 +3,7 @@ import {
   computeExecutionRanks,
   compareExecutionRank,
   countEffectiveUrgent,
+  executionSortKey,
   type RankInputTask,
   type RankInputFlags,
   type AssignedPriority,
@@ -179,5 +180,71 @@ describe('countEffectiveUrgent', () => {
       direct: 1,
       effective: 3,
     });
+  });
+});
+
+describe('executionSortKey', () => {
+  it('sorts a mixed board like compareExecutionRank + AutoLauncher tie-break, after a JSON round-trip', () => {
+    const tasks: RankInputTask[] = [
+      T('A1', [], '🔲 Ready', 'low'),
+      T('A2', [], '🔲 Ready', 'high'),
+      T('A3', [], '🔲 Ready', 'medium'),
+      T('A4', [], '🔲 Ready', null),
+      T('A5', [], '🔲 Ready', 'high'),
+      T('B1'),
+      T('B2', ['B1']),
+      T('B3', ['B1']),
+      T('C1'),
+      T('C2', ['C1']),
+      T('D1', ['C1']),
+      T('D2'),
+      T('E1'),
+      T('E2'),
+    ];
+    const f = flags({
+      E1: { executeNowReason: 'x', executeNowSetAt: 2000 },
+      E2: { executeNowReason: 'y', executeNowSetAt: null },
+      D2: { urgent: true },
+      D1: { urgent: true },
+    });
+    const ranks = computeExecutionRanks(tasks, f);
+    const createdAt = new Map<string, number | undefined>([
+      ['A4', 5],
+      ['A5', undefined],
+      ['A2', 10],
+    ]);
+    const entries = tasks.map((t) => {
+      const rank = ranks.get(t.id)!;
+      return {
+        id: t.id,
+        rank,
+        tieBreak: [createdAt.get(t.id) ?? Infinity, t.id] as Array<
+          number | string
+        >,
+        key: JSON.parse(
+          JSON.stringify(executionSortKey(rank, createdAt.get(t.id), t.id)),
+        ) as (number | string)[],
+      };
+    });
+    const byRank = [...entries]
+      .sort((a, b) =>
+        compareExecutionRank(
+          { ...a.rank, tieBreak: a.tieBreak },
+          { ...b.rank, tieBreak: b.tieBreak },
+        ),
+      )
+      .map((e) => e.id);
+    const cmp = (a: (number | string)[], b: (number | string)[]) => {
+      for (let i = 0; i < Math.min(a.length, b.length); i++) {
+        if (a[i] === b[i]) continue;
+        return a[i] < b[i] ? -1 : 1;
+      }
+      return a.length - b.length;
+    };
+    const byKey = [...entries]
+      .sort((a, b) => cmp(a.key, b.key))
+      .map((e) => e.id);
+    expect(byKey).toEqual(byRank);
+    expect(entries.every((e) => e.key.every((k) => k !== null))).toBe(true);
   });
 });

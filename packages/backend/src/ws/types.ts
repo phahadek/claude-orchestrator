@@ -207,6 +207,8 @@ export interface TaskView {
     urgentInherited: boolean;
     urgentVia: string[];
     blocksCount: number;
+    /** Per-task dispatch-order key; ascending lexicographic compare matches AutoLauncher's order. */
+    sortKey?: (number | string)[];
   } | null;
   /** True when this task has a staged intent in the decision-inbox visibility set (staged/approved/needs_revision/pending_verification) — the operator still owns a disposition for it. */
   hasAwaitingDispositionIntent: boolean;
