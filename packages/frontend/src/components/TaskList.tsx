@@ -4,7 +4,7 @@ import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { TaskCard } from './TaskCard';
 import { CompactTaskCard } from './CompactTaskCard';
-import { isEffectivelyUrgent } from './UrgentToggle';
+import { isEffectivelyUrgent } from '../utils/urgent';
 import { BacklogCodeSection } from './BacklogCodeSection';
 import { NonCodeTypeSection } from './NonCodeTypeSection';
 import { StagedIntentPanel } from './StagedIntentPanel';
