@@ -28,6 +28,8 @@ import {
   createStagedIntentsRouter,
   stageIntent,
   verifyDispatchedGroupsForSession,
+  computeProposedBody,
+  resolveEffectiveType,
 } from '../stagedIntents';
 import { recordAccretionMarker } from '../../gate/gateStore';
 import { recordAccretionMarker as recordSeedAccretionMarker } from '../../seed/seedStore';
@@ -343,6 +345,132 @@ describe('verifyDispatchedGroupsForSession — group-level verify gate', () => {
     expect(res.body.intents.map((i: { id: string }) => i.id)).toContain(
       intent.id,
     );
+  });
+});
+
+describe('verifyDispatchedGroupsForSession — group body edits and retype are live during verification', () => {
+  const BAD_BODY = '## Open Questions\n- Still unresolved?\n';
+
+  it('passes a group whose same-group task.patchBodySection fixes a readiness violation', async () => {
+    mockGetTaskBackend.mockReturnValue(makeBackend(BAD_BODY));
+    stageDependsOn('session-p1', 'group-p1', 'notion:group-p1');
+    stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: 'notion:group-p1',
+        section: 'Open Questions',
+        operation: 'remove',
+      },
+      'proj-1',
+      'group-p1',
+      'session-p1',
+    );
+    stageBlockedReadyIntent('session-p1', 'group-p1');
+
+    const outcomes = await verifyDispatchedGroupsForSession('session-p1');
+
+    expect(outcomes[0]).toEqual(
+      expect.objectContaining({ passed: true, errors: [] }),
+    );
+  });
+
+  it('passes a group whose same-group task.updateBody rewrite fixes a readiness violation', async () => {
+    mockGetTaskBackend.mockReturnValue(makeBackend(BAD_BODY));
+    stageDependsOn('session-p2', 'group-p2', 'notion:group-p2');
+    stageIntent(
+      'task.updateBody',
+      {
+        taskId: 'notion:group-p2',
+        sections: { Summary: 'Clean rewrite.' },
+      },
+      'proj-1',
+      'group-p2',
+      'session-p2',
+    );
+    stageBlockedReadyIntent('session-p2', 'group-p2');
+
+    const outcomes = await verifyDispatchedGroupsForSession('session-p2');
+
+    expect(outcomes[0]).toEqual(
+      expect.objectContaining({ passed: true, errors: [] }),
+    );
+  });
+
+  it('still fails verification with the gate reason when the same-group patch does not fix the defect', async () => {
+    mockGetTaskBackend.mockReturnValue(makeBackend(BAD_BODY));
+    stageDependsOn('session-p3', 'group-p3', 'notion:group-p3');
+    stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: 'notion:group-p3',
+        section: 'Summary',
+        operation: 'replace',
+        find: 'x',
+        replaceWith: 'y',
+      },
+      'proj-1',
+      'group-p3',
+      'session-p3',
+    );
+    stageBlockedReadyIntent('session-p3', 'group-p3');
+
+    const outcomes = await verifyDispatchedGroupsForSession('session-p3');
+
+    expect(outcomes[0].passed).toBe(false);
+    expect(outcomes[0].errors.length).toBeGreaterThan(0);
+  });
+
+  it('computeProposedBody folds pending_verification edits but not committed ones', async () => {
+    mockGetTaskBackend.mockReturnValue(makeBackend(BAD_BODY));
+    const patch = (groupId: string) =>
+      stageIntent(
+        'task.patchBodySection',
+        {
+          taskId: 'notion:fold',
+          section: 'Open Questions',
+          operation: 'remove',
+        },
+        'proj-1',
+        groupId,
+      );
+    const pending = patch('group-fold-pv');
+    db.prepare(
+      "UPDATE staged_intent SET state = 'pending_verification' WHERE id = ?",
+    ).run(pending.id);
+    const folded = await computeProposedBody(
+      makeBackend(BAD_BODY) as never,
+      'group-fold-pv',
+      'notion:fold',
+    );
+    expect(folded.body).not.toContain('Open Questions');
+
+    const done = patch('group-fold-committed');
+    db.prepare("UPDATE staged_intent SET state = 'committed' WHERE id = ?").run(
+      done.id,
+    );
+    const notFolded = await computeProposedBody(
+      makeBackend(BAD_BODY) as never,
+      'group-fold-committed',
+      'notion:fold',
+    );
+    expect(notFolded.body).toBe(BAD_BODY);
+    expect(notFolded.unapplied).toEqual([]);
+  });
+
+  it('resolveEffectiveType honours a same-group task.setType in pending_verification', () => {
+    const row = stageIntent(
+      'task.setType',
+      { taskId: 'notion:retype', type: '🔎 Investigation' },
+      'proj-1',
+      'group-retype',
+    );
+    db.prepare(
+      "UPDATE staged_intent SET state = 'pending_verification' WHERE id = ?",
+    ).run(row.id);
+
+    expect(
+      resolveEffectiveType('group-retype', 'notion:retype', undefined),
+    ).toBe('🔎 Investigation');
   });
 });
 
