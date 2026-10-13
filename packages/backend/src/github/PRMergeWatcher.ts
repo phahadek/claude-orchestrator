@@ -1603,9 +1603,7 @@ export class PRMergeWatcher extends EventEmitter {
       const session = getSession(pr.session_id);
       const worktreePath = session?.worktree_path ?? '';
       if (!worktreePath) return;
-      let result: Awaited<
-        ReturnType<ReviewOrchestrator['rerunFlakyAnalyze']>
-      >;
+      let result: Awaited<ReturnType<ReviewOrchestrator['rerunFlakyAnalyze']>>;
       try {
         result = await this.reviewOrchestrator.rerunFlakyAnalyze(
           pr.pr_number,
