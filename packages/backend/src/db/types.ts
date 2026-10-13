@@ -497,6 +497,18 @@ export interface NewDepthReviewVerdictRow {
   route_count?: number;
 }
 
+// ─── task_execution_flags ───────────────────────────────────────────────────
+
+export interface TaskExecutionFlagsRow {
+  task_id: string;
+  project_id: string;
+  urgent: 0 | 1;
+  urgent_set_by: string | null;
+  urgent_set_at: number | null;
+  execute_now_reason: string | null;
+  execute_now_set_at: number | null;
+}
+
 // ─── task_repo_assignments ──────────────────────────────────────────────────
 
 export interface TaskRepoAssignmentRow {

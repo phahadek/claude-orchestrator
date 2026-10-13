@@ -73,6 +73,7 @@ type EventType =
   | 'task_launch_skipped_branch_exists'
   | 'task_launch_skipped_branch_probe_failed'
   | 'task_unblocked'
+  | 'task_urgent_changed'
   | 'pr_unparked'
   | 'repo_git_config_repaired'
   | 'task_recovered'

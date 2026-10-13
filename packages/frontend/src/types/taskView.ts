@@ -91,6 +91,8 @@ export interface TaskView {
   totalTokens?: { input: number; output: number };
   /** Assigned target repo slug for multi-repo projects. Null when unassigned. */
   assignedRepo: string | null;
+  /** Operator Urgent flag (direct flag only). Absent/undefined is treated as false. */
+  urgent?: boolean;
   /** True when this task has a staged intent in the decision-inbox visibility set (staged/approved/needs_revision/pending_verification) — the operator still owns a disposition for it. Absent/undefined is treated as false. */
   hasAwaitingDispositionIntent?: boolean;
   /** Recovery action available for this task when paused. */

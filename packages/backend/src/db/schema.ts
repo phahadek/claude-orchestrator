@@ -256,6 +256,17 @@ export function runMigrations(target: Database.Database): void {
       assigned_at  INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS task_execution_flags (
+      task_id             TEXT    PRIMARY KEY,
+      project_id          TEXT    NOT NULL,
+      urgent              INTEGER NOT NULL DEFAULT 0,
+      urgent_set_by       TEXT,
+      urgent_set_at       INTEGER,
+      execute_now_reason  TEXT,
+      execute_now_set_at  INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_execution_flags_project ON task_execution_flags(project_id);
+
     CREATE TABLE IF NOT EXISTS ops_journal (
       task_id              TEXT    PRIMARY KEY,
       project              TEXT    NOT NULL,
