@@ -43,6 +43,7 @@ import { computeOpsBlockingDeps, isOpsEligibleType } from '../ops/opsLoad';
 import { groomBlockingDepTitles } from '../orchestration/planningCandidates';
 import { resolveProjectDepStatus } from '../orchestration/DispatchTriggerEvaluator';
 import { normalizeTaskId, normalizeBoardId } from '../tasks/taskId';
+import { loadExecutionRanks } from '../orchestration/executionPriority';
 import yaml from 'js-yaml';
 import { asyncHandler } from './asyncHandler';
 export type { TaskView } from '../ws/types';
@@ -122,13 +123,19 @@ function collectDependencyContext(rootTask: NotionTask): NotionTask[] {
  * Only called for ops-eligible tasks, so the board-cache scan this performs
  * stays off the hot path for the common 💻 Code task_updated broadcasts.
  */
-function findProjectIdForTask(notionTaskId: string): string | null {
+const sameTask = (a: string, b: string): boolean =>
+  normalizeTaskId(a) === normalizeTaskId(b);
+
+function findBoardForTask(
+  notionTaskId: string,
+): { projectId: string; tasks: NotionTask[] } | null {
   for (const project of getAllProjects()) {
     const boardRow = getTaskCache(`board:${project.boardId}`);
     if (boardRow) {
       try {
         const boardTasks = JSON.parse(boardRow.raw_json) as NotionTask[];
-        if (boardTasks.some((t) => t.id === notionTaskId)) return project.id;
+        if (boardTasks.some((t) => sameTask(t.id, notionTaskId)))
+          return { projectId: project.id, tasks: boardTasks };
       } catch {
         // ignore malformed cache entry
       }
@@ -137,13 +144,39 @@ function findProjectIdForTask(notionTaskId: string): string | null {
     if (nonMilestoneRow) {
       try {
         const nmTasks = JSON.parse(nonMilestoneRow.raw_json) as NotionTask[];
-        if (nmTasks.some((t) => t.id === notionTaskId)) return project.id;
+        if (nmTasks.some((t) => sameTask(t.id, notionTaskId)))
+          return { projectId: project.id, tasks: nmTasks };
       } catch {
         // ignore malformed cache entry
       }
     }
   }
   return null;
+}
+
+/** Mutates `views` in place with executionRank, ranked against one whole board. */
+function applyExecutionRanks(
+  views: TaskView[],
+  boardTasks: NotionTask[],
+  projectId: string,
+): void {
+  try {
+    const ranks = loadExecutionRanks(projectId, boardTasks);
+    for (const view of views) {
+      const r = ranks.get(normalizeTaskId(view.taskId));
+      view.executionRank = r
+        ? {
+            group: r.group,
+            urgent: r.urgent,
+            urgentInherited: r.urgentInherited,
+            urgentVia: r.urgentVia,
+            blocksCount: r.blocksCount,
+          }
+        : null;
+    }
+  } catch {
+    // ignore — views retain executionRank unset
+  }
 }
 
 /**
@@ -278,7 +311,9 @@ async function buildTaskView(notionTaskId: string): Promise<TaskView | null> {
   if (notionTask) {
     const contextTasks = collectDependencyContext(notionTask);
     resolveDependencyBlocking([view], contextTasks);
-    const projectId = findProjectIdForTask(notionTaskId);
+    const board = findBoardForTask(notionTaskId);
+    const projectId = board?.projectId ?? null;
+    if (board) applyExecutionRanks([view], board.tasks, board.projectId);
     if (projectId) {
       annotateGroomDepBlocking([view], contextTasks, projectId);
       if (isOpsEligibleType(notionTask.type)) {
@@ -793,6 +828,7 @@ export function createTasksRouter(
         .filter((v) => !v.notionStatus.includes('Deferred'));
 
       resolveDependencyBlocking(views, notionTasks);
+      applyExecutionRanks(views, notionTasks, projectId);
 
       annotateGroomDepBlocking(views, notionTasks, projectId);
 
@@ -857,6 +893,7 @@ export function createTasksRouter(
         .filter((v) => !v.notionStatus.includes('Deferred'));
 
       resolveDependencyBlocking(views, allBoardTasks);
+      applyExecutionRanks(views, allBoardTasks, projectId);
 
       annotateGroomDepBlocking(views, allBoardTasks, projectId);
 
@@ -1006,6 +1043,8 @@ export function createTasksRouter(
       return;
     }
 
+    const board = findBoardForTask(taskId);
+    const before = board ? loadExecutionRanks(projectId, board.tasks) : null;
     const previous = getTaskExecutionFlags(taskId)?.urgent === 1;
     setTaskUrgent(taskId, projectId, urgent, 'human');
     recordEvent({
@@ -1016,6 +1055,15 @@ export function createTasksRouter(
       payload: { urgent, previous },
     });
     emitTaskUpdated(taskId);
+    if (board && before) {
+      const after = loadExecutionRanks(projectId, board.tasks);
+      for (const [id, rank] of after) {
+        if (id === taskId) continue;
+        if (before.get(id)?.urgentInherited !== rank.urgentInherited) {
+          emitTaskUpdated(id);
+        }
+      }
+    }
 
     res.json({ ok: true, urgent });
   });
