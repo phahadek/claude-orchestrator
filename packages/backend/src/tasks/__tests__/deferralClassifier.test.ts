@@ -115,6 +115,7 @@ vi.mock('../../logger', () => ({
 
 import {
   classifyReadyProposal,
+  Semaphore,
   __resetClassifiedIntentIdsForTest,
 } from '../deferralClassifier';
 
@@ -1114,5 +1115,64 @@ describe('classifyReadyProposal — per-intent idempotence', () => {
 
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     expect(mockSetStagedIntentAdvisory).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Semaphore.resize', () => {
+  it('wakes exactly one waiter per freed slot when growing', async () => {
+    const sem = new Semaphore(1);
+    const releases: (() => void)[] = [];
+    releases.push(await sem.acquire());
+    let woken = 0;
+    for (let i = 0; i < 3; i++) {
+      void sem.acquire().then((r) => {
+        woken++;
+        releases.push(r);
+      });
+    }
+    expect(sem.queueDepth()).toBe(3);
+
+    sem.resize(3);
+    await Promise.resolve();
+
+    expect(woken).toBe(2);
+    expect(sem.inUse()).toBe(3);
+    expect(sem.queueDepth()).toBe(1);
+
+    releases[0]();
+    await Promise.resolve();
+    expect(woken).toBe(3);
+    expect(sem.queueDepth()).toBe(0);
+    expect(sem.inUse()).toBe(3);
+
+    releases.slice(1).forEach((r) => r());
+    expect(sem.inUse()).toBe(0);
+  });
+
+  it('shrinking wakes nobody and never over-credits on release', async () => {
+    const sem = new Semaphore(3);
+    const releases = [
+      await sem.acquire(),
+      await sem.acquire(),
+      await sem.acquire(),
+    ];
+    let woken = 0;
+    void sem.acquire().then(() => {
+      woken++;
+    });
+
+    sem.resize(1);
+    await Promise.resolve();
+    expect(woken).toBe(0);
+    expect(sem.inUse()).toBe(3);
+
+    const afterRelease: number[] = [];
+    sem.resize(1);
+    releases.forEach((r) => {
+      r();
+      afterRelease.push(sem.inUse());
+    });
+    await Promise.resolve();
+    expect(Math.min(...afterRelease)).toBeGreaterThanOrEqual(0);
   });
 });

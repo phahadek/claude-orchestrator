@@ -428,7 +428,6 @@ export class Semaphore {
     this.available += newSize - this.size;
     this.size = newSize;
     while (this.available > 0 && this.queue.length > 0) {
-      this.available--;
       const next = this.queue.shift()!;
       next.wake();
     }
