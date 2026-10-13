@@ -461,6 +461,37 @@ export function formatBaseBranchModifiedFeedback(args: {
   );
 }
 
+/** Post-merge notice for a pre-test merge that folded the base branch into the session's worktree. */
+export function formatPreTestMergeSuccess(args: {
+  baseBranch: string;
+  mergedSha: string | null;
+}): string {
+  const sha = args.mergedSha ? args.mergedSha.slice(0, 7) : 'latest';
+  return (
+    `The orchestrator merged origin/${args.baseBranch}@${sha} into this branch before this run. ` +
+    `The merge is in your worktree now and ships with your next push.`
+  );
+}
+
+/** Pre-test merge refused because uncommitted changes overlap the incoming files. */
+export function formatPreTestMergeDirtyRefused(args: {
+  baseBranch: string;
+  detail?: string | null;
+}): string {
+  const detail = args.detail ? `\n\n${args.detail.split('\n')[0]}` : '';
+  return (
+    `## Pre-test merge skipped — uncommitted changes\n\n` +
+    `The orchestrator could not merge \`origin/${args.baseBranch}\` into this branch before the run ` +
+    `because your worktree has uncommitted changes that overlap the incoming files.${detail}\n\n` +
+    `**Action required:** commit your work, then re-request the test run. ` +
+    `If the merge then conflicts, you will get the standard conflict instructions:\n\n` +
+    formatMergeConflictFeedback({
+      branchName: null,
+      baseBranch: args.baseBranch,
+    })
+  );
+}
+
 /**
  * Format a merge conflict notification for a local branch coding session.
  * Asks the session to rebase onto the base branch and resolve conflicts.
