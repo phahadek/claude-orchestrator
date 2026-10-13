@@ -1752,8 +1752,9 @@ export class SessionManager extends EventEmitter {
     // crash-loop while its PR sits open awaiting review and AutoLauncher
     // still needs to know. Only the visible task-status write is skipped
     // here, leaving the task at 👀 In Review rather than flipping it to
-    // 🗂️ Ready or 🚫 Blocked. Merged/closed PRs are already covered above
-    // via the task's terminal status.
+    // 🗂️ Ready or 🚫 Blocked. A merged PR is already covered above
+    // via the task's terminal status; a closed-unmerged one is not terminal
+    // and is recoverable via the orphan redispatch fallback.
     const openPr = getPRByNotionTaskId(notionTaskId);
     if (openPr && openPr.state === 'open') {
       recordTaskDemotionSkippedOpenPr(

@@ -56,6 +56,13 @@ export interface TasksActiveResponse {
   coldCache: boolean;
 }
 
+/** A closed-unmerged PR is recoverable, so it must not suppress the orphan redispatch fallback. */
+function taskHasLivePR(
+  row: Pick<TaskAggregateRow, 'pr_number' | 'pr_state'>,
+): boolean {
+  return row.pr_number != null && row.pr_state !== 'closed';
+}
+
 function getReviewIterationCap(): number {
   return typedGetSetting('max_review_iterations');
 }
@@ -511,7 +518,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     recoveryDescriptor: deriveTaskRecoveryDescriptor({
       taskReason: taskPauseStruct?.reason ?? null,
       prReason: pauseStruct?.reason ?? null,
-      hasPR: row.pr_number != null,
+      hasPR: taskHasLivePR(row),
       sessionTerminal: TERMINAL_SESSION_STATUSES.has(
         row.code_session_status ?? '',
       ),
@@ -1235,7 +1242,7 @@ export function createTasksRouter(
       const descriptor = deriveTaskRecoveryDescriptor({
         taskReason: taskPauseStruct?.reason ?? null,
         prReason: pauseStruct?.reason ?? null,
-        hasPR: row?.pr_number != null,
+        hasPR: row ? taskHasLivePR(row) : false,
         sessionTerminal: TERMINAL_SESSION_STATUSES.has(
           row?.code_session_status ?? '',
         ),
