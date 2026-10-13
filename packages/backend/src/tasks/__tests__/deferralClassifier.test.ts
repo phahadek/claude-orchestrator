@@ -1118,6 +1118,10 @@ describe('classifyReadyProposal — per-intent idempotence', () => {
   });
 });
 
+async function flushMicrotasks(): Promise<void> {
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+}
+
 describe('Semaphore.resize', () => {
   it('wakes exactly one waiter per freed slot when growing', async () => {
     const sem = new Semaphore(1);
@@ -1133,14 +1137,14 @@ describe('Semaphore.resize', () => {
     expect(sem.queueDepth()).toBe(3);
 
     sem.resize(3);
-    await Promise.resolve();
+    await flushMicrotasks();
 
     expect(woken).toBe(2);
     expect(sem.inUse()).toBe(3);
     expect(sem.queueDepth()).toBe(1);
 
     releases[0]();
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(woken).toBe(3);
     expect(sem.queueDepth()).toBe(0);
     expect(sem.inUse()).toBe(3);
@@ -1162,7 +1166,7 @@ describe('Semaphore.resize', () => {
     });
 
     sem.resize(1);
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(woken).toBe(0);
     expect(sem.inUse()).toBe(3);
 
@@ -1172,7 +1176,7 @@ describe('Semaphore.resize', () => {
       r();
       afterRelease.push(sem.inUse());
     });
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(Math.min(...afterRelease)).toBeGreaterThanOrEqual(0);
   });
 });
