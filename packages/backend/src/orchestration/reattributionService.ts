@@ -130,7 +130,7 @@ async function reattributeForIngestedRun(
 
 export async function sweepConfirmedWaiting(
   sink: ReattributionWakeSink | null,
-): Promise<{ items_processed: number }> {
+): Promise<{ items_processed: number; evaluated: number }> {
   const subjects = listAwaitingDispositionRuns();
   let woken = 0;
   for (const s of subjects) {
@@ -142,7 +142,10 @@ export async function sweepConfirmedWaiting(
       );
     }
   }
-  return { items_processed: woken };
+  logger.info(
+    `[reattribution] sweep evaluated=${subjects.length} woken=${woken}`,
+  );
+  return { items_processed: woken, evaluated: subjects.length };
 }
 
 export function startReattributionService(

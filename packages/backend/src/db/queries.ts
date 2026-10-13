@@ -9977,11 +9977,13 @@ export function listAwaitingDispositionRuns(
     : '';
   return db
     .prepare(
-      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
+      `SELECT ${AWAITING_DISPOSITION_COLUMNS}
        FROM test_request_runs
-       WHERE state = 'failed' AND awaiting_disposition_at IS NOT NULL
-         AND session_id IS NOT NULL ${idClause}
-       ORDER BY awaiting_disposition_at ASC LIMIT ?`,
+       JOIN sessions s ON s.session_id = test_request_runs.session_id
+       WHERE test_request_runs.state = 'failed'
+         AND test_request_runs.awaiting_disposition_at IS NOT NULL
+         AND s.status NOT IN (${BASE_TERMINAL_STATUS_SQL_LIST}) ${idClause}
+       ORDER BY test_request_runs.awaiting_disposition_at ASC LIMIT ?`,
     )
     .all(...(ids ?? []), limit) as TestRequestRunRow[];
 }
@@ -9993,6 +9995,10 @@ export function markTestRequestRunAwaitingDisposition(id: string): void {
 }
 
 const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha, foreign_concurrent_run_count, worktree_path, superseded_by, failed_command, commands, coverage_source_run_id, awaiting_disposition_at, runner_executed`;
+
+const AWAITING_DISPOSITION_COLUMNS = TEST_REQUEST_RUN_COLUMNS.split(', ')
+  .map((c) => `test_request_runs.${c}`)
+  .join(', ');
 
 /**
  * Every settled `passed` run for (project_id, content_hash) that carries a

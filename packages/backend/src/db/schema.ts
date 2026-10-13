@@ -3601,6 +3601,10 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+  target.exec(`
+    CREATE INDEX IF NOT EXISTS idx_test_request_runs_state_awaiting_disposition
+      ON test_request_runs(state, awaiting_disposition_at);
+  `);
 
   // runner_executed: 1 on a row stamped at admission because a remote runner
   // executor was installed for it — the marker the runner-unreachability
