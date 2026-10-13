@@ -7306,7 +7306,13 @@ interface ProposedBodyResult {
   unapplied: UnappliedBodyPatch[];
 }
 
-async function computeProposedBody(
+// verifyGroup moves every member to pending_verification before the preview is built; committed is excluded because a committed edit is already in the stored body.
+const PREVIEW_BODY_EDIT_STATES: StagedIntentState[] = [
+  ...ACTIVE_STATES,
+  'pending_verification',
+];
+
+export async function computeProposedBody(
   backend: ReturnType<typeof getTaskBackend>,
   groupId: string | null | undefined,
   taskId: string,
@@ -7322,7 +7328,7 @@ async function computeProposedBody(
   const updateBodyRow = intents.find(
     (row) =>
       row.kind === 'task.updateBody' &&
-      ACTIVE_STATES.includes(row.state) &&
+      PREVIEW_BODY_EDIT_STATES.includes(row.state) &&
       (JSON.parse(row.payload) as UpdateBodyPayload).taskId === taskId,
   );
   // A task.updateBody replaces the whole body wholesale, so it's the base a
@@ -7343,7 +7349,7 @@ async function computeProposedBody(
   const patchRows = intents.filter(
     (row) =>
       row.kind === 'task.patchBodySection' &&
-      ACTIVE_STATES.includes(row.state) &&
+      PREVIEW_BODY_EDIT_STATES.includes(row.state) &&
       (JSON.parse(row.payload) as PatchBodySectionPayload).taskId === taskId,
   );
   const unapplied: UnappliedBodyPatch[] = [];
@@ -7413,7 +7419,7 @@ function describeUnappliedCrossGroupBodyPatches(
  * caller's payload.groomingGate?.type) only when neither a pending setType
  * nor a cached type is available.
  */
-function resolveEffectiveType(
+export function resolveEffectiveType(
   groupId: string | null | undefined,
   taskId: string,
   fallbackType: string | undefined,
@@ -7444,6 +7450,7 @@ function resolveEffectiveType(
   // here, reproducing the exact bug this function exists to prevent.
   const relevantSetTypeStates: readonly StagedIntentState[] = [
     ...ACTIVE_STATES,
+    'pending_verification',
     'committed',
     'needs_revision',
   ];
