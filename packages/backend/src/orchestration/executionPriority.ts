@@ -200,7 +200,7 @@ export function executionRankKey(r: ExecutionRank): (number | string)[] {
 }
 
 /** Finite stand-in for Infinity (which JSON serialises to null) that still sorts last. */
-export const SORT_KEY_LAST = Number.MAX_SAFE_INTEGER;
+const SORT_KEY_LAST = Number.MAX_SAFE_INTEGER;
 
 /**
  * Self-contained, JSON-safe sort key: ascending lexicographic order (numbers
