@@ -80,6 +80,7 @@ import {
   getProjectRowById,
   getLatestTestRequestRun,
   listQueuedTestRequestRunsForWorktree,
+  rebindTestRequestRunContentHash,
   withdrawTestRequestRun,
   ingestTestRunResultsOffMainThread,
   listSettledPassedTestRequestRunsForCoverage,
@@ -480,10 +481,50 @@ export function withdrawQueuedRunsForWorktree(
   return count;
 }
 
+/**
+ * Rebinds the executing run and every still-queued same-hash sibling for
+ * (projectId, worktreePath) from oldHash to newHash after a successful
+ * pre-test merge: coalescing keys, the in-memory entry and run spec (so the
+ * execution-start content check and settle paths read newHash), and the
+ * durable row. Other worktrees/hashes are untouched. Returns runs rebound.
+ */
+export function rebindWorktreeContentHash(
+  projectId: string,
+  worktreePath: string,
+  oldHash: string,
+  newHash: string,
+): number {
+  if (oldHash === newHash) return 0;
+  const moved: [string, InFlightEntry][] = [];
+  for (const [k, e] of inFlightRuns) {
+    if (
+      e.projectId === projectId &&
+      e.worktreePath === worktreePath &&
+      e.contentHash === oldHash
+    ) {
+      moved.push([k, e]);
+    }
+  }
+  for (const [k, e] of moved) {
+    inFlightRuns.delete(k);
+    e.contentHash = newHash;
+    e.execSpec.contentHash = newHash;
+    inFlightRuns.set(
+      coalesceKey(e.projectId, newHash, e.runKind, e.baseSha),
+      e,
+    );
+  }
+  rebindTestRequestRunContentHash(projectId, worktreePath, oldHash, newHash);
+  return moved.length;
+}
+
 interface InFlightEntry {
   runId: string;
   projectId: string;
   contentHash: string;
+  worktreePath: string;
+  /** The live spec the executor reads — mutated in place by rebindWorktreeContentHash. */
+  execSpec: TestRequestRunSpec;
   runKind: TestRunKind;
   baseSha: string | null;
   /** This entry's own command set — what the coverage-reuse layer checks a waiting request's coverageCommands against. */
@@ -930,7 +971,7 @@ export function admitTestRequest(
   // Partial coverage: some (not all) requested commands were already run by
   // passed same-hash runs — execute only the rest. The row still records the
   // full requested list; the output notes which commands were reused.
-  let execSpec = spec;
+  let execSpec: TestRequestRunSpec = { ...spec };
   let outputPrefix = '';
   if (spec.coverageCommands === undefined) {
     const split = splitCommandsByCoverage(
@@ -1003,7 +1044,9 @@ export function admitTestRequest(
     spec.commands,
     outputPrefix,
   ).finally(() => {
-    if (inFlightRuns.get(key)?.runId === runId) inFlightRuns.delete(key);
+    for (const [k, e] of inFlightRuns) {
+      if (e.runId === runId) inFlightRuns.delete(k);
+    }
     if (sKey && pendingBySession.get(sKey)?.runId === runId)
       pendingBySession.delete(sKey);
   });
@@ -1012,6 +1055,8 @@ export function admitTestRequest(
     runId,
     projectId: spec.projectId,
     contentHash: spec.contentHash,
+    worktreePath: spec.worktreePath,
+    execSpec,
     runKind,
     baseSha,
     commands: spec.commands,

@@ -9736,6 +9736,25 @@ export function withdrawTestRequestRun(id: string, supersededBy: string): void {
 }
 
 /**
+ * Rebinds every queued/running run for (project, worktree) from oldHash to
+ * newHash — the durable half of the lane's post-merge hash rebind.
+ */
+export function rebindTestRequestRunContentHash(
+  projectId: string,
+  worktreePath: string,
+  oldHash: string,
+  newHash: string,
+): number {
+  return db
+    .prepare(
+      `UPDATE test_request_runs SET content_hash = ?
+       WHERE project_id = ? AND worktree_path = ? AND content_hash = ?
+         AND state IN ('queued', 'running')`,
+    )
+    .run(newHash, projectId, worktreePath, oldHash).changes;
+}
+
+/**
  * Every run still `queued` for a (project_id, worktree_path) pair — the
  * same-worktree supersession scan's read (see admitTestRequest's stale-run
  * withdrawal and the PR-driven withdrawal on pr_merged/pr_closed/push_detected
