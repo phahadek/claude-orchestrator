@@ -60,9 +60,7 @@ function warnUnscopedAncestrySourceUse(): void {
  * `projectDir`), rather than assuming the current process cwd is the right
  * repo — the gate reconciler runs against multiple projects' local clones.
  */
-function createLocalGitAncestrySource(
-  cwd?: string,
-): DeployAncestrySource {
+function createLocalGitAncestrySource(cwd?: string): DeployAncestrySource {
   return {
     isAncestor(ancestorSha, descendantSha) {
       if (ancestorSha === descendantSha) return true;
