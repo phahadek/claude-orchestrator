@@ -279,9 +279,7 @@ describe('mergeBaseIntoSessionBranch', () => {
 
     expect(result.outcome).toBe('conflict');
     expect(await git(['rev-parse', 'HEAD'], repoDir)).toBe(headBefore);
-    expect(fs.existsSync(path.join(repoDir, '.git', 'MERGE_HEAD'))).toBe(
-      false,
-    );
+    expect(fs.existsSync(path.join(repoDir, '.git', 'MERGE_HEAD'))).toBe(false);
     expect(fs.readFileSync(path.join(repoDir, 'base.txt'), 'utf-8')).toBe(
       'feature version\n',
     );

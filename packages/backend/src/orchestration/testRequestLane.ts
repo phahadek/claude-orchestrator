@@ -380,7 +380,11 @@ const mergeHoldByRun = new Map<string, string>();
 /** Wall-clock ceiling on how long a run is passed over for a busy owner before it is withdrawn. */
 export const SESSION_NOT_IDLE_CEILING_MS = 3 * 60 * 60 * 1000;
 
-const BUSY_SESSION_STATUSES = new Set(['starting', 'running', 'needs_permission']);
+const BUSY_SESSION_STATUSES = new Set([
+  'starting',
+  'running',
+  'needs_permission',
+]);
 
 /**
  * Grant-time eligibility: a run whose owner session is mid-turn is passed
@@ -1521,11 +1525,7 @@ async function runPreTestMerge(
       spec.worktreePath,
       `origin/${baseBranch}`,
     );
-    recordTestRequestRunMerge(
-      runId,
-      result.mergedSha ?? null,
-      result.outcome,
-    );
+    recordTestRequestRunMerge(runId, result.mergedSha ?? null, result.outcome);
     if (result.outcome === 'merged') {
       try {
         const newHash = await computeWholeTreeContentHash(spec.worktreePath);
