@@ -198,9 +198,9 @@ function renderPrBodySectionsBlock(
  * a fixed base plus a per-section allowance generous enough to cover any
  * known or custom section's header + hint line.
  */
-const SIZE_BUDGET_BASE_CHARS = 11250;
+const SIZE_BUDGET_BASE_CHARS = 12750;
 const SIZE_BUDGET_PER_SECTION_CHARS = 100;
-const SIZE_BUDGET_BASE_WORDS = 1830;
+const SIZE_BUDGET_BASE_WORDS = 2080;
 const SIZE_BUDGET_PER_SECTION_WORDS = 10;
 
 export function computeSizeBudget(sections: readonly string[]): {
@@ -346,7 +346,21 @@ The supervisor's "Pause your work" message isn't a nudge in this sense: stopping
 
 ---
 
+## Investigate a Failing Test First
+
+A failing test is presumed caused by your diff until you name a concrete cause outside it. A failing test in a file your diff touches, or one that exercises a module your diff changed (directly or through a shared fixture), is presumed caused by the diff.
+
+1. Read at least one failing test, then trace its fixtures and imports into the code you changed. Do this before any other step.
+2. Many failures sharing one fixture is a signal to inspect that fixture's path through your change — not a sign of an environment failure.
+3. The \`test_request\` digest shows failing test names, not assertion text, so this is code-reading work: intersect the failing tests' fixtures and imports with your diff.
+4. Only a failure whose cause you have identified outside your diff goes to the flaky path below (\`flaky_confirm\`, \`mcp__orchestrator__testHealth_getFlakyHistory\`), and the \`reason\` must name that cause.
+5. Asking the operator about the environment is a last resort, after steps 1–3.
+
+---
+
 ## Flaky / Transient CI or F2 Gate Failures
+
+This section applies only once you have investigated per "Investigate a Failing Test First" above and named a concrete cause outside your diff.
 
 When a CI check or the F2 orchestrator-run test gate fails on your PR, do not assume it's flaky and do not push an empty commit to force a re-run — that does not re-drive anything. Default to treating the failure as real and fixing it.
 
@@ -358,7 +372,7 @@ Test commands are blocked at the permission layer — always via \`mcp__orchestr
 
 The backend refuses (naming why) unless the test clears the corpus and its file isn't in your diff. On success it re-runs the gate on the same commit and re-drives the merge loop on a pass — bounded, so exhaustion parks the PR for a human rather than looping.
 
-Check \`mcp__orchestrator__testHealth_getFlakyHistory\` first — pass the failing test ids from your run — it grounds your \`reason\` and tells you whether \`flaky_confirm\` is even worth calling.
+Once you have a named cause outside your diff, \`mcp__orchestrator__testHealth_getFlakyHistory\` (pass the failing test ids from your run) can corroborate your \`reason\`.
 
 Retrying \`test_request\` against an unchanged tree is futile either way: a settled run just replays via dedup, and a broken run (timeout, crash, OOM, failed spawn) stays held for operator approval instead — re-staging changes neither.
 
@@ -469,7 +483,7 @@ Run in order — all must pass before opening the PR:
 ${verifySteps}
 ${stageNum}. Stage only your implementation files for commit.
 
-Tests are blocked at the permission layer, not part of this gate — run via \`test_request\`. A flaky-looking \`test_request\` failure here: call \`flaky_confirm\` with \`gate: "test_request"\` rather than retrying (see "Flaky / Transient CI or F2 Gate Failures" above).`;
+Tests are blocked at the permission layer, not part of this gate — run via \`test_request\`. A failed \`test_request\` here: first follow "Investigate a Failing Test First" above. Only if you have named a concrete cause outside your diff, call \`flaky_confirm\` with \`gate: "test_request"\` rather than retrying (see "Flaky / Transient CI or F2 Gate Failures" above).`;
 })()}
 
 ---

@@ -401,6 +401,32 @@ describe('buildOrchestratorClaudeMd', () => {
     expect(flakySection).toContain('woken at most once');
   });
 
+  it('has an investigate-first section before the flaky section, and the Pre-PR Gate points at it before flaky_confirm', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    const investigate = result.indexOf('## Investigate a Failing Test First');
+    expect(investigate).toBeGreaterThan(-1);
+    expect(investigate).toBeLessThan(
+      result.indexOf('## Flaky / Transient CI or F2 Gate Failures'),
+    );
+    expect(result).toContain(
+      'presumed caused by your diff until you name a concrete cause outside it',
+    );
+    expect(result).toContain('exercises a module your diff changed');
+    expect(result).not.toContain(
+      'Check `mcp__orchestrator__testHealth_getFlakyHistory` first',
+    );
+    const gate = result.slice(
+      result.indexOf('## Pre-PR Gate'),
+      result.indexOf('## Forbidden Actions'),
+    );
+    expect(gate.indexOf('Investigate a Failing Test First')).toBeGreaterThan(
+      -1,
+    );
+    expect(gate.indexOf('Investigate a Failing Test First')).toBeLessThan(
+      gate.indexOf('flaky_confirm'),
+    );
+  });
+
   it('includes worktree path in Git Isolation section', () => {
     const result = buildOrchestratorClaudeMd({
       ...defaultParams,
