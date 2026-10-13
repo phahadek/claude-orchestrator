@@ -1346,6 +1346,33 @@ describe('PreReviewPipeline — verify gate worker_crash classification', () => 
     );
     expect(sm.sendOrResume).not.toHaveBeenCalled();
   });
+
+  it('routes a non-timed-out environment_failure verify run as gate_timeout_infra_failure and never messages the session', async () => {
+    const ENV_OUTPUT = '[vitest-worker]: Timeout calling "onTaskUpdate"';
+    mockLaneResult({
+      passed: false,
+      output: ENV_OUTPUT,
+      failedCommand: 'pytest -n 2',
+    });
+    mockGetTestRequestRunById.mockReturnValue({
+      failure_reason: 'environment_failure',
+      output: ENV_OUTPUT,
+      structured_result: null,
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(false);
+    expect(mockSetPauseReason).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'gate_timeout_infra_failure',
+      expect.anything(),
+    );
+    expect(sm.sendOrResume).not.toHaveBeenCalled();
+  });
 });
 
 describe('PreReviewPipeline — verify gate superseded-run handling', () => {
