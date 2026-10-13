@@ -21,12 +21,30 @@ interface Waiter {
   key: LaneWaiterKey;
   wake: () => void;
   reject: (err: Error) => void;
+  /** Wall-clock ms when this waiter was first passed over as ineligible. */
+  skippedSince?: number;
 }
 
 export interface PriorityLaneQueueOpts {
   rerank?: (projectId: string, runIds: string[]) => Map<string, LaneWaiterKey>;
   onGrant?: (runId: string) => void;
+  /**
+   * Called when a free slot could go to this waiter. May have side effects
+   * (the lane takes the owner's merge hold here), so it is called only for a
+   * waiter about to be granted when it returns true. An ineligible waiter is
+   * passed over without losing its rank.
+   */
+  eligible?: (runId: string) => boolean;
+  /** Wall-clock ms an ineligible waiter may stay passed over before being withdrawn. */
+  skipCeilingMs?: number;
+  /** Called after a waiter is withdrawn for exceeding skipCeilingMs. */
+  onSkipExpired?: (runId: string) => void;
+  /** Interval for re-evaluating passed-over waiters between slot releases. */
+  reevaluateIntervalMs?: number;
+  clock?: () => number;
 }
+
+export const SKIP_EXPIRED_REASON = 'session_not_idle';
 
 function compareKeyParts(
   a: (number | string)[],
@@ -58,6 +76,7 @@ export class PriorityLaneQueue {
   private size: number;
   private readonly lists = new Map<string, Waiter[]>();
   private cursor: string | null = null;
+  private reevalTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     capacity: number,
@@ -82,12 +101,13 @@ export class PriorityLaneQueue {
   }
 
   async acquire(runId: string, key: LaneWaiterKey): Promise<() => void> {
-    if (this.available > 0) {
+    if (this.available > 0 && (this.opts.eligible?.(runId) ?? true)) {
       this.available--;
       this.opts.onGrant?.(runId);
       return () => this.release();
     }
     return new Promise((resolve, reject) => {
+      const parkedWithFreeSlot = this.available > 0;
       this.insert({
         id: runId,
         key,
@@ -97,7 +117,9 @@ export class PriorityLaneQueue {
           this.opts.onGrant?.(runId);
         },
         reject,
+        skippedSince: parkedWithFreeSlot ? this.now() : undefined,
       });
+      if (parkedWithFreeSlot) this.scheduleReevaluation();
     });
   }
 
@@ -160,23 +182,77 @@ export class PriorityLaneQueue {
     this.drain();
   }
 
+  private now(): number {
+    return (this.opts.clock ?? Date.now)();
+  }
+
   private drain(): void {
+    this.expireSkipped();
     while (this.available > 0 && this.lists.size > 0) {
       for (const pid of [...this.lists.keys()]) this.rerankOne(pid);
-      const pid = this.nextProject();
-      if (pid === null) return;
+      if (!this.grantNext()) break;
+    }
+    this.scheduleReevaluation();
+  }
+
+  /** Grants the first eligible waiter: projects round-robin, each list in rank order. */
+  private grantNext(): boolean {
+    const ids = [...this.lists.keys()].sort();
+    const start = ids.findIndex((p) => this.cursor === null || p > this.cursor);
+    const ordered =
+      start <= 0 ? ids : [...ids.slice(start), ...ids.slice(0, start)];
+    for (const pid of ordered) {
       const list = this.lists.get(pid)!;
-      const next = list[0];
-      this.removeFrom(list, 0, pid);
-      this.cursor = pid;
-      next.wake();
+      for (let i = 0; i < list.length; i++) {
+        const w = list[i];
+        if (this.opts.eligible && !this.opts.eligible(w.id)) {
+          w.skippedSince ??= this.now();
+          continue;
+        }
+        this.removeFrom(list, i, pid);
+        this.cursor = pid;
+        w.wake();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private expireSkipped(): void {
+    const ceiling = this.opts.skipCeilingMs;
+    if (ceiling === undefined) return;
+    const now = this.now();
+    const expired: Waiter[] = [];
+    for (const list of this.lists.values()) {
+      for (const w of list) {
+        if (w.skippedSince !== undefined && now - w.skippedSince >= ceiling)
+          expired.push(w);
+      }
+    }
+    for (const w of expired) {
+      const found = this.find(w.id);
+      if (!found) continue;
+      this.removeFrom(found.list, found.index, w.key.projectId);
+      w.reject(new LaneRunWithdrawnError(SKIP_EXPIRED_REASON));
+      this.opts.onSkipExpired?.(w.id);
     }
   }
 
-  private nextProject(): string | null {
-    const ids = [...this.lists.keys()].sort();
-    if (ids.length === 0) return null;
-    return ids.find((p) => this.cursor === null || p > this.cursor) ?? ids[0];
+  private scheduleReevaluation(): void {
+    if (this.reevalTimer) {
+      clearTimeout(this.reevalTimer);
+      this.reevalTimer = null;
+    }
+    let anySkipped = false;
+    for (const list of this.lists.values()) {
+      if (list.some((w) => w.skippedSince !== undefined)) anySkipped = true;
+    }
+    if (!anySkipped) return;
+    this.reevalTimer = setTimeout(() => {
+      this.reevalTimer = null;
+      this.drain();
+    }, this.opts.reevaluateIntervalMs ?? 30_000);
+    this.reevalTimer.unref?.();
   }
 
   private rerankOne(projectId: string): void {

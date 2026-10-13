@@ -9739,6 +9739,17 @@ export function withdrawTestRequestRun(id: string, supersededBy: string): void {
   ).run(Date.now(), supersededBy, id);
 }
 
+/** Records the pre-test merge's result onto a run row. */
+export function recordTestRequestRunMerge(
+  id: string,
+  mergedDevSha: string | null,
+  conflictOutcome: string,
+): void {
+  db.prepare(
+    `UPDATE test_request_runs SET merged_dev_sha = ?, conflict_outcome = ? WHERE id = ?`,
+  ).run(mergedDevSha, conflictOutcome, id);
+}
+
 /**
  * Rebinds every queued/running run for (project, worktree) from oldHash to
  * newHash — the durable half of the lane's post-merge hash rebind.

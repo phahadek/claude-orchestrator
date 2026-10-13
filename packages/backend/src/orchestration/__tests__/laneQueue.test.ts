@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { PriorityLaneQueue, type LaneWaiterKey } from '../laneQueue';
 import { LaneRunWithdrawnError } from '../../tasks/deferralClassifier';
 
@@ -161,5 +161,60 @@ describe('PriorityLaneQueue', () => {
     release();
     await flush();
     expect(granted).toEqual(['first', 'second']);
+  });
+});
+
+describe('PriorityLaneQueue idle guard', () => {
+  it('keeps a passed-over waiter ranked ahead across a slot release', async () => {
+    const busy = new Set(['head']);
+    const q = new PriorityLaneQueue(1, {
+      eligible: (id) => !busy.has(id),
+      reevaluateIntervalMs: 1_000_000,
+    });
+    const order: string[] = [];
+    const rel: Record<string, () => void> = {};
+    const holder = await q.acquire('holder', key('A', 'priority'));
+    enqueue(q, 'head', key('A', 'priority', [1]), order, rel);
+    enqueue(q, 'tail', key('A', 'priority', [2]), order, rel);
+
+    holder();
+    await flush();
+    expect(order).toEqual(['tail']);
+    expect(q.positionOf('head')).toBe(1);
+
+    busy.delete('head');
+    rel.tail();
+    await flush();
+    expect(order).toEqual(['tail', 'head']);
+  });
+
+  it('withdraws a passed-over waiter with session_not_idle past the wall-clock ceiling', async () => {
+    vi.useFakeTimers();
+    try {
+      const expired: string[] = [];
+      const q = new PriorityLaneQueue(1, {
+        eligible: () => false,
+        skipCeilingMs: 3 * 60 * 60 * 1000,
+        reevaluateIntervalMs: 60_000,
+        onSkipExpired: (id) => expired.push(id),
+      });
+      const result = q.acquire('stuck', key('A', 'priority')).then(
+        () => 'granted',
+        (e: unknown) => e,
+      );
+      await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000);
+      expect(expired).toEqual([]);
+      expect(q.queueDepth()).toBe(1);
+      await vi.advanceTimersByTimeAsync(61 * 60 * 1000);
+      expect(expired).toEqual(['stuck']);
+      expect(q.queueDepth()).toBe(0);
+      const err = await result;
+      expect(err).toBeInstanceOf(LaneRunWithdrawnError);
+      expect((err as LaneRunWithdrawnError).supersededBy).toBe(
+        'session_not_idle',
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -1336,6 +1336,10 @@ export interface TestRequestRunRow {
   task_id: string | null;
   /** Execution-priority group the run ranked in at admission; null for rows predating this column. */
   priority_group: string | null;
+  /** Sha of the session branch's HEAD after the pre-test merge of latest dev; null when no merge was attempted. */
+  merged_dev_sha?: string | null;
+  /** Pre-test merge outcome: 'up_to_date' | 'merged' | 'conflict' | 'dirty_refused' | 'error'; null when no merge was attempted. */
+  conflict_outcome?: string | null;
 }
 
 // ─── dependency_cache_entries ───────────────────────────────────────────────
