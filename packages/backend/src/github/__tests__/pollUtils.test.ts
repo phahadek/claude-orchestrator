@@ -79,6 +79,15 @@ describe('classifyStalledPR — gate_failed', () => {
     expect(classifyStalledPR(pr, null)).toEqual({ kind: 'gate_failed' });
   });
 
+  it('does not classify a gate_timeout_infra_failure PR as gate_failed', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'gate_timeout_infra_failure' }),
+      pending_push: 0,
+    });
+
+    expect(classifyStalledPR(pr, null)?.kind).not.toBe('gate_failed');
+  });
+
   it('does not classify a non-gate-failure verdict as gate_failed regardless of pending_push', () => {
     const pr = makePR({
       review_result: JSON.stringify({ verdict: 'approved' }),

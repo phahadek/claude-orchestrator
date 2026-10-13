@@ -36,6 +36,14 @@ export function detectCrashSignature(
   return nodeId ? { matchedLines, nodeId } : { matchedLines };
 }
 
+/** True when any line of `output` contains a declared environment-failure signature; an empty list never matches. */
+export function matchesEnvironmentFailureSignature(
+  output: string,
+  signatures: string[],
+): boolean {
+  return detectCrashSignature(output, signatures) !== null;
+}
+
 /**
  * Renders the capped session message for a confirmed worker-crash match —
  * never the raw or tail-truncated run output, only the matched lines/node id

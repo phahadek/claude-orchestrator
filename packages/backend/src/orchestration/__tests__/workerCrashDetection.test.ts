@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   detectCrashSignature,
   buildWorkerCrashMessage,
+  matchesEnvironmentFailureSignature,
 } from '../workerCrashDetection';
 
 describe('detectCrashSignature', () => {
@@ -45,6 +46,21 @@ describe('detectCrashSignature', () => {
     expect(match).not.toBeNull();
     expect(match!.matchedLines).toEqual(['replacing crashed worker gw1']);
     expect(match!.nodeId).toBeUndefined();
+  });
+});
+
+describe('matchesEnvironmentFailureSignature', () => {
+  const out = '[vitest-worker]: Timeout calling "onTaskUpdate"\nmore';
+  it('matches a declared substring', () => {
+    expect(
+      matchesEnvironmentFailureSignature(out, [
+        '[vitest-worker]: Timeout calling',
+      ]),
+    ).toBe(true);
+  });
+  it('never matches with an empty list or no hit', () => {
+    expect(matchesEnvironmentFailureSignature(out, [])).toBe(false);
+    expect(matchesEnvironmentFailureSignature(out, ['nope'])).toBe(false);
   });
 });
 

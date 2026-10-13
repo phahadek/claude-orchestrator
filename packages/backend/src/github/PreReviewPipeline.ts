@@ -402,7 +402,9 @@ export class PreReviewPipeline {
             truncatedOutput: tailOfLog(base.output),
             isToolInfraFailure: base.isToolInfraFailure,
             toolFailureReason: base.toolFailureReason,
-            isTimeoutInfraFailure: run?.failure_reason === 'timeout',
+            isTimeoutInfraFailure:
+              run?.failure_reason === 'timeout' ||
+              run?.failure_reason === 'environment_failure',
             isWorkerCrash,
             crashMessage:
               isWorkerCrash && run
@@ -522,6 +524,8 @@ export class PreReviewPipeline {
               timeoutSec: config.test_timeout_sec,
               maxRssMb: config.test_max_rss_mb,
               crashSignatures: config.test_crash_signatures ?? [],
+              environmentSignatures:
+                config.test_environment_failure_signatures ?? [],
             },
           );
           outcome = {

@@ -14,6 +14,7 @@ import {
 import {
   detectCrashSignature,
   buildWorkerCrashMessage,
+  matchesEnvironmentFailureSignature,
 } from './workerCrashDetection';
 
 export interface VerifyResult {
@@ -68,6 +69,8 @@ export interface RunVerifyAsGateOptions {
   maxRssMb?: number;
   /** Worker-crash signature substrings, mirroring OrchestratorConfig.test_crash_signatures. */
   crashSignatures?: string[];
+  /** Environment-failure signature substrings, mirroring OrchestratorConfig.test_environment_failure_signatures. */
+  environmentSignatures?: string[];
 }
 
 export async function runVerifyAsGate(
@@ -150,7 +153,12 @@ export async function runVerifyAsGate(
             }
           : timedOut
             ? { isTimeoutInfraFailure: true }
-            : {}),
+            : matchesEnvironmentFailureSignature(
+                  output,
+                  options.environmentSignatures ?? [],
+                )
+              ? { isTimeoutInfraFailure: true }
+              : {}),
       };
     }
   }
