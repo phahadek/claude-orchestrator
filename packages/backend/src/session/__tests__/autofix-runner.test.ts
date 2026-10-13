@@ -1584,6 +1584,27 @@ describe('getChangedFiles — failures are errors, not an empty diff', () => {
   });
 });
 
+describe('runAutofix — fails closed when changed files are unavailable', () => {
+  it('returns success:false and runs no autofix command when git diff exits non-zero', async () => {
+    const spawned: string[] = [];
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      spawned.push([cmd, ...a].join(' '));
+      if (cmd === 'git' && a[0] === 'diff') return makeProc(128, 'fatal');
+      return makeProc(0, '');
+    };
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['npm run fmt'],
+      () => {},
+    );
+    expect(result.success).toBe(false);
+    expect(result.summary).toContain('changed files unavailable');
+    expect(spawned.some((s) => s.includes('npm run fmt'))).toBe(false);
+  });
+});
+
 // ── runAutofix — cwd-missing guard ────────────────────────────────────────────
 
 describe('runAutofix — cwd-missing guard', () => {
