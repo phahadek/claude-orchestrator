@@ -29,8 +29,3 @@ export function onMergeHoldReleased(
   releaseListeners.add(fn);
   return () => releaseListeners.delete(fn);
 }
-
-export function __resetMergeHoldsForTest(): void {
-  held.clear();
-  releaseListeners.clear();
-}

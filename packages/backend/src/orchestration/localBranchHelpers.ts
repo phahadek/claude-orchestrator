@@ -88,7 +88,7 @@ export async function detectMergeConflict(
   }
 }
 
-export type PreTestMergeOutcome =
+type PreTestMergeOutcome =
   | 'up_to_date'
   | 'merged'
   | 'conflict'

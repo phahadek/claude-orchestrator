@@ -378,7 +378,7 @@ const queuedRunMeta = new Map<
 const mergeHoldByRun = new Map<string, string>();
 
 /** Wall-clock ceiling on how long a run is passed over for a busy owner before it is withdrawn. */
-export const SESSION_NOT_IDLE_CEILING_MS = 3 * 60 * 60 * 1000;
+const SESSION_NOT_IDLE_CEILING_MS = 3 * 60 * 60 * 1000;
 
 const BUSY_SESSION_STATUSES = new Set([
   'starting',
