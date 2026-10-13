@@ -209,6 +209,10 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
     audience: 'operator',
     reason: 'task card assign-repo action',
   },
+  'POST /api/tasks/:taskId/urgent': {
+    audience: 'operator',
+    reason: 'task card urgent toggle',
+  },
   'POST /api/tasks/move-preview': {
     audience: 'operator',
     reason: 'task move dialog',
