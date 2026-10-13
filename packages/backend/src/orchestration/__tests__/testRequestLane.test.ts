@@ -5225,3 +5225,46 @@ describe('rebindWorktreeContentHash — pre-test merge hash rebind', () => {
     testRequestLaneEvents.off('settled', onSettled);
   });
 });
+
+describe('admitTestRequest task linkage', () => {
+  function persisted(runId: string) {
+    return db
+      .prepare(
+        `SELECT task_id, priority_group FROM test_request_runs WHERE id = ?`,
+      )
+      .get(runId) as { task_id: string | null; priority_group: string | null };
+  }
+
+  it.each([
+    ['session_request', 'task-s', 'sess-1'],
+    ['pr_gate', 'task-p', null],
+  ] as const)(
+    'persists task_id and priority_group for a %s spec',
+    (producer, taskId, sessionId) => {
+      mockRunTestCommands.mockImplementation(() => new Promise(() => {}));
+      const admission = admitTestRequest(
+        baseSpec({
+          contentHash: `hash-${producer}`,
+          producer,
+          taskId,
+          sessionId,
+        }),
+      );
+      admission.result.catch(() => {});
+      expect(persisted(admission.runId)).toEqual({
+        task_id: taskId,
+        priority_group: 'priority',
+      });
+    },
+  );
+
+  it('persists null task_id for a spec with no resolvable task and ranks Priority', () => {
+    mockRunTestCommands.mockImplementation(() => new Promise(() => {}));
+    const admission = admitTestRequest(baseSpec({ contentHash: 'hash-none' }));
+    admission.result.catch(() => {});
+    expect(persisted(admission.runId)).toEqual({
+      task_id: null,
+      priority_group: 'priority',
+    });
+  });
+});

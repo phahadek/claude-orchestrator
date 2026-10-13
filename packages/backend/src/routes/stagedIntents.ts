@@ -6424,6 +6424,9 @@ export async function triggerTestRequestExecution(
           timeoutSec: inputs.timeoutSec,
           maxRssMb: inputs.maxRssMb,
           sessionId: intent.sessionId ?? null,
+          taskId: intent.sessionId
+            ? (getSession(intent.sessionId)?.task_id ?? null)
+            : null,
           runOrigin: null,
           producer: 'session_request',
         });
@@ -6856,6 +6859,7 @@ async function maybeAutoApproveTestRequest(
     timeoutSec: inputs.timeoutSec,
     maxRssMb: inputs.maxRssMb,
     sessionId: intent.sessionId,
+    taskId: getSession(intent.sessionId)?.task_id ?? null,
     runOrigin: null,
     producer: 'session_request',
   });

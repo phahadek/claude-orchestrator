@@ -3614,6 +3614,21 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
+  // task_id / priority_group: the task a lane run was admitted for and the
+  // execution-priority group it ranked in at admission (see
+  // orchestration/laneQueue.ts). NULL for rows predating these columns and
+  // for runs with no resolvable task.
+  try {
+    target.exec(`ALTER TABLE test_request_runs ADD COLUMN task_id TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(`ALTER TABLE test_request_runs ADD COLUMN priority_group TEXT`);
+  } catch {
+    /* already exists */
+  }
+
   // parked_at: the occupancy marker for a session left idle and resumable
   // by a machine path whose process was reclaimed or died without a
   // result — replaces archiveSession(id, 'machine_park') for that case (see

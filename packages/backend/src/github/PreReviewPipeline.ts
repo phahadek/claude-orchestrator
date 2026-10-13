@@ -896,7 +896,10 @@ export class PreReviewPipeline {
     ctx: StageContext,
     spec: TestRequestRunSpec,
   ): Promise<TestRequestRunResult> {
-    const admission = admitTestRequest(spec);
+    const admission = admitTestRequest({
+      ...spec,
+      taskId: getPRByNumber(ctx.prNumber, ctx.repo)?.task_id ?? null,
+    });
     this.sessionManager.emit('message', {
       type: 'pr_gate_lane_run_admitted',
       prNumber: ctx.prNumber,
@@ -1039,6 +1042,7 @@ export class PreReviewPipeline {
       timeoutSec: config.test_timeout_sec,
       maxRssMb: config.test_max_rss_mb,
       sessionId: null,
+      taskId: getPRByNumber(prNumber, repo)?.task_id ?? null,
       runOrigin: 'pr_pipeline',
       producer: 'pr_gate',
     }).result.catch((err: unknown) => {

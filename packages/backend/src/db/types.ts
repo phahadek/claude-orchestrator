@@ -1332,6 +1332,10 @@ export interface TestRequestRunRow {
   awaiting_disposition_at: number | null;
   /** 1 when a remote runner executes this row (stamped at admission); 0 for locally executed rows. Only rows with 1 are eligible for the runner-unreachability sweep. */
   runner_executed: number;
+  /** Task the run was admitted for, when resolvable; null otherwise and for rows predating this column. */
+  task_id: string | null;
+  /** Execution-priority group the run ranked in at admission; null for rows predating this column. */
+  priority_group: string | null;
 }
 
 // ─── dependency_cache_entries ───────────────────────────────────────────────

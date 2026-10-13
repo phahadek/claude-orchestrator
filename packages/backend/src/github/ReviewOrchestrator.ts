@@ -899,6 +899,9 @@ export class ReviewOrchestrator {
           timeoutSec,
           maxRssMb,
           sessionId: null,
+          taskId: project.githubRepo
+            ? (getPRByNumber(prNumber, project.githubRepo)?.task_id ?? null)
+            : null,
           runOrigin: 'pr_pipeline',
           producer: 'pr_gate',
         })
@@ -1212,6 +1215,7 @@ export class ReviewOrchestrator {
         timeoutSec: config.test_timeout_sec,
         maxRssMb: config.test_max_rss_mb,
         sessionId: null,
+        taskId: job.taskId,
         runOrigin: 'pr_pipeline',
         producer: 'pr_gate',
         runKind: 'verify',
