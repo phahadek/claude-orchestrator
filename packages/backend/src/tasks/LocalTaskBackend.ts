@@ -11,7 +11,7 @@ import type {
   PatchBodySectionOperation,
 } from './TaskBackend';
 import type { ResolvedTask } from './types';
-import type { NotionTask } from '../notion/types';
+import { parseCreatedAt, type NotionTask } from '../notion/types';
 import { toExternalId, formatTaskId } from './taskId';
 import { DependencyResolver } from '../notion/DependencyResolver';
 import { upsertTaskCache } from '../db/queries';
@@ -51,6 +51,8 @@ interface LocalTask {
   files_affected?: string[];
   notes?: string;
   reviewer?: string[]; // GitHub usernames to auto-request for review (corporate mode)
+  /** Optional creation time (ISO-8601 string; js-yaml may parse it to a Date). */
+  created_at?: string | Date;
   /**
    * Full page body as raw markdown (see the YAML task-backend write surface
    * design). Absent on legacy tasks that predate this field — such tasks
@@ -258,6 +260,7 @@ export class LocalTaskBackend implements TaskBackend {
       prUrl: t.pr_url ?? undefined,
       priority: t.priority,
       reviewer: t.reviewer,
+      createdAt: parseCreatedAt(t.created_at),
     };
   }
 

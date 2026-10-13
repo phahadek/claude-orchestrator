@@ -7,7 +7,12 @@ import {
   deleteTaskCacheRow,
   getRecentTaskStatusWrite,
 } from '../db/queries';
-import { NotionTask, NotionApiError, ResolvedTask } from './types';
+import {
+  NotionTask,
+  NotionApiError,
+  ResolvedTask,
+  parseCreatedAt,
+} from './types';
 import { DependencyResolver } from './DependencyResolver';
 import { toExternalId, normalizeTaskId } from '../tasks/taskId';
 import { markdownToBlocks } from '../tasks/bodyRender';
@@ -86,6 +91,7 @@ interface NotionPage {
   id: string;
   url: string;
   archived?: boolean;
+  created_time?: string;
   properties: {
     'Task Name': { type: 'title'; title: NotionRichTextItem[] };
     Status: { type: 'select'; select: { name: string } | null };
@@ -303,6 +309,7 @@ function mapPageToTask(page: NotionPage): NotionTask {
     prUrl,
     priority,
     archived: page.archived === true,
+    createdAt: parseCreatedAt(page.created_time),
   };
 }
 

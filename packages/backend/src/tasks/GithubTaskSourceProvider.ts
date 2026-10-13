@@ -4,7 +4,7 @@ import type {
   TaskSummary,
 } from './TaskBackend';
 import type { ResolvedTask } from './types';
-import type { NotionTask } from '../notion/types';
+import { parseCreatedAt, type NotionTask } from '../notion/types';
 import { formatTaskId } from './taskId';
 import { DependencyResolver } from '../notion/DependencyResolver';
 import type { GitHubClient } from '../github/GitHubClient';
@@ -120,6 +120,7 @@ function issueToTask(issue: Issue): NotionTask {
     dependsOn: extractDependsOn(issue.body),
     notionUrl: issue.url,
     priority: resolvePriority(issue.labels),
+    createdAt: parseCreatedAt(issue.createdAt),
   };
 }
 

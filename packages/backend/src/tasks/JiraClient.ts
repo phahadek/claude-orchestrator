@@ -13,6 +13,7 @@ interface JiraIssueFields {
     outwardIssue?: { key: string };
   }>;
   parent?: { key: string };
+  created?: string;
 }
 
 export interface JiraIssue {
@@ -134,6 +135,7 @@ export class JiraClient {
       'description',
       'issuelinks',
       'parent',
+      'created',
     ];
     let nextPageToken: string | undefined;
 
