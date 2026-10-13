@@ -59,6 +59,7 @@ function writeTempTasksYaml(
     acceptance_criteria?: string;
     files_affected?: string[];
     notes?: string;
+    created_at?: string | Date;
   }>,
 ): void {
   const content = yaml.dump({
@@ -147,6 +148,51 @@ describe('LocalTaskBackend.fetchReadyTasks — dependsOn prefixing', () => {
     };
     expect(cached.id).toBe('yaml:task-a');
     expect(cached.dependsOn).toEqual(['yaml:task-b']);
+  });
+});
+
+describe('LocalTaskBackend.fetchReadyTasks — createdAt', () => {
+  it('maps created_at (ISO string or YAML timestamp) to epoch ms and round-trips it into the cache', async () => {
+    writeTempTasksYaml(tmpDir, [
+      {
+        id: 'task-str',
+        name: 'Str',
+        status: 'Ready',
+        created_at: '2024-05-01T12:00:00Z',
+      },
+      {
+        id: 'task-ts',
+        name: 'Ts',
+        status: 'Ready',
+        created_at: new Date('2024-05-02T12:00:00Z'),
+      },
+    ]);
+
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+    const result = await backend.fetchReadyTasks('ms-1');
+
+    const byId = Object.fromEntries(result.map((r) => [r.task.id, r.task]));
+    expect(byId['yaml:task-str'].createdAt).toBe(Date.UTC(2024, 4, 1, 12));
+    expect(byId['yaml:task-ts'].createdAt).toBe(Date.UTC(2024, 4, 2, 12));
+
+    const perTaskCall = vi
+      .mocked(upsertTaskCache)
+      .mock.calls.find(([key]) => key === 'yaml:task-str');
+    const cached = JSON.parse(perTaskCall![1] as string) as {
+      createdAt?: number;
+    };
+    expect(cached.createdAt).toBe(Date.UTC(2024, 4, 1, 12));
+  });
+
+  it('leaves createdAt undefined when created_at is not set', async () => {
+    writeTempTasksYaml(tmpDir, [
+      { id: 'task-x', name: 'Task X', status: 'Ready' },
+    ]);
+
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
+    const result = await backend.fetchReadyTasks('ms-1');
+
+    expect(result[0].task.createdAt).toBeUndefined();
   });
 });
 

@@ -53,6 +53,35 @@ const PROJECT_CONFIG = {
   project_key: 'TEST',
 };
 
+describe('JiraTaskSourceProvider — createdAt', () => {
+  function makeProvider(issues: JiraIssue[]) {
+    const mockClient = {
+      searchIssues: vi.fn().mockResolvedValue(issues),
+      buildReadyJql: vi.fn().mockReturnValue('project = TEST'),
+      buildKeyInJql: vi.fn().mockReturnValue(''),
+    };
+    return new JiraTaskSourceProvider(mockClient as never, PROJECT_CONFIG);
+  }
+
+  it('maps fields.created to epoch ms', async () => {
+    const provider = makeProvider([
+      makeIssue('TEST-1', { created: '2024-05-01T12:00:00.000+0000' }),
+    ]);
+
+    const result = await provider.fetchReadyTasks(null);
+
+    expect(result[0].task.createdAt).toBe(Date.UTC(2024, 4, 1, 12));
+  });
+
+  it('leaves createdAt undefined when fields.created is absent', async () => {
+    const provider = makeProvider([makeIssue('TEST-1')]);
+
+    const result = await provider.fetchReadyTasks(null);
+
+    expect(result[0].task.createdAt).toBeUndefined();
+  });
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
 });

@@ -1265,6 +1265,91 @@ describe('NotionClient.fetchReadyTasks — readBoardCache strips notion: prefix'
 
 // ─── NotionClient.fetchBoardTasks — status-write reconciliation ──────────────
 
+describe('NotionClient board fetch — createdAt', () => {
+  const BOARD_ID = 'created-at-board-id';
+
+  function page(id: string, created_time?: string) {
+    return {
+      id,
+      url: `https://notion.so/${id}`,
+      created_time,
+      properties: {
+        'Task Name': { type: 'title', title: [{ text: { content: id } }] },
+        Status: { type: 'select', select: { name: '🗂️ Ready' } },
+        Type: { type: 'select', select: { name: '💻 Code' } },
+        'Depends On': { type: 'rich_text', rich_text: [] },
+        Notes: { type: 'rich_text', rich_text: [] },
+      },
+    };
+  }
+
+  beforeEach(() => {
+    vi.mocked(getCacheAge).mockReset();
+    vi.mocked(getCacheAge).mockReturnValue(Infinity);
+    vi.mocked(getTaskCache).mockReset();
+    vi.mocked(getTaskCache).mockReturnValue(null);
+  });
+
+  it('maps page created_time to createdAt in epoch ms and leaves it undefined when absent', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          results: [
+            page('with-time', '2024-05-01T12:00:00.000Z'),
+            page('no-time'),
+          ],
+          has_more: false,
+          next_cursor: null,
+        }),
+      }),
+    );
+
+    const tasks = await new NotionClient().fetchReadyTasks(BOARD_ID, true);
+    const byId = Object.fromEntries(tasks.map((t) => [t.task.id, t.task]));
+
+    expect(byId['with-time'].createdAt).toBe(Date.UTC(2024, 4, 1, 12));
+    expect(byId['no-time'].createdAt).toBeUndefined();
+  });
+
+  it('parses a cached board row without createdAt and preserves one that has it', async () => {
+    vi.mocked(getCacheAge).mockReturnValue(0);
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: `board:${BOARD_ID}`,
+      fetched_at: Date.now(),
+      raw_json: JSON.stringify([
+        {
+          id: 'old-row',
+          title: 'Old',
+          status: '🗂️ Ready',
+          type: '💻 Code',
+          dependsOn: [],
+          notionUrl: 'https://notion.so/old',
+        },
+        {
+          id: 'new-row',
+          title: 'New',
+          status: '🗂️ Ready',
+          type: '💻 Code',
+          dependsOn: [],
+          notionUrl: 'https://notion.so/new',
+          createdAt: 1714564800000,
+        },
+      ]),
+    });
+
+    const tasks = await new NotionClient().fetchReadyTasks(BOARD_ID);
+    const byId = Object.fromEntries(tasks.map((t) => [t.task.id, t.task]));
+
+    expect(byId['old-row'].createdAt).toBeUndefined();
+    expect(byId['new-row'].createdAt).toBe(1714564800000);
+    expect(JSON.parse(JSON.stringify(byId['old-row']))).not.toHaveProperty(
+      'createdAt',
+    );
+  });
+});
+
 describe('NotionClient.fetchBoardTasks — reconciles against a recent status write', () => {
   const BOARD_ID_RECONCILE = 'reconcile-test-board-id';
   const RAW_TASK_ID = 'cccc3333-dddd-4444-eeee-ffff00001111';
