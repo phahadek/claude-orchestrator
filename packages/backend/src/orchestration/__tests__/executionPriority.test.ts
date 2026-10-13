@@ -26,10 +26,7 @@ const flags = (o: Record<string, Partial<RankInputFlags>>) =>
 describe('computeExecutionRanks', () => {
   it('propagates urgency to unfinished ancestors and drops Done', () => {
     const f = flags({ C: { urgent: true } });
-    const r = computeExecutionRanks(
-      [T('A'), T('B', ['A']), T('C', ['B'])],
-      f,
-    );
+    const r = computeExecutionRanks([T('A'), T('B', ['A']), T('C', ['B'])], f);
     expect(r.get('A')!.urgentInherited).toBe(true);
     expect(r.get('A')!.urgentVia).toContain('C');
     expect(r.get('B')!.urgentInherited).toBe(true);
@@ -99,7 +96,11 @@ describe('computeExecutionRanks', () => {
 });
 
 describe('compareExecutionRank', () => {
-  const sorted = (ts: RankInputTask[], f: ReturnType<typeof flags>, tb?: (id: string) => (number | string)[]) => {
+  const sorted = (
+    ts: RankInputTask[],
+    f: ReturnType<typeof flags>,
+    tb?: (id: string) => (number | string)[],
+  ) => {
     const r = computeExecutionRanks(ts, f);
     return [...r.entries()]
       .map(([id, rank]) => ({ id, ...rank, tieBreak: tb ? tb(id) : [id] }))
@@ -122,7 +123,11 @@ describe('compareExecutionRank', () => {
   it('urgent: direct before inherited regardless of priority, then priority', () => {
     expect(
       sorted(
-        [T('dep', [], '🔲 Ready', 'high'), T('top', ['dep'], '🔲 Ready', 'low'), T('top2', [], '🔲 Ready', 'medium')],
+        [
+          T('dep', [], '🔲 Ready', 'high'),
+          T('top', ['dep'], '🔲 Ready', 'low'),
+          T('top2', [], '🔲 Ready', 'medium'),
+        ],
         flags({ top: { urgent: true }, top2: { urgent: true } }),
       ),
     ).toEqual(['top2', 'top', 'dep']);
@@ -143,7 +148,12 @@ describe('compareExecutionRank', () => {
     ).toEqual(['b', 'a']);
     expect(
       sorted(
-        [T('n'), T('l', [], '🔲 Ready', 'low'), T('m', [], '🔲 Ready', 'medium'), T('h', [], '🔲 Ready', 'high')],
+        [
+          T('n'),
+          T('l', [], '🔲 Ready', 'low'),
+          T('m', [], '🔲 Ready', 'medium'),
+          T('h', [], '🔲 Ready', 'high'),
+        ],
         new Map(),
       ),
     ).toEqual(['h', 'm', 'l', 'n']);
@@ -151,7 +161,8 @@ describe('compareExecutionRank', () => {
 
   it('falls back to tieBreak and is stable under shuffling', () => {
     const ts = [T('a'), T('b'), T('c')];
-    const tb = (id: string) => (id === 'b' ? [5, id] : id === 'a' ? [Infinity, id] : [Infinity, id]);
+    const tb = (id: string) =>
+      id === 'b' ? [5, id] : id === 'a' ? [Infinity, id] : [Infinity, id];
     const expected = ['b', 'a', 'c'];
     expect(sorted(ts, new Map(), tb)).toEqual(expected);
     expect(sorted([...ts].reverse(), new Map(), tb)).toEqual(expected);
@@ -164,6 +175,9 @@ describe('countEffectiveUrgent', () => {
       [T('A'), T('B', ['A']), T('C', ['B'])],
       flags({ C: { urgent: true } }),
     );
-    expect(countEffectiveUrgent(r.values())).toEqual({ direct: 1, effective: 3 });
+    expect(countEffectiveUrgent(r.values())).toEqual({
+      direct: 1,
+      effective: 3,
+    });
   });
 });
