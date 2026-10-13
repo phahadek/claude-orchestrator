@@ -445,9 +445,9 @@ describe('verifyDispatchedGroupsForSession — group body edits and retype are l
     expect(folded.body).not.toContain('Open Questions');
 
     const done = patch('group-fold-committed');
-    db.prepare(
-      "UPDATE staged_intent SET state = 'committed' WHERE id = ?",
-    ).run(done.id);
+    db.prepare("UPDATE staged_intent SET state = 'committed' WHERE id = ?").run(
+      done.id,
+    );
     const notFolded = await computeProposedBody(
       makeBackend(BAD_BODY) as never,
       'group-fold-committed',
@@ -468,9 +468,9 @@ describe('verifyDispatchedGroupsForSession — group body edits and retype are l
       "UPDATE staged_intent SET state = 'pending_verification' WHERE id = ?",
     ).run(row.id);
 
-    expect(resolveEffectiveType('group-retype', 'notion:retype', undefined)).toBe(
-      '🔎 Investigation',
-    );
+    expect(
+      resolveEffectiveType('group-retype', 'notion:retype', undefined),
+    ).toBe('🔎 Investigation');
   });
 });
 
