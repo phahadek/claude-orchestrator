@@ -127,6 +127,10 @@ import {
 } from './runTestOutcomes';
 import { logger } from '../logger';
 import { dispatchPreTestMergeConflict } from '../github/conflictNudge';
+import {
+  formatPreTestMergeDirtyRefused,
+  formatPreTestMergeSuccess,
+} from '../github/reviewUtils';
 import type { SessionManager } from '../session/SessionManager';
 import type { ServerMessage, TestRequestRunStatusPayload } from '../ws/types';
 
@@ -1565,9 +1569,12 @@ async function runPreTestMerge(
           '[testRequestLane] post-merge content hash failed — run will withdraw on the content check',
         );
       }
-      return '';
+      return `${formatPreTestMergeSuccess({ baseBranch, mergedSha: result.mergedSha ?? null })}\n`;
     }
     if (result.outcome === 'up_to_date') return '';
+    if (result.outcome === 'dirty_refused') {
+      return `${formatPreTestMergeDirtyRefused({ baseBranch, detail: result.detail })}\n`;
+    }
     if (result.outcome === 'conflict') {
       dispatchPreTestMergeConflict(conflictSessions, {
         sessionId,

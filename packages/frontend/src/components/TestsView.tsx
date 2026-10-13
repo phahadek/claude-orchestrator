@@ -24,6 +24,12 @@ const PRODUCER_LABELS: Record<ProjectTestRunProducer, string> = {
   base_health: 'Base health',
 };
 
+const MERGE_OUTCOME_LABELS: Record<string, string> = {
+  conflict: 'Pre-test merge conflicted with dev',
+  dirty_refused: 'Pre-test merge skipped (uncommitted changes)',
+  error: 'Pre-test merge errored',
+};
+
 function formatDuration(ms: number | null): string {
   if (ms == null) return '—';
   if (ms < 1000) return `${ms}ms`;
@@ -134,6 +140,17 @@ export function TestsView({ activeProjectId }: Props) {
                 {formatDuration(run.durationMs)}
               </span>
             </div>
+            {run.conflictOutcome && run.conflictOutcome !== 'up_to_date' && (
+              <div
+                className={styles.runMeta}
+                data-testid={`project-test-run-merge-${run.id}`}
+              >
+                {run.conflictOutcome === 'merged'
+                  ? `Merged dev@${run.mergedDevSha ? run.mergedDevSha.slice(0, 7) : 'latest'} before run`
+                  : (MERGE_OUTCOME_LABELS[run.conflictOutcome] ??
+                    `Pre-test merge: ${run.conflictOutcome}`)}
+              </div>
+            )}
             <div className={styles.nextAction}>{run.nextAction}</div>
           </div>
         ))}

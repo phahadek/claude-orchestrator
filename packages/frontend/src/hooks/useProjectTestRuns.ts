@@ -43,6 +43,8 @@ export interface ProjectTestRunEntry {
   outcome: ProjectTestRunOutcome;
   nextAction: string;
   outcomeCounts: ProjectTestRunOutcomeCounts | null;
+  mergedDevSha: string | null;
+  conflictOutcome: string | null;
 }
 
 interface ProjectTestRunsResponse {

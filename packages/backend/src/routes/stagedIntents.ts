@@ -9399,6 +9399,8 @@ export function createStagedIntentsRouter(
           outcome: classification.outcome,
           nextAction: classification.nextAction,
           outcomeCounts,
+          mergedDevSha: run.merged_dev_sha ?? null,
+          conflictOutcome: run.conflict_outcome ?? null,
         };
       }),
     });
