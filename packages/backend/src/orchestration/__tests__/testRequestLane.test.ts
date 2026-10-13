@@ -38,6 +38,16 @@ const {
   mockIngestOffMainThread: vi.fn(),
 }));
 
+const { mockGetProjectById } = vi.hoisted(() => ({
+  mockGetProjectById: vi.fn(),
+}));
+
+vi.mock('../../config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../config')>();
+  mockGetProjectById.mockImplementation(actual.getProjectById);
+  return { ...actual, getProjectById: mockGetProjectById };
+});
+
 vi.mock('../../session/test-runner', () => ({
   runTestCommands: mockRunTestCommands,
   // testRequestLane.ts calls the off-main-thread wrapper, not
@@ -149,6 +159,9 @@ import {
   __checkoutInstallLockMapSizeForTest,
 } from '../checkoutInstallLock';
 import { typedSetSetting } from '../../config/settings';
+import { resolveActiveMilestoneId } from '../../config';
+import { logger } from '../../logger';
+import { upsertTaskCache } from '../../db/queries';
 
 beforeEach(() => {
   mockRunTestCommands.mockReset();
@@ -5385,5 +5398,70 @@ describe('admitTestRequest task linkage', () => {
       task_id: null,
       priority_group: 'priority',
     });
+  });
+});
+
+describe('test lane ranks against the active milestone board', () => {
+  const task = (id: string, dependsOn: string[] = []) => ({
+    id,
+    status: '🗂️ Ready',
+    dependsOn,
+    priority: null,
+  });
+  const project = (autoLaunchMilestoneId: string | null) => ({
+    id: 'proj-1',
+    boardId: 'm1',
+    autoLaunchMilestoneId,
+    boards: [
+      { id: 'm1', sourceId: '' },
+      { id: 'm16', sourceId: 'db-16' },
+    ],
+  });
+  const persistedGroup = (runId: string) =>
+    (
+      db
+        .prepare(`SELECT priority_group FROM test_request_runs WHERE id = ?`)
+        .get(runId) as { priority_group: string }
+    ).priority_group;
+
+  beforeEach(() => {
+    db.prepare(`DELETE FROM task_cache`).run();
+    mockGetProjectById.mockReset();
+    mockGetProjectById.mockReturnValue(project('m16'));
+    upsertTaskCache(
+      'board:m16',
+      JSON.stringify([task('blk'), task('dep', ['blk'])]),
+    );
+    upsertTaskCache('board:m1', JSON.stringify([task('old')]));
+  });
+
+  it('ranks a Blocker on the active milestone board as blocker', () => {
+    mockRunTestCommands.mockImplementation(() => new Promise(() => {}));
+    const a = admitTestRequest(baseSpec({ contentHash: 'h-blk', taskId: 'blk' }));
+    a.result.catch(() => {});
+    expect(persistedGroup(a.runId)).toBe('blocker');
+  });
+
+  it('falls back to the first board with a sourceId when autoLaunchMilestoneId is null', () => {
+    mockGetProjectById.mockReturnValue(project(null));
+    mockRunTestCommands.mockImplementation(() => new Promise(() => {}));
+    const a = admitTestRequest(baseSpec({ contentHash: 'h-fb', taskId: 'blk' }));
+    a.result.catch(() => {});
+    expect(persistedGroup(a.runId)).toBe('blocker');
+    expect(resolveActiveMilestoneId(project(null))).toBe('m16');
+  });
+
+  it('warns once naming the board key for a task on neither board', () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => logger);
+    mockRunTestCommands.mockImplementation(() => new Promise(() => {}));
+    const a = admitTestRequest(
+      baseSpec({ contentHash: 'h-miss', taskId: 'ghost' }),
+    );
+    a.result.catch(() => {});
+    expect(persistedGroup(a.runId)).toBe('priority');
+    const calls = warn.mock.calls.filter((c) => String(c[0]).includes('ghost'));
+    expect(calls).toHaveLength(1);
+    expect(String(calls[0][0])).toContain('board:m16');
+    warn.mockRestore();
   });
 });

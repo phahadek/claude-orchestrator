@@ -752,6 +752,19 @@ function hydrateProject(p: {
   return config;
 }
 
+/**
+ * The milestone board a project's work is dispatched and ranked from:
+ * explicit `autoLaunchMilestoneId` wins; otherwise the first board in display
+ * order with a non-empty sourceId. Shared by AutoLauncher and the test lane.
+ */
+export function resolveActiveMilestoneId(
+  project: Pick<ProjectConfig, 'autoLaunchMilestoneId' | 'boards'>,
+): string | null {
+  if (project.autoLaunchMilestoneId) return project.autoLaunchMilestoneId;
+  const firstWithSource = project.boards?.find((b) => b.sourceId);
+  return firstWithSource?.id ?? null;
+}
+
 export function getProjectById(id: string): ProjectConfig | undefined {
   // Lazy import avoids a circular dependency between config <-> ProjectService.
   const { ProjectService } =

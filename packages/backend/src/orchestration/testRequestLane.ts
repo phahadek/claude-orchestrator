@@ -48,7 +48,7 @@ import {
   executionRankKey,
   type ExecutionRank,
 } from './executionPriority';
-import { getProjectById } from '../config';
+import { getProjectById, resolveActiveMilestoneId } from '../config';
 import { normalizeTaskId } from '../tasks/taskId';
 import type { NotionTask } from '../notion/types';
 import { recordEvent } from '../audit/AuditLog';
@@ -460,14 +460,19 @@ const DEFAULT_PRIORITY_RANK: ExecutionRank = {
   executeNowSetAt: null,
 };
 
-function loadProjectBoardTasks(projectId: string): NotionTask[] {
+function projectBoardCacheKeys(projectId: string): string[] {
   const project = getProjectById(projectId);
   if (!project) return [];
-  const tasks: NotionTask[] = [];
-  for (const cacheKey of [
-    `board:${project.boardId}`,
+  const milestoneId = resolveActiveMilestoneId(project);
+  return [
+    ...(milestoneId ? [`board:${milestoneId}`] : []),
     `non_milestone:${project.id}`,
-  ]) {
+  ];
+}
+
+function loadProjectBoardTasks(projectId: string): NotionTask[] {
+  const tasks: NotionTask[] = [];
+  for (const cacheKey of projectBoardCacheKeys(projectId)) {
     const row = getTaskCache(cacheKey);
     if (!row) continue;
     try {
@@ -490,9 +495,17 @@ function resolveExecutionRanks(
   } catch (err) {
     logger.warn(`[testRequestLane] rank load failed for ${projectId}: ${err}`);
   }
-  return taskIds.map(
-    (id) => (id && ranks?.get(normalizeTaskId(id))) || DEFAULT_PRIORITY_RANK,
-  );
+  return taskIds.map((id) => {
+    if (!id) return DEFAULT_PRIORITY_RANK;
+    const found = ranks?.get(normalizeTaskId(id));
+    if (found) return found;
+    if (ranks) {
+      logger.warn(
+        `[testRequestLane] task ${id} (project ${projectId}) not found on ranked boards [${projectBoardCacheKeys(projectId).join(', ')}]; ranking as Priority/unset`,
+      );
+    }
+    return DEFAULT_PRIORITY_RANK;
+  });
 }
 
 function toWaiterKey(

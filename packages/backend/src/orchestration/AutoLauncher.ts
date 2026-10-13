@@ -5,7 +5,11 @@ import { WorktreeSetupError } from '../session/WorktreeSetupError';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { Scheduler } from './Scheduler';
-import { getAllProjects, runtimeSettings } from '../config';
+import {
+  getAllProjects,
+  runtimeSettings,
+  resolveActiveMilestoneId,
+} from '../config';
 import type { ProjectConfig } from '../config';
 import type { ResolvedTask } from '../notion/types';
 import type {
@@ -689,9 +693,7 @@ export class AutoLauncher {
    * milestone in display order with a non-empty sourceId.
    */
   private resolveMilestoneId(project: ProjectConfig): string | null {
-    if (project.autoLaunchMilestoneId) return project.autoLaunchMilestoneId;
-    const firstWithSource = project.boards?.find((b) => b.sourceId);
-    return firstWithSource?.id ?? null;
+    return resolveActiveMilestoneId(project);
   }
 
   /**
