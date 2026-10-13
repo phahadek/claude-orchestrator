@@ -144,14 +144,14 @@ describe('Execute Now TTL', () => {
   const task = (id: string): NotionTask =>
     ({
       id,
-      status: 'Not started',
+      status: '🗂️ Ready',
       dependsOn: [],
       priority: undefined,
     }) as unknown as NotionTask;
 
   it('is ignored by the rank loader and cleared by the sweep with cause expired', () => {
     setTaskExecuteNow('t5', 'p5', 'merge_conflict');
-    expect(loadExecutionRanks('p5', [task('t5')]).get('t5')?.group).toBe(
+    expect(loadExecutionRanks('p5', [task('t5')]).get('notion:t5')?.group).toBe(
       'execute_now',
     );
 
@@ -159,7 +159,7 @@ describe('Execute Now TTL', () => {
       `UPDATE task_execution_flags SET execute_now_set_at = ? WHERE task_id = 't5'`,
     ).run(Date.now() - EXECUTE_NOW_TTL_MS - 1000);
 
-    expect(loadExecutionRanks('p5', [task('t5')]).get('t5')?.group).not.toBe(
+    expect(loadExecutionRanks('p5', [task('t5')]).get('notion:t5')?.group).not.toBe(
       'execute_now',
     );
     expect(sweepExpiredExecuteNow()).toBe(1);
