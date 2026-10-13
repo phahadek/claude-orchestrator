@@ -2795,6 +2795,19 @@ describe('admitTestRequest — settled-run guard', () => {
       expect(mockCollectStructuredTestResult.mock.calls[0]?.[2]).toBe(1);
     });
 
+    it('still expects a report from a report-producing command that ran and failed (missing report stays incomplete)', async () => {
+      mockLoadOrchestratorConfig.mockReturnValue(cfg);
+      mockRunTestCommands.mockResolvedValueOnce({
+        passed: false,
+        output: 'oom',
+        failedCommand: 'npx vitest run',
+      });
+      await runProjectTestRequest(
+        baseSpec({ commands: verifyCommands, failFast: true }),
+      );
+      expect(mockCollectStructuredTestResult.mock.calls[0]?.[2]).toBe(2);
+    });
+
     it('keeps the full count for a test: lane run where every command writes a report', async () => {
       mockLoadOrchestratorConfig.mockReturnValue(cfg);
       mockRunTestCommands.mockResolvedValueOnce({ passed: true, output: 'ok' });

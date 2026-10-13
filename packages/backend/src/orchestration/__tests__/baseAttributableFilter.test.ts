@@ -534,6 +534,42 @@ describe('filterVerifyFailureByBaseHealth', () => {
     expect(result).toBeNull();
   });
 
+  it('returns filtered_pass for a fail-fast verify run (one report, vitest never ran) whose only failing test is breadth-flagged', async () => {
+    summaryState.incomplete = 0;
+    stubBreadthFlags(new Set(['suite.testA']));
+    mockGetFailingTestIdsForRun.mockReturnValue([
+      { test_id: 'suite.testA', name: 'testA' },
+    ]);
+
+    const result = await filterVerifyFailureByBaseHealth(
+      PROJECT,
+      'run-failfast-verify',
+      null,
+      SUBJECT,
+    );
+
+    expect(result?.outcome).toBe('filtered_pass');
+    expect(result?.passed).toBe(true);
+  });
+
+  it('refuses filtered_pass for a verify run whose report-producing command ran but left its report missing (incomplete)', async () => {
+    summaryState.incomplete = 1;
+    stubBreadthFlags(new Set(['suite.testA']));
+    mockGetFailingTestIdsForRun.mockReturnValue([
+      { test_id: 'suite.testA', name: 'testA' },
+    ]);
+
+    const result = await filterVerifyFailureByBaseHealth(
+      PROJECT,
+      'run-incomplete-verify',
+      null,
+      SUBJECT,
+    );
+
+    expect(result?.outcome).not.toBe('filtered_pass');
+    expect(result?.passed).toBe(false);
+  });
+
   it('excludes breadth-flagged failing tests from a structured verify report', async () => {
     stubBreadthFlags(new Set(['t1', 't2']));
     const sr = makeStructuredResult(
