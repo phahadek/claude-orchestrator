@@ -13,6 +13,7 @@
  * reconcile.
  */
 
+import fs from 'fs';
 import { logger } from '../logger';
 import { getProjectById } from '../config';
 import {
@@ -22,6 +23,8 @@ import {
   getTestRequestRunById,
   listAwaitingDispositionRuns,
   flipRunToPassedAndEnqueueWake,
+  clearAwaitingDisposition,
+  TERMINAL_SESSION_STATUSES,
 } from '../db/queries';
 import type { TestRequestRunRow } from '../db/types';
 import { getChangedFiles } from '../session/autofix-runner';
@@ -58,7 +61,17 @@ export async function evaluateSubject(
   const project = getProjectById(run.project_id);
   const session = getSession(run.session_id);
   const worktree = session?.worktree_path ?? run.worktree_path;
-  if (!project || !session || !worktree) return 'skipped';
+  if (
+    !project ||
+    !session ||
+    !worktree ||
+    TERMINAL_SESSION_STATUSES.has(session.status) ||
+    !fs.existsSync(worktree)
+  ) {
+    // Dead run: drop it from the awaiting set before any git spawn.
+    clearAwaitingDisposition(runId);
+    return 'skipped';
+  }
 
   let changedFiles: string[];
   try {
@@ -131,21 +144,30 @@ async function reattributeForIngestedRun(
 export async function sweepConfirmedWaiting(
   sink: ReattributionWakeSink | null,
 ): Promise<{ items_processed: number; evaluated: number }> {
-  const subjects = listAwaitingDispositionRuns();
+  const batchSize = 500;
   let woken = 0;
-  for (const s of subjects) {
-    try {
-      if ((await evaluateSubject(s.id, sink)) === 'woken') woken++;
-    } catch (err) {
-      logger.warn(
-        `[reattribution] sweep evaluation failed for run ${s.id}: ${err instanceof Error ? err.message : err}`,
-      );
+  let evaluated = 0;
+  for (;;) {
+    const subjects = listAwaitingDispositionRuns({ limit: batchSize });
+    evaluated += subjects.length;
+    let drained = 0;
+    for (const s of subjects) {
+      try {
+        if ((await evaluateSubject(s.id, sink)) === 'woken') woken++;
+      } catch (err) {
+        logger.warn(
+          `[reattribution] sweep evaluation failed for run ${s.id}: ${err instanceof Error ? err.message : err}`,
+        );
+      }
+      if (getTestRequestRunById(s.id)?.awaiting_disposition_at == null)
+        drained++;
     }
+    // Re-query only while a full batch made progress, so live runs behind a
+    // large dead backlog are still reached.
+    if (subjects.length < batchSize || drained === 0) break;
   }
-  logger.info(
-    `[reattribution] sweep evaluated=${subjects.length} woken=${woken}`,
-  );
-  return { items_processed: woken, evaluated: subjects.length };
+  logger.info(`[reattribution] sweep evaluated=${evaluated} woken=${woken}`);
+  return { items_processed: woken, evaluated };
 }
 
 export function startReattributionService(
