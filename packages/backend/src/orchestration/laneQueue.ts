@@ -132,7 +132,11 @@ export class PriorityLaneQueue {
     if (!this.find(runId)) return null;
     const sim = new Map<string, string[]>();
     for (const [pid, list] of this.lists) {
-      if (list.length > 0) sim.set(pid, list.map((w) => w.id));
+      if (list.length > 0)
+        sim.set(
+          pid,
+          list.map((w) => w.id),
+        );
     }
     const heads = new Map<string, number>();
     let cursor = this.cursor;

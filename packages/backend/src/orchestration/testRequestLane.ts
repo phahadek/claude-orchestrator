@@ -399,8 +399,7 @@ function resolveExecutionRanks(
     logger.warn(`[testRequestLane] rank load failed for ${projectId}: ${err}`);
   }
   return taskIds.map(
-    (id) =>
-      (id && ranks?.get(normalizeTaskId(id))) || DEFAULT_PRIORITY_RANK,
+    (id) => (id && ranks?.get(normalizeTaskId(id))) || DEFAULT_PRIORITY_RANK,
   );
 }
 
