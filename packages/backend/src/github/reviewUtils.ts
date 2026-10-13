@@ -485,7 +485,10 @@ export function formatPreTestMergeDirtyRefused(args: {
     `because your worktree has uncommitted changes that overlap the incoming files.${detail}\n\n` +
     `**Action required:** commit your work, then re-request the test run. ` +
     `If the merge then conflicts, you will get the standard conflict instructions:\n\n` +
-    formatMergeConflictFeedback({ branchName: null, baseBranch: args.baseBranch })
+    formatMergeConflictFeedback({
+      branchName: null,
+      baseBranch: args.baseBranch,
+    })
   );
 }
 
