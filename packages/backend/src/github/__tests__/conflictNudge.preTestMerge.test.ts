@@ -4,11 +4,18 @@ const q = vi.hoisted(() => ({
   getPRBySessionId: vi.fn(),
   setConflictNudgeSha: vi.fn(),
   setTaskExecuteNow: vi.fn(),
+  getSession: vi.fn(),
 }));
 vi.mock('../../db/queries', () => q);
 vi.mock('../../audit/AuditLog', () => ({ recordEvent: vi.fn() }));
+vi.mock('../../logger', () => ({
+  logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
+}));
 
-import { routePreTestMergeConflict } from '../conflictNudge';
+import {
+  routePreTestMergeConflict,
+  dispatchPreTestMergeConflict,
+} from '../conflictNudge';
 import { recordEvent } from '../../audit/AuditLog';
 
 const basePr = {
@@ -96,4 +103,51 @@ describe('routePreTestMergeConflict', () => {
       expect(sm.relaunchFixerForPR).not.toHaveBeenCalled();
     },
   );
+});
+
+describe('pr_gate with no head_sha', () => {
+  it('sets Execute Now but sends no nudge', async () => {
+    q.getPRBySessionId.mockReturnValue({ ...basePr, head_sha: null });
+    const sm = sessions();
+    await routePreTestMergeConflict(sm as never, info('pr_gate'));
+    expect(q.setTaskExecuteNow).toHaveBeenCalled();
+    expect(sm.relaunchFixerForPR).not.toHaveBeenCalled();
+  });
+});
+
+describe('dispatchPreTestMergeConflict (lane entry point)', () => {
+  const lane = {
+    sessionId: 's1',
+    projectId: 'p1',
+    baseBranch: 'dev',
+    producer: 'session_request' as const,
+  };
+
+  it('looks up the session task and routes the conflict', async () => {
+    q.getSession.mockReturnValue({ task_id: 't9' });
+    const sm = sessions();
+    dispatchPreTestMergeConflict(sm as never, lane);
+    await vi.waitFor(() => expect(sm.sendOrResume).toHaveBeenCalled());
+    expect(q.setTaskExecuteNow).toHaveBeenCalledWith(
+      't9',
+      'p1',
+      'merge_conflict',
+    );
+  });
+
+  it('is a no-op without a wired SessionManager', () => {
+    dispatchPreTestMergeConflict(null, lane);
+    expect(q.setTaskExecuteNow).not.toHaveBeenCalled();
+  });
+
+  it('swallows routing failures', async () => {
+    q.getSession.mockReturnValue(null);
+    q.getPRBySessionId.mockImplementation(() => {
+      throw new Error('boom');
+    });
+    expect(() =>
+      dispatchPreTestMergeConflict(sessions() as never, lane),
+    ).not.toThrow();
+    await new Promise((r) => setTimeout(r, 0));
+  });
 });

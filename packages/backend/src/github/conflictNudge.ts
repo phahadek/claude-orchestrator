@@ -1,6 +1,8 @@
 import { recordEvent } from '../audit/AuditLog';
+import { logger } from '../logger';
 import {
   getPRBySessionId,
+  getSession,
   setConflictNudgeSha,
   setTaskExecuteNow,
 } from '../db/queries';
@@ -152,13 +154,27 @@ export async function routePreTestMergeConflict(
   if (pr?.head_sha && pr.head_sha === pr.conflict_nudge_sha) return;
 
   if (info.producer === 'pr_gate') {
-    if (!pr?.head_sha) return;
+    if (!pr?.head_sha) {
+      logger.warn(
+        `[conflictNudge] pr_gate pre-test merge conflict for session ${info.sessionId} has no PR head_sha — no nudge sent (Execute Now still set)`,
+      );
+      return;
+    }
     const prompt = formatMergeConflictFeedback({
       branchName: pr.head_branch,
       baseBranch: pr.base_branch ?? info.baseBranch,
     });
     const relaunched = await sessions.relaunchFixerForPR(pr, prompt);
-    if (relaunched === null || typeof relaunched !== 'string') return;
+    if (relaunched === null || typeof relaunched !== 'string') {
+      // null: relaunchFixerForPR refused; for idle-no-worktree it has already
+      // surfaced the anomaly to the operator (stalled_idle + session_action_failed).
+      logger.warn(
+        `[conflictNudge] fixer relaunch for PR #${pr.pr_number} (${pr.repo}) did not spawn/resume (${
+          relaunched === null ? 'refused' : `outcome=${relaunched.outcome}`
+        }) — conflict not recorded as nudged`,
+      );
+      return;
+    }
     setConflictNudgeSha(pr.pr_number, pr.repo, pr.head_sha);
     recordEvent({
       event_type: 'conflict_nudge_sent',
@@ -205,4 +221,25 @@ export async function routePreTestMergeConflict(
       cause: 'pre_test_merge_conflict',
     },
   });
+}
+
+/** Lane entry point: fire-and-forget routing that never throws into the run. */
+export function dispatchPreTestMergeConflict(
+  sessions: SessionManager | null,
+  info: Omit<PreTestMergeConflictInfo, 'taskId'>,
+): void {
+  if (!sessions) {
+    logger.warn(
+      `[conflictNudge] pre-test merge conflict for session ${info.sessionId} but no SessionManager is wired — not routed`,
+    );
+    return;
+  }
+  void routePreTestMergeConflict(sessions, {
+    ...info,
+    taskId: getSession(info.sessionId)?.task_id ?? null,
+  }).catch((err: unknown) =>
+    logger.warn(
+      `[conflictNudge] pre-test merge conflict routing failed for session ${info.sessionId}: ${(err as Error).message}`,
+    ),
+  );
 }

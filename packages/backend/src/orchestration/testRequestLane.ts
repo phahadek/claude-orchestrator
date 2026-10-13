@@ -126,7 +126,7 @@ import {
   trackRunIngestion,
 } from './runTestOutcomes';
 import { logger } from '../logger';
-import { routePreTestMergeConflict } from '../github/conflictNudge';
+import { dispatchPreTestMergeConflict } from '../github/conflictNudge';
 import type { SessionManager } from '../session/SessionManager';
 import type { ServerMessage, TestRequestRunStatusPayload } from '../ws/types';
 
@@ -1568,19 +1568,13 @@ async function runPreTestMerge(
       return '';
     }
     if (result.outcome === 'up_to_date') return '';
-    if (result.outcome === 'conflict' && conflictSessions) {
-      void routePreTestMergeConflict(conflictSessions, {
+    if (result.outcome === 'conflict') {
+      dispatchPreTestMergeConflict(conflictSessions, {
         sessionId,
-        taskId: getSession(sessionId)?.task_id ?? null,
         projectId: spec.projectId,
         baseBranch,
         producer: spec.producer,
-      }).catch((err: unknown) =>
-        logger.warn(
-          { err, runId },
-          '[testRequestLane] pre-test merge conflict routing failed',
-        ),
-      );
+      });
     }
     return `[testRequestLane] pre-test merge of origin/${baseBranch} not applied (${result.outcome}); testing the unmerged tree${result.detail ? `: ${result.detail.split('\n')[0]}` : ''}\n`;
   } catch (err) {
