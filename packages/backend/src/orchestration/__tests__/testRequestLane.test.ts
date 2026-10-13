@@ -2765,6 +2765,46 @@ describe('admitTestRequest — settled-run guard', () => {
     expect(rowCount.n).toBe(2);
   });
 
+  describe('expected report count passed to the collector', () => {
+    const verifyCommands = ['pyright', 'task test', 'npx vitest run'];
+    const cfg = {
+      test_report_glob: '*.xml',
+      test: ['task test', 'npx vitest run'],
+      test_scoped: [],
+    };
+
+    it('excludes non-report commands (pyright) from the expected count on a passing verify run', async () => {
+      mockLoadOrchestratorConfig.mockReturnValue(cfg);
+      mockRunTestCommands.mockResolvedValueOnce({ passed: true, output: 'ok' });
+      await runProjectTestRequest(
+        baseSpec({ commands: verifyCommands, failFast: true }),
+      );
+      expect(mockCollectStructuredTestResult.mock.calls[0]?.[2]).toBe(2);
+    });
+
+    it('excludes fail-fast-skipped commands from the expected count', async () => {
+      mockLoadOrchestratorConfig.mockReturnValue(cfg);
+      mockRunTestCommands.mockResolvedValueOnce({
+        passed: false,
+        output: 'fail',
+        failedCommand: 'task test',
+      });
+      await runProjectTestRequest(
+        baseSpec({ commands: verifyCommands, failFast: true }),
+      );
+      expect(mockCollectStructuredTestResult.mock.calls[0]?.[2]).toBe(1);
+    });
+
+    it('keeps the full count for a test: lane run where every command writes a report', async () => {
+      mockLoadOrchestratorConfig.mockReturnValue(cfg);
+      mockRunTestCommands.mockResolvedValueOnce({ passed: true, output: 'ok' });
+      await runProjectTestRequest(
+        baseSpec({ commands: ['task test', 'npx vitest run'] }),
+      );
+      expect(mockCollectStructuredTestResult.mock.calls[0]?.[2]).toBe(2);
+    });
+  });
+
   it('a settled passed row with a genuine non-vacuous structured_result is still replayed as unchangedReplay', async () => {
     mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '*.xml' });
     mockCollectStructuredTestResult.mockReturnValue({

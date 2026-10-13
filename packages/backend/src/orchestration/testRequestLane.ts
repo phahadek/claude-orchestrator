@@ -1498,11 +1498,31 @@ const localRunnerExecutor: LaneRunnerExecutor = async ({
   let structuredResult: StructuredTestResult | null = null;
   if (testReportGlob) {
     try {
+      // Only commands that actually ran and are report-producers (members of
+      // test:/test_scoped:) owe a report; pyright-style verify-only commands
+      // and fail-fast-skipped commands don't.
+      const cfg = loadOrchestratorConfig(spec.worktreePath);
+      const producers = new Set([
+        ...(cfg.test ?? []),
+        ...(cfg.test_scoped ?? []),
+      ]);
+      const failedIdx =
+        !raw.passed && raw.failedCommand !== undefined
+          ? spec.commands.indexOf(raw.failedCommand)
+          : -1;
+      const ranCommands =
+        (spec.failFast ?? false) && failedIdx >= 0
+          ? spec.commands.slice(0, failedIdx + 1)
+          : spec.commands;
+      const expectedReports =
+        producers.size === 0
+          ? spec.commands.length
+          : ranCommands.filter((c) => producers.has(c)).length;
       // Awaited so structured_result is computed before the run settles.
       structuredResult = await collectStructuredTestResultOffMainThread(
         spec.worktreePath,
         testReportGlob,
-        spec.commands.length,
+        expectedReports,
         startedAt,
       );
     } catch (err) {
