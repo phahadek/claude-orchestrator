@@ -5191,6 +5191,7 @@ describe('rebindWorktreeContentHash — pre-test merge hash rebind', () => {
         worktreePath: wt,
         contentHash: 'pre',
         runKind: 'scoped',
+        baseSha: 'base-1',
       }),
     );
 
@@ -5222,9 +5223,6 @@ describe('rebindWorktreeContentHash — pre-test merge hash rebind', () => {
     expect(settled).toContain('post');
     expect(settled).not.toContain('pre');
 
-    await vi.waitFor(() => expect(resolvers.length).toBe(3));
-    resolvers[2]({ passed: true, output: '' });
-    await scoped.result;
     testRequestLaneEvents.off('settled', onSettled);
   });
 });
