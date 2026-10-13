@@ -40,6 +40,7 @@ import { probeBranchLocally, deriveBranchSlug } from '../session/branchModel';
 import { normalizeTaskId } from '../tasks/taskId';
 import { compareExecutionRank, loadExecutionRanks } from './executionPriority';
 import type { ExecutionRank } from './executionPriority';
+import { resolveAutoLaunchMilestoneId } from './autoLaunchMilestone';
 
 const READY_STATUS = '🗂️ Ready';
 const DONE_STATUS = '✅ Done';
@@ -683,15 +684,9 @@ export class AutoLauncher {
     );
   }
 
-  /**
-   * Determine the milestone the launcher should poll for a project:
-   * explicit `autoLaunchMilestoneId` wins; otherwise fall back to the first
-   * milestone in display order with a non-empty sourceId.
-   */
+  /** The milestone the launcher should poll — see resolveAutoLaunchMilestoneId. */
   private resolveMilestoneId(project: ProjectConfig): string | null {
-    if (project.autoLaunchMilestoneId) return project.autoLaunchMilestoneId;
-    const firstWithSource = project.boards?.find((b) => b.sourceId);
-    return firstWithSource?.id ?? null;
+    return resolveAutoLaunchMilestoneId(project);
   }
 
   /**
