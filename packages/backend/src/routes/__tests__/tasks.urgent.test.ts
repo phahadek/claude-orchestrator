@@ -8,16 +8,20 @@ const m = vi.hoisted(() => ({
   getTaskExecutionFlags: vi.fn(),
   getActiveTaskAggregates: vi.fn(),
   recordEvent: vi.fn(),
+  getAllProjects: vi.fn(),
+  getTaskCache: vi.fn(),
+  listTaskExecutionFlagsForProject: vi.fn(),
 }));
 
 vi.mock('../../config.js', () => ({
   getProjectById: m.getProjectById,
-  getAllProjects: vi.fn().mockReturnValue([]),
+  getAllProjects: m.getAllProjects,
   runtimeSettings: {},
 }));
 
 vi.mock('../../db/queries.js', () => ({
-  getTaskCache: vi.fn().mockReturnValue(null),
+  getTaskCache: m.getTaskCache,
+  listTaskExecutionFlagsForProject: m.listTaskExecutionFlagsForProject,
   getActiveTaskAggregates: m.getActiveTaskAggregates,
   clearTaskPauseReason: vi.fn(),
   resetTaskCrashCount: vi.fn(),
@@ -76,6 +80,9 @@ beforeEach(() => {
   m.getProjectById.mockReturnValue({ id: 'proj-1', name: 'P' });
   m.getTaskExecutionFlags.mockReturnValue(undefined);
   m.getActiveTaskAggregates.mockReturnValue([]);
+  m.getAllProjects.mockReturnValue([]);
+  m.getTaskCache.mockReturnValue(null);
+  m.listTaskExecutionFlagsForProject.mockReturnValue([]);
 });
 
 describe('POST /api/tasks/:taskId/urgent', () => {
@@ -112,6 +119,69 @@ describe('POST /api/tasks/:taskId/urgent', () => {
       { type: 'task_updated' }
     >;
     expect(msg.task.urgent).toBe(true);
+  });
+
+  it('emits task_updated for every ancestor whose inherited urgency changed', async () => {
+    const board = [
+      { id: 'a', title: 'A', status: '🗂️ Ready', dependsOn: [] },
+      { id: 'b', title: 'B', status: '🗂️ Ready', dependsOn: ['a'] },
+      { id: 'c', title: 'C', status: '🗂️ Ready', dependsOn: ['b'] },
+      { id: 'd', title: 'D', status: '🗂️ Ready', dependsOn: [] },
+    ];
+    let cUrgent = false;
+    m.getAllProjects.mockReturnValue([
+      { id: 'proj-1', name: 'P', boardId: 'b1' },
+    ]);
+    m.getTaskCache.mockImplementation((key: string) =>
+      key === 'board:b1'
+        ? { raw_json: JSON.stringify(board), fetched_at: 1 }
+        : null,
+    );
+    m.listTaskExecutionFlagsForProject.mockImplementation(() =>
+      cUrgent
+        ? [
+            {
+              task_id: 'notion:c',
+              project_id: 'proj-1',
+              urgent: 1,
+              urgent_set_by: 'human',
+              urgent_set_at: 1,
+              execute_now_reason: null,
+              execute_now_set_at: null,
+            },
+          ]
+        : [],
+    );
+    m.setTaskUrgent.mockImplementation(
+      (_id: string, _p: string, urgent: boolean) => {
+        cUrgent = urgent;
+      },
+    );
+    m.getActiveTaskAggregates.mockImplementation((ids: string[]) =>
+      ids.map((id) => ({
+        task_id: id,
+        raw_json: JSON.stringify(
+          board.find((t) => `notion:${t.id}` === id) ?? board[0],
+        ),
+      })),
+    );
+    const broadcast = vi.fn<(msg: ServerMessage) => void>();
+    setTaskBroadcast(broadcast);
+
+    const res = await supertest(buildApp())
+      .post('/api/tasks/c/urgent?projectId=proj-1')
+      .send({ urgent: true });
+
+    expect(res.status).toBe(200);
+    await vi.waitFor(() => expect(broadcast).toHaveBeenCalledTimes(3));
+    const ids = broadcast.mock.calls
+      .map(
+        (c) =>
+          (c[0] as Extract<ServerMessage, { type: 'task_updated' }>).task
+            .taskId,
+      )
+      .sort();
+    expect(ids).toEqual(['notion:a', 'notion:b', 'notion:c']);
   });
 
   it('returns 400 and writes nothing for a non-boolean body', async () => {
