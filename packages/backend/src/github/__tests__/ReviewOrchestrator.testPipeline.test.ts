@@ -297,6 +297,7 @@ describe('ReviewOrchestrator.runTestPipeline — re-run on new content hash', ()
       timeoutSec: 300,
       maxRssMb: 0,
       sessionId: null,
+      taskId: null,
       runOrigin: 'pr_pipeline',
       producer: 'pr_gate',
     });
@@ -329,6 +330,7 @@ describe('ReviewOrchestrator.runTestPipeline — re-run on new content hash', ()
       timeoutSec: 300,
       maxRssMb: 0,
       sessionId: null,
+      taskId: null,
       runOrigin: 'pr_pipeline',
       producer: 'pr_gate',
     });
@@ -440,6 +442,7 @@ describe('ReviewOrchestrator.runTestPipeline — persistence via the shared lane
       timeoutSec: 60,
       maxRssMb: 0,
       sessionId: null,
+      taskId: null,
       runOrigin: 'pr_pipeline',
       producer: 'pr_gate',
     });

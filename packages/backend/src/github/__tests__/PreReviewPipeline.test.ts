@@ -2455,6 +2455,7 @@ describe('PreReviewPipeline.rerunFlakyTests', () => {
       timeoutSec: 300,
       maxRssMb: 0,
       sessionId: null,
+      taskId: null,
       runOrigin: 'pr_pipeline',
       producer: 'pr_gate',
     });

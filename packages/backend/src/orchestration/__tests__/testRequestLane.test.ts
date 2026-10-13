@@ -2327,13 +2327,14 @@ describe('admitTestRequest — live queue position', () => {
     expect(second.position).toBe(1);
     expect(second.queueDepth).toBe(1);
 
-    // Third request, back on project A, queues behind the project-B request
-    // ahead of it — one shared FIFO, not a per-project one.
+    // Third request, back on project A: the queue is per-project and served
+    // round-robin by project id, so A's waiter is estimated ahead of B's
+    // (position is global, depth is shared across projects).
     const third = admitTestRequest(
       baseSpec({ projectId: 'proj-fifo-a', contentHash: 'fifo-a-2' }),
     );
     expect(third.status).toBe('queued');
-    expect(third.position).toBe(2);
+    expect(third.position).toBe(1);
     expect(third.queueDepth).toBe(2);
   });
 
