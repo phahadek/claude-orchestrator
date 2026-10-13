@@ -9607,10 +9607,12 @@ export function insertTestRequestRun(
    */
   commands?: string[] | null,
   runnerExecuted = false,
+  taskId: string | null = null,
+  priorityGroup: string | null = null,
 ): void {
   db.prepare(
-    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, concurrent_run_count, run_origin, producer, run_kind, base_sha, worktree_path, commands, breadth_origin, runner_executed)
-     VALUES (?, ?, ?, ?, ?, '', ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, concurrent_run_count, run_origin, producer, run_kind, base_sha, worktree_path, commands, breadth_origin, runner_executed, task_id, priority_group)
+     VALUES (?, ?, ?, ?, ?, '', ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     projectId,
@@ -9631,6 +9633,8 @@ export function insertTestRequestRun(
     commands ? JSON.stringify(commands) : null,
     resolveRunBreadthOrigin(projectId, contentHash, sessionId, worktreePath),
     runnerExecuted ? 1 : 0,
+    taskId,
+    priorityGroup,
   );
 }
 

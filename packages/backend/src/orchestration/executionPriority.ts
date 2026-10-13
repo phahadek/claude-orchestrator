@@ -2,7 +2,7 @@ import type { NotionTask } from '../notion/types';
 import { listTaskExecutionFlagsForProject } from '../db/queries';
 import { normalizeTaskId } from '../tasks/taskId';
 
-type ExecutionGroup = 'execute_now' | 'urgent' | 'blocker' | 'priority';
+export type ExecutionGroup = 'execute_now' | 'urgent' | 'blocker' | 'priority';
 export type AssignedPriority = 'high' | 'medium' | 'low' | null;
 
 export interface RankInputTask {
@@ -175,6 +175,25 @@ export function compareExecutionRank(
     }
   }
   return compareTieBreak(a.tieBreak, b.tieBreak);
+}
+
+export function executionGroupOrder(group: ExecutionGroup): number {
+  return GROUP_ORDER[group];
+}
+
+/** Within-group sort key: lexicographic ascending order matches compareExecutionRank (minus tieBreak). */
+export function executionRankKey(r: ExecutionRank): (number | string)[] {
+  const p = priorityRank(r.priority);
+  switch (r.group) {
+    case 'execute_now':
+      return [r.executeNowSetAt ?? Infinity];
+    case 'urgent':
+      return [r.urgent ? 0 : 1, p];
+    case 'blocker':
+      return [-r.blocksCount, p];
+    case 'priority':
+      return [p];
+  }
 }
 
 export function countEffectiveUrgent(ranks: Iterable<ExecutionRank>): {

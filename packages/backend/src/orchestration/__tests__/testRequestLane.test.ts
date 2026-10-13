@@ -2327,13 +2327,14 @@ describe('admitTestRequest — live queue position', () => {
     expect(second.position).toBe(1);
     expect(second.queueDepth).toBe(1);
 
-    // Third request, back on project A, queues behind the project-B request
-    // ahead of it — one shared FIFO, not a per-project one.
+    // Third request, back on project A: the queue is per-project and served
+    // round-robin by project id, so A's waiter is estimated ahead of B's
+    // (position is global, depth is shared across projects).
     const third = admitTestRequest(
       baseSpec({ projectId: 'proj-fifo-a', contentHash: 'fifo-a-2' }),
     );
     expect(third.status).toBe('queued');
-    expect(third.position).toBe(2);
+    expect(third.position).toBe(1);
     expect(third.queueDepth).toBe(2);
   });
 
@@ -5223,5 +5224,48 @@ describe('rebindWorktreeContentHash — pre-test merge hash rebind', () => {
     expect(settled).not.toContain('pre');
 
     testRequestLaneEvents.off('settled', onSettled);
+  });
+});
+
+describe('admitTestRequest task linkage', () => {
+  function persisted(runId: string) {
+    return db
+      .prepare(
+        `SELECT task_id, priority_group FROM test_request_runs WHERE id = ?`,
+      )
+      .get(runId) as { task_id: string | null; priority_group: string | null };
+  }
+
+  it.each([
+    ['session_request', 'task-s', 'sess-1'],
+    ['pr_gate', 'task-p', null],
+  ] as const)(
+    'persists task_id and priority_group for a %s spec',
+    (producer, taskId, sessionId) => {
+      mockRunTestCommands.mockImplementation(() => new Promise(() => {}));
+      const admission = admitTestRequest(
+        baseSpec({
+          contentHash: `hash-${producer}`,
+          producer,
+          taskId,
+          sessionId,
+        }),
+      );
+      admission.result.catch(() => {});
+      expect(persisted(admission.runId)).toEqual({
+        task_id: taskId,
+        priority_group: 'priority',
+      });
+    },
+  );
+
+  it('persists null task_id for a spec with no resolvable task and ranks Priority', () => {
+    mockRunTestCommands.mockImplementation(() => new Promise(() => {}));
+    const admission = admitTestRequest(baseSpec({ contentHash: 'hash-none' }));
+    admission.result.catch(() => {});
+    expect(persisted(admission.runId)).toEqual({
+      task_id: null,
+      priority_group: 'priority',
+    });
   });
 });

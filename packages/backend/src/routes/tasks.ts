@@ -44,6 +44,7 @@ import { groomBlockingDepTitles } from '../orchestration/planningCandidates';
 import { resolveProjectDepStatus } from '../orchestration/DispatchTriggerEvaluator';
 import { normalizeTaskId, normalizeBoardId } from '../tasks/taskId';
 import { loadExecutionRanks } from '../orchestration/executionPriority';
+import { rerankTestLaneProject } from '../orchestration/testRequestLane';
 import yaml from 'js-yaml';
 import { asyncHandler } from './asyncHandler';
 export type { TaskView } from '../ws/types';
@@ -1055,6 +1056,7 @@ export function createTasksRouter(
       payload: { urgent, previous },
     });
     emitTaskUpdated(taskId);
+    rerankTestLaneProject(projectId);
     if (board && before) {
       const after = loadExecutionRanks(projectId, board.tasks);
       for (const [id, rank] of after) {

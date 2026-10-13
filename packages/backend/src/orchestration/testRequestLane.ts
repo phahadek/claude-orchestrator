@@ -32,7 +32,16 @@
 
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
-import { Semaphore, LaneRunWithdrawnError } from '../tasks/deferralClassifier';
+import { LaneRunWithdrawnError } from '../tasks/deferralClassifier';
+import { PriorityLaneQueue, type LaneWaiterKey } from './laneQueue';
+import {
+  loadExecutionRanks,
+  executionRankKey,
+  type ExecutionRank,
+} from './executionPriority';
+import { getProjectById } from '../config';
+import { normalizeTaskId } from '../tasks/taskId';
+import type { NotionTask } from '../notion/types';
 import { recordEvent } from '../audit/AuditLog';
 import {
   runTestCommands,
@@ -59,6 +68,7 @@ import { detectCrashSignature } from './workerCrashDetection';
 import { typedGetSetting } from '../config/settings';
 import {
   insertTestRequestRun,
+  getTaskCache,
   markTestRequestRunRunning,
   setTestRequestRunConcurrentCount,
   completeTestRequestRun,
@@ -165,6 +175,12 @@ export interface TestRequestRunSpec {
   maxRssMb: number;
   /** Originating session, persisted onto the run row for per-request attribution. */
   sessionId: string | null;
+  /**
+   * Task the run is for (sessions.task_id / pull_requests.task_id), used to
+   * rank it in the lane queue and persisted on the run row. Omitted/null when
+   * no task is resolvable — such a run ranks in the Priority group, unset.
+   */
+  taskId?: string | null;
   /**
    * Explicit identity the caller states about the run it's originating —
    * 'base_health_probe' is historical only (the now-deleted baseHealthCheck.ts
@@ -334,20 +350,108 @@ function getGlobalTestRunLimit(): number {
   return Math.min(maxConcurrent, Math.max(1, Math.floor(ceilingMb / perRunMb)));
 }
 
-let globalTestRunSemaphore: Semaphore | null = null;
+let globalTestRunSemaphore: PriorityLaneQueue | null = null;
+
+/** Queued runs' task linkage, kept so the queue can re-rank them from fresh board/flag inputs at each slot release. */
+const queuedRunMeta = new Map<
+  string,
+  { taskId: string | null; requestedAt: number }
+>();
+
+const DEFAULT_PRIORITY_RANK: ExecutionRank = {
+  group: 'priority',
+  urgent: false,
+  urgentInherited: false,
+  urgentVia: [],
+  blocksCount: 0,
+  priority: null,
+  executeNowSetAt: null,
+};
+
+function loadProjectBoardTasks(projectId: string): NotionTask[] {
+  const project = getProjectById(projectId);
+  if (!project) return [];
+  const tasks: NotionTask[] = [];
+  for (const cacheKey of [
+    `board:${project.boardId}`,
+    `non_milestone:${project.id}`,
+  ]) {
+    const row = getTaskCache(cacheKey);
+    if (!row) continue;
+    try {
+      tasks.push(...(JSON.parse(row.raw_json) as NotionTask[]));
+    } catch {
+      // ignore malformed cache entry
+    }
+  }
+  return tasks;
+}
+
+/** Ranks each task id (null = unresolvable) for one project from fresh board + flag inputs. */
+function resolveExecutionRanks(
+  projectId: string,
+  taskIds: (string | null)[],
+): ExecutionRank[] {
+  let ranks: Map<string, ExecutionRank> | null = null;
+  try {
+    ranks = loadExecutionRanks(projectId, loadProjectBoardTasks(projectId));
+  } catch (err) {
+    logger.warn(`[testRequestLane] rank load failed for ${projectId}: ${err}`);
+  }
+  return taskIds.map(
+    (id) => (id && ranks?.get(normalizeTaskId(id))) || DEFAULT_PRIORITY_RANK,
+  );
+}
+
+function toWaiterKey(
+  projectId: string,
+  rank: ExecutionRank,
+  requestedAt: number,
+): LaneWaiterKey {
+  return {
+    projectId,
+    group: rank.group,
+    rankKey: executionRankKey(rank),
+    requestedAt,
+  };
+}
+
+function rerankQueuedRuns(
+  projectId: string,
+  runIds: string[],
+): Map<string, LaneWaiterKey> {
+  const metas = runIds.map((id) => queuedRunMeta.get(id));
+  const ranks = resolveExecutionRanks(
+    projectId,
+    metas.map((m) => m?.taskId ?? null),
+  );
+  const out = new Map<string, LaneWaiterKey>();
+  runIds.forEach((id, i) => {
+    const meta = metas[i];
+    if (meta) out.set(id, toWaiterKey(projectId, ranks[i], meta.requestedAt));
+  });
+  return out;
+}
+
+/** Refreshes a project's queued-run ordering after an execution flag changed — display only, release-time re-rank still decides who runs. */
+export function rerankTestLaneProject(projectId: string): void {
+  globalTestRunSemaphore?.rerankProject(projectId);
+}
 
 /**
- * Returns the single module-level semaphore shared by every project,
+ * Returns the single module-level lane queue shared by every project,
  * resizing it in place whenever the configured global limit
  * (getGlobalTestRunLimit) has changed since it was created — so editing the
  * setting takes effect on the very next acquire, no backend restart needed.
- * FIFO ordering of this one semaphore's wait queue is what gives every
- * project a single, shared queue position rather than a per-project one.
+ * Waiters are held per project in rank order and served round-robin by
+ * project (see laneQueue.ts).
  */
-function getGlobalTestRunSemaphore(): Semaphore {
+function getGlobalTestRunSemaphore(): PriorityLaneQueue {
   const limit = getGlobalTestRunLimit();
   if (!globalTestRunSemaphore) {
-    globalTestRunSemaphore = new Semaphore(limit);
+    globalTestRunSemaphore = new PriorityLaneQueue(limit, {
+      rerank: rerankQueuedRuns,
+    });
   } else if (globalTestRunSemaphore.capacity() !== limit) {
     globalTestRunSemaphore.resize(limit);
   }
@@ -384,6 +488,7 @@ function getForeignConcurrentRunCount(projectId: string): number {
  */
 export function __resetProjectSemaphoresForTest(): void {
   globalTestRunSemaphore = null;
+  queuedRunMeta.clear();
   inFlightRuns.clear();
   pendingBySession.clear();
 }
@@ -991,6 +1096,8 @@ export function admitTestRequest(
 
   const requestedAt = Date.now();
   const runId = randomUUID();
+  const taskId = spec.taskId ?? null;
+  const [rank] = resolveExecutionRanks(spec.projectId, [taskId]);
   // Durably recorded as 'queued' before the semaphore permit is even
   // requested — a caller can query this row (and a boot-time crash mid-queue
   // is recoverable) from the moment of admission, not just from the moment
@@ -1011,6 +1118,8 @@ export function admitTestRequest(
     spec.worktreePath,
     spec.commands,
     runnerExecutorOverride !== null,
+    taskId,
+    rank.group,
   );
   withdrawStaleSameWorktreeRuns(
     spec.projectId,
@@ -1019,7 +1128,10 @@ export function admitTestRequest(
     runId,
   );
   const semaphore = getGlobalTestRunSemaphore();
-  const permitPromise = semaphore.acquire(runId);
+  queuedRunMeta.set(runId, { taskId, requestedAt });
+  const permitPromise = semaphore
+    .acquire(runId, toWaiterKey(spec.projectId, rank, requestedAt))
+    .finally(() => queuedRunMeta.delete(runId));
   const admission = () => {
     const queuedPosition = semaphore.positionOf(runId);
     return queuedPosition == null
@@ -1584,6 +1696,8 @@ async function executeTestRequestRun(
       coverage_source_run_id: null,
       awaiting_disposition_at: null,
       runner_executed: runnerExecutorOverride !== null ? 1 : 0,
+      task_id: spec.taskId ?? null,
+      priority_group: null,
     });
     trackRunIngestion(runId, ingestionPromise);
     ingestionPromise.then(
