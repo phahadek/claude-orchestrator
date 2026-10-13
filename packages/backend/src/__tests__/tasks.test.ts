@@ -1351,6 +1351,59 @@ describe('TaskView recoveryDescriptor', () => {
     );
     expect(task.recoveryDescriptor).toMatchObject({ available: false });
   });
+
+  describe('orphan fallback keyed on PR state', () => {
+    async function descriptorFor(prState: string) {
+      vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+        makeAggregate('task-1', '👀 In Review', {
+          pr_number: 7,
+          pr_state: prState,
+          code_session_status: 'error',
+        }),
+      ]);
+      const res = await supertest(buildApp()).get(
+        '/api/tasks/active?projectId=proj-1',
+      );
+      expect(res.status).toBe(200);
+      return res.body.tasks.find(
+        (t: { taskId: string }) => t.taskId === 'task-1',
+      ).recoveryDescriptor;
+    }
+
+    it('offers redispatch when the only PR was closed unmerged', async () => {
+      expect(await descriptorFor('closed')).toMatchObject({
+        available: true,
+        action: 'redispatch',
+      });
+    });
+
+    it('offers nothing while the PR is open', async () => {
+      expect(await descriptorFor('open')).toMatchObject({ available: false });
+    });
+
+    it('offers no redispatch for a merged PR', async () => {
+      const d = await descriptorFor('merged');
+      expect(d.action).not.toBe('redispatch');
+    });
+
+    it('still derives from the task pause reason for a closed PR', async () => {
+      vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+        makeAggregate('task-1', '👀 In Review', {
+          pr_pause_reason: 'max_reviews',
+          pr_number: 7,
+          pr_state: 'closed',
+          code_session_status: 'error',
+        }),
+      ]);
+      const res = await supertest(buildApp()).get(
+        '/api/tasks/active?projectId=proj-1',
+      );
+      const task = res.body.tasks.find(
+        (t: { taskId: string }) => t.taskId === 'task-1',
+      );
+      expect(task.recoveryDescriptor.action).not.toBe('redispatch');
+    });
+  });
 });
 
 describe('TaskView displayStatus — auto_recovering threading', () => {
@@ -1444,6 +1497,25 @@ describe('POST /api/tasks/:taskId/recover', () => {
     );
     expect(res.status).toBe(422);
     expect(res.body.error).toMatch(/No recovery action/);
+  });
+
+  it('redispatches a task whose only PR was closed unmerged', async () => {
+    const updateStatus = setupFakeBackend();
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-1', '👀 In Review', {
+        pr_number: 7,
+        pr_state: 'closed',
+        code_session_status: 'error',
+      }),
+    ]);
+    const res = await supertest(buildApp()).post(
+      '/api/tasks/task-1/recover?projectId=proj-1',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, action: 'redispatch' });
+    expect(updateStatus).toHaveBeenCalledWith('task-1', '🗂️ Ready', {
+      source: 'orchestrator',
+    });
   });
 
   it('returns 422 for max_reviews (no action available)', async () => {
