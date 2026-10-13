@@ -97,6 +97,7 @@ import {
   renderBaseAttributableFilterDigest,
   applyF2GateMaskingGuards,
   shouldMarkAwaitingDisposition,
+  DIGEST_FAILING_TEST_LIST_CAP,
   type BaseAttributableFilterResult,
 } from '../baseAttributableFilter';
 
@@ -907,8 +908,10 @@ describe('renderBaseAttributableFilterDigest', () => {
     });
 
     it('lists exactly 50 tests with no overflow line', () => {
-      const digest = renderBaseAttributableFilterDigest(partial(50));
-      expect(testLineCount(digest)).toBe(50);
+      const digest = renderBaseAttributableFilterDigest(
+        partial(DIGEST_FAILING_TEST_LIST_CAP),
+      );
+      expect(testLineCount(digest)).toBe(DIGEST_FAILING_TEST_LIST_CAP);
       expect(digest).not.toContain('not listed');
     });
 
