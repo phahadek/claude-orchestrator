@@ -3629,6 +3629,22 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
+  // merged_dev_sha / conflict_outcome: the pre-test merge's result for the run
+  // (see orchestration/localBranchHelpers.ts mergeBaseIntoSessionBranch).
+  // NULL when no merge was attempted and for rows predating these columns.
+  try {
+    target.exec(`ALTER TABLE test_request_runs ADD COLUMN merged_dev_sha TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(
+      `ALTER TABLE test_request_runs ADD COLUMN conflict_outcome TEXT`,
+    );
+  } catch {
+    /* already exists */
+  }
+
   // parked_at: the occupancy marker for a session left idle and resumable
   // by a machine path whose process was reclaimed or died without a
   // result — replaces archiveSession(id, 'machine_park') for that case (see

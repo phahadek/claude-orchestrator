@@ -163,6 +163,7 @@ import {
 } from './sessionLivenessReconciler';
 import { isUsageAdmitted } from '../orchestration/usageAdmission';
 import { CrashBudget } from '../orchestration/crashBudget';
+import { isMergeHeld, onMergeHoldReleased } from '../orchestration/mergeHold';
 import { tryDependencyCachePool } from '../orchestration/dependencyCachePool';
 import {
   countsAgainstConcurrency,
@@ -1383,6 +1384,17 @@ export class SessionManager extends EventEmitter {
 
   constructor(private readonly githubClient?: GitHubClient) {
     super();
+    // Wakes deferred to the inbox during a pre-test merge window are
+    // delivered the moment the hold lifts.
+    onMergeHoldReleased((sessionId) => {
+      if (listUndeliveredInboxItems(sessionId).length === 0) return;
+      this.deliverUndeliveredInboxItems(sessionId, 'mergeHoldReleased').catch(
+        (err) =>
+          logger.warn(
+            `[SessionManager] post-merge inbox delivery failed for ${sessionId.slice(0, 8)}: ${err}`,
+          ),
+      );
+    });
     // Turn-boundary drain for a done-transition markSessionDone deferred
     // while this session's turn was in flight (e.g. PRMergeWatcher's
     // markSessionDone racing a still-running review session — see
@@ -5429,6 +5441,10 @@ export class SessionManager extends EventEmitter {
       return;
     }
 
+    // Items stay undelivered through a pre-test merge window; the hold's
+    // release listener re-runs delivery.
+    if (isMergeHeld(sessionId)) return;
+
     this.emitFeedbackPending(sessionId, true);
 
     if (isTerminal) {
@@ -5575,6 +5591,15 @@ export class SessionManager extends EventEmitter {
     // window), is now detected via this.send()'s boolean return rather than
     // silently dropped — falling through to the respawn path below instead
     // delivers it via a fresh --resume process.
+    // Pre-test merge window: the lane is merging latest dev into this
+    // session's worktree. Checked first with no await before it, so the
+    // lane's idle-check-and-acquire can never interleave with a wake.
+    if (isMergeHeld(sessionId)) {
+      if (opts.persistTextOnDefer !== false) {
+        enqueueFeedbackItem(sessionId, 'operator:message', text);
+      }
+      return sessionId;
+    }
     const liveSession = this.sessions.get(sessionId);
     // Context-overflow escalation in flight: the owning AgentSession is about
     // to (or just did) spawn on large_task_model. Respawning here would start a

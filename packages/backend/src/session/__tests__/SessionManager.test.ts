@@ -301,6 +301,11 @@ import {
   incrementSessionPokeRetryCount,
   getSessionDocsTargetSurface,
 } from '../../db/queries';
+import {
+  acquireMergeHold,
+  releaseMergeHold,
+  isMergeHeld,
+} from '../../orchestration/mergeHold';
 import { getProjectById } from '../../config';
 import { getCorporateMode } from '../../config/corporateMode';
 import { reapOrphanContainers } from '../DockerSessionRunner';
@@ -892,6 +897,40 @@ describe('sendOrResume — live session fast path', () => {
       'in-flight text',
     );
     expect(live.noteInboxDuringEscalation).toHaveBeenCalledTimes(1);
+  });
+
+  it('during a pre-test merge hold: defers the wake to the inbox, then delivers on release', async () => {
+    const p = sm.sendOrResume(SESSION_ID, 'first');
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
+    capturedSessions[0].emit('message', {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: 'boot',
+    });
+    await p;
+
+    const live = capturedSessions[0] as any;
+    vi.mocked(AgentSession).mockClear();
+    live.sendMessage.mockClear();
+    vi.mocked(enqueueFeedbackItem).mockClear();
+
+    vi.mocked(listUndeliveredInboxItems).mockReturnValue([]);
+    expect(acquireMergeHold(SESSION_ID)).toBe(true);
+    try {
+      const result = await sm.sendOrResume(SESSION_ID, 'wake during merge');
+      expect(result).toBe(SESSION_ID);
+      expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+      expect(live.sendMessage).not.toHaveBeenCalled();
+      expect(vi.mocked(enqueueFeedbackItem)).toHaveBeenCalledWith(
+        SESSION_ID,
+        'operator:message',
+        'wake during merge',
+      );
+    } finally {
+      releaseMergeHold(SESSION_ID);
+    }
+    expect(isMergeHeld(SESSION_ID)).toBe(false);
   });
 
   it('updates status to running and emits session_status when live session is idle', async () => {

@@ -33,7 +33,16 @@
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import { LaneRunWithdrawnError } from '../tasks/deferralClassifier';
-import { PriorityLaneQueue, type LaneWaiterKey } from './laneQueue';
+import {
+  PriorityLaneQueue,
+  SKIP_EXPIRED_REASON,
+  type LaneWaiterKey,
+} from './laneQueue';
+import { acquireMergeHold, releaseMergeHold } from './mergeHold';
+import {
+  fetchBaseBranch,
+  mergeBaseIntoSessionBranch,
+} from './localBranchHelpers';
 import {
   loadExecutionRanks,
   executionRankKey,
@@ -69,6 +78,8 @@ import { typedGetSetting } from '../config/settings';
 import {
   insertTestRequestRun,
   getTaskCache,
+  getSession,
+  recordTestRequestRunMerge,
   markTestRequestRunRunning,
   setTestRequestRunConcurrentCount,
   completeTestRequestRun,
@@ -356,8 +367,67 @@ let globalTestRunSemaphore: PriorityLaneQueue | null = null;
 /** Queued runs' task linkage, kept so the queue can re-rank them from fresh board/flag inputs at each slot release. */
 const queuedRunMeta = new Map<
   string,
-  { taskId: string | null; requestedAt: number }
+  {
+    taskId: string | null;
+    requestedAt: number;
+    /** Owning session whose worktree the pre-test merge mutates; null for a run that never merges. */
+    mergeSessionId: string | null;
+  }
 >();
+
+/** Runs whose owner's merge hold was taken at grant time, mapped to that session. */
+const mergeHoldByRun = new Map<string, string>();
+
+/** Wall-clock ceiling on how long a run is passed over for a busy owner before it is withdrawn. */
+const SESSION_NOT_IDLE_CEILING_MS = 3 * 60 * 60 * 1000;
+
+const BUSY_SESSION_STATUSES = new Set([
+  'starting',
+  'running',
+  'needs_permission',
+]);
+
+/**
+ * Grant-time eligibility: a run whose owner session is mid-turn is passed
+ * over (keeping its rank). For an idle owner the merge hold is taken here,
+ * synchronously with the idle check, so no wake can land between them.
+ */
+function isRunEligible(runId: string): boolean {
+  const sessionId = queuedRunMeta.get(runId)?.mergeSessionId;
+  if (!sessionId) return true;
+  const session = getSession(sessionId);
+  if (!session) return true;
+  if (BUSY_SESSION_STATUSES.has(session.status)) return false;
+  if (!acquireMergeHold(sessionId)) return false;
+  mergeHoldByRun.set(runId, sessionId);
+  return true;
+}
+
+function withdrawSkippedRun(runId: string): void {
+  withdrawTestRequestRun(runId, SKIP_EXPIRED_REASON);
+  const run = getTestRequestRunById(runId);
+  if (!run) return;
+  broadcastRunStatus({
+    runId,
+    projectId: run.project_id,
+    contentHash: run.content_hash,
+    status: 'withdrawn',
+    sessionId: run.session_id,
+    requestedAt: run.requested_at ?? undefined,
+    startedAt: run.started_at,
+    finishedAt: Date.now(),
+  });
+  recordEvent({
+    event_type: 'test_run_withdrawn',
+    actor_type: 'system',
+    project_id: run.project_id,
+    payload: {
+      runId,
+      reason: SKIP_EXPIRED_REASON,
+      supersededBy: SKIP_EXPIRED_REASON,
+    },
+  });
+}
 
 const DEFAULT_PRIORITY_RANK: ExecutionRank = {
   group: 'priority',
@@ -452,6 +522,9 @@ function getGlobalTestRunSemaphore(): PriorityLaneQueue {
   if (!globalTestRunSemaphore) {
     globalTestRunSemaphore = new PriorityLaneQueue(limit, {
       rerank: rerankQueuedRuns,
+      eligible: isRunEligible,
+      skipCeilingMs: SESSION_NOT_IDLE_CEILING_MS,
+      onSkipExpired: withdrawSkippedRun,
     });
   } else if (globalTestRunSemaphore.capacity() !== limit) {
     globalTestRunSemaphore.resize(limit);
@@ -490,6 +563,7 @@ function getForeignConcurrentRunCount(projectId: string): number {
 export function __resetProjectSemaphoresForTest(): void {
   globalTestRunSemaphore = null;
   queuedRunMeta.clear();
+  mergeHoldByRun.clear();
   inFlightRuns.clear();
   pendingBySession.clear();
 }
@@ -1129,7 +1203,12 @@ export function admitTestRequest(
     runId,
   );
   const semaphore = getGlobalTestRunSemaphore();
-  queuedRunMeta.set(runId, { taskId, requestedAt });
+  queuedRunMeta.set(runId, {
+    taskId,
+    requestedAt,
+    mergeSessionId:
+      spec.sessionId && spec.runOrigin == null ? spec.sessionId : null,
+  });
   const permitPromise = semaphore
     .acquire(runId, toWaiterKey(spec.projectId, rank, requestedAt))
     .then((release) => {
@@ -1440,6 +1519,56 @@ const localRunnerExecutor: LaneRunnerExecutor = async ({
   };
 };
 
+/**
+ * Runs the pre-test merge for a run whose grant took its owner's merge hold,
+ * releasing the hold when the merge finishes (or throws). Returns a note to
+ * prefix onto the run's output when the merge could not be applied.
+ */
+async function runPreTestMerge(
+  spec: TestRequestRunSpec,
+  runId: string,
+): Promise<string> {
+  const sessionId = mergeHoldByRun.get(runId);
+  if (!sessionId) return '';
+  mergeHoldByRun.delete(runId);
+  try {
+    const baseBranch = getProjectById(spec.projectId)?.baseBranch;
+    if (!baseBranch) return '';
+    await fetchBaseBranch(spec.worktreePath, baseBranch);
+    const result = await mergeBaseIntoSessionBranch(
+      spec.worktreePath,
+      `origin/${baseBranch}`,
+    );
+    recordTestRequestRunMerge(runId, result.mergedSha ?? null, result.outcome);
+    if (result.outcome === 'merged') {
+      try {
+        const newHash = await computeWholeTreeContentHash(spec.worktreePath);
+        if (newHash) {
+          rebindWorktreeContentHash(
+            spec.projectId,
+            spec.worktreePath,
+            spec.contentHash,
+            newHash,
+          );
+        }
+      } catch (err) {
+        logger.warn(
+          { err, runId },
+          '[testRequestLane] post-merge content hash failed — run will withdraw on the content check',
+        );
+      }
+      return '';
+    }
+    if (result.outcome === 'up_to_date') return '';
+    return `[testRequestLane] pre-test merge of origin/${baseBranch} not applied (${result.outcome}); testing the unmerged tree${result.detail ? `: ${result.detail.split('\n')[0]}` : ''}\n`;
+  } catch (err) {
+    logger.warn({ err, runId }, '[testRequestLane] pre-test merge failed');
+    return '';
+  } finally {
+    releaseMergeHold(sessionId);
+  }
+}
+
 async function executeTestRequestRun(
   spec: TestRequestRunSpec,
   runId: string,
@@ -1475,6 +1604,11 @@ async function executeTestRequestRun(
     }
     throw err;
   }
+
+  // Pre-test merge of latest dev into the owner's worktree, strictly before
+  // the content-hash check and the lane's executor — so a remote runner's
+  // packed snapshot is always the merged tree.
+  const mergeNote = await runPreTestMerge(spec, runId);
 
   const semaphore = getGlobalTestRunSemaphore();
   const startedAt = Date.now();
@@ -1627,7 +1761,7 @@ async function executeTestRequestRun(
     const pkg: RunnerResultPackage = rawPkg;
     const result: TestCommandResult = {
       passed: pkg.passed,
-      output: outputPrefix ? outputPrefix + pkg.output : pkg.output,
+      output: outputPrefix + mergeNote + pkg.output,
       oomKilled: pkg.oomKilled,
       timedOut: pkg.timedOut,
       spawnFailed: pkg.spawnFailed,

@@ -87,3 +87,105 @@ export async function detectMergeConflict(
     return true;
   }
 }
+
+type PreTestMergeOutcome =
+  | 'up_to_date'
+  | 'merged'
+  | 'conflict'
+  | 'dirty_refused'
+  | 'error';
+
+export interface PreTestMergeResult {
+  outcome: PreTestMergeOutcome;
+  /** Worktree HEAD after the merge; set for 'up_to_date' and 'merged'. */
+  mergedSha?: string;
+  detail?: string;
+}
+
+const MERGE_IDENTITY = [
+  '-c',
+  'user.name=claude-orchestrator',
+  '-c',
+  'user.email=bot@claude-code.internal',
+];
+
+/** Best-effort `git fetch origin <branch>`; a failure falls back to the local ref. */
+export async function fetchBaseBranch(
+  worktreePath: string,
+  baseBranch: string,
+): Promise<void> {
+  try {
+    await gitExec(['fetch', 'origin', baseBranch], worktreePath);
+  } catch (e) {
+    logger.warn(
+      `[fetchBaseBranch] git fetch origin ${baseBranch} failed (continuing with local ref): ${execFailure(e).text}`,
+    );
+  }
+}
+
+function execFailure(e: unknown): { code: unknown; text: string } {
+  const err = e as { code?: unknown; stderr?: string; stdout?: string };
+  return {
+    code: err.code,
+    text: `${err.stderr ?? ''}${err.stdout ?? ''}`.trim() || String(e),
+  };
+}
+
+/**
+ * Merges `baseRef` into the branch checked out in `worktreePath`. A textual
+ * conflict is detected first via checkout-free `git merge-tree --write-tree`,
+ * so a conflicting merge never mutates the worktree. The real merge is plain
+ * `git merge`, which succeeds over unrelated uncommitted work and itself
+ * refuses (reported as 'dirty_refused') when uncommitted changes overlap files
+ * the merge would touch.
+ */
+export async function mergeBaseIntoSessionBranch(
+  worktreePath: string,
+  baseRef: string,
+): Promise<PreTestMergeResult> {
+  const headSha = async (): Promise<string> =>
+    (await gitExec(['rev-parse', 'HEAD'], worktreePath)).stdout.trim();
+  try {
+    try {
+      await gitExec(
+        ['merge-base', '--is-ancestor', baseRef, 'HEAD'],
+        worktreePath,
+      );
+      return { outcome: 'up_to_date', mergedSha: await headSha() };
+    } catch (e) {
+      if (execFailure(e).code !== 1) throw e;
+    }
+
+    try {
+      await gitExec(
+        ['merge-tree', '--write-tree', 'HEAD', baseRef],
+        worktreePath,
+      );
+    } catch (e) {
+      const f = execFailure(e);
+      if (f.code === 1) return { outcome: 'conflict', detail: f.text };
+      throw e;
+    }
+
+    try {
+      await gitExec(
+        [...MERGE_IDENTITY, 'merge', '--no-edit', baseRef],
+        worktreePath,
+      );
+    } catch (e) {
+      const f = execFailure(e);
+      if (/would be overwritten|untracked working tree files/i.test(f.text)) {
+        return { outcome: 'dirty_refused', detail: f.text };
+      }
+      await gitExec(['merge', '--abort'], worktreePath).catch(() => undefined);
+      return { outcome: 'error', detail: f.text };
+    }
+    return { outcome: 'merged', mergedSha: await headSha() };
+  } catch (e) {
+    const f = execFailure(e);
+    logger.warn(
+      `[mergeBaseIntoSessionBranch] merge of ${baseRef} in ${worktreePath} failed: ${f.text}`,
+    );
+    return { outcome: 'error', detail: f.text };
+  }
+}
