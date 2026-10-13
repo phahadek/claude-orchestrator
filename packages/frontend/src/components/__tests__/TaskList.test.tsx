@@ -2946,4 +2946,38 @@ describe('TaskList', () => {
       expect(screen.getByText('Stuck Task')).toBeDefined();
     });
   });
+
+  describe('urgent counter', () => {
+    const inheritedRank = {
+      group: 'urgent' as const,
+      urgent: true,
+      urgentInherited: true,
+      urgentVia: ['x'],
+      blocksCount: 0,
+    };
+
+    it('shows effective and flagged counts', () => {
+      renderList([
+        makeTask({ taskId: 'a', displayStatus: 'in_progress', urgent: true }),
+        makeTask({
+          taskId: 'b',
+          displayStatus: 'in_progress',
+          executionRank: inheritedRank,
+        }),
+        makeTask({
+          taskId: 'c',
+          displayStatus: 'in_review',
+          executionRank: inheritedRank,
+        }),
+      ]);
+      expect(screen.getByTestId('urgent-counter').textContent).toBe(
+        '🚨 3 urgent (1 flagged)',
+      );
+    });
+
+    it('is hidden when nothing is urgent', () => {
+      renderList([makeTask({ taskId: 'a', displayStatus: 'in_progress' })]);
+      expect(screen.queryByTestId('urgent-counter')).toBeNull();
+    });
+  });
 });

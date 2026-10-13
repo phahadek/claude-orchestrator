@@ -1,5 +1,6 @@
 import type { TaskView } from '../types/taskView';
 import { STATUS_EMOJI } from '../utils/taskSort';
+import { UrgentToggle } from './UrgentToggle';
 import styles from './CompactTaskCard.module.css';
 
 interface Props {
@@ -13,6 +14,8 @@ interface Props {
   showStatus?: boolean;
   /** Reason shown below the row (e.g. a dep-blocked ops task), e.g. "waiting on <dep>". No checkbox is rendered when set. */
   blockedReason?: string | null;
+  /** Project id for the urgent siren toggle; the toggle is hidden when absent. */
+  projectId?: string | null;
 }
 
 const PRIORITY_ICONS: Record<string, string> = {
@@ -37,6 +40,7 @@ export function CompactTaskCard({
   onClick,
   showStatus = false,
   blockedReason = null,
+  projectId = null,
 }: Props) {
   const priorityIcon = PRIORITY_ICONS[task.priority] ?? '';
   const isBlocked = task.blocked;
@@ -89,6 +93,8 @@ export function CompactTaskCard({
             🧭
           </span>
         )}
+
+        {projectId && <UrgentToggle task={task} projectId={projectId} />}
 
         {showStatus && (
           <span
