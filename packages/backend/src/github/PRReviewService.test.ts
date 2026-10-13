@@ -58,6 +58,8 @@ import {
   supersedeReviewSession,
   collectGateChargedFailures,
   buildGateChargedFailuresSection,
+  buildReviewJsonSchemaBlock,
+  OPS_PR_INTENT_FILES_DIMENSION_GUIDANCE,
 } from './PRReviewService';
 import {
   getPRByNumber,
@@ -2171,6 +2173,49 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
     expect(result.verdict).toBe('approved');
   });
 
+  it('re-review follow-up carries the no-execution-proof rule and none of the removed bar strings', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...mockPRRow,
+      review_session_id: 'dead-review-session-id',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
+    const mockSM = makeMockSessionManager();
+    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async () => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage('r-id', JSON.stringify(claudePayload)),
+          ),
+        );
+        return 'r-id';
+      },
+    );
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+    const msg = (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mock
+      .calls[0][1] as string;
+    expect(msg).toContain(
+      "Test execution is the orchestrator's responsibility, not\nyours: never request commands, output, or proof that a test was run",
+    );
+    for (const s of [
+      'Per-criterion evidence bar',
+      'observed output',
+      'non-vacuous',
+      'fails without the change and passes with it',
+    ])
+      expect(msg).not.toContain(s);
+  });
+
   it('spawns fresh session when review_session_id has no DB row (pruned) and clears the stale pointer', async () => {
     const prRowWithPrunedSession = {
       ...mockPRRow,
@@ -4260,27 +4305,31 @@ describe('PRReviewService — manual verification items excluded from verdict', 
     expect(prompt).toContain('manualItemsForHuman');
   });
 
-  it('REVIEW_JSON_SCHEMA_BLOCK prompt requires per-criterion command+output+non-vacuous evidence', () => {
+  const REMOVED_BAR_STRINGS = [
+    'Per-criterion evidence bar',
+    'observed output',
+    'non-vacuous',
+    'fails without the change and passes with it',
+    "treat that run's command + observed result as satisfying",
+    'covering test skipped/excluded',
+  ];
+  const NEW_RULE =
+    "Test execution is the orchestrator's responsibility, not\nyours: never request commands, output, or proof that a test was run";
+
+  it('default prompt carries the no-execution-proof rule and none of the removed bar strings', () => {
     const service = makeService();
     const prompt = service.buildPrompt(mockPR, mockDiff, mockTaskBody);
 
-    expect(prompt).toContain('Per-criterion evidence bar');
-    expect(prompt).toContain('command run to check it');
-    expect(prompt).toContain('observed output');
-    expect(prompt).toContain('non-vacuous confirmation');
-    expect(prompt).toContain('fails without the change and passes with it');
-    expect(prompt).toContain('skipped or');
+    expect(prompt).toContain(NEW_RULE);
+    for (const s of REMOVED_BAR_STRINGS) expect(prompt).not.toContain(s);
   });
 
-  it('REVIEW_JSON_SCHEMA_BLOCK prompt lets an orchestrator-verified passed run satisfy the command+output bar', () => {
-    const service = makeService();
-    const prompt = service.buildPrompt(mockPR, mockDiff, mockTaskBody);
-
-    expect(prompt).toContain('Orchestrator-Verified Test Run');
-    expect(prompt).toContain(
-      "treat that run's command + observed result as satisfying",
+  it('ops PR-intent variant carries the new rule and none of the removed strings', () => {
+    const text = buildReviewJsonSchemaBlock(
+      OPS_PR_INTENT_FILES_DIMENSION_GUIDANCE,
     );
-    expect(prompt).toContain('does not need to separately restate them');
+    expect(text).toContain(NEW_RULE);
+    for (const s of REMOVED_BAR_STRINGS) expect(text).not.toContain(s);
   });
 });
 

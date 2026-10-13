@@ -269,7 +269,7 @@ A production-code change made to address a gate-charged failure must still be as
  * scope (rendered in the "## Approved PR Intent" prompt section) instead of
  * a task-body Files/paths affected list.
  */
-const OPS_PR_INTENT_FILES_DIMENSION_GUIDANCE = `For the "Changed files vs Files/paths affected list" dimension: this PR was opened by an Ops session against an operator-approved "## Approved PR Intent" declaration above, not a task-body Files/paths affected list — compare the changed files against that declaration's scope instead. Pass if all changed files are either within the declared scope OR are necessary downstream updates it implies (e.g., updating call sites after a type change, adjusting tests for modified behavior, fixing imports). Fail only if the PR touches files outside that approved scope.`;
+export const OPS_PR_INTENT_FILES_DIMENSION_GUIDANCE = `For the "Changed files vs Files/paths affected list" dimension: this PR was opened by an Ops session against an operator-approved "## Approved PR Intent" declaration above, not a task-body Files/paths affected list — compare the changed files against that declaration's scope instead. Pass if all changed files are either within the declared scope OR are necessary downstream updates it implies (e.g., updating call sites after a type change, adjusting tests for modified behavior, fixing imports). Fail only if the PR touches files outside that approved scope.`;
 
 /**
  * Shared review-instructions block: the JSON schema, verdict rules, and the
@@ -278,7 +278,7 @@ const OPS_PR_INTENT_FILES_DIMENSION_GUIDANCE = `For the "Changed files vs Files/
  * part that varies between the default (Code task, task-body spec) and Ops
  * (approved PR-intent) rubrics — see buildPrompt's `prIntent` parameter.
  */
-function buildReviewJsonSchemaBlock(
+export function buildReviewJsonSchemaBlock(
   filesDimensionGuidance: string = DEFAULT_FILES_DIMENSION_GUIDANCE,
 ): string {
   return `Respond ONLY with a JSON object — no preamble, no markdown fences.
@@ -297,27 +297,13 @@ you MUST:
 - Never fail the verdict solely because manual verification items are not demonstrated in the PR.
 - List them verbatim in the "manualItemsForHuman" array so downstream tooling can surface them to a human.
 
-## Per-criterion evidence bar for "Diff vs Acceptance Criteria"
+## Judging "Diff vs Acceptance Criteria"
 
 For each automated acceptance criterion (excluding manual verification items handled
-above), the PR must show falsification-style evidence, not just a claim that it works:
-- The specific command run to check it (e.g. a test file/name or script invocation).
-- The observed output of that command (pass/fail result, not a paraphrase).
-- An explicit non-vacuous confirmation: the test actually executed (not skipped or
-  filtered out), and it fails without the change and passes with it — a test that
-  trivially passes regardless of the change (e.g. an empty assertion, a test that
-  never ran, or one skipped/excluded from the run) does not count as evidence.
-Fail this dimension for any criterion lacking this command+output+non-vacuous-confirmation
-evidence, even if the surrounding diff otherwise looks plausible.
-
-If an "## Orchestrator-Verified Test Run" section is present above, its listed commands
-and pass/fail/skip counts are a real, already-executed record from the orchestrator's own
-test gate — not a claim by the PR author. For any acceptance criterion the diff shows is
-covered by a test in that run, treat that run's command + observed result as satisfying
-the "specific command run" and "observed output" requirements for that criterion; the PR
-body/description does not need to separately restate them. This does not excuse the
-non-vacuous-confirmation requirement — still fail the dimension if the run shows the
-covering test skipped/excluded, or if the run failed, or if no run covers the criterion.
+above), judge by reading the diff whether the code satisfies it and whether the tests
+added or changed exercise it. Test execution is the orchestrator's responsibility, not
+yours: never request commands, output, or proof that a test was run, and never fail this
+dimension because such proof is absent from the PR.
 
 Evaluate the PR across exactly these 4 dimensions and respond with this JSON schema:
 {
@@ -347,11 +333,10 @@ const REVIEW_JSON_SCHEMA_BLOCK = buildReviewJsonSchemaBlock();
 /**
  * Renders the PR's own coding session's latest finished test_request_runs row
  * (the F2 gate's real, already-executed verdict) into the review prompt, so
- * the "Per-criterion evidence bar" above has something genuine to point at
- * instead of demanding evidence the PR body/author has no way to supply.
+ * as informational context for the reviewer (not evidence the reviewer
+ * adjudicates).
  * Returns '' when no finished run exists (still-running/queued rows and
- * missing rows both fall back to today's no-section behavior) — the reviewer
- * then evaluates the evidence bar exactly as before.
+ * missing rows both fall back to today's no-section behavior).
  *
  * Per-test totals come from readRunTestOutcomes, so a run whose raw
  * structured_result was already nulled by the storage-dedup sweep still
@@ -413,8 +398,9 @@ function buildTestRunEvidenceSection(
       ? "Source: the PR pipeline's own full-suite run (run_kind: full)"
       : `Source: the coding session's own run (run_kind: ${run.run_kind})`;
   return `\n## Orchestrator-Verified Test Run
-This is a real record from the orchestrator's own F2 test gate for this PR's coding
-session — not a claim made by the PR author. It ran out-of-band via mcp__orchestrator__test_request.
+Informational context only: the orchestrator's own F2 test gate ran tests for this PR's
+coding session out-of-band via mcp__orchestrator__test_request. Test execution is the
+orchestrator's job; do not adjudicate this record or ask for further proof a test ran.
 ${sourceLine}
 Run outcome: ${run.state}
 Finished at: ${finishedAt}
