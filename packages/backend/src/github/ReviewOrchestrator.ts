@@ -1298,8 +1298,7 @@ export class ReviewOrchestrator {
         timeoutSec: config.test_timeout_sec,
         maxRssMb: config.test_max_rss_mb,
         crashSignatures,
-        environmentSignatures:
-          config.test_environment_failure_signatures ?? [],
+        environmentSignatures: config.test_environment_failure_signatures ?? [],
       },
     );
     return this.applyVerifyBaseAttributionFilter(project, job, gateResult);

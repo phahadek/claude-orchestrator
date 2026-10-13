@@ -363,7 +363,9 @@ function failureReasonFor(
   }
   if (result.timedOut) return 'timeout';
   if (result.oomKilled) return 'oom_killed';
-  if (matchesEnvironmentFailureSignature(result.output, environmentSignatures)) {
+  if (
+    matchesEnvironmentFailureSignature(result.output, environmentSignatures)
+  ) {
     return 'environment_failure';
   }
   return 'generic';
