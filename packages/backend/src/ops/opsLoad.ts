@@ -121,11 +121,11 @@ type AncestryProbe = (
   descendantSha: string,
 ) => Promise<boolean | null>;
 
-let ancestryProbe: AncestryProbe = probeGitAncestry;
+let ancestryProbe: AncestryProbe | undefined;
 
 /** Test hook: swap the git probe (pass undefined to restore) and clear the memo. */
 export function __setOpsAncestryProbeForTests(probe?: AncestryProbe): void {
-  ancestryProbe = probe ?? probeGitAncestry;
+  ancestryProbe = probe;
   ancestryMemo.clear();
 }
 
@@ -155,7 +155,11 @@ async function memoizedIsAncestor(
   let pending = slot.results.get(mergeCommit);
   if (!pending) {
     if (slot.results.size >= MAX_MEMO_ENTRIES_PER_DIR) slot.results.clear();
-    pending = ancestryProbe(projectDir, mergeCommit, deployedSha);
+    pending = (ancestryProbe ?? probeGitAncestry)(
+      projectDir,
+      mergeCommit,
+      deployedSha,
+    );
     slot.results.set(mergeCommit, pending);
     const results = slot.results;
     void pending.then(
