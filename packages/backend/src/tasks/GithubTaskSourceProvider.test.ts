@@ -61,6 +61,40 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+describe('GithubTaskSourceProvider — createdAt', () => {
+  it('maps the issue createdAt to epoch ms', async () => {
+    const client = makeClient({
+      listIssues: vi
+        .fn()
+        .mockResolvedValue([
+          makeIssue(1, { createdAt: '2024-05-01T12:00:00Z' }),
+        ]),
+    });
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
+
+    const result = await provider.fetchReadyTasks(null);
+
+    expect(result[0].task.createdAt).toBe(Date.UTC(2024, 4, 1, 12));
+  });
+
+  it('leaves createdAt undefined when the issue has no valid creation time', async () => {
+    const client = makeClient({
+      listIssues: vi.fn().mockResolvedValue([makeIssue(1, { createdAt: '' })]),
+    });
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
+
+    const result = await provider.fetchReadyTasks(null);
+
+    expect(result[0].task.createdAt).toBeUndefined();
+  });
+});
+
 // ── fetchReadyTasks ─────────────────────────────────────────────────────────
 
 describe('GithubTaskSourceProvider.fetchReadyTasks', () => {
