@@ -324,6 +324,30 @@ export function countPushFailureEvents(sessionId: string): number {
 }
 
 /**
+ * Returns the ts of the session's most recent pr_creation_failed event, but
+ * only when that latest failure has stage='test_request_gate'; null otherwise.
+ */
+export function getLatestTestGateRefusalTs(sessionId: string): number | null {
+  const rows = db
+    .prepare(
+      `SELECT ts, payload FROM audit_log
+       WHERE event_type = 'pr_creation_failed' AND actor_id = ?
+       ORDER BY ts DESC, rowid DESC LIMIT 1`,
+    )
+    .all(sessionId) as { ts: number; payload: string }[];
+  const row = rows[0];
+  if (!row) return null;
+  try {
+    return (JSON.parse(row.payload) as { stage?: string }).stage ===
+      'test_request_gate'
+      ? row.ts
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * True when a task_ops_stranded_surfaced event has already been recorded for
  * this task at this exact ops_journal.updated_at value — the sweep-cycle
  * dedup for StrandedOpsTaskMonitor. The journal's updated_at cannot change

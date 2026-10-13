@@ -39,6 +39,7 @@ import {
   recordEvent,
   countNudgeEvents,
   getLatestNudgeTimestamp,
+  getLatestTestGateRefusalTs,
 } from '../audit/AuditLog';
 import type { Session } from '../db/types';
 import { GitHubClient } from '../github/GitHubClient';
@@ -175,6 +176,9 @@ const AWAITING_LANE_RESULT_CEILING_MS = 3 * 60 * 60 * 1000;
 /** Nudge message sent to a stalled idle session that hasn't opened a PR. */
 const NO_PR_NUDGE_MESSAGE =
   'You appear to have finished your work but no PR was opened. Please open a draft PR now so your changes can be reviewed. If you are done with your task, follow the PR format in CLAUDE.md and emit the <pr-body>…</pr-body> marker.';
+/** Nudge sent instead when the session's latest PR attempt was refused by the test gate. */
+const TEST_GATE_REFUSED_NUDGE_MESSAGE =
+  'Your PR was refused because no test_request run has passed on the current tree. Do not re-emit the <pr-body> marker yet. Follow "Investigate a Failing Test First" in CLAUDE.md: investigate the test failures as your own, fix them and push, request a new test_request run, and only re-emit <pr-body> once a run on the current tree passes.';
 
 /**
  * Periodic sweep that detects tasks stuck at "🔄 In Progress" in Notion with no
@@ -623,7 +627,9 @@ export class OrphanedTaskSweeper {
         latestSession,
         taskId,
         effectiveProjectId,
-        NO_PR_NUDGE_MESSAGE,
+        this.hasCurrentTestGateRefusal(latestSession)
+          ? TEST_GATE_REFUSED_NUDGE_MESSAGE
+          : NO_PR_NUDGE_MESSAGE,
       );
       return;
     }
@@ -679,6 +685,19 @@ export class OrphanedTaskSweeper {
   }
 
   /** Nudge a stalled idle session or surface it to the operator if nudges are exhausted. */
+  /** Latest PR attempt was refused by the test gate and no newer test run was requested since. */
+  private hasCurrentTestGateRefusal(session: Session): boolean {
+    const refusedAt = getLatestTestGateRefusalTs(session.session_id);
+    if (refusedAt === null) return false;
+    if (!session.project_id) return true;
+    const run = getLatestTestRequestRunForSession(
+      session.project_id,
+      session.session_id,
+    );
+    const requestedAt = run?.requested_at ?? run?.started_at ?? 0;
+    return requestedAt <= refusedAt;
+  }
+
   private async maybeNudgeIdleSession(
     session: Session,
     taskId: string,

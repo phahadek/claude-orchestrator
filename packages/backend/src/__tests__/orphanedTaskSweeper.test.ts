@@ -57,6 +57,7 @@ vi.mock('../audit/AuditLog.js', () => ({
   countNudgeEvents: vi.fn(() => 0),
   getLatestNudgeTimestamp: vi.fn(() => null),
   countNudgeEventsSince: vi.fn(() => 0),
+  getLatestTestGateRefusalTs: vi.fn(() => null),
 }));
 
 vi.mock('../config.js', () => ({
@@ -97,6 +98,7 @@ import {
   recordEvent,
   countNudgeEvents,
   getLatestNudgeTimestamp,
+  getLatestTestGateRefusalTs,
 } from '../audit/AuditLog.js';
 import { getAllProjects } from '../config.js';
 import { isUsageAdmitted } from '../orchestration/usageAdmission.js';
@@ -209,6 +211,7 @@ describe('OrphanedTaskSweeper', () => {
     vi.mocked(countNudgeEvents).mockReturnValue(0);
     vi.mocked(getSessionLastActivityMs).mockReturnValue(null);
     vi.mocked(getLatestNudgeTimestamp).mockReturnValue(null);
+    vi.mocked(getLatestTestGateRefusalTs).mockReset().mockReturnValue(null);
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(upsertPullRequest).mockClear();
     vi.mocked(getOpsJournalEntry).mockReset().mockReturnValue(undefined);
@@ -695,6 +698,74 @@ describe('OrphanedTaskSweeper', () => {
   });
 
   // ── Nudge path (idle sessions) ────────────────────────────────────────────
+
+  describe('test-gate refusal-aware nudge', () => {
+    async function runNudge(
+      refusalTs: number | null,
+      runRequestedAt: number | null,
+    ) {
+      const backend = makeBackend([makeTask('notion:abc')]);
+      vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+        makeSession(
+          'idle',
+          30 * 60 * 1000,
+          Date.now() - 10 * 60 * 1000,
+        ) as ReturnType<typeof getLatestCodeSessionByNotionTaskId>,
+      );
+      vi.mocked(getLatestTestGateRefusalTs).mockReturnValue(refusalTs);
+      vi.mocked(getLatestTestRequestRunForSession).mockReturnValue(
+        runRequestedAt === null
+          ? undefined
+          : ({
+              state: 'failed',
+              requested_at: runRequestedAt,
+              started_at: runRequestedAt,
+            } as ReturnType<typeof getLatestTestRequestRunForSession>),
+      );
+      const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
+      const sweeper = new OrphanedTaskSweeper(broadcast, {
+        listProjects: () => [
+          { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+        ],
+        resolveBackend: () => backend,
+        enqueueFeedback,
+      });
+      await sweeper.sweepOnce();
+      return enqueueFeedback;
+    }
+
+    it('sends the refusal-aware message when the refusal is current', async () => {
+      const now = Date.now();
+      const enqueueFeedback = await runNudge(now - 60_000, now - 120_000);
+      expect(enqueueFeedback).toHaveBeenCalledWith(
+        'sess-1',
+        'system:nudge',
+        expect.stringContaining('Investigate a Failing Test First'),
+      );
+      const msg = enqueueFeedback.mock.calls[0][2] as string;
+      expect(msg).toContain('Do not re-emit the <pr-body>');
+      expect(msg).not.toContain('Please open a draft PR now');
+    });
+
+    it('sends the default message when there is no test-gate refusal', async () => {
+      const enqueueFeedback = await runNudge(null, null);
+      expect(enqueueFeedback).toHaveBeenCalledWith(
+        'sess-1',
+        'system:nudge',
+        expect.stringContaining('Please open a draft PR now'),
+      );
+    });
+
+    it('sends the default message when a newer test run supersedes the refusal', async () => {
+      const now = Date.now();
+      const enqueueFeedback = await runNudge(now - 60_000, now - 30_000);
+      expect(enqueueFeedback).toHaveBeenCalledWith(
+        'sess-1',
+        'system:nudge',
+        expect.stringContaining('Please open a draft PR now'),
+      );
+    });
+  });
 
   it('nudges a stalled idle session instead of reverting', async () => {
     const backend = makeBackend([makeTask('notion:abc')]);
