@@ -674,11 +674,21 @@ export class PreReviewPipeline {
 
           const scopedEnv = buildScopedEnv(ctx.worktreePath, config.cache_env);
           const normalized = config.analyze.map(normalizeAnalyzeCommand);
-          const diffPaths = await getChangedFiles(
-            ctx.worktreePath,
-            getPRByNumber(ctx.prNumber, ctx.repo)?.base_branch ??
-              ctx.project.baseBranch,
-          );
+          let diffPaths: string[];
+          try {
+            diffPaths = await getChangedFiles(
+              ctx.worktreePath,
+              getPRByNumber(ctx.prNumber, ctx.repo)?.base_branch ??
+                ctx.project.baseBranch,
+            );
+          } catch (err) {
+            const reason = `analyze not run: changed files unavailable (${err instanceof Error ? err.message : String(err)})`;
+            return {
+              summary: reason,
+              isToolInfraFailure: true,
+              toolFailureReason: reason,
+            };
+          }
 
           const outputParts: string[] = [];
           let allPassed = true;

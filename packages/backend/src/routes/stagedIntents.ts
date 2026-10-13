@@ -6323,11 +6323,20 @@ async function resolveTestRequestExecutionInputs(intent: StagedIntent): Promise<
     };
   }
   const pr = getPRBySessionId(intent.sessionId);
-  const { commands, runKind } = await resolveTestCommandsForDiff(
-    config,
-    worktreePath,
-    pr?.base_branch ?? project.baseBranch,
-  );
+  let resolved: Awaited<ReturnType<typeof resolveTestCommandsForDiff>>;
+  try {
+    resolved = await resolveTestCommandsForDiff(
+      config,
+      worktreePath,
+      pr?.base_branch ?? project.baseBranch,
+    );
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `could not resolve the session's changed files: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  const { commands, runKind } = resolved;
   return {
     ok: true,
     worktreePath,

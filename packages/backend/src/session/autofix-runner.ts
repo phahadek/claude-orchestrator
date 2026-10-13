@@ -120,7 +120,7 @@ function spawnCmd(
   cmd: string,
   args: string[],
   opts: { cwd: string; env?: NodeJS.ProcessEnv },
-): Promise<{ exitCode: number; stdout: string }> {
+): Promise<{ exitCode: number; stdout: string; spawnError?: Error }> {
   return new Promise((resolve) => {
     const proc = spawn(cmd, args, { cwd: opts.cwd, env: opts.env });
     let out = '';
@@ -130,7 +130,9 @@ function spawnCmd(
     proc.stderr?.on('data', (d: Buffer) => {
       out += d.toString();
     });
-    proc.on('error', (err) => resolve({ exitCode: 1, stdout: String(err) }));
+    proc.on('error', (err) =>
+      resolve({ exitCode: 1, stdout: String(err), spawnError: err }),
+    );
     proc.on('close', (code) => resolve({ exitCode: code ?? 1, stdout: out }));
   });
 }
@@ -256,11 +258,16 @@ async function resolveBaseBranchRef(
 ): Promise<string> {
   if (baseBranch.includes('/')) return baseBranch;
   const remoteRef = `origin/${baseBranch}`;
-  const { exitCode, stdout } = await spawnCmd(
+  const { exitCode, stdout, spawnError } = await spawnCmd(
     'git',
     ['show-ref', '--verify', `refs/remotes/${remoteRef}`],
     { cwd: worktreePath },
   );
+  if (spawnError) {
+    throw new Error(
+      `cannot resolve base ref in ${worktreePath}: ${spawnError.message}`,
+    );
+  }
   return exitCode === 0 && stdout.trim() ? remoteRef : baseBranch;
 }
 
@@ -269,11 +276,21 @@ export async function getChangedFiles(
   baseBranch: string,
 ): Promise<string[]> {
   const resolvedBase = await resolveBaseBranchRef(worktreePath, baseBranch);
-  const { stdout } = await spawnCmd(
+  const { exitCode, stdout, spawnError } = await spawnCmd(
     'git',
     ['diff', '--name-only', `${resolvedBase}...HEAD`],
     { cwd: worktreePath },
   );
+  if (spawnError) {
+    throw new Error(
+      `cannot list changed files in ${worktreePath}: ${spawnError.message}`,
+    );
+  }
+  if (exitCode !== 0) {
+    throw new Error(
+      `git diff ${resolvedBase}...HEAD exited ${exitCode} in ${worktreePath}: ${stdout.trim().slice(0, 500)}`,
+    );
+  }
   // A three-dot diff can list paths whose deletion is already committed in HEAD
   // (e.g. inherited from a merged/rebased dev where a sibling PR removed the
   // file). Such a path is absent from the worktree and has nothing to autofix
@@ -386,7 +403,17 @@ export async function runAutofix(
   // Resolve the PR's changed files upfront: used both to expand {{changed_files}}
   // placeholders and to scope what the autofix commit is allowed to stage, so a
   // whole-repo formatter can't sweep unrelated pre-existing debt into the commit.
-  const changedFiles = await getChangedFiles(worktreePath, baseBranch);
+  let changedFiles: string[];
+  try {
+    changedFiles = await getChangedFiles(worktreePath, baseBranch);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    log(`changed files unavailable — autofix not run: ${reason}`);
+    return {
+      success: false,
+      summary: `autofix not run: changed files unavailable (${reason})`,
+    };
+  }
 
   // Snapshot what was already dirty before the autofix commands run, so any
   // out-of-scope modification the formatter makes can be told apart from
