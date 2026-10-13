@@ -96,6 +96,7 @@ import {
   listSettledPassedTestRequestRunsForCoverage,
   insertCoverageTestRequestRun,
   getTestRequestRunById,
+  clearTaskExecuteNow,
 } from '../db/queries';
 import { db } from '../db/db';
 import type {
@@ -1131,6 +1132,19 @@ export function admitTestRequest(
   queuedRunMeta.set(runId, { taskId, requestedAt });
   const permitPromise = semaphore
     .acquire(runId, toWaiterKey(spec.projectId, rank, requestedAt))
+    .then((release) => {
+      if (taskId) {
+        try {
+          clearTaskExecuteNow(taskId, 'consumed', Date.now());
+        } catch (err) {
+          logger.warn(
+            { err, runId },
+            '[testRequestLane] execute-now consume failed',
+          );
+        }
+      }
+      return release;
+    })
     .finally(() => queuedRunMeta.delete(runId));
   const admission = () => {
     const queuedPosition = semaphore.positionOf(runId);

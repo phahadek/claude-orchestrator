@@ -93,6 +93,7 @@ import {
   isRunFailureBreadthAttributable,
   resolveBreadthOwnTree,
   updateTestRequestRunState,
+  clearTaskExecuteNow,
 } from '../db/queries';
 import { emitTaskUpdated } from '../routes/tasks';
 import { logger } from '../logger';
@@ -2341,6 +2342,12 @@ export class PRMergeWatcher extends EventEmitter {
     pr: PullRequestRow,
     reason: 'pr_merged' | 'pr_closed' | 'head_moved',
   ): void {
+    if (reason !== 'head_moved') {
+      const taskId =
+        pr.task_id ??
+        (pr.session_id ? getSession(pr.session_id)?.task_id : null);
+      if (taskId) clearTaskExecuteNow(taskId, reason);
+    }
     const worktreePath = pr.session_id
       ? getSession(pr.session_id)?.worktree_path
       : null;

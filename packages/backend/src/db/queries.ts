@@ -8005,11 +8005,36 @@ export function listTaskExecutionFlagsForProject(
     .all(projectId) as TaskExecutionFlagsRow[];
 }
 
+/** Closed set of reasons the system sets Execute Now for; a stored value outside it still ranks as Execute Now. */
+export type ExecuteNowReason = 'merge_conflict';
+
+export type ExecuteNowClearCause =
+  | 'consumed'
+  | 'pr_merged'
+  | 'pr_closed'
+  | 'expired';
+
+export const EXECUTE_NOW_TTL_MS = 6 * 60 * 60 * 1000;
+
+export function isExecuteNowExpired(
+  setAt: number | null,
+  now: number = Date.now(),
+): boolean {
+  return setAt !== null && now - setAt >= EXECUTE_NOW_TTL_MS;
+}
+
 export function setTaskExecuteNow(
   taskId: string,
   projectId: string,
-  reason: string,
+  reason: ExecuteNowReason,
 ): void {
+  recordEvent({
+    event_type: 'task_execute_now_set',
+    actor_type: 'system',
+    project_id: projectId,
+    task_id: taskId,
+    payload: { reason },
+  });
   db.prepare(
     `INSERT INTO task_execution_flags (task_id, project_id, execute_now_reason, execute_now_set_at)
      VALUES (@task_id, @project_id, @reason, @now)
@@ -8025,12 +8050,57 @@ export function setTaskExecuteNow(
   });
 }
 
-export function clearTaskExecuteNow(taskId: string): void {
+/**
+ * Clears a task's Execute Now flag and writes a `task_execute_now_cleared`
+ * audit row with the cause. No-op (no audit row) when the flag isn't set, or
+ * — for `onlySetAtOrBefore` — when it was (re)set after that instant.
+ */
+export function clearTaskExecuteNow(
+  taskId: string,
+  cause: ExecuteNowClearCause,
+  onlySetAtOrBefore?: number,
+): boolean {
+  const id = normalizeTaskId(taskId);
+  const flags = getTaskExecutionFlags(id);
+  if (!flags || flags.execute_now_set_at === null) return false;
+  if (
+    onlySetAtOrBefore !== undefined &&
+    flags.execute_now_set_at > onlySetAtOrBefore
+  ) {
+    return false;
+  }
   db.prepare(
     `UPDATE task_execution_flags
      SET execute_now_reason = NULL, execute_now_set_at = NULL
      WHERE task_id = ?`,
-  ).run(normalizeTaskId(taskId));
+  ).run(id);
+  recordEvent({
+    event_type: 'task_execute_now_cleared',
+    actor_type: 'system',
+    project_id: flags.project_id,
+    task_id: taskId,
+    payload: {
+      cause,
+      reason: flags.execute_now_reason,
+      set_at: flags.execute_now_set_at,
+    },
+  });
+  return true;
+}
+
+/** Clears every Execute Now flag older than the TTL with cause `expired`; returns how many were cleared. */
+export function sweepExpiredExecuteNow(now: number = Date.now()): number {
+  const rows = db
+    .prepare(
+      `SELECT task_id FROM task_execution_flags
+       WHERE execute_now_set_at IS NOT NULL AND execute_now_set_at <= ?`,
+    )
+    .all(now - EXECUTE_NOW_TTL_MS) as { task_id: string }[];
+  let cleared = 0;
+  for (const r of rows) {
+    if (clearTaskExecuteNow(r.task_id, 'expired')) cleared++;
+  }
+  return cleared;
 }
 
 // ─── ops_journal ─────────────────────────────────────────────────────────────

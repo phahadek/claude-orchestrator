@@ -1,5 +1,8 @@
 import type { NotionTask } from '../notion/types';
-import { listTaskExecutionFlagsForProject } from '../db/queries';
+import {
+  listTaskExecutionFlagsForProject,
+  isExecuteNowExpired,
+} from '../db/queries';
 import { normalizeTaskId } from '../tasks/taskId';
 
 export type ExecutionGroup = 'execute_now' | 'urgent' | 'blocker' | 'priority';
@@ -224,11 +227,13 @@ export function loadExecutionRanks(
   tasks: NotionTask[],
 ): Map<string, ExecutionRank> {
   const flags = new Map<string, RankInputFlags>();
+  const now = Date.now();
   for (const row of listTaskExecutionFlagsForProject(projectId)) {
+    const expired = isExecuteNowExpired(row.execute_now_set_at, now);
     flags.set(normalizeTaskId(row.task_id), {
       urgent: row.urgent === 1,
-      executeNowReason: row.execute_now_reason,
-      executeNowSetAt: row.execute_now_set_at,
+      executeNowReason: expired ? null : row.execute_now_reason,
+      executeNowSetAt: expired ? null : row.execute_now_set_at,
     });
   }
   const inputs: RankInputTask[] = tasks.map((t) => ({
