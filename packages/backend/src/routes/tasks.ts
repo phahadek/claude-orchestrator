@@ -13,6 +13,8 @@ import {
   deleteTaskCacheRow,
   getTaskRepoAssignment,
   setTaskRepoAssignment,
+  getTaskExecutionFlags,
+  setTaskUrgent,
   getPRByNotionTaskId,
   clearTerminalPRFlags,
   getMilestoneById,
@@ -466,6 +468,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     review,
     totalTokens,
     assignedRepo: getTaskRepoAssignment(row.task_id)?.repo ?? null,
+    urgent: getTaskExecutionFlags(row.task_id)?.urgent === 1,
     hasAwaitingDispositionIntent: hasAwaitingDispositionIntentForTask(
       row.task_id,
     ),
@@ -985,6 +988,36 @@ export function createTasksRouter(
     emitTaskUpdated(taskId);
 
     res.json({ ok: true, repo });
+  });
+
+  // ── POST /api/tasks/:taskId/urgent?projectId=<id> ──────────────────────────
+  router.post('/tasks/:taskId/urgent', (req: Request, res: Response) => {
+    const taskId = normalizeTaskId(String(req.params.taskId));
+    const projectId =
+      typeof req.query.projectId === 'string' ? req.query.projectId : null;
+    const urgent = (req.body as { urgent?: unknown } | undefined)?.urgent;
+
+    if (typeof urgent !== 'boolean') {
+      res.status(400).json({ error: 'urgent must be a boolean' });
+      return;
+    }
+    if (!projectId || !getProjectById(projectId)) {
+      res.status(404).json({ error: `Project '${projectId}' not found` });
+      return;
+    }
+
+    const previous = getTaskExecutionFlags(taskId)?.urgent === 1;
+    setTaskUrgent(taskId, projectId, urgent, 'human');
+    recordEvent({
+      event_type: 'task_urgent_changed',
+      actor_type: 'human',
+      project_id: projectId,
+      task_id: taskId,
+      payload: { urgent, previous },
+    });
+    emitTaskUpdated(taskId);
+
+    res.json({ ok: true, urgent });
   });
 
   // ── GET /api/tasks/:taskId/page?projectId=<id> ──────────────────────────────

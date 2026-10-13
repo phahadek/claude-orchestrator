@@ -48,6 +48,7 @@ import type {
   NewDeviceRow,
   SessionPauseInterval,
   TaskRepoAssignmentRow,
+  TaskExecutionFlagsRow,
   FeedbackInboxRow,
   TestRequestRunRow,
   TestRequestRunState,
@@ -7954,6 +7955,82 @@ export function getTaskRepoAssignment(
 
 export function deleteTaskRepoAssignment(taskId: string): void {
   db.prepare(`DELETE FROM task_repo_assignments WHERE task_id = ?`).run(taskId);
+}
+
+// ─── task_execution_flags ──────────────────────────────────────────────────────
+
+const EXECUTION_FLAGS_COLUMNS = `task_id, project_id, urgent, urgent_set_by, urgent_set_at,
+  execute_now_reason, execute_now_set_at`;
+
+export function setTaskUrgent(
+  taskId: string,
+  projectId: string,
+  urgent: boolean,
+  actor: string,
+): void {
+  db.prepare(
+    `INSERT INTO task_execution_flags (task_id, project_id, urgent, urgent_set_by, urgent_set_at)
+     VALUES (@task_id, @project_id, @urgent, @actor, @now)
+     ON CONFLICT(task_id) DO UPDATE SET
+       project_id = excluded.project_id,
+       urgent = excluded.urgent,
+       urgent_set_by = excluded.urgent_set_by,
+       urgent_set_at = excluded.urgent_set_at`,
+  ).run({
+    task_id: normalizeTaskId(taskId),
+    project_id: projectId,
+    urgent: urgent ? 1 : 0,
+    actor,
+    now: Date.now(),
+  });
+}
+
+export function getTaskExecutionFlags(
+  taskId: string,
+): TaskExecutionFlagsRow | undefined {
+  return db
+    .prepare(
+      `SELECT ${EXECUTION_FLAGS_COLUMNS} FROM task_execution_flags WHERE task_id = ?`,
+    )
+    .get(normalizeTaskId(taskId)) as TaskExecutionFlagsRow | undefined;
+}
+
+export function listTaskExecutionFlagsForProject(
+  projectId: string,
+): TaskExecutionFlagsRow[] {
+  return db
+    .prepare(
+      `SELECT ${EXECUTION_FLAGS_COLUMNS} FROM task_execution_flags WHERE project_id = ?`,
+    )
+    .all(projectId) as TaskExecutionFlagsRow[];
+}
+
+export function setTaskExecuteNow(
+  taskId: string,
+  projectId: string,
+  reason: string,
+): void {
+  db.prepare(
+    `INSERT INTO task_execution_flags (task_id, project_id, execute_now_reason, execute_now_set_at)
+     VALUES (@task_id, @project_id, @reason, @now)
+     ON CONFLICT(task_id) DO UPDATE SET
+       project_id = excluded.project_id,
+       execute_now_reason = excluded.execute_now_reason,
+       execute_now_set_at = excluded.execute_now_set_at`,
+  ).run({
+    task_id: normalizeTaskId(taskId),
+    project_id: projectId,
+    reason,
+    now: Date.now(),
+  });
+}
+
+export function clearTaskExecuteNow(taskId: string): void {
+  db.prepare(
+    `UPDATE task_execution_flags
+     SET execute_now_reason = NULL, execute_now_set_at = NULL
+     WHERE task_id = ?`,
+  ).run(normalizeTaskId(taskId));
 }
 
 // ─── ops_journal ─────────────────────────────────────────────────────────────
