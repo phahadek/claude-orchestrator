@@ -5196,9 +5196,7 @@ describe('rebindWorktreeContentHash — pre-test merge hash rebind', () => {
       }),
     );
 
-    expect(rebindWorktreeContentHash('proj-rebind', wt, 'pre', 'post')).toBe(
-      2,
-    );
+    expect(rebindWorktreeContentHash('proj-rebind', wt, 'pre', 'post')).toBe(2);
     expect(getTestRequestRunById(full.runId)?.content_hash).toBe('post');
     expect(getTestRequestRunById(scoped.runId)?.content_hash).toBe('post');
     expect(getTestRequestRunById(blocker.runId)?.content_hash).toBe(
