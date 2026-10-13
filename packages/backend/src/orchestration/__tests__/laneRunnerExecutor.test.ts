@@ -27,10 +27,6 @@ vi.mock('../../session/analyzeGating', async (importOriginal) => {
   };
 });
 
-vi.mock('../memoryAdmission', () => ({
-  hasTestRequestAdmission: vi.fn(() => true),
-}));
-
 vi.mock('../testSnapshot', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../testSnapshot')>();
   return { ...actual, packTestSnapshot: vi.fn() };

@@ -49,10 +49,6 @@ vi.mock('../../session/test-runner', () => ({
   runTestCommands: mockRunTestCommands,
 }));
 
-vi.mock('../../orchestration/memoryAdmission', () => ({
-  hasTestRequestAdmission: () => true,
-}));
-
 import { db } from '../../db/db';
 import {
   stageIntent,

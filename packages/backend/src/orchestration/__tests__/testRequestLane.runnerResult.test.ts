@@ -36,10 +36,6 @@ vi.mock('../../session/analyzeGating', async (importOriginal) => {
   };
 });
 
-vi.mock('../memoryAdmission', () => ({
-  hasTestRequestAdmission: vi.fn(() => true),
-}));
-
 import { db } from '../../db/db';
 import { insertProject } from '../../db/queries';
 import {

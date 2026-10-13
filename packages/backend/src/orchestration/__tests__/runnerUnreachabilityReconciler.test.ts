@@ -21,10 +21,6 @@ vi.mock('../../session/analyzeGating', () => ({
   computeWholeTreeContentHash: vi.fn(async () => mockTreeHash.value),
 }));
 
-vi.mock('../memoryAdmission', () => ({
-  hasTestRequestAdmission: vi.fn(() => true),
-}));
-
 import { db } from '../../db/db';
 import {
   insertProject,

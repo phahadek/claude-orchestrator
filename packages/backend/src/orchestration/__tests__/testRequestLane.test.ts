@@ -25,7 +25,7 @@ const {
   mockRunTestCommands: vi.fn(),
   mockCollectStructuredTestResult: vi.fn(() => null),
   mockClearReportFiles: vi.fn(),
-  mockHasAdmission: vi.fn(() => true),
+  mockHasAdmission: vi.fn(() => ({ allowed: false })),
   mockLoadOrchestratorConfig: vi.fn(() => ({ test_report_glob: '' })),
   // Default implementation is set inside the vi.mock('../../db/queries', ...)
   // factory below, once the real module is available — it delegates to the
@@ -79,11 +79,11 @@ vi.mock('../../session/analyzeGating', async (importOriginal) => {
   return { ...actual, computeWholeTreeContentHash: mockComputeHash };
 });
 
-// Host memory headroom is real-machine-dependent and irrelevant to most of
-// this suite (coalescing + crash recovery) — defaults to always-admit, but
-// individual tests can override mockHasAdmission to exercise the wait loop.
+// Host memory headroom is real-machine-dependent; the lane must not consult
+// it once a run holds a permit, so mockHeadroom refuses and tests assert the
+// run starts anyway.
 vi.mock('../memoryAdmission', () => ({
-  hasTestRequestAdmission: mockHasAdmission,
+  hasMemoryHeadroom: mockHasAdmission,
 }));
 
 // See mockIngestOffMainThread's own doc comment above for why only this one
@@ -101,7 +101,6 @@ vi.mock('../../db/queries', async (importOriginal) => {
 });
 
 import { db } from '../../db/db';
-import { logger } from '../../logger';
 import {
   runProjectTestRequest,
   admitTestRequest,
@@ -155,7 +154,7 @@ beforeEach(() => {
   mockCollectStructuredTestResult.mockReturnValue(null);
   mockClearReportFiles.mockReset();
   mockHasAdmission.mockReset();
-  mockHasAdmission.mockReturnValue(true);
+  mockHasAdmission.mockReturnValue({ allowed: false });
   mockLoadOrchestratorConfig.mockReset();
   mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '' });
   db.prepare('DELETE FROM test_run_results').run();
@@ -638,19 +637,33 @@ describe('runProjectTestRequest — coalescing', () => {
     expect(row.failure_reason).toBe('generic');
   });
 
-  it('captures requested_at before the admission wait resolves, not after', async () => {
+  it('captures requested_at at call time, before a queued run acquires its permit', async () => {
     vi.useFakeTimers();
     try {
-      // First admission check fails, forcing waitForMemoryAdmission's poll
-      // loop to sleep once before granting — requested_at must reflect the
-      // moment of the call, not the moment admission was eventually granted.
-      mockHasAdmission.mockReturnValueOnce(false).mockReturnValue(true);
-      mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+      typedSetSetting('test_request_max_concurrent', 1);
+      const resolvers: Array<(v: { passed: boolean; output: string }) => void> =
+        [];
+      mockRunTestCommands.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolvers.push(resolve);
+          }),
+      );
+
+      const holder = runProjectTestRequest(
+        baseSpec({ contentHash: 'hash-d-holder' }),
+      );
+      await vi.waitFor(() => expect(resolvers).toHaveLength(1));
 
       const before = Date.now();
       const run = runProjectTestRequest(baseSpec({ contentHash: 'hash-d' }));
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(resolvers).toHaveLength(1);
 
-      await vi.advanceTimersByTimeAsync(5_000);
+      resolvers[0]({ passed: true, output: 'ok' });
+      await holder;
+      await vi.waitFor(() => expect(resolvers).toHaveLength(2));
+      resolvers[1]({ passed: true, output: 'ok' });
       await run;
 
       const row = db
@@ -668,86 +681,56 @@ describe('runProjectTestRequest — coalescing', () => {
     }
   });
 
-  it("waitForMemoryAdmission checks peer occupancy, not the caller's own held permit — with capacity 2 and both permits held, the second run is admitted immediately instead of waiting out the deadline", async () => {
+  it('starts a run as soon as it holds a permit, with no timer advance, even when host memory headroom is refused', async () => {
     vi.useFakeTimers();
     try {
-      insertProject({
-        id: 'proj-admission-peer',
-        name: 'Admission Peer',
-        project_dir: '/tmp/admission-peer',
-        context_url: null,
-        github_repo: null,
-        task_source: 'notion',
-      });
-      typedSetSetting('test_request_max_concurrent', 2);
+      mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
 
-      // Admits when peer occupancy (inFlight passed to hasTestRequestAdmission)
-      // is below the limit, refuses at/above it — exactly the predicate's own
-      // contract. The bug passed inUse() (which includes the caller's own
-      // just-acquired permit) instead of inUse() - 1, so with two permits held
-      // this would see inFlight=2 and never admit within the poll loop.
-      mockHasAdmission.mockImplementation((inFlight: number) => inFlight < 2);
-
-      const resolvers: Array<(v: { passed: boolean; output: string }) => void> =
-        [];
-      mockRunTestCommands.mockImplementation(
-        () =>
-          new Promise((resolve) => {
-            resolvers.push(resolve);
-          }),
+      await runProjectTestRequest(
+        baseSpec({ contentHash: 'hash-no-admission-wait' }),
       );
 
-      const p1 = runProjectTestRequest(
-        baseSpec({
-          projectId: 'proj-admission-peer',
-          contentHash: 'admission-peer-a',
-          worktreePath: '/tmp/admission-peer',
-        }),
-      );
-      const p2 = runProjectTestRequest(
-        baseSpec({
-          projectId: 'proj-admission-peer',
-          contentHash: 'admission-peer-b',
-          worktreePath: '/tmp/admission-peer',
-        }),
-      );
-
-      // Both permits are held (capacity 2, two callers), yet both should
-      // clear admission without a single poll tick — advancing time by less
-      // than one ADMISSION_POLL_MS is enough for a correct implementation.
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.waitFor(() =>
-        expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
-      );
-
-      resolvers.forEach((resolve) => resolve({ passed: true, output: 'ok' }));
-      await Promise.all([p1, p2]);
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+      const row = db
+        .prepare(
+          `SELECT started_at FROM test_request_runs WHERE content_hash = ?`,
+        )
+        .get('hash-no-admission-wait') as { started_at: number | null };
+      expect(row.started_at).not.toBeNull();
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('still blocks and logs the exhaustion warning when host headroom stays below threshold — the memory half of the admission predicate is preserved', async () => {
-    vi.useFakeTimers();
-    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
-    try {
-      mockHasAdmission.mockReturnValue(false);
-      mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+  it('with capacity 2 and two runs in flight, a third run starts as soon as one releases and records concurrent_run_count 1', async () => {
+    typedSetSetting('test_request_max_concurrent', 2);
+    const resolvers: Array<(v: { passed: boolean; output: string }) => void> =
+      [];
+    mockRunTestCommands.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
 
-      const run = runProjectTestRequest(
-        baseSpec({ contentHash: 'hash-admission-exhausted' }),
-      );
+    const p1 = runProjectTestRequest(baseSpec({ contentHash: 'cap-a' }));
+    const p2 = runProjectTestRequest(baseSpec({ contentHash: 'cap-b' }));
+    const p3 = runProjectTestRequest(baseSpec({ contentHash: 'cap-c' }));
+    await vi.waitFor(() => expect(resolvers).toHaveLength(2));
 
-      await vi.advanceTimersByTimeAsync(5 * 60_000 + 1_000);
-      await run;
+    resolvers[0]({ passed: true, output: 'ok' });
+    await vi.waitFor(() => expect(resolvers).toHaveLength(3));
 
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('memory admission wait exhausted'),
-      );
-    } finally {
-      warnSpy.mockRestore();
-      vi.useRealTimers();
-    }
+    resolvers[1]({ passed: true, output: 'ok' });
+    resolvers[2]({ passed: true, output: 'ok' });
+    await Promise.all([p1, p2, p3]);
+
+    const row = db
+      .prepare(
+        `SELECT concurrent_run_count FROM test_request_runs WHERE content_hash = 'cap-c'`,
+      )
+      .get() as { concurrent_run_count: number };
+    expect(row.concurrent_run_count).toBe(1);
   });
 
   it('distinguishes timeout, oom-kill, and generic failure sub-reasons', async () => {

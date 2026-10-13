@@ -45,7 +45,6 @@ import {
   validateRunnerResultPackage,
   type RunnerResultPackage,
 } from './runnerResultPackage';
-import { hasTestRequestAdmission } from './memoryAdmission';
 import { computeWholeTreeContentHash } from '../session/analyzeGating';
 import {
   loadOrchestratorConfig,
@@ -684,29 +683,6 @@ function admitFromCoverageWait(
   };
 }
 
-const ADMISSION_POLL_MS = 5_000;
-const ADMISSION_MAX_WAIT_MS = 5 * 60_000;
-
-async function waitForMemoryAdmission(
-  projectId: string,
-  globalLimit: number,
-): Promise<void> {
-  const deadline = Date.now() + ADMISSION_MAX_WAIT_MS;
-  const semaphore = getGlobalTestRunSemaphore();
-  while (Date.now() < deadline) {
-    // inUse() includes the permit this call itself already holds — subtract
-    // it so the check reflects peer occupancy (host-wide, across every
-    // project), matching hasTestRequestAdmission's documented "before
-    // admitting the caller's own request" contract (and how
-    // concurrentRunCount is computed a few lines below in the caller).
-    if (hasTestRequestAdmission(semaphore.inUse() - 1, globalLimit)) return;
-    await new Promise((resolve) => setTimeout(resolve, ADMISSION_POLL_MS));
-  }
-  logger.warn(
-    `[testRequestLane] memory admission wait exhausted for project ${projectId} — proceeding anyway`,
-  );
-}
-
 /**
  * Admits a test.request into the lane, synchronously — before the run has
  * even started, let alone finished — reporting whether it's running or
@@ -1328,7 +1304,6 @@ async function executeTestRequestRun(
     }
     throw err;
   }
-  await waitForMemoryAdmission(spec.projectId, getGlobalTestRunLimit());
 
   const semaphore = getGlobalTestRunSemaphore();
   const startedAt = Date.now();
