@@ -109,6 +109,38 @@ describe('reattributionService', () => {
     expect(filterMock).toHaveBeenCalledTimes(1);
   });
 
+  it('excludes terminal and missing-session runs but keeps idle ones, reporting evaluated/woken', async () => {
+    for (const [sid, status] of [
+      ['s-idle', 'idle'],
+      ['s-done', 'done'],
+      ['s-err', 'error'],
+      ['s-kill', 'killed'],
+    ] as const) {
+      addSession(sid);
+      db.prepare(`UPDATE sessions SET status = ? WHERE session_id = ?`).run(
+        status,
+        sid,
+      );
+      addWaitingRun(`r-${sid}`, sid);
+    }
+    db.pragma('foreign_keys = OFF');
+    addWaitingRun('r-orphan', 'no-such-session');
+    db.pragma('foreign_keys = ON');
+
+    expect(listAwaitingDispositionRuns().map((r) => r.id)).toEqual([
+      'r-s-idle',
+    ]);
+    expect(
+      listAwaitingDispositionRuns({ failingTestIds: ['t1'] }),
+    ).toBeDefined();
+
+    const res = await sweepConfirmedWaiting(null);
+    expect(res).toEqual({ items_processed: 1, evaluated: 1 });
+    expect(getTestRequestRunById('r-s-idle')?.state).toBe('passed');
+    expect(listUndeliveredInboxItems('s-idle')).toHaveLength(1);
+    expect(getTestRequestRunById('r-s-done')?.state).toBe('failed');
+  });
+
   it('leaves the wake durably in the inbox when delivery crashes, with no duplicate on re-evaluation', async () => {
     addWaitingRun('r1', 's1');
     const sink = {
