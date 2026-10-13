@@ -29,6 +29,7 @@ import {
   markReviewerRequested,
   getAnalyzeResult,
   getLatestTestRequestRun,
+  setConflictNudgeSha,
 } from '../db/queries';
 import type { GitHubClient, PRReviewDecision } from './GitHubClient';
 import { GitHubApiError, GitHubRateLimitError } from './types';
@@ -233,6 +234,7 @@ export class AutoMerger {
         // PR's head_branch rather than reopening the dead one — see
         // relaunchFixerForPR's own doc comment.
         if (!this.sessions) continue;
+        if (pr.head_sha && pr.head_sha === pr.conflict_nudge_sha) continue;
         const prompt = formatMergeConflictFeedback({
           branchName: pr.head_branch,
           baseBranch: pr.base_branch ?? 'dev',
@@ -251,6 +253,9 @@ export class AutoMerger {
             })`,
           );
           continue;
+        }
+        if (pr.head_sha) {
+          setConflictNudgeSha(pr.pr_number, pr.repo, pr.head_sha);
         }
         recordEvent({
           event_type: 'conflict_nudge_sent',

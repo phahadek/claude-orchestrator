@@ -141,6 +141,7 @@ import {
 } from './routes/stagedIntents';
 import {
   setTestRequestLaneBroadcast,
+  setTestRequestLaneSessionManager,
   sweepTestRunResultsExtraction,
   EXTRACTION_SWEEP_DEFAULT_CAP,
 } from './orchestration/testRequestLane';
@@ -470,6 +471,7 @@ setEnrollmentBroadcast(broadcast);
 setStagedIntentBroadcast(broadcast);
 // Wire broadcast into the test.request lane (for test_request_run_status WS messages)
 setTestRequestLaneBroadcast(broadcast);
+setTestRequestLaneSessionManager(sessionManager);
 
 // Scheduler: constructed once, broadcast wired in, exposed to diagnostics route
 const scheduler = new Scheduler();
