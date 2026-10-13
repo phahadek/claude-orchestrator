@@ -2,7 +2,7 @@ import type { NotionTask } from '../notion/types';
 import { listTaskExecutionFlagsForProject } from '../db/queries';
 import { normalizeTaskId } from '../tasks/taskId';
 
-export type ExecutionGroup = 'execute_now' | 'urgent' | 'blocker' | 'priority';
+type ExecutionGroup = 'execute_now' | 'urgent' | 'blocker' | 'priority';
 export type AssignedPriority = 'high' | 'medium' | 'low' | null;
 
 export interface RankInputTask {
