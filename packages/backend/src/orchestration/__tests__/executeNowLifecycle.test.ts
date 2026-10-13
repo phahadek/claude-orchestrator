@@ -81,9 +81,9 @@ describe('Execute Now set', () => {
     );
     expect(
       (
-        db
-          .prepare(`SELECT COUNT(*) AS n FROM task_execution_flags`)
-          .get() as { n: number }
+        db.prepare(`SELECT COUNT(*) AS n FROM task_execution_flags`).get() as {
+          n: number;
+        }
       ).n,
     ).toBe(1);
     const rows = auditRows('task_execute_now_set');
@@ -130,14 +130,17 @@ describe('Execute Now consume at lane grant', () => {
 });
 
 describe('PR merged / closed clearing', () => {
-  it.each(['pr_merged', 'pr_closed'] as const)('clears with cause %s', (cause) => {
-    setTaskExecuteNow('t4', 'p4', 'merge_conflict');
-    expect(clearTaskExecuteNow('t4', cause)).toBe(true);
-    expect(getTaskExecutionFlags('t4')!.execute_now_set_at).toBeNull();
-    expect(JSON.parse(auditRows('task_execute_now_cleared')[0].payload).cause).toBe(
-      cause,
-    );
-  });
+  it.each(['pr_merged', 'pr_closed'] as const)(
+    'clears with cause %s',
+    (cause) => {
+      setTaskExecuteNow('t4', 'p4', 'merge_conflict');
+      expect(clearTaskExecuteNow('t4', cause)).toBe(true);
+      expect(getTaskExecutionFlags('t4')!.execute_now_set_at).toBeNull();
+      expect(
+        JSON.parse(auditRows('task_execute_now_cleared')[0].payload).cause,
+      ).toBe(cause);
+    },
+  );
 });
 
 describe('Execute Now TTL', () => {
@@ -159,14 +162,14 @@ describe('Execute Now TTL', () => {
       `UPDATE task_execution_flags SET execute_now_set_at = ? WHERE task_id = 'notion:t5'`,
     ).run(Date.now() - EXECUTE_NOW_TTL_MS - 1000);
 
-    expect(loadExecutionRanks('p5', [task('t5')]).get('notion:t5')?.group).not.toBe(
-      'execute_now',
-    );
+    expect(
+      loadExecutionRanks('p5', [task('t5')]).get('notion:t5')?.group,
+    ).not.toBe('execute_now');
     expect(sweepExpiredExecuteNow()).toBe(1);
     expect(getTaskExecutionFlags('t5')!.execute_now_set_at).toBeNull();
-    expect(JSON.parse(auditRows('task_execute_now_cleared')[0].payload).cause).toBe(
-      'expired',
-    );
+    expect(
+      JSON.parse(auditRows('task_execute_now_cleared')[0].payload).cause,
+    ).toBe('expired');
   });
 });
 
