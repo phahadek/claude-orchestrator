@@ -106,8 +106,9 @@ describe('UrgentToggle', () => {
     await waitFor(() =>
       expect(screen.getByTestId('urgent-toggle').title).toContain('boom'),
     );
-    expect((screen.getByTestId('urgent-toggle') as HTMLButtonElement).disabled)
-      .toBe(false);
+    expect(
+      (screen.getByTestId('urgent-toggle') as HTMLButtonElement).disabled,
+    ).toBe(false);
   });
 
   it('is absent for Backlog, non-Code and Done tasks, present for Ready and In Review Code', () => {
