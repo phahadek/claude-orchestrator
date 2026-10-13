@@ -43,6 +43,7 @@ vi.mock('../../db/queries.js', () =>
     resetTaskCrashCount: vi.fn(),
     getTaskRepoAssignment: vi.fn().mockReturnValue(undefined),
     isNoOpSuppressed: vi.fn().mockReturnValue(false),
+    listTaskExecutionFlagsForProject: vi.fn().mockReturnValue([]),
   }),
 );
 

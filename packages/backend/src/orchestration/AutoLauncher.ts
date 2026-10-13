@@ -37,6 +37,9 @@ import {
   parseThresholdPercent,
 } from './usageAdmission';
 import { probeBranchLocally, deriveBranchSlug } from '../session/branchModel';
+import { normalizeTaskId } from '../tasks/taskId';
+import { compareExecutionRank, loadExecutionRanks } from './executionPriority';
+import type { ExecutionRank } from './executionPriority';
 
 const READY_STATUS = '🗂️ Ready';
 const DONE_STATUS = '✅ Done';
@@ -46,6 +49,30 @@ const FETCH_TIMEOUT_MS = 30_000;
 const PROJECT_CONCURRENCY = 5;
 const UPDATE_CONCURRENCY = 3;
 const LAUNCH_CONCURRENCY = 3;
+
+/** A launch candidate, ranked within its project and ready for the grant loop. */
+interface RankedCandidate {
+  resolved: ResolvedTask;
+  milestoneId: string | null;
+  taskKind: 'milestone' | 'non_milestone';
+}
+
+/** Phase-one output for one project: its ranked candidate queue. */
+interface PreparedProject {
+  project: ProjectConfig;
+  candidates: RankedCandidate[];
+  readyTaskIds: string[];
+}
+
+const FALLBACK_RANK: ExecutionRank = {
+  group: 'priority',
+  urgent: false,
+  urgentInherited: false,
+  urgentVia: [],
+  blocksCount: 0,
+  priority: null,
+  executeNowSetAt: null,
+};
 
 /** Result of an admission-gate check — allowed, or blocked with a uniform reason tag. */
 interface AdmissionCheckResult {
@@ -110,6 +137,8 @@ export class AutoLauncher {
    * counts toward the sustained-block signal (edge-triggered, not per-tick).
    */
   private consecutiveStallTicks = 0;
+  /** Last project served a launch slot; in-memory, reset on boot. */
+  private lastServedProjectId: string | null = null;
   /** Non-null while a sustained admission block is active — the onset payload, reused for REST reconciliation. */
   private stallState: AdmissionStallState | null = null;
   /** Consecutive blocked ticks required before raising admission_stalled. */
@@ -301,37 +330,29 @@ export class AutoLauncher {
     try {
       const listProjects = this.options.listProjects ?? getAllProjects;
       const projects = listProjects().filter((p) => p.autoLaunchEnabled);
-      const projectResults = await runWithConcurrency(
+      const prepared = await runWithConcurrency(
         projects,
         PROJECT_CONCURRENCY,
         (project) =>
-          this.processProject(project).catch((err) => {
+          this.prepareProject(project).catch((err) => {
             logger.error(`[AutoLauncher] project ${project.id} failed:`, err);
             return {
-              eligible: 0,
-              launched: 0,
-              skipped: 0,
+              project,
+              candidates: [],
               readyTaskIds: [] as string[],
-              blockReason: undefined as AdmissionBlockReason | undefined,
-              blockDetail: undefined as Record<string, unknown> | undefined,
-            };
+            } as PreparedProject;
           }),
       );
       const newReadyTaskIds = new Set<string>();
-      let blockReason: AdmissionBlockReason | undefined;
-      let blockDetail: Record<string, unknown> | undefined;
-      for (const counts of projectResults) {
-        eligibleCount += counts.eligible;
-        launchedCount += counts.launched;
-        skippedCount += counts.skipped;
-        for (const id of counts.readyTaskIds) {
-          newReadyTaskIds.add(id);
-        }
-        if (counts.blockReason) {
-          blockReason = counts.blockReason;
-          blockDetail = counts.blockDetail;
-        }
+      for (const p of prepared) {
+        for (const id of p.readyTaskIds) newReadyTaskIds.add(id);
       }
+      const grant = await this.grantRoundRobin(prepared);
+      eligibleCount = grant.eligible;
+      launchedCount = grant.launched;
+      skippedCount = grant.eligible - grant.launched;
+      const blockReason = grant.blockReason;
+      const blockDetail = grant.blockDetail;
       this.lastPollReadyTaskIds = newReadyTaskIds;
       aggBlockReason = blockReason;
       this.evaluateAdmissionStall(
@@ -354,19 +375,19 @@ export class AutoLauncher {
     };
   }
 
-  private async processProject(project: ProjectConfig): Promise<{
-    eligible: number;
-    launched: number;
-    skipped: number;
-    readyTaskIds: string[];
-    blockReason?: AdmissionBlockReason;
-    blockDetail?: Record<string, unknown>;
-  }> {
+  private async prepareProject(
+    project: ProjectConfig,
+  ): Promise<PreparedProject> {
+    const empty = (): PreparedProject => ({
+      project,
+      candidates: [],
+      readyTaskIds: [],
+    });
     const resolveBackend = this.options.resolveBackend ?? getTaskBackend;
     const backend = resolveBackend(project.id);
 
     if (backend.type === 'yaml') {
-      return { eligible: 0, launched: 0, skipped: 0, readyTaskIds: [] };
+      return empty();
     }
 
     let milestoneId: string | null = null;
@@ -376,7 +397,7 @@ export class AutoLauncher {
         logger.warn(
           `[AutoLauncher] project ${project.id}: no milestone configured — skipping`,
         );
-        return { eligible: 0, launched: 0, skipped: 0, readyTaskIds: [] };
+        return empty();
       }
     }
 
@@ -483,51 +504,142 @@ export class AutoLauncher {
       this.maybeClearStaleReadyTransitionPauses(resolved.task.id);
     }
 
-    const candidates = allTasks.filter((t) => this.isLaunchCandidate(t));
-    if (candidates.length === 0)
-      return { eligible: 0, launched: 0, skipped: 0, readyTaskIds };
-
-    // Bounded concurrency so a launch burst (worktree add, git fetch, MCP-config
-    // and system-prompt writes, claude process spawn) doesn't serialise the
-    // whole tick behind its own I/O — mirrors the catch-up pass's
-    // UPDATE_CONCURRENCY pattern above. hasCapacity() is re-checked per
-    // candidate so the cap is still respected once in-flight launches land;
-    // capacityExhausted short-circuits remaining workers once it flips.
-    let capacityExhausted = false;
-    let blockReason: AdmissionBlockReason | undefined;
-    let blockDetail: Record<string, unknown> | undefined;
-    const launchResults = await runWithConcurrency(
-      candidates,
-      LAUNCH_CONCURRENCY,
-      async (candidate) => {
-        if (capacityExhausted) return false;
-        const capacity = this.hasCapacity();
-        if (!capacity.allowed) {
-          capacityExhausted = true;
-          blockReason = capacity.reason;
-          blockDetail = capacity.detail;
-          return false;
-        }
-        // Non-milestone tasks have no milestoneId — they branch off dev directly.
-        const isNonMilestone = nonMilestoneTasks.includes(candidate);
-        return this.launchTask(
-          project,
-          candidate,
-          isNonMilestone ? null : milestoneId,
-          isNonMilestone ? 'non_milestone' : 'milestone',
-        );
-      },
+    // Each board is ranked from its own dependency graph; the two ranked lists
+    // are merged into one candidate list by the single comparator.
+    // Non-milestone tasks have no milestoneId — they branch off dev directly.
+    const rankBoard = (
+      tasks: ResolvedTask[],
+      boardMilestoneId: string | null,
+      taskKind: 'milestone' | 'non_milestone',
+    ) => {
+      const ranks = loadExecutionRanks(
+        project.id,
+        tasks.map((r) => r.task),
+      );
+      return tasks
+        .filter((t) => this.isLaunchCandidate(t))
+        .map((resolved) => ({
+          resolved,
+          milestoneId: boardMilestoneId,
+          taskKind,
+          rank: ranks.get(normalizeTaskId(resolved.task.id)) ?? FALLBACK_RANK,
+          tieBreak: [
+            resolved.task.createdAt ?? Infinity,
+            normalizeTaskId(resolved.task.id),
+          ] as Array<number | string>,
+        }));
+    };
+    const ranked = [
+      ...rankBoard(milestoneTasks, milestoneId, 'milestone'),
+      ...rankBoard(nonMilestoneTasks, null, 'non_milestone'),
+    ];
+    ranked.sort((a, b) =>
+      compareExecutionRank(
+        { ...a.rank, tieBreak: a.tieBreak },
+        { ...b.rank, tieBreak: b.tieBreak },
+      ),
     );
-    const launched = launchResults.filter(Boolean).length;
 
     return {
-      eligible: candidates.length,
-      launched,
-      skipped: candidates.length - launched,
+      project,
+      candidates: ranked.map(({ resolved, milestoneId: m, taskKind }) => ({
+        resolved,
+        milestoneId: m,
+        taskKind,
+      })),
       readyTaskIds,
-      blockReason,
-      blockDetail,
     };
+  }
+
+  /**
+   * Phase two: hand out launch slots one per project per round, cycling in
+   * stable project-id order starting after the last-served project. Each turn
+   * takes the project's top-ranked remaining candidate; projects with none are
+   * passed over. Capacity is re-checked between batches of up to
+   * LAUNCH_CONCURRENCY grants.
+   */
+  private async grantRoundRobin(prepared: PreparedProject[]): Promise<{
+    eligible: number;
+    launched: number;
+    blockReason?: AdmissionBlockReason;
+    blockDetail?: Record<string, unknown>;
+  }> {
+    const queues = new Map<
+      string,
+      { project: ProjectConfig; queue: RankedCandidate[] }
+    >();
+    let eligible = 0;
+    for (const p of prepared) {
+      if (p.candidates.length === 0) continue;
+      eligible += p.candidates.length;
+      queues.set(p.project.id, {
+        project: p.project,
+        queue: [...p.candidates],
+      });
+    }
+    const orderedIds = [...queues.keys()].sort();
+
+    const nextGrant = (): {
+      project: ProjectConfig;
+      candidate: RankedCandidate;
+    } | null => {
+      const cursor = this.lastServedProjectId;
+      const after =
+        cursor === null ? 0 : orderedIds.findIndex((id) => id > cursor);
+      const first = after === -1 ? 0 : after;
+      for (let i = 0; i < orderedIds.length; i++) {
+        const id = orderedIds[(first + i) % orderedIds.length];
+        const entry = queues.get(id)!;
+        if (entry.queue.length === 0) continue;
+        this.lastServedProjectId = id;
+        return { project: entry.project, candidate: entry.queue.shift()! };
+      }
+      return null;
+    };
+
+    let launched = 0;
+    let blockReason: AdmissionBlockReason | undefined;
+    let blockDetail: Record<string, unknown> | undefined;
+    while ([...queues.values()].some((e) => e.queue.length > 0)) {
+      const capacity = this.hasCapacity();
+      if (!capacity.allowed) {
+        blockReason = capacity.reason;
+        blockDetail = capacity.detail;
+        break;
+      }
+      const headroom = Math.max(
+        1,
+        runtimeSettings.auto_launch_concurrency - this.countLiveCodeSessions(),
+      );
+      const batchSize = Math.min(LAUNCH_CONCURRENCY, headroom);
+      const batch: Array<{
+        project: ProjectConfig;
+        candidate: RankedCandidate;
+      }> = [];
+      for (let i = 0; i < batchSize; i++) {
+        const g = nextGrant();
+        if (!g) break;
+        batch.push(g);
+      }
+      const results = await Promise.all(
+        batch.map(({ project, candidate }) =>
+          this.launchTask(
+            project,
+            candidate.resolved,
+            candidate.milestoneId,
+            candidate.taskKind,
+          ).catch((err) => {
+            logger.error(
+              `[AutoLauncher] launch of ${candidate.resolved.task.id} failed:`,
+              err,
+            );
+            return false;
+          }),
+        ),
+      );
+      launched += results.filter(Boolean).length;
+    }
+    return { eligible, launched, blockReason, blockDetail };
   }
 
   /**
