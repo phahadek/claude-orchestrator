@@ -61,7 +61,10 @@ interface RankedCandidate {
 interface PreparedProject {
   project: ProjectConfig;
   candidates: RankedCandidate[];
+  /** IDs of tasks whose status is Ready this poll (not the whole board). */
   readyTaskIds: string[];
+  /** True when the board fetch failed; the project's previous Ready set is carried forward. */
+  fetchFailed?: boolean;
 }
 
 const FALLBACK_RANK: ExecutionRank = {
@@ -122,14 +125,14 @@ export class AutoLauncher {
     { count: number; nextRetryAt: number; lastError: string }
   >();
   /**
-   * Task IDs observed as Ready in the previous poll cycle. Null until the first
-   * poll completes — used to skip transition-based clearing on the very first
-   * cycle (no prior state available). After the first poll it is a Set of task
-   * IDs seen as Ready; tasks absent from this set that appear in a subsequent
-   * cycle are treated as external → Ready transitions and have stale pauses
-   * cleared (the loop-safety guard for launch_failed escalation).
+   * Per-project IDs of tasks whose status was Ready at the last successful
+   * fetch. A project with no entry has no prior state (first poll, or every
+   * poll so far failed) so transition clearing is skipped for it. A failed
+   * fetch keeps the project's previous entry. Ready tasks absent from the set
+   * are treated as external → Ready transitions and have stale pauses cleared
+   * (steady-state membership is the loop-safety guard for launch_failed).
    */
-  private lastPollReadyTaskIds: Set<string> | null = null;
+  private lastPollReadyTaskIds = new Map<string, Set<string>>();
   /**
    * Consecutive poll ticks where eligible candidates existed but zero were
    * admitted (a gate blocked every one). Reset to 0 the moment a tick admits
@@ -340,12 +343,18 @@ export class AutoLauncher {
               project,
               candidates: [],
               readyTaskIds: [] as string[],
+              fetchFailed: true,
             } as PreparedProject;
           }),
       );
-      const newReadyTaskIds = new Set<string>();
+      const newReadyTaskIds = new Map<string, Set<string>>();
       for (const p of prepared) {
-        for (const id of p.readyTaskIds) newReadyTaskIds.add(id);
+        if (p.fetchFailed) {
+          const prev = this.lastPollReadyTaskIds.get(p.project.id);
+          if (prev) newReadyTaskIds.set(p.project.id, prev);
+        } else {
+          newReadyTaskIds.set(p.project.id, new Set(p.readyTaskIds));
+        }
       }
       const grant = await this.grantRoundRobin(prepared);
       eligibleCount = grant.eligible;
@@ -491,7 +500,9 @@ export class AutoLauncher {
       },
     );
 
-    const readyTaskIds = allTasks.map((r) => r.task.id);
+    const readyTaskIds = allTasks
+      .filter((r) => r.task.status === READY_STATUS)
+      .map((r) => r.task.id);
 
     // Transition detection: clear stale pause state for tasks that just moved
     // into Ready from a non-Ready status. Only fires when the task was NOT in
@@ -501,7 +512,8 @@ export class AutoLauncher {
     // skipped to avoid wiping launch_failed escalations → relaunch loop.
     for (const resolved of allTasks) {
       await yieldToEventLoop();
-      this.maybeClearStaleReadyTransitionPauses(resolved.task.id);
+      if (resolved.task.status !== READY_STATUS) continue;
+      this.maybeClearStaleReadyTransitionPauses(project.id, resolved.task.id);
     }
 
     // Each board is ranked from its own dependency graph; the two ranked lists
@@ -652,9 +664,13 @@ export class AutoLauncher {
    * in the set are steady-state Ready and must NOT be cleared (loop-safety guard
    * for launch_failed escalation).
    */
-  private maybeClearStaleReadyTransitionPauses(taskId: string): void {
-    if (this.lastPollReadyTaskIds === null) return; // First cycle — no prior state
-    if (this.lastPollReadyTaskIds.has(taskId)) return; // Steady-state Ready
+  private maybeClearStaleReadyTransitionPauses(
+    projectId: string,
+    taskId: string,
+  ): void {
+    const prev = this.lastPollReadyTaskIds.get(projectId);
+    if (!prev) return; // No prior successful poll for this project
+    if (prev.has(taskId)) return; // Steady-state Ready
     const hadPause = getTaskPauseReason(taskId) != null;
     const hadPrPause = getPausedPrReasonForTask(taskId) != null;
     if (!hadPause && !hadPrPause) return;

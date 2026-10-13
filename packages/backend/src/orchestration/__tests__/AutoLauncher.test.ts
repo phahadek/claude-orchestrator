@@ -2173,8 +2173,10 @@ describe('AutoLauncher — ready-transition pause clearing', () => {
     // Simulate post-first-poll state: lastPollReadyTaskIds is a non-null Set
     // that does NOT contain task-transition (the task just transitioned to Ready)
     (
-      launcher as unknown as { lastPollReadyTaskIds: Set<string> }
-    ).lastPollReadyTaskIds = new Set(['some-other-task']);
+      launcher as unknown as {
+        lastPollReadyTaskIds: Map<string, Set<string>>;
+      }
+    ).lastPollReadyTaskIds = new Map([['proj-1', new Set(['some-other-task'])]]);
 
     await launcher.pollOnce();
 
@@ -2201,8 +2203,10 @@ describe('AutoLauncher — ready-transition pause clearing', () => {
 
     // Simulate post-first-poll state with task-steady already in the set
     (
-      launcher as unknown as { lastPollReadyTaskIds: Set<string> }
-    ).lastPollReadyTaskIds = new Set(['task-steady']);
+      launcher as unknown as {
+        lastPollReadyTaskIds: Map<string, Set<string>>;
+      }
+    ).lastPollReadyTaskIds = new Map([['proj-1', new Set(['task-steady'])]]);
 
     // Now simulate launch_failed escalation set while task is steady-state Ready
     vi.mocked(getTaskPauseReason).mockReturnValue(
@@ -2242,13 +2246,121 @@ describe('AutoLauncher — ready-transition pause clearing', () => {
 
     // Simulate post-first-poll state without task-pr-pause (it just transitioned to Ready)
     (
-      launcher as unknown as { lastPollReadyTaskIds: Set<string> }
-    ).lastPollReadyTaskIds = new Set(['some-other-task']);
+      launcher as unknown as {
+        lastPollReadyTaskIds: Map<string, Set<string>>;
+      }
+    ).lastPollReadyTaskIds = new Map([['proj-1', new Set(['some-other-task'])]]);
 
     await launcher.pollOnce();
 
     expect(clearPausedPrReasonForTask).toHaveBeenCalledWith('task-pr-pause');
     expect(sessionManager.start).toHaveBeenCalledOnce();
+  });
+
+  it('keeps pauses for a task that stays In Review across polls', async () => {
+    const task = makeResolvedTask({
+      id: 'task-review',
+      status: '👀 In Review',
+    });
+    vi.mocked(getTaskPauseReason).mockReturnValue(
+      'needs_attention' as unknown as ReturnType<typeof getTaskPauseReason>,
+    );
+    vi.mocked(getPausedPrReasonForTask).mockReturnValue(
+      'ci_failing' as unknown as ReturnType<typeof getPausedPrReasonForTask>,
+    );
+    const backend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
+    };
+    const launcher = new AutoLauncher(
+      makeSessionManager(0) as never,
+      undefined,
+      {
+        listProjects: () => [makeProject()],
+        resolveBackend: () => backend as never,
+        pollOnStart: false,
+      },
+    );
+    await launcher.pollOnce();
+    await launcher.pollOnce();
+    await launcher.pollOnce();
+
+    expect(clearTaskPauseReason).not.toHaveBeenCalled();
+    expect(clearPausedPrReasonForTask).not.toHaveBeenCalled();
+    expect(resetTaskCrashCount).not.toHaveBeenCalled();
+  });
+
+  it('does not clear pauses after a fetch failure, and still detects transitions for other projects', async () => {
+    const review = makeResolvedTask({
+      id: 'task-review',
+      status: '👀 In Review',
+    });
+    const backlog = makeResolvedTask({ id: 'task-b', status: '🔲 Backlog' });
+    const other = makeResolvedTask({ id: 'task-other', status: '🔲 Backlog' });
+    const otherReady = makeResolvedTask({ id: 'task-other' });
+    vi.mocked(getTaskPauseReason).mockReturnValue(
+      'needs_attention' as unknown as ReturnType<typeof getTaskPauseReason>,
+    );
+
+    const fetchA = vi
+      .fn()
+      .mockResolvedValueOnce([review, backlog])
+      .mockRejectedValueOnce(new Error('timeout'))
+      .mockResolvedValueOnce([review, backlog]);
+    const fetchB = vi
+      .fn()
+      .mockResolvedValueOnce([other])
+      .mockResolvedValueOnce([other])
+      .mockResolvedValueOnce([otherReady]);
+    const backends: Record<string, unknown> = {
+      'proj-1': { type: 'notion', fetchReadyTasks: fetchA },
+      'proj-2': { type: 'notion', fetchReadyTasks: fetchB },
+    };
+    const launcher = new AutoLauncher(
+      makeSessionManager(0) as never,
+      undefined,
+      {
+        listProjects: () => [
+          makeProject(),
+          makeProject({ id: 'proj-2', autoLaunchMilestoneId: 'milestone-2' }),
+        ],
+        resolveBackend: (id: string) => backends[id] as never,
+        pollOnStart: false,
+      },
+    );
+    await launcher.pollOnce();
+    await launcher.pollOnce();
+    await launcher.pollOnce();
+
+    expect(clearTaskPauseReason).not.toHaveBeenCalledWith('task-review');
+    expect(clearTaskPauseReason).not.toHaveBeenCalledWith('task-b');
+    expect(clearTaskPauseReason).toHaveBeenCalledWith('task-other');
+  });
+
+  it('clears pauses when a task moves Backlog → Ready between successful polls', async () => {
+    vi.mocked(getTaskPauseReason).mockReturnValue(
+      'needs_attention' as unknown as ReturnType<typeof getTaskPauseReason>,
+    );
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce([
+        makeResolvedTask({ id: 'task-m', status: '🔲 Backlog' }),
+      ])
+      .mockResolvedValueOnce([makeResolvedTask({ id: 'task-m' })]);
+    const backend = { type: 'notion' as const, fetchReadyTasks: fetch };
+    const launcher = new AutoLauncher(
+      makeSessionManager(0) as never,
+      undefined,
+      {
+        listProjects: () => [makeProject()],
+        resolveBackend: () => backend as never,
+        pollOnStart: false,
+      },
+    );
+    await launcher.pollOnce();
+    expect(clearTaskPauseReason).not.toHaveBeenCalled();
+    await launcher.pollOnce();
+    expect(clearTaskPauseReason).toHaveBeenCalledWith('task-m');
   });
 });
 
@@ -2296,8 +2408,10 @@ describe('AutoLauncher — event loop yielding', () => {
     });
     // Non-null, empty — every task looks like a fresh Ready transition.
     (
-      launcher as unknown as { lastPollReadyTaskIds: Set<string> }
-    ).lastPollReadyTaskIds = new Set();
+      launcher as unknown as {
+        lastPollReadyTaskIds: Map<string, Set<string>>;
+      }
+    ).lastPollReadyTaskIds = new Map([['proj-1', new Set<string>()]]);
 
     await launcher.pollOnce();
 
@@ -2325,8 +2439,10 @@ describe('AutoLauncher — event loop yielding', () => {
       pollOnStart: false,
     });
     (
-      launcher as unknown as { lastPollReadyTaskIds: Set<string> }
-    ).lastPollReadyTaskIds = new Set();
+      launcher as unknown as {
+        lastPollReadyTaskIds: Map<string, Set<string>>;
+      }
+    ).lastPollReadyTaskIds = new Map([['proj-1', new Set<string>()]]);
 
     const events: string[] = [];
     setImmediate(() => {
