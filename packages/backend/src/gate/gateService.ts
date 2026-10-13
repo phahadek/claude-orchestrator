@@ -119,6 +119,29 @@ export function createLocalAsyncGitAncestrySource(
 }
 
 /**
+ * Definitive git ancestry answer: true/false only when git exits 0/1;
+ * null for any other failure (unknown object, missing checkout), so callers
+ * can avoid memoizing a transient or environmental failure as "not ancestor".
+ */
+export async function probeGitAncestry(
+  cwd: string | undefined,
+  ancestorSha: string,
+  descendantSha: string,
+): Promise<boolean | null> {
+  if (ancestorSha === descendantSha) return true;
+  try {
+    await execFileAsync(
+      'git',
+      ['merge-base', '--is-ancestor', ancestorSha, descendantSha],
+      { cwd },
+    );
+    return true;
+  } catch (err) {
+    return (err as { code?: unknown }).code === 1 ? false : null;
+  }
+}
+
+/**
  * The default non-blocking git-ancestry source. Not exported — every caller
  * must go through defaultAncestrySourceForProject (or inject its own scoped
  * source); see warnUnscopedAncestrySourceUse above.

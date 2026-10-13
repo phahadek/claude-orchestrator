@@ -46,7 +46,7 @@ import {
   type DeclaredWriteEntry,
 } from '../tasks/readinessGate';
 import { getProjectDeployedSha } from '../deploy/deployService';
-import { createLocalGitAncestrySource } from '../gate/gateService';
+import { probeGitAncestry } from '../gate/gateService';
 import {
   loadManifest,
   resolveConfigDir,
@@ -112,8 +112,65 @@ async function isDepDeployed(
   const deployedSha = getProjectDeployedSha(project);
   if (!deployedSha) return true;
   const projectDir = getProjectRowById(project)?.project_dir;
-  const ancestry = createLocalGitAncestrySource(projectDir);
-  return ancestry.isAncestor(mergeCommit, deployedSha);
+  return memoizedIsAncestor(projectDir, mergeCommit, deployedSha);
+}
+
+type AncestryProbe = (
+  cwd: string | undefined,
+  ancestorSha: string,
+  descendantSha: string,
+) => Promise<boolean | null>;
+
+let ancestryProbe: AncestryProbe = probeGitAncestry;
+
+/** Test hook: swap the git probe (pass undefined to restore) and clear the memo. */
+export function __setOpsAncestryProbeForTests(probe?: AncestryProbe): void {
+  ancestryProbe = probe ?? probeGitAncestry;
+  ancestryMemo.clear();
+}
+
+const MAX_MEMO_ENTRIES_PER_DIR = 5000;
+
+/**
+ * Per clone dir: only the current deployedSha's results are retained, so a
+ * new deploy discards the old SHA's entries and the memo stays bounded.
+ * Values are promises so concurrent lookups for one pair share a single spawn.
+ */
+const ancestryMemo = new Map<
+  string,
+  { deployedSha: string; results: Map<string, Promise<boolean | null>> }
+>();
+
+async function memoizedIsAncestor(
+  projectDir: string | undefined,
+  mergeCommit: string,
+  deployedSha: string,
+): Promise<boolean> {
+  const dirKey = projectDir ?? '';
+  let slot = ancestryMemo.get(dirKey);
+  if (!slot || slot.deployedSha !== deployedSha) {
+    slot = { deployedSha, results: new Map() };
+    ancestryMemo.set(dirKey, slot);
+  }
+  let pending = slot.results.get(mergeCommit);
+  if (!pending) {
+    if (slot.results.size >= MAX_MEMO_ENTRIES_PER_DIR) slot.results.clear();
+    pending = ancestryProbe(projectDir, mergeCommit, deployedSha);
+    slot.results.set(mergeCommit, pending);
+    const results = slot.results;
+    void pending.then(
+      (v) => {
+        if (v === null && results.get(mergeCommit) === pending) {
+          results.delete(mergeCommit);
+        }
+      },
+      () => {
+        if (results.get(mergeCommit) === pending) results.delete(mergeCommit);
+      },
+    );
+  }
+  // A failed probe keeps the prior behavior (blocks) but is never cached.
+  return (await pending.catch(() => null)) === true;
 }
 
 export interface OpsDepBlockInfo {

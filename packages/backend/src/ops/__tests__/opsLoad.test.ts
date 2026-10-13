@@ -9,7 +9,7 @@
  * signal fires the run after a blocking dep goes ✅ Done.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('../../config', () => ({
   config: { notionApiKey: 'test', notionDatabaseId: 'test', port: 3000 },
@@ -47,7 +47,11 @@ import {
   recordProjectDeployedSha,
   updateProject,
 } from '../../db/queries.js';
-import { loadOpsContext } from '../opsLoad.js';
+import {
+  loadOpsContext,
+  computeOpsBlockingDeps,
+  __setOpsAncestryProbeForTests,
+} from '../opsLoad.js';
 import { getEntry } from '../opsJournal.js';
 import { createUnit } from '../../architecture/ArchUnitStore.js';
 import { UnknownMilestoneError } from '../../projects/milestoneResolver.js';
@@ -1054,5 +1058,102 @@ describe('loadOpsContext — dep deploy-gating', () => {
     expect(result.worklist.dep_blocked.map((t) => t.id)).not.toContain(
       'ops-task',
     );
+  });
+});
+
+describe('computeOpsBlockingDeps — ancestry memo', () => {
+  const all = [
+    { id: 'dep-a', status: '✅ Done', title: 'A' },
+    { id: 'dep-b', status: '✅ Done', title: 'B' },
+  ];
+  const targets = [
+    { id: 't1', dependsOn: ['dep-a', 'dep-b'] },
+    { id: 't2', dependsOn: ['dep-a'] },
+  ];
+
+  beforeEach(() => {
+    db.prepare('UPDATE projects SET project_dir = ? WHERE id = ?').run(
+      process.cwd(),
+      PROJECT,
+    );
+    db.prepare('DELETE FROM sessions').run();
+    db.prepare('DELETE FROM local_branches').run();
+    db.prepare('DELETE FROM project_deployed_sha').run();
+    for (const [id, sha] of [
+      ['dep-a', 'a'.repeat(40)],
+      ['dep-b', 'b'.repeat(40)],
+    ]) {
+      insertSession({
+        session_id: `sess-${id}`,
+        task_id: `notion:${id}`,
+        task_url: null,
+        project_context_url: null,
+        status: 'done',
+        started_at: 0,
+        session_type: 'standard',
+        task_name: null,
+        metadata: null,
+        review_result: null,
+        pause_reason: null,
+        last_error_detail: null,
+        events_pruned_at: null,
+        total_input_tokens: 0,
+        total_output_tokens: 0,
+        compaction_count: 0,
+        context_occupancy_tokens: 0,
+      } as never);
+      const br = insertLocalBranch({
+        project_id: PROJECT,
+        session_id: `sess-${id}`,
+        branch_name: `feature/${id}`,
+        base_branch: 'dev',
+        status: 'open',
+        review_result: null,
+        created_at: new Date(0).toISOString(),
+        updated_at: new Date(0).toISOString(),
+      });
+      markLocalBranchMerged(br.id, sha);
+    }
+  });
+
+  afterEach(() => __setOpsAncestryProbeForTests());
+
+  it('spawns once per unique pair, across repeat calls, and refreshes on new deployedSha', async () => {
+    const probe = vi.fn(async () => true as boolean | null);
+    __setOpsAncestryProbeForTests(probe);
+    recordProjectDeployedSha(PROJECT, 'd'.repeat(40));
+
+    await computeOpsBlockingDeps(all, targets, PROJECT, { fast: true });
+    expect(probe).toHaveBeenCalledTimes(2);
+    await computeOpsBlockingDeps(all, targets, PROJECT, { fast: true });
+    expect(probe).toHaveBeenCalledTimes(2);
+
+    recordProjectDeployedSha(PROJECT, 'e'.repeat(40));
+    await computeOpsBlockingDeps(all, targets, PROJECT, { fast: true });
+    expect(probe).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not cache a failed probe, and a definitive false still blocks', async () => {
+    const probe = vi
+      .fn<() => Promise<boolean | null>>()
+      .mockResolvedValue(null);
+    __setOpsAncestryProbeForTests(probe);
+    recordProjectDeployedSha(PROJECT, 'd'.repeat(40));
+
+    const first = await computeOpsBlockingDeps(all, targets, PROJECT, {
+      fast: true,
+    });
+    expect(first.get('t2')?.blockingDepIds).toEqual(['dep-a']);
+    await computeOpsBlockingDeps(all, targets, PROJECT, { fast: true });
+    expect(probe.mock.calls.length).toBeGreaterThanOrEqual(4);
+
+    probe.mockResolvedValue(false);
+    const third = await computeOpsBlockingDeps(all, targets, PROJECT, {
+      fast: true,
+    });
+    expect(third.get('t1')?.blockingDepIds).toEqual(['dep-a', 'dep-b']);
+    const calls = probe.mock.calls.length;
+    await computeOpsBlockingDeps(all, targets, PROJECT, { fast: true });
+    expect(probe).toHaveBeenCalledTimes(calls);
   });
 });
