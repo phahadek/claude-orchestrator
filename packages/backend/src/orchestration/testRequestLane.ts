@@ -126,6 +126,8 @@ import {
   trackRunIngestion,
 } from './runTestOutcomes';
 import { logger } from '../logger';
+import { dispatchPreTestMergeConflict } from '../github/conflictNudge';
+import type { SessionManager } from '../session/SessionManager';
 import type { ServerMessage, TestRequestRunStatusPayload } from '../ws/types';
 
 // ── Broadcast infrastructure ─────────────────────────────────────────────────
@@ -138,6 +140,12 @@ export function setTestRequestLaneBroadcast(
   fn: (msg: ServerMessage) => void,
 ): void {
   broadcastFn = fn;
+}
+
+let conflictSessions: SessionManager | null = null;
+
+export function setTestRequestLaneSessionManager(sm: SessionManager): void {
+  conflictSessions = sm;
 }
 
 function broadcastRunStatus(payload: TestRequestRunStatusPayload): void {
@@ -1560,6 +1568,14 @@ async function runPreTestMerge(
       return '';
     }
     if (result.outcome === 'up_to_date') return '';
+    if (result.outcome === 'conflict') {
+      dispatchPreTestMergeConflict(conflictSessions, {
+        sessionId,
+        projectId: spec.projectId,
+        baseBranch,
+        producer: spec.producer,
+      });
+    }
     return `[testRequestLane] pre-test merge of origin/${baseBranch} not applied (${result.outcome}); testing the unmerged tree${result.detail ? `: ${result.detail.split('\n')[0]}` : ''}\n`;
   } catch (err) {
     logger.warn({ err, runId }, '[testRequestLane] pre-test merge failed');
