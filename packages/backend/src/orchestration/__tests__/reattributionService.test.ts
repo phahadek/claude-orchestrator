@@ -9,8 +9,9 @@ const filterMock = vi.hoisted(() => vi.fn());
 vi.mock('../baseAttributableFilter', () => ({
   filterBaseAttributableFailuresForF2Gate: filterMock,
 }));
+const getChangedFilesMock = vi.hoisted(() => vi.fn());
 vi.mock('../../session/autofix-runner', () => ({
-  getChangedFiles: vi.fn(async () => ['src/a.ts']),
+  getChangedFiles: getChangedFilesMock,
 }));
 vi.mock('../../config', () => ({
   getProjectById: vi.fn(() => ({ id: 'proj-1', baseBranch: 'dev' })),
@@ -72,6 +73,8 @@ beforeEach(() => {
   );
   filterMock.mockReset();
   filterMock.mockResolvedValue(fullExcuse);
+  getChangedFilesMock.mockReset();
+  getChangedFilesMock.mockResolvedValue(['src/a.ts']);
   addSession('s1');
   addSession('s2');
 });
@@ -126,6 +129,27 @@ describe('reattributionService', () => {
     await sweepConfirmedWaiting(sink);
     expect(listUndeliveredInboxItems('s1')).toHaveLength(1);
     expect(sink.deliverReattributionWake).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips (excuses nothing, no flip, no wake) when the worktree path does not exist', async () => {
+    const actual = await vi.importActual<
+      typeof import('../../session/autofix-runner')
+    >('../../session/autofix-runner');
+    getChangedFilesMock.mockImplementation(actual.getChangedFiles);
+    db.prepare(
+      `UPDATE sessions SET worktree_path = '/nonexistent/worktree/path' WHERE session_id = 's1'`,
+    ).run();
+    addWaitingRun('r1', 's1');
+    const deliver = vi.fn(async () => {});
+
+    expect(
+      await evaluateSubject('r1', { deliverReattributionWake: deliver }),
+    ).toBe('skipped');
+
+    expect(filterMock).not.toHaveBeenCalled();
+    expect(getTestRequestRunById('r1')?.state).toBe('failed');
+    expect(listUndeliveredInboxItems('s1')).toHaveLength(0);
+    expect(deliver).not.toHaveBeenCalled();
   });
 
   it('does not flip or wake on a partial excuse', async () => {

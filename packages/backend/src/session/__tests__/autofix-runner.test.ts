@@ -117,6 +117,7 @@ import {
   runAutofix,
   expandAutofixCommand,
   isToolInfraFailureOutput,
+  getChangedFiles,
 } from '../autofix-runner';
 import { recordEvent } from '../../audit/AuditLog';
 
@@ -1554,6 +1555,32 @@ describe('spawnCmd / spawnShell — error event resolves instead of throwing', (
 
     expect(threw).toBe(false);
     expect(unhandled).toBeUndefined();
+  });
+});
+
+describe('getChangedFiles — failures are errors, not an empty diff', () => {
+  it('rejects when the spawn itself fails (missing cwd)', async () => {
+    _spawnHook = () =>
+      makeErrorProc(
+        Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' }),
+      );
+    await expect(getChangedFiles('/gone', 'dev')).rejects.toThrow(/ENOENT/);
+  });
+
+  it('rejects when git diff exits non-zero', async () => {
+    _spawnHook = (_cmd, args) => {
+      const a = args as string[];
+      if (a[0] === 'diff') return makeProc(128, 'fatal: bad revision');
+      return makeProc(1, '');
+    };
+    await expect(getChangedFiles('/worktree', 'dev')).rejects.toThrow(
+      /exited 128/,
+    );
+  });
+
+  it('returns [] for a clean empty diff', async () => {
+    _spawnHook = () => makeProc(0, '');
+    await expect(getChangedFiles('/worktree', 'dev')).resolves.toEqual([]);
   });
 });
 

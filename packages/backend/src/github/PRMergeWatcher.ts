@@ -1603,13 +1603,23 @@ export class PRMergeWatcher extends EventEmitter {
       const session = getSession(pr.session_id);
       const worktreePath = session?.worktree_path ?? '';
       if (!worktreePath) return;
-      const result = await this.reviewOrchestrator.rerunFlakyAnalyze(
-        pr.pr_number,
-        pr.repo,
-        pr.head_sha,
-        worktreePath,
-        project,
-      );
+      let result: Awaited<
+        ReturnType<ReviewOrchestrator['rerunFlakyAnalyze']>
+      >;
+      try {
+        result = await this.reviewOrchestrator.rerunFlakyAnalyze(
+          pr.pr_number,
+          pr.repo,
+          pr.head_sha,
+          worktreePath,
+          project,
+        );
+      } catch (err) {
+        logger.warn(
+          `[PRMergeWatcher] analyze re-run failed for PR #${pr.pr_number}: ${(err as Error).message}`,
+        );
+        return;
+      }
       if (!result) return;
       outcome = result.outcome;
     } else {
