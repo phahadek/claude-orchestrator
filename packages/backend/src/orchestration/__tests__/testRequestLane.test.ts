@@ -112,6 +112,8 @@ import {
   computeTestPerfBaseline,
   __resetProjectSemaphoresForTest,
   withdrawQueuedRunsForWorktree,
+  rebindWorktreeContentHash,
+  testRequestLaneEvents,
   getRunIngestionPromise,
 } from '../testRequestLane';
 import {
@@ -5141,5 +5143,85 @@ describe('sweepTestRunResultsExtraction — recovers a run whose dispatch failed
 
     expect(runHasExtractedReport('run-crash-recover')).toBe(true);
     expect(getTestRunSummary('run-crash-recover')?.total_count).toBe(1);
+  });
+});
+
+describe('rebindWorktreeContentHash — pre-test merge hash rebind', () => {
+  it('rebinds queued same-hash runs of one worktree, joins later admissions, and emits the post-merge hash', async () => {
+    insertProject({
+      id: 'proj-rebind',
+      name: 'Rebind',
+      project_dir: '/tmp/proj-rebind',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    typedSetSetting('test_request_max_concurrent', 1);
+    const resolvers: Array<(v: { passed: boolean; output: string }) => void> =
+      [];
+    mockRunTestCommands.mockImplementation(
+      () => new Promise((resolve) => resolvers.push(resolve)),
+    );
+    const settled: string[] = [];
+    const onSettled = (e: { contentHash: string }) =>
+      settled.push(e.contentHash);
+    testRequestLaneEvents.on('settled', onSettled);
+
+    const blocker = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-rebind',
+        worktreePath: '/tmp/wt-other',
+        contentHash: 'other-hash',
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
+    const wt = '/tmp/wt-rebind';
+    const full = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-rebind',
+        worktreePath: wt,
+        contentHash: 'pre',
+      }),
+    );
+    const scoped = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-rebind',
+        worktreePath: wt,
+        contentHash: 'pre',
+        commands: ['npm run scoped'],
+        runKind: 'scoped',
+        baseSha: 'base-1',
+      }),
+    );
+
+    expect(rebindWorktreeContentHash('proj-rebind', wt, 'pre', 'post')).toBe(2);
+    expect(getTestRequestRunById(full.runId)?.content_hash).toBe('post');
+    expect(getTestRequestRunById(scoped.runId)?.content_hash).toBe('post');
+    expect(getTestRequestRunById(blocker.runId)?.content_hash).toBe(
+      'other-hash',
+    );
+
+    const joined = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-rebind',
+        worktreePath: wt,
+        contentHash: 'post',
+      }),
+    );
+    expect(joined.runId).toBe(full.runId);
+    expect(joined.unchangedReplay).toBe(false);
+
+    resolvers[0]({ passed: true, output: '' });
+    await blocker.result;
+    await vi.waitFor(() => expect(resolvers.length).toBe(2));
+    resolvers[1]({ passed: true, output: '' });
+    const res = await full.result;
+    expect(res.superseded).toBeUndefined();
+    expect(settled).toContain('post');
+    expect(settled).not.toContain('pre');
+
+    testRequestLaneEvents.off('settled', onSettled);
   });
 });
