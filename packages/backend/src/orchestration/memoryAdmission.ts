@@ -120,22 +120,3 @@ export function hasRunnerMemoryHeadroom(
     projectedFreeMB: freeMemMB - perSessionReserveMB,
   };
 }
-
-/**
- * Admission check for the test.request governed lane
- * (orchestration/testRequestLane.ts): folds the global test-run concurrency
- * cap into the same host memory-headroom check every other dispatch decision
- * goes through, rather than admitting a test run purely off the lane's own
- * semaphore and leaving it to starve the host independently. `inFlight` is
- * the count of test.request runs currently executing host-wide, across every
- * project (before admitting the caller's own request); `limit` is
- * `runtimeSettings.test_request_max_concurrent`.
- */
-export function hasTestRequestAdmission(
-  inFlight: number,
-  limit: number,
-  freeMemBytes: number = os.freemem(),
-): boolean {
-  if (inFlight >= limit) return false;
-  return hasMemoryHeadroom(freeMemBytes).allowed;
-}

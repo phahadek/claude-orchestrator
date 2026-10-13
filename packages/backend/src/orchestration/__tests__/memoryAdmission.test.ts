@@ -20,7 +20,6 @@ import {
   evaluateMemoryHeadroom,
   hasMemoryHeadroom,
   hasRunnerMemoryHeadroom,
-  hasTestRequestAdmission,
 } from '../memoryAdmission';
 
 describe('hasRunnerMemoryHeadroom', () => {
@@ -124,21 +123,5 @@ describe('hasMemoryHeadroom', () => {
         perSessionReserveMB: result.perSessionReserveMB,
       }),
     ).toBe(result.allowed);
-  });
-});
-
-describe('hasTestRequestAdmission', () => {
-  it('admits when inFlight is below the global limit and memory headroom is fine', () => {
-    (os.freemem as ReturnType<typeof vi.fn>).mockReturnValue(
-      10 * 1024 * 1024 * 1024,
-    );
-    expect(hasTestRequestAdmission(1, 2)).toBe(true);
-  });
-
-  it('refuses when inFlight is at or above the global limit, regardless of memory headroom', () => {
-    (os.freemem as ReturnType<typeof vi.fn>).mockReturnValue(
-      10 * 1024 * 1024 * 1024,
-    );
-    expect(hasTestRequestAdmission(2, 2)).toBe(false);
   });
 });
