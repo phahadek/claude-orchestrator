@@ -2176,7 +2176,9 @@ describe('AutoLauncher — ready-transition pause clearing', () => {
       launcher as unknown as {
         lastPollReadyTaskIds: Map<string, Set<string>>;
       }
-    ).lastPollReadyTaskIds = new Map([['proj-1', new Set(['some-other-task'])]]);
+    ).lastPollReadyTaskIds = new Map([
+      ['proj-1', new Set(['some-other-task'])],
+    ]);
 
     await launcher.pollOnce();
 
@@ -2249,7 +2251,9 @@ describe('AutoLauncher — ready-transition pause clearing', () => {
       launcher as unknown as {
         lastPollReadyTaskIds: Map<string, Set<string>>;
       }
-    ).lastPollReadyTaskIds = new Map([['proj-1', new Set(['some-other-task'])]]);
+    ).lastPollReadyTaskIds = new Map([
+      ['proj-1', new Set(['some-other-task'])],
+    ]);
 
     await launcher.pollOnce();
 
