@@ -73,7 +73,10 @@ import {
   sharesCheckoutNodeModules,
 } from './checkoutInstallLock';
 import { checkToolchainVersions, formatToolchainMismatch } from './gateEnv';
-import { detectCrashSignature } from './workerCrashDetection';
+import {
+  detectCrashSignature,
+  matchesEnvironmentFailureSignature,
+} from './workerCrashDetection';
 import { typedGetSetting } from '../config/settings';
 import {
   insertTestRequestRun,
@@ -344,6 +347,7 @@ export interface TestRequestAdmission {
 function failureReasonFor(
   result: TestCommandResult,
   crashSignatures: string[],
+  environmentSignatures: string[] = [],
 ): TestRequestFailureReason {
   if (result.isToolInfraFailure) return 'tool_infra_failure';
   if (result.spawnFailed) return 'execution_failed';
@@ -359,6 +363,11 @@ function failureReasonFor(
   }
   if (result.timedOut) return 'timeout';
   if (result.oomKilled) return 'oom_killed';
+  if (
+    matchesEnvironmentFailureSignature(result.output, environmentSignatures)
+  ) {
+    return 'environment_failure';
+  }
   return 'generic';
 }
 
@@ -1759,6 +1768,8 @@ async function executeTestRequestRun(
     const laneConfig = loadOrchestratorConfig(spec.worktreePath);
     const testReportGlob = laneConfig.test_report_glob;
     const crashSignatures = laneConfig.test_crash_signatures ?? [];
+    const environmentSignatures =
+      laneConfig.test_environment_failure_signatures ?? [];
     const acquisitionAttempted = !!testReportGlob;
     // Delete any report file left over from a previous run before this run's
     // commands execute — otherwise a command that fails/crashes before its
@@ -1804,7 +1815,9 @@ async function executeTestRequestRun(
       runId,
       result.passed ? 'passed' : 'failed',
       result.output,
-      result.passed ? null : failureReasonFor(result, crashSignatures),
+      result.passed
+        ? null
+        : failureReasonFor(result, crashSignatures, environmentSignatures),
       structuredResultJson,
       oomKilled,
       acquisitionAttempted,
@@ -1850,7 +1863,7 @@ async function executeTestRequestRun(
       finished_at: pkg.finishedAt,
       failure_reason: result.passed
         ? null
-        : failureReasonFor(result, crashSignatures),
+        : failureReasonFor(result, crashSignatures, environmentSignatures),
       structured_result: structuredResultJson,
       concurrent_run_count: runConcurrentRunCount,
       oom_killed: oomKilled ? 1 : 0,
@@ -2223,6 +2236,7 @@ type TestRunOutcome =
   | 'failed-with-no-report-acquired'
   | 'crashed-oom'
   | 'crashed-worker'
+  | 'environment-failure'
   | 'timed-out'
   | 'execution-failed'
   | 'running'
@@ -2245,6 +2259,8 @@ const TEST_RUN_NEXT_ACTIONS: Record<TestRunOutcome, string> = {
     'The test run was OOM-killed — reduce test memory usage/parallelism, or retry.',
   'crashed-worker':
     'A test crashed its worker — re-running the unchanged tree will not help; fix the crash.',
+  'environment-failure':
+    'The test run failed because of the test environment, not because of this diff — do not edit code or assume flakiness. Retry later or ask the operator.',
   'timed-out':
     'The test run exceeded its time limit — investigate a hang or split the run.',
   'execution-failed':
@@ -2273,6 +2289,8 @@ export function classifyTestRunOutcome(
     outcome = 'execution-failed';
   } else if (run.failure_reason === 'worker_crash') {
     outcome = 'crashed-worker';
+  } else if (run.failure_reason === 'environment_failure') {
+    outcome = 'environment-failure';
   } else if (run.oom_killed || run.failure_reason === 'oom_killed') {
     outcome = 'crashed-oom';
   } else if (run.failure_reason === 'timeout') {

@@ -172,6 +172,14 @@ export interface OrchestratorConfig {
    * today's behavior unchanged).
    */
   test_crash_signatures: string[];
+  /**
+   * Plain substrings matched against a failed (not timed-out, not OOM) test
+   * run's output that identify a known environment failure (e.g. a vitest
+   * worker RPC timeout) the session cannot fix by pushing code. A match
+   * classifies the run as failure_reason 'environment_failure' and routes it
+   * as infra, never as a fix request. Empty = feature off.
+   */
+  test_environment_failure_signatures: string[];
   /** Commands the orchestrator runs as static analysis gate, between verify and test. Empty = gate skipped. */
   analyze: AnalyzeCommand[];
   /** Per-command timeout in seconds for analyze commands. Default 300. */
@@ -323,6 +331,7 @@ const DEFAULTS: OrchestratorConfig = {
   test_scoped: [],
   test_full_run_paths: [],
   test_crash_signatures: [],
+  test_environment_failure_signatures: [],
   analyze: [],
   analyze_timeout_sec: 300,
   analyze_max_rss_mb: 0,
@@ -668,6 +677,11 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
       test_crash_signatures: Array.isArray(parsed.test_crash_signatures)
         ? parsed.test_crash_signatures
         : DEFAULTS.test_crash_signatures,
+      test_environment_failure_signatures: Array.isArray(
+        parsed.test_environment_failure_signatures,
+      )
+        ? parsed.test_environment_failure_signatures
+        : DEFAULTS.test_environment_failure_signatures,
       analyze: Array.isArray(parsed.analyze)
         ? (parsed.analyze as unknown[]).filter(isValidAnalyzeEntry)
         : DEFAULTS.analyze,

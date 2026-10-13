@@ -165,6 +165,23 @@ describe('runVerifyAsGate — bounded via the shared test-run machinery', () => 
     expect(result.crashMessage).toContain('node down: Not properly terminated');
   });
 
+  it('marks a non-timed-out failure matching an environment signature as isTimeoutInfraFailure, and only when declared', async () => {
+    const out = '[vitest-worker]: Timeout calling "onTaskUpdate"';
+    _spawnHook = () => makeProc(1, out);
+    const matched = runVerifyAsGate('/repo', ['vitest run'], undefined, {
+      environmentSignatures: ['[vitest-worker]: Timeout calling'],
+    });
+    await vi.runAllTimersAsync();
+    expect((await matched).isTimeoutInfraFailure).toBe(true);
+
+    _spawnHook = () => makeProc(1, out);
+    const unmatched = runVerifyAsGate('/repo', ['vitest run'], undefined, {});
+    await vi.runAllTimersAsync();
+    const r = await unmatched;
+    expect(r.passed).toBe(false);
+    expect(r.isTimeoutInfraFailure).toBeUndefined();
+  });
+
   it('places each verify command via spawnIntoTestRunCgroup with one runId per runVerifyAsGate invocation, and verifies teardown on completion', async () => {
     _spawnHook = () => makeProc(0, 'ok');
 

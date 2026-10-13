@@ -826,6 +826,71 @@ describe('runProjectTestRequest — coalescing', () => {
     expect(row.failure_reason).toBe('timeout');
   });
 
+  describe('environment_failure classification', () => {
+    const ENV_SIG = '[vitest-worker]: Timeout calling';
+    const ENV_OUT = '[vitest-worker]: Timeout calling "onTaskUpdate"';
+    const reasonFor = (contentHash: string) =>
+      (
+        db
+          .prepare(
+            `SELECT failure_reason FROM test_request_runs WHERE project_id = ? AND content_hash = ?`,
+          )
+          .get('proj-1', contentHash) as { failure_reason: string }
+      ).failure_reason;
+
+    it('classifies a non-timed-out failed run matching a declared environment signature as environment_failure', async () => {
+      mockLoadOrchestratorConfig.mockReturnValue({
+        test_report_glob: '',
+        test_environment_failure_signatures: [ENV_SIG],
+      });
+      mockRunTestCommands.mockResolvedValueOnce({
+        passed: false,
+        output: ENV_OUT,
+      });
+      await runProjectTestRequest(baseSpec({ contentHash: 'hash-env' }));
+      expect(reasonFor('hash-env')).toBe('environment_failure');
+    });
+
+    it('stays generic when no environment signature is declared', async () => {
+      mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '' });
+      mockRunTestCommands.mockResolvedValueOnce({
+        passed: false,
+        output: ENV_OUT,
+      });
+      await runProjectTestRequest(baseSpec({ contentHash: 'hash-env-none' }));
+      expect(reasonFor('hash-env-none')).toBe('generic');
+    });
+
+    it('keeps timeout for a timed-out run matching only an environment signature', async () => {
+      mockLoadOrchestratorConfig.mockReturnValue({
+        test_report_glob: '',
+        test_environment_failure_signatures: [ENV_SIG],
+      });
+      mockRunTestCommands.mockResolvedValueOnce({
+        passed: false,
+        output: ENV_OUT,
+        timedOut: true,
+      });
+      await runProjectTestRequest(baseSpec({ contentHash: 'hash-env-to' }));
+      expect(reasonFor('hash-env-to')).toBe('timeout');
+    });
+
+    it('keeps worker_crash for a timed-out run matching a crash signature even when an environment signature also matches', async () => {
+      mockLoadOrchestratorConfig.mockReturnValue({
+        test_report_glob: '',
+        test_crash_signatures: ['node down'],
+        test_environment_failure_signatures: [ENV_SIG],
+      });
+      mockRunTestCommands.mockResolvedValueOnce({
+        passed: false,
+        output: `node down\n${ENV_OUT}`,
+        timedOut: true,
+      });
+      await runProjectTestRequest(baseSpec({ contentHash: 'hash-env-crash' }));
+      expect(reasonFor('hash-env-crash')).toBe('worker_crash');
+    });
+  });
+
   it('a spawn failure is never replayed as a cached unchangedReplay result — a retry against the same tree re-executes', async () => {
     mockRunTestCommands.mockResolvedValueOnce({
       passed: false,

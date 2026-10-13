@@ -1187,6 +1187,8 @@ export class ReviewOrchestrator {
               matchedLines: [],
             },
           );
+        } else if (run?.failure_reason === 'environment_failure') {
+          truncatedOutput = `Verify failed for an environment reason.\n${truncatedOutput}`;
         } else if (run?.failure_reason === 'timeout') {
           truncatedOutput = `Verify timed out.\n${truncatedOutput}`;
         }
@@ -1296,6 +1298,7 @@ export class ReviewOrchestrator {
         timeoutSec: config.test_timeout_sec,
         maxRssMb: config.test_max_rss_mb,
         crashSignatures,
+        environmentSignatures: config.test_environment_failure_signatures ?? [],
       },
     );
     return this.applyVerifyBaseAttributionFilter(project, job, gateResult);

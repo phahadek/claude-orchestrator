@@ -39,6 +39,17 @@ const structuredWithTests = JSON.stringify({
   durationMsTotal: 100,
 });
 
+describe('classifyTestRunOutcome — environment_failure', () => {
+  it('tells the session the failure is environmental, never to fix a crash', () => {
+    const result = classifyTestRunOutcome(
+      makeRun({ state: 'failed', failure_reason: 'environment_failure' }),
+    );
+    expect(result.outcome).toBe('environment-failure');
+    expect(result.nextAction).toContain('not because of this diff');
+    expect(result.nextAction).not.toContain('fix the crash');
+  });
+});
+
 describe('classifyTestRunOutcome', () => {
   it('classifies a running run', () => {
     const result = classifyTestRunOutcome(makeRun({ state: 'running' }));

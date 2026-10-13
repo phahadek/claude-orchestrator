@@ -1241,6 +1241,13 @@ export type TestRequestFailureReason =
    */
   | 'worker_crash'
   /**
+   * A failed run that did not time out or OOM whose output matched a
+   * project-declared test_environment_failure_signatures entry — an
+   * environment failure the session cannot fix. Routed as infra
+   * (gate_timeout_infra_failure), never as a fix request.
+   */
+  | 'environment_failure'
+  /**
    * A runner-executed row stuck 'queued'/'running' past the reconciliation
    * grace period with no result package heard back — the runner never pulled
    * the run or went silent mid-run. The run never produced a verdict about
