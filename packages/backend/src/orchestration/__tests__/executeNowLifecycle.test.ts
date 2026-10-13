@@ -72,7 +72,7 @@ describe('Execute Now set', () => {
     setTaskExecuteNow('t1', 'p1', 'merge_conflict');
     const first = getTaskExecutionFlags('t1')!.execute_now_set_at!;
     db.prepare(
-      `UPDATE task_execution_flags SET execute_now_set_at = ? WHERE task_id = 't1'`,
+      `UPDATE task_execution_flags SET execute_now_set_at = ? WHERE task_id = 'notion:t1'`,
     ).run(first - 1000);
     setTaskExecuteNow('t1', 'p1', 'merge_conflict');
 
@@ -156,7 +156,7 @@ describe('Execute Now TTL', () => {
     );
 
     db.prepare(
-      `UPDATE task_execution_flags SET execute_now_set_at = ? WHERE task_id = 't5'`,
+      `UPDATE task_execution_flags SET execute_now_set_at = ? WHERE task_id = 'notion:t5'`,
     ).run(Date.now() - EXECUTE_NOW_TTL_MS - 1000);
 
     expect(loadExecutionRanks('p5', [task('t5')]).get('notion:t5')?.group).not.toBe(
