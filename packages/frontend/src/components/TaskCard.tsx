@@ -10,6 +10,7 @@ import { FloorSignOffDetail } from './FloorSignOffDetail';
 import { deriveFloorSignOff } from '../utils/floorSignOff';
 import { ContextBadge } from './ContextBadge';
 import { getTaskSourceLinkLabel } from '../utils/taskSourceLabel';
+import { UrgentToggle } from './UrgentToggle';
 import { TaskMoveDialog } from './TaskMoveDialog';
 import type { StagedIntent } from '../api/stagedIntents';
 import styles from './TaskCard.module.css';
@@ -270,6 +271,7 @@ export function TaskCard({
     >
       <div className={styles.header}>
         <span className={styles.taskName}>{task.taskName}</span>
+        {project?.id && <UrgentToggle task={task} projectId={project.id} />}
         <span
           className={`${styles.statusBadge} ${styles[`status-${statusKey}`] ?? ''}`}
           title={

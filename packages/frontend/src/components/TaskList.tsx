@@ -4,6 +4,7 @@ import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { TaskCard } from './TaskCard';
 import { CompactTaskCard } from './CompactTaskCard';
+import { isEffectivelyUrgent } from '../utils/urgent';
 import { BacklogCodeSection } from './BacklogCodeSection';
 import { NonCodeTypeSection } from './NonCodeTypeSection';
 import { StagedIntentPanel } from './StagedIntentPanel';
@@ -151,7 +152,9 @@ function ReadySection({
   isExpanded,
   onToggleCollapse,
   onOptimisticDispatch,
+  projectId,
 }: {
+  projectId: string | null;
   tasks: TaskView[];
   onSelectTask: (taskId: string) => void;
   send: (msg: ClientMessage) => boolean;
@@ -302,6 +305,7 @@ function ReadySection({
                       checked={checkedIds.has(task.taskId)}
                       onCheckChange={toggleCheck}
                       onClick={() => onSelectTask(task.taskId)}
+                      projectId={projectId}
                     />
                   ))}
               </div>
@@ -833,11 +837,19 @@ export function TaskList({
     );
   }
 
+  const urgentEffectiveCount = codeNotDone.filter(isEffectivelyUrgent).length;
+  const urgentDirectCount = codeNotDone.filter((t) => t.urgent).length;
+
   return (
     <div className={styles.taskListContainer}>
       {syncButton}
       <div className={styles.taskList} data-testid="task-list">
         {/* 💻 Code */}
+        {urgentEffectiveCount > 0 && (
+          <div className={styles.urgentCounter} data-testid="urgent-counter">
+            🚨 {urgentEffectiveCount} urgent ({urgentDirectCount} flagged)
+          </div>
+        )}
         {CODE_GROUP_ORDER.map((status) => {
           const groupTasks = codeGroupMap.get(status) ?? [];
           if (groupTasks.length === 0) return null;
@@ -885,6 +897,7 @@ export function TaskList({
           <ReadySection
             key="ready"
             tasks={readyCodeTasks}
+            projectId={activeProjectId}
             onSelectTask={onSelectTask}
             send={send}
             project={project}

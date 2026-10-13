@@ -1,0 +1,36 @@
+.siren {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.siren:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.off {
+  filter: grayscale(1);
+  opacity: 0.45;
+}
+
+.off:hover:not(:disabled) {
+  opacity: 0.8;
+}
+
+.on {
+  filter: none;
+  opacity: 1;
+}
+
+.inherited {
+  filter: none;
+  opacity: 0.6;
+  outline: 1px dashed #ef4444;
+  outline-offset: 1px;
+  border-radius: 3px;
+}
