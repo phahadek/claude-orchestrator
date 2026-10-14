@@ -154,14 +154,23 @@ describe('DeployOrchestrator: step execution order and kinds', () => {
 
 describe('DeployOrchestrator: succeeded shell step output retention', () => {
   async function runWithOutput(output: string) {
-    const deps = makeDeps(playbookWith([step({ id: 'build', kind: 'shell' })]), {
-      runShell: vi.fn(
-        async (): Promise<ShellResult> => ({ ok: true, output, exitCode: 0 }),
-      ),
-    });
-    const run = await new DeployOrchestrator('proj', '/tmp/proj', deps).startDeploy('sha-target');
+    const deps = makeDeps(
+      playbookWith([step({ id: 'build', kind: 'shell' })]),
+      {
+        runShell: vi.fn(
+          async (): Promise<ShellResult> => ({ ok: true, output, exitCode: 0 }),
+        ),
+      },
+    );
+    const run = await new DeployOrchestrator(
+      'proj',
+      '/tmp/proj',
+      deps,
+    ).startDeploy('sha-target');
     await flush();
-    return listDeployRunEvents(run.run_id).find((e) => e.event_type === 'step_succeeded');
+    return listDeployRunEvents(run.run_id).find(
+      (e) => e.event_type === 'step_succeeded',
+    );
   }
 
   it('persists short output verbatim', async () => {

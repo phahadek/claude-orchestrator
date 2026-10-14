@@ -1035,7 +1035,9 @@ export class DeployOrchestrator {
         return {
           ok: result.ok,
           detail: result.ok ? undefined : shellFailureDetail(step.id, result),
-          successDetail: result.ok ? boundSuccessOutput(result.output) : undefined,
+          successDetail: result.ok
+            ? boundSuccessOutput(result.output)
+            : undefined,
         };
       }
 
