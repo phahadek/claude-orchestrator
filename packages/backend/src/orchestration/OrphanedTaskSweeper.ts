@@ -101,15 +101,18 @@ function stripVolatileFields(message: string): string {
  * message (which embeds a fresh Notion request_id every call).
  */
 /**
- * True when the session's own latest test-lane run is still queued or
- * running and hasn't been waiting longer than AWAITING_LANE_RESULT_CEILING_MS
- * — the session is legitimately waiting on the lane, not stalled. The nudge
- * this exempts from ("open a PR now") pushes the branch, which withdraws the
- * session's own queued run via withdrawQueuedRunsForWorktree, so nudging a
- * session in this state actively destroys the result it's waiting for.
- * Bounded (unlike the capability exemption): a run queued past the ceiling
- * falls through to the normal nudge/surface path so a wedged lane can't park
- * a session forever.
+ * True when the session's own latest test-lane run is still queued, or is
+ * running and has executed for less than AWAITING_LANE_RESULT_CEILING_MS.
+ * The nudge this exempts from ("open a PR now") pushes the branch, which
+ * withdraws the session's own queued run via withdrawQueuedRunsForWorktree,
+ * so nudging a session in this state actively destroys the result it's
+ * waiting for.
+ * Queued runs are exempt unconditionally (operator ruling: waiting on a
+ * queued test is never a wedge — the lane ranks by priority with no aging, so
+ * a low-priority run may legitimately wait indefinitely; the boot sweep
+ * terminalizes stale queued rows). Running runs are bounded, measured from
+ * execution start (started_at; for queued rows it is only a placeholder), so
+ * a run executing past the ceiling falls through to nudge/surface.
  */
 function isSessionAwaitingLaneResult(session: Session): boolean {
   if (!session.project_id) return false;
@@ -117,11 +120,10 @@ function isSessionAwaitingLaneResult(session: Session): boolean {
     session.project_id,
     session.session_id,
   );
-  if (!run || (run.state !== 'queued' && run.state !== 'running')) {
-    return false;
-  }
-  const queuedAt = run.requested_at ?? run.started_at;
-  return Date.now() - queuedAt < AWAITING_LANE_RESULT_CEILING_MS;
+  if (!run) return false;
+  if (run.state === 'queued') return true;
+  if (run.state !== 'running') return false;
+  return Date.now() - run.started_at < AWAITING_LANE_RESULT_CEILING_MS;
 }
 
 function failureReasonKey(err: unknown): string {
@@ -167,10 +169,10 @@ const MIN_NUDGE_SPACING_MS = 15 * 60 * 1000;
  */
 const AWAITING_OPERATOR_DECISION_WINDOW_MS = 24 * 60 * 60 * 1000;
 /**
- * Bounded window a session may sit awaiting its own test-lane run before the
- * exemption stops applying and it falls through to the normal nudge path —
- * see isSessionAwaitingLaneResult. Generous relative to observed p50 queue
- * wait (80-91 min) so a genuinely wedged lane cannot park a session forever.
+ * Bound on how long a RUNNING test-lane run may execute before the exemption
+ * stops applying and the session falls through to the normal nudge path —
+ * see isSessionAwaitingLaneResult. Does not apply to queued runs, which are
+ * exempt unconditionally.
  */
 const AWAITING_LANE_RESULT_CEILING_MS = 3 * 60 * 60 * 1000;
 /** Nudge message sent to a stalled idle session that hasn't opened a PR. */
@@ -453,12 +455,12 @@ export class OrphanedTaskSweeper {
       return;
     }
 
-    // Same shape, bounded: an idle session whose own test-lane run is still
-    // queued or running is legitimately waiting on the lane, not stalled —
-    // the "open a PR now" nudge would push the branch and withdraw that very
-    // run (withdrawQueuedRunsForWorktree), so the session never receives the
-    // result it's waiting for. Unlike the capability exemption this is not
-    // indefinite — see isSessionAwaitingLaneResult's ceiling.
+    // An idle session whose own test-lane run is still queued or running is
+    // legitimately waiting on the lane, not stalled — the "open a PR now"
+    // nudge would push the branch and withdraw that very run
+    // (withdrawQueuedRunsForWorktree). Queued: exempt with no ceiling
+    // (operator ruling: waiting on a queued test is never a wedge). Running:
+    // bounded from execution start — see isSessionAwaitingLaneResult.
     if (
       latestSession?.status === 'idle' &&
       !isHardStoppedIdle(latestSession) &&
