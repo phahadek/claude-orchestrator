@@ -1515,6 +1515,13 @@ export class ReviewOrchestrator {
     }
     if (verdict !== 'needs_changes') return;
 
+    if (pr.head_sha && pr.head_sha === pr.last_reviewed_sha) {
+      logger.info(
+        `[ReviewOrchestrator] session_ended for session ${sessionId.slice(0, 8)}: PR #${pr.pr_number} head ${pr.head_sha.slice(0, 8)} already reviewed (needs_changes) — skipping re-review`,
+      );
+      return;
+    }
+
     const maxIter = getMaxReviewIterations();
     if (pr.review_iteration >= maxIter) return;
 
