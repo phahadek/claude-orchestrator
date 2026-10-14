@@ -325,6 +325,79 @@ describe('StalledPRReconciler breadth-attributable-failures exemption', () => {
     expect(messages.find((m) => m.type === 'pr_pause_cleared')).toBeDefined();
   });
 
+  it('takes the escape for a latest run in state failed whose failures are all breadth-attributable', async () => {
+    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue({
+      id: 'run-latest',
+      state: 'failed',
+    } as any);
+    vi.mocked(isRunFailureBreadthAttributable).mockReturnValue(true);
+    const pr = makePR({
+      stalled_pr_retry_count: 2,
+      stalled_retry_base_exhausted: 1,
+      reconcile_exhausted: 1,
+      reconcile_exhausted_set_at: 1000,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+
+    const { fn: broadcast } = makeBroadcast();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+
+    await reconciler.reconcileOnce();
+
+    expect(resetStalledPRRetryCountForBaseRecovery).toHaveBeenCalledWith(
+      1715,
+      'org/repo',
+    );
+  });
+
+  it('does not take the escape when the latest run passed, even with a breadth-attributable (excused) failure row', async () => {
+    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue({
+      id: 'run-latest',
+      state: 'passed',
+    } as any);
+    vi.mocked(isRunFailureBreadthAttributable).mockReturnValue(true);
+    const pr = makePR({
+      stalled_pr_retry_count: 2,
+      stalled_retry_base_exhausted: 1,
+      reconcile_exhausted: 1,
+      reconcile_exhausted_set_at: 1000,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+
+    const { fn: broadcast } = makeBroadcast();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+
+    await reconciler.reconcileOnce();
+
+    expect(resetStalledPRRetryCountForBaseRecovery).not.toHaveBeenCalled();
+    expect(clearTerminalPRFlags).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'stalled_pr_base_recovery_reset',
+      }),
+    );
+  });
+
+  it('charges stalled_pr_retry_count normally for a gate_failed stall whose latest run passed', async () => {
+    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue({
+      id: 'run-latest',
+      state: 'passed',
+    } as any);
+    vi.mocked(isRunFailureBreadthAttributable).mockReturnValue(true);
+    const pr = makePR({ stalled_pr_retry_count: 1 });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+
+    const { fn: broadcast } = makeBroadcast();
+    const sm = makeSessionManager();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setSessionManager(sm as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(incrementStalledPRRetryCount).toHaveBeenCalledWith(1715, 'org/repo');
+    expect(setStalledRetryBaseExhausted).not.toHaveBeenCalled();
+  });
+
   it('does not take the escape when the latest run is not breadth-attributable', async () => {
     vi.mocked(isRunFailureBreadthAttributable).mockReturnValue(false);
     const pr = makePR({
