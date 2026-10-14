@@ -38,6 +38,7 @@ vi.mock('../db/queries.js', () => ({
   hasQueuedOrRunningTestRunForWorktree: vi.fn(() => false),
   markSessionSuperseded: vi.fn(),
   hasUndispositionedNoOpForSession: vi.fn(() => false),
+  hasPendingReviewDisputeForPR: vi.fn(() => false),
   TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED: new Set([
     'done',
     'error',
@@ -85,6 +86,7 @@ import {
   hasQueuedOrRunningTestRunForSession,
   hasQueuedOrRunningTestRunForWorktree,
   markSessionSuperseded,
+  hasPendingReviewDisputeForPR,
 } from '../db/queries.js';
 import {
   recordEvent,
@@ -1551,6 +1553,96 @@ describe('StalledPRReconciler', () => {
         expect.objectContaining({ pr_number: 42, repo: 'org/repo' }),
         expect.any(String),
       );
+    });
+
+    it('session_inert relaunch prompt carries the blocking verdict, failing dimensions and review.dispute', async () => {
+      const pr = makeInertPR({
+        review_result: JSON.stringify({
+          verdict: 'needs_changes',
+          summary: 'Edit schema.sql please.',
+          dimensions: [
+            { name: 'Migrations', passed: false, notes: 'missing' },
+            { name: 'Style', passed: true, notes: 'ok' },
+          ],
+        }),
+      });
+      vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+      vi.mocked(getSession).mockImplementation((sessionId: string) => {
+        if (sessionId === 'session-1') return { status: 'idle' } as any;
+        return null as any;
+      });
+      vi.mocked(hasPrBodyMarkerUpdateSinceTimestamp).mockReturnValue(false);
+
+      const { fn: broadcast } = makeBroadcast();
+      const sm = makeSessionManager();
+      const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+      reconciler.setReviewOrchestrator(makeReviewOrchestrator() as any);
+      reconciler.setSessionManager(sm as any);
+
+      await reconciler.reconcileOnce();
+
+      const prompt = vi.mocked(sm.relaunchFixerForPR).mock
+        .calls[0][1] as string;
+      expect(prompt).toContain('Edit schema.sql please.');
+      expect(prompt).toContain('Migrations');
+      expect(prompt).not.toContain('Style');
+      expect(prompt).toContain('review.dispute');
+    });
+
+    it('keeps the generic prompt when no blocking verdict is outstanding', async () => {
+      const pr = makeInertPR({
+        review_result: JSON.stringify({ verdict: 'approved' }),
+      });
+      vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+      vi.mocked(getSession).mockImplementation((sessionId: string) => {
+        if (sessionId === 'session-1') return { status: 'idle' } as any;
+        return null as any;
+      });
+      vi.mocked(hasPrBodyMarkerUpdateSinceTimestamp).mockReturnValue(false);
+
+      const { fn: broadcast } = makeBroadcast();
+      const sm = makeSessionManager();
+      const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+      reconciler.setReviewOrchestrator(makeReviewOrchestrator() as any);
+      reconciler.setSessionManager(sm as any);
+
+      await reconciler.reconcileOnce();
+
+      const prompt = vi.mocked(sm.relaunchFixerForPR).mock.calls[0]?.[1] as
+        | string
+        | undefined;
+      if (prompt !== undefined) {
+        expect(prompt).toContain('has shown no activity for a while');
+        expect(prompt).not.toContain('review.dispute');
+      }
+    });
+
+    it('does not classify session_inert, relaunch or escalate while a review.dispute is pending; resumes once dispositioned', async () => {
+      const pr = makeInertPR({ stalled_pr_retry_count: 2 });
+      vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+      vi.mocked(getSession).mockImplementation((sessionId: string) => {
+        if (sessionId === 'session-1') return { status: 'idle' } as any;
+        return null as any;
+      });
+      vi.mocked(hasPrBodyMarkerUpdateSinceTimestamp).mockReturnValue(false);
+      vi.mocked(hasPendingReviewDisputeForPR).mockReturnValue(true);
+
+      const { fn: broadcast } = makeBroadcast();
+      const sm = makeSessionManager();
+      const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+      reconciler.setReviewOrchestrator(makeReviewOrchestrator() as any);
+      reconciler.setSessionManager(sm as any);
+
+      await reconciler.reconcileOnce();
+      expect(sm.relaunchFixerForPR).not.toHaveBeenCalled();
+      expect(setReconcileExhausted).not.toHaveBeenCalled();
+
+      vi.mocked(hasPendingReviewDisputeForPR).mockReturnValue(false);
+      await reconciler.reconcileOnce();
+      expect(
+        vi.mocked(sm.relaunchFixerForPR).mock.calls.length +
+          vi.mocked(setReconcileExhausted).mock.calls.length,
+      ).toBeGreaterThan(0);
     });
 
     it('does not force a re-review once review_iteration is at the max_review_iterations cap, falling back to the nudge instead', async () => {

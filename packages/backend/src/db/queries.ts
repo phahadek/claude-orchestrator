@@ -12957,6 +12957,31 @@ export function hasUndispositionedStagedIntentsForSession(
   );
 }
 
+let _stmtHasPendingReviewDisputeForPR: Database.Statement | null = null;
+
+/** True if a review.dispute for this PR is staged and awaiting the operator. */
+export function hasPendingReviewDisputeForPR(
+  prNumber: number,
+  repo: string,
+): boolean {
+  _stmtHasPendingReviewDisputeForPR ??= db.prepare<{
+    pr_number: number;
+    repo: string;
+  }>(
+    `SELECT 1 FROM staged_intent
+     WHERE kind = 'review.dispute' AND state = 'staged'
+       AND json_extract(payload, '$.prNumber') = @pr_number
+       AND json_extract(payload, '$.repo') = @repo
+     LIMIT 1`,
+  );
+  return (
+    _stmtHasPendingReviewDisputeForPR.get({
+      pr_number: prNumber,
+      repo,
+    }) !== undefined
+  );
+}
+
 let _stmtHasUndispositionedNoOpForSession: Database.Statement | null = null;
 
 /**

@@ -994,7 +994,9 @@ describe('OrphanedTaskSweeper', () => {
     );
   });
 
-  it('falls through to the normal nudge path once a queued lane run exceeds the bounded ceiling', async () => {
+  async function sweepIdleWithRun(
+    run: Record<string, unknown>,
+  ): Promise<ReturnType<typeof vi.fn>> {
     const backend = makeBackend([makeTask('notion:abc')]);
     const endedAt = Date.now() - 10 * 60 * 1000;
     vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
@@ -1002,13 +1004,10 @@ describe('OrphanedTaskSweeper', () => {
         typeof getLatestCodeSessionByNotionTaskId
       >,
     );
-    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue({
-      state: 'queued',
-      requested_at: Date.now() - 4 * 60 * 60 * 1000, // queued 4h ago — past the 3h ceiling
-      started_at: Date.now() - 4 * 60 * 60 * 1000,
-    } as ReturnType<typeof getLatestTestRequestRunForSession>);
+    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue(
+      run as ReturnType<typeof getLatestTestRequestRunForSession>,
+    );
     const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
-
     const sweeper = new OrphanedTaskSweeper(broadcast, {
       listProjects: () => [
         { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
@@ -1016,14 +1015,54 @@ describe('OrphanedTaskSweeper', () => {
       resolveBackend: () => backend,
       enqueueFeedback,
     });
-
     await sweeper.sweepOnce();
+    return enqueueFeedback;
+  }
+
+  it('never nudges or surfaces an idle session whose queued lane run was requested 10h ago', async () => {
+    const enqueueFeedback = await sweepIdleWithRun({
+      state: 'queued',
+      requested_at: Date.now() - 10 * 60 * 60 * 1000,
+      started_at: Date.now() - 10 * 60 * 60 * 1000,
+    });
+
+    expect(enqueueFeedback).not.toHaveBeenCalled();
+    expect(setSessionPauseReason).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalled();
+  });
+
+  it('falls through to the nudge path once a running lane run exceeds the 3h ceiling', async () => {
+    const enqueueFeedback = await sweepIdleWithRun({
+      state: 'running',
+      requested_at: Date.now() - 4 * 60 * 60 * 1000,
+      started_at: Date.now() - (3 * 60 + 1) * 60 * 1000,
+    });
 
     expect(enqueueFeedback).toHaveBeenCalledWith(
       'sess-1',
       'system:nudge',
       expect.stringContaining('no PR was opened'),
     );
+  });
+
+  it('measures the running bound from execution start, not request time', async () => {
+    const enqueueFeedback = await sweepIdleWithRun({
+      state: 'running',
+      requested_at: Date.now() - 5 * 60 * 60 * 1000,
+      started_at: Date.now() - 30 * 60 * 1000,
+    });
+
+    expect(enqueueFeedback).not.toHaveBeenCalled();
+  });
+
+  it('does not exempt an idle session whose latest lane run failed', async () => {
+    const enqueueFeedback = await sweepIdleWithRun({
+      state: 'failed',
+      requested_at: Date.now() - 40 * 60 * 1000,
+      started_at: Date.now() - 35 * 60 * 1000,
+    });
+
+    expect(enqueueFeedback).toHaveBeenCalled();
   });
 
   it('never nudges or reverts an idle session parked awaiting an operator decision, within the bounded window', async () => {

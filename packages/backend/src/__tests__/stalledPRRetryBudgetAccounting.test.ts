@@ -39,6 +39,7 @@ vi.mock('../db/queries.js', () => ({
   resetStalledPRRetryCountForBaseRecovery: vi.fn(),
   setReconcileExhausted: vi.fn(),
   hasUndispositionedNoOpForSession: vi.fn(() => false),
+  hasPendingReviewDisputeForPR: vi.fn(() => false),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
