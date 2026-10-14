@@ -143,7 +143,13 @@ import {
   getFailingTestIdsForRun,
   getTestRequestRunById,
   getLatestTestRequestRunForSession,
+  insertMilestone,
+  upsertTaskCache,
+  setTaskUrgent,
 } from '../../db/queries';
+import { logger } from '../../logger';
+import type { NotionTask } from '../../notion/types';
+import { resolveAutoLaunchMilestoneId } from '../autoLaunchMilestone';
 import {
   withCheckoutInstallLock,
   __checkoutInstallLockMapSizeForTest,
@@ -5385,5 +5391,194 @@ describe('admitTestRequest task linkage', () => {
       task_id: null,
       priority_group: 'priority',
     });
+  });
+});
+
+describe('admitTestRequest ranks against the active milestone board', () => {
+  const PROJECT = 'proj-rank';
+  const OLD = 'ms-old';
+  const ACTIVE = 'ms-active';
+  const BLOCKER = 'notion:aaaaaaaa-0000-0000-0000-000000000001';
+  const DEPENDENT = 'notion:aaaaaaaa-0000-0000-0000-000000000002';
+  const PLAIN = 'notion:aaaaaaaa-0000-0000-0000-000000000003';
+  const OLD_ONLY = 'notion:aaaaaaaa-0000-0000-0000-000000000004';
+
+  function task(
+    id: string,
+    status: string,
+    dependsOn: string[] = [],
+  ): NotionTask {
+    return {
+      id,
+      title: id,
+      status,
+      type: '💻 Code',
+      dependsOn,
+      notionUrl: '',
+      priority: '🟡 Medium',
+    };
+  }
+
+  function rankRow(runId: string) {
+    return db
+      .prepare(
+        `SELECT task_id, priority_group FROM test_request_runs WHERE id = ?`,
+      )
+      .get(runId) as { task_id: string | null; priority_group: string | null };
+  }
+
+  beforeEach(() => {
+    db.prepare('DELETE FROM milestones').run();
+    db.prepare('DELETE FROM task_execution_flags').run();
+    db.prepare(`DELETE FROM task_cache WHERE task_id LIKE 'board:%'`).run();
+    insertProject({
+      id: PROJECT,
+      name: 'Rank',
+      project_dir: '/tmp/proj-rank',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+      auto_launch_milestone_id: ACTIVE,
+    });
+    // The wrapped first milestone (display_order 0) is ProjectConfig.boardId.
+    insertMilestone({
+      id: OLD,
+      project_id: PROJECT,
+      name: 'M1',
+      source_id: 'src-old',
+      canonical_short_id: 'M1',
+      display_order: 0,
+      wrapped_at: 1,
+    });
+    insertMilestone({
+      id: ACTIVE,
+      project_id: PROJECT,
+      name: 'M9',
+      source_id: 'src-active',
+      canonical_short_id: 'M9',
+      display_order: 8,
+    });
+    upsertTaskCache(
+      `board:${OLD}`,
+      JSON.stringify([task(OLD_ONLY, '🗂️ Ready')]),
+    );
+    upsertTaskCache(
+      `board:${ACTIVE}`,
+      JSON.stringify([
+        task(BLOCKER, '🗂️ Ready'),
+        task(DEPENDENT, '🔲 Backlog', [BLOCKER]),
+        task(PLAIN, '🗂️ Ready'),
+      ]),
+    );
+  });
+
+  it('persists blocker for a task that blocks another on the active board', () => {
+    mockRunTestCommands.mockImplementation(() => new Promise(() => {}));
+    const admission = admitTestRequest(
+      baseSpec({ projectId: PROJECT, contentHash: 'h-b', taskId: BLOCKER }),
+    );
+    admission.result.catch(() => {});
+    expect(rankRow(admission.runId)).toEqual({
+      task_id: BLOCKER,
+      priority_group: 'blocker',
+    });
+  });
+
+  it('persists urgent for a task flagged urgent', () => {
+    setTaskUrgent(PLAIN, PROJECT, true, 'human');
+    mockRunTestCommands.mockImplementation(() => new Promise(() => {}));
+    const admission = admitTestRequest(
+      baseSpec({ projectId: PROJECT, contentHash: 'h-u', taskId: PLAIN }),
+    );
+    admission.result.catch(() => {});
+    expect(rankRow(admission.runId).priority_group).toBe('urgent');
+  });
+
+  it('grants a later-requested blocker run before an earlier priority run', async () => {
+    typedSetSetting('test_request_max_concurrent', 1);
+    const resolvers: Array<(v: { passed: boolean; output: string }) => void> =
+      [];
+    mockRunTestCommands.mockImplementation(
+      () => new Promise((resolve) => resolvers.push(resolve)),
+    );
+    const holder = admitTestRequest(
+      baseSpec({
+        projectId: PROJECT,
+        worktreePath: '/tmp/wt-hold',
+        contentHash: 'h-hold',
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
+    const plain = admitTestRequest(
+      baseSpec({
+        projectId: PROJECT,
+        worktreePath: '/tmp/wt-plain',
+        contentHash: 'h-plain',
+        taskId: PLAIN,
+      }),
+    );
+    const blocker = admitTestRequest(
+      baseSpec({
+        projectId: PROJECT,
+        worktreePath: '/tmp/wt-blocker',
+        contentHash: 'h-blocker',
+        taskId: BLOCKER,
+      }),
+    );
+    plain.result.catch(() => {});
+    blocker.result.catch(() => {});
+
+    resolvers[0]({ passed: true, output: '' });
+    await holder.result;
+    await vi.waitFor(() => expect(resolvers.length).toBe(2));
+    expect(getTestRequestRunById(blocker.runId)?.state).toBe('running');
+    expect(getTestRequestRunById(plain.runId)?.state).toBe('queued');
+  });
+
+  it('ranks a task only on the wrapped first milestone as Priority and warns once', () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    mockRunTestCommands.mockImplementation(() => new Promise(() => {}));
+    const admission = admitTestRequest(
+      baseSpec({ projectId: PROJECT, contentHash: 'h-o', taskId: OLD_ONLY }),
+    );
+    admission.result.catch(() => {});
+    expect(rankRow(admission.runId).priority_group).toBe('priority');
+    const unranked = warn.mock.calls.filter((c) =>
+      String(c[0]).includes('not on ranked boards'),
+    );
+    expect(unranked).toHaveLength(1);
+    expect(String(unranked[0][0])).toContain(`board:${ACTIVE}`);
+    warn.mockRestore();
+  });
+});
+
+describe('resolveAutoLaunchMilestoneId', () => {
+  it('prefers autoLaunchMilestoneId', () => {
+    expect(
+      resolveAutoLaunchMilestoneId({
+        autoLaunchMilestoneId: 'm-active',
+        boards: [{ id: 'm-old', sourceId: 's', name: 'M1' }],
+      }),
+    ).toBe('m-active');
+  });
+
+  it('falls back to the first board with a sourceId', () => {
+    expect(
+      resolveAutoLaunchMilestoneId({
+        autoLaunchMilestoneId: null,
+        boards: [
+          { id: 'm-yaml', sourceId: '', name: 'Y' },
+          { id: 'm-1', sourceId: 's1', name: 'M1' },
+        ],
+      }),
+    ).toBe('m-1');
+  });
+
+  it('returns null with no milestone to poll', () => {
+    expect(
+      resolveAutoLaunchMilestoneId({ autoLaunchMilestoneId: null, boards: [] }),
+    ).toBeNull();
   });
 });

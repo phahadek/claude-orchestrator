@@ -49,6 +49,7 @@ import {
   type ExecutionRank,
 } from './executionPriority';
 import { getProjectById } from '../config';
+import { resolveAutoLaunchMilestoneId } from './autoLaunchMilestone';
 import { normalizeTaskId } from '../tasks/taskId';
 import type { NotionTask } from '../notion/types';
 import { recordEvent } from '../audit/AuditLog';
@@ -102,6 +103,7 @@ import {
   type BreadthOwnTree,
   getFailingTestIdsForRun,
   getProjectRowById,
+  listMilestonesByProject,
   getLatestTestRequestRun,
   listQueuedTestRequestRunsForWorktree,
   rebindTestRequestRunContentHash,
@@ -460,14 +462,38 @@ const DEFAULT_PRIORITY_RANK: ExecutionRank = {
   executeNowSetAt: null,
 };
 
-function loadProjectBoardTasks(projectId: string): NotionTask[] {
-  const project = getProjectById(projectId);
+/**
+ * The task_cache keys a project's runs are ranked against: the board
+ * AutoLauncher dispatches from (resolveAutoLaunchMilestoneId) plus the
+ * non-milestone board. Not `project.boardId` — that is the first milestone by
+ * display order, typically long wrapped, so no live run's task is on it.
+ */
+function rankBoardCacheKeys(projectId: string): string[] {
+  const project = getProjectRowById(projectId);
   if (!project) return [];
+  // Same milestone list, in the same order, that hydrateProject builds
+  // ProjectConfig.boards from.
+  const boards = listMilestonesByProject(projectId).map((m) => ({
+    id: m.id,
+    sourceId: m.source_id ?? '',
+    name: m.name,
+  }));
+  const milestoneId =
+    resolveAutoLaunchMilestoneId({
+      autoLaunchMilestoneId: project.auto_launch_milestone_id,
+      boards,
+    }) ??
+    boards[0]?.id ??
+    null;
+  return [
+    ...(milestoneId ? [`board:${milestoneId}`] : []),
+    `non_milestone:${projectId}`,
+  ];
+}
+
+function loadBoardTasks(cacheKeys: string[]): NotionTask[] {
   const tasks: NotionTask[] = [];
-  for (const cacheKey of [
-    `board:${project.boardId}`,
-    `non_milestone:${project.id}`,
-  ]) {
+  for (const cacheKey of cacheKeys) {
     const row = getTaskCache(cacheKey);
     if (!row) continue;
     try {
@@ -479,20 +505,31 @@ function loadProjectBoardTasks(projectId: string): NotionTask[] {
   return tasks;
 }
 
-/** Ranks each task id (null = unresolvable) for one project from fresh board + flag inputs. */
+/**
+ * Ranks each task id (null = unresolvable) for one project from fresh board +
+ * flag inputs. `onUnranked` is called for a non-null id absent from the loaded
+ * boards, which then ranks as DEFAULT_PRIORITY_RANK.
+ */
 function resolveExecutionRanks(
   projectId: string,
   taskIds: (string | null)[],
+  onUnranked?: (taskId: string, boardKeys: string[]) => void,
 ): ExecutionRank[] {
+  let boardKeys: string[] = [];
   let ranks: Map<string, ExecutionRank> | null = null;
   try {
-    ranks = loadExecutionRanks(projectId, loadProjectBoardTasks(projectId));
+    boardKeys = rankBoardCacheKeys(projectId);
+    ranks = loadExecutionRanks(projectId, loadBoardTasks(boardKeys));
   } catch (err) {
     logger.warn(`[testRequestLane] rank load failed for ${projectId}: ${err}`);
   }
-  return taskIds.map(
-    (id) => (id && ranks?.get(normalizeTaskId(id))) || DEFAULT_PRIORITY_RANK,
-  );
+  return taskIds.map((id) => {
+    if (!id) return DEFAULT_PRIORITY_RANK;
+    const rank = ranks?.get(normalizeTaskId(id));
+    if (rank) return rank;
+    if (ranks) onUnranked?.(id, boardKeys);
+    return DEFAULT_PRIORITY_RANK;
+  });
 }
 
 function toWaiterKey(
@@ -1193,7 +1230,14 @@ export function admitTestRequest(
   const requestedAt = Date.now();
   const runId = randomUUID();
   const taskId = spec.taskId ?? null;
-  const [rank] = resolveExecutionRanks(spec.projectId, [taskId]);
+  const [rank] = resolveExecutionRanks(
+    spec.projectId,
+    [taskId],
+    (unranked, boardKeys) =>
+      logger.warn(
+        `[testRequestLane] run ${runId} task ${unranked} not on ranked boards (${boardKeys.join(', ')}) for ${spec.projectId} — ranking as Priority/unset`,
+      ),
+  );
   // Durably recorded as 'queued' before the semaphore permit is even
   // requested — a caller can query this row (and a boot-time crash mid-queue
   // is recoverable) from the moment of admission, not just from the moment
