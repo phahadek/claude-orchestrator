@@ -33,6 +33,7 @@ import {
   setLastSignalledHeadSha,
   setPauseReason,
   setSessionPauseReason,
+  clearSessionPauseReasonIf,
   insertPauseInterval,
   getSessionTags,
   setSessionTags,
@@ -114,6 +115,47 @@ import type {
   ReviewVerdictItem,
   ReviewVerdictRecordedPayload,
 } from '../github/types';
+
+/** Reasons asserting "this session is not progressing" — disproved by a completed turn. */
+const LIVENESS_PAUSE_REASONS = [
+  'runner_killed_unexpected',
+  'stalled_idle',
+  'orphaned_at_boot',
+] as const;
+
+const NON_BOUNDARY_PAYLOAD_TYPES = new Set([
+  'tool_progress',
+  'thinking_tokens',
+  'rate_limit_event',
+]);
+
+function isNonBoundaryEvent(row: {
+  event_type: string;
+  payload: string;
+}): boolean {
+  if (row.event_type === 'rate_limit') return true;
+  try {
+    const p = JSON.parse(row.payload) as Record<string, unknown>;
+    if (typeof p.type !== 'string') return false;
+    if (NON_BOUNDARY_PAYLOAD_TYPES.has(p.type)) return true;
+    if (p.type === 'system' && typeof p.subtype === 'string') {
+      return p.subtype === 'status' || p.subtype.startsWith('hook_');
+    }
+  } catch {
+    // unparseable rows count as turn-level
+  }
+  return false;
+}
+
+/** Newest event that is a turn boundary or content, skipping progress/status noise. */
+function lastTurnLevelEvent<T extends { event_type: string; payload: string }>(
+  events: readonly T[],
+): T | undefined {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (!isNonBoundaryEvent(events[i])) return events[i];
+  }
+  return undefined;
+}
 
 const PR_URL_REGEX = /https:\/\/github\.com\/([^/"\\]+\/[^/"\\]+)\/pull\/\d+/;
 const PR_BODY_MARKER_REGEX = /<pr-body>([\s\S]*?)<\/pr-body>/;
@@ -1405,8 +1447,8 @@ The full task spec and all rules are in your system prompt. Begin implementing d
    */
   private wasLastEventSuccessfulResult(): boolean {
     const events = getEventsBySession(this.sessionId);
-    if (events.length === 0) return false;
-    const lastEvent = events[events.length - 1];
+    const lastEvent = lastTurnLevelEvent(events);
+    if (!lastEvent) return false;
     if (eventKind(lastEvent) !== 'result') return false;
     try {
       const payload = JSON.parse(lastEvent.payload) as Record<string, unknown>;
@@ -1427,8 +1469,8 @@ The full task spec and all rules are in your system prompt. Begin implementing d
   private getLastResultErrorDetail(): string | undefined {
     try {
       const events = getEventsBySession(this.sessionId);
-      if (events.length === 0) return undefined;
-      const lastEvent = events[events.length - 1];
+      const lastEvent = lastTurnLevelEvent(events);
+      if (!lastEvent) return undefined;
       if (eventKind(lastEvent) !== 'result') return undefined;
       const payload = JSON.parse(lastEvent.payload) as Record<string, unknown>;
       if (payload.is_error !== true) return undefined;
@@ -1699,6 +1741,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         });
         if (
           orchestratorMcpStatus !== 'connected' &&
+          orchestratorMcpStatus !== 'pending' &&
           isCodeSession(this.sessionType)
         ) {
           this.pauseForOrchestratorMcpConnectFailure(orchestratorMcpStatus);
@@ -1895,6 +1938,17 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     // Also signal turn completion so the server can check for new commits.
     if (rawType === 'result') {
       this._turnInFlight = false;
+      if (event.is_error !== true) {
+        try {
+          clearSessionPauseReasonIf(
+            this.sessionId,
+            LIVENESS_PAUSE_REASONS,
+            'turn_completed',
+          );
+        } catch {
+          // Best-effort — DB may be unavailable or mocked without this function.
+        }
+      }
       const pr = getPRBySessionId(this.sessionId);
       if (pr?.review_session_id || (pr && isPreReviewBlocked(pr))) {
         // Gate on actual HEAD SHA advance — skip when no new commits were made.
