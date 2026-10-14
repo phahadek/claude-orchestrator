@@ -1,6 +1,6 @@
 import type { TaskView } from '../types/taskView';
 import { CompactTaskCard } from './CompactTaskCard';
-import { sortByPriority } from '../utils/taskSort';
+import { sortByExecutionRank } from '../utils/taskSort';
 import styles from './TaskList.module.css';
 
 interface Props {
@@ -24,7 +24,7 @@ export function BacklogCodeSection({
 }: Props) {
   if (tasks.length === 0) return null;
 
-  const sorted = sortByPriority(tasks);
+  const sorted = sortByExecutionRank(tasks);
   const groomable = groomCheckedIds !== undefined;
 
   return (
@@ -50,14 +50,15 @@ export function BacklogCodeSection({
       {isExpanded && (
         <div className={styles.groupCards}>
           {sorted.map((task) => {
-            const depBlocked = groomable && !!task.groomDepBlocked;
+            const canGroom = groomable && task.displayStatus === 'backlog';
+            const depBlocked = canGroom && !!task.groomDepBlocked;
             return (
               <CompactTaskCard
                 key={task.taskId}
                 task={task}
-                showCheckbox={groomable && !depBlocked}
+                showCheckbox={canGroom && !depBlocked}
                 checked={
-                  groomable && !depBlocked && groomCheckedIds!.has(task.taskId)
+                  canGroom && !depBlocked && groomCheckedIds!.has(task.taskId)
                 }
                 onCheckChange={onGroomCheckChange ?? (() => {})}
                 blockedReason={depBlocked ? task.groomDepBlockedReason : null}

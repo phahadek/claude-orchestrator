@@ -12,7 +12,11 @@ import type { StagedIntent } from '../api/stagedIntents';
 import { opsJournalApi } from '../api/opsJournal';
 import { useDispatch } from '../hooks/useDispatch';
 import { projectsApi } from '../api/projects';
-import { sortByPriority } from '../utils/taskSort';
+import {
+  sortByPriority,
+  sortByExecutionRank,
+  codeCategory,
+} from '../utils/taskSort';
 import { bareTaskId } from '../utils/taskId';
 import styles from './TaskList.module.css';
 
@@ -36,18 +40,6 @@ interface Props {
   send: (msg: ClientMessage) => boolean;
   project: ProjectConfig | null;
 }
-
-// Code section groups, in display order. Ready/Backlog/Done are handled by their own
-// dedicated sections below (ReadySection, BacklogCodeSection, the bottom Done section).
-const CODE_GROUP_ORDER: DisplayStatus[] = [
-  'needs_attention',
-  'ready_to_merge',
-  'auto_recovering',
-  'in_progress',
-  'in_review',
-  'blocked',
-  'deferred',
-];
 
 const GROUP_LABELS: Record<DisplayStatus, string> = {
   needs_attention: '⚠️ Needs Attention',
@@ -138,7 +130,7 @@ function groupByWave(tasks: TaskView[]): Map<number, TaskView[]> {
     map.get(wave)!.push(task);
   }
   for (const [wave, waveTasks] of map) {
-    map.set(wave, sortByPriority(waveTasks));
+    map.set(wave, sortByExecutionRank(waveTasks));
   }
   return map;
 }
@@ -171,7 +163,9 @@ function ReadySection({
     return new Set(Array.from(initialMap.keys()).filter((w) => w > 1));
   });
 
-  const wave1CodeTasks = tasks.filter((t) => (t.wave ?? 1) === 1 && !t.blocked);
+  const wave1CodeTasks = tasks.filter(
+    (t) => (t.wave ?? 1) === 1 && !t.blocked && t.displayStatus === 'ready',
+  );
   const totalCount = tasks.length;
   const waveMap = groupByWave(tasks);
   const waveNumbers = Array.from(waveMap.keys()).sort((a, b) => a - b);
@@ -300,6 +294,7 @@ function ReadySection({
                       showCheckbox={
                         wave === 1 &&
                         !task.blocked &&
+                        task.displayStatus === 'ready' &&
                         task.taskType.includes('💻')
                       }
                       checked={checkedIds.has(task.taskId)}
@@ -547,24 +542,27 @@ export function TaskList({
   const codeTasks = tasks.filter((t) => t.taskType.includes('💻'));
   const nonCodeTasks = tasks.filter((t) => !t.taskType.includes('💻'));
 
-  const codeDoneTasks = codeTasks.filter((t) => t.displayStatus === 'done');
+  const codeDoneTasks = codeTasks.filter((t) => codeCategory(t) === 'done');
   const nonCodeDoneTasks = nonCodeTasks.filter(
     (t) => t.displayStatus === 'done',
   );
   const doneCount = codeDoneTasks.length + nonCodeDoneTasks.length;
 
-  const codeNotDone = codeTasks.filter((t) => t.displayStatus !== 'done');
+  const codeNotDone = codeTasks.filter((t) => codeCategory(t) !== 'done');
   const nonCodeNotDone = nonCodeTasks.filter((t) => t.displayStatus !== 'done');
 
-  const readyCodeTasks = codeNotDone.filter((t) => t.displayStatus === 'ready');
+  const readyCodeTasks = codeNotDone.filter((t) => codeCategory(t) === 'ready');
+  const inProgressCodeTasks = sortByExecutionRank(
+    codeNotDone.filter((t) => codeCategory(t) === 'in_progress'),
+  );
   const backlogCodeTasks = codeNotDone.filter(
-    (t) => t.displayStatus === 'backlog',
+    (t) => codeCategory(t) === 'backlog',
   );
   const backlogNonCodeTasks = nonCodeNotDone.filter(
     (t) => t.displayStatus === 'backlog',
   );
   const groomableTasks = [...backlogCodeTasks, ...backlogNonCodeTasks].filter(
-    (t) => !t.groomDepBlocked,
+    (t) => t.displayStatus === 'backlog' && !t.groomDepBlocked,
   );
   const groomSelectedCount = groomableTasks.filter((t) =>
     groomCheckedIds.has(t.taskId),
@@ -827,16 +825,6 @@ export function TaskList({
     }
   }
 
-  // Build per-status lookup for the remaining code groups (needs_attention, ready_to_merge,
-  // in_progress, in_review, blocked, deferred) — ready/backlog/done have their own sections.
-  const codeGroupMap = new Map<DisplayStatus, TaskView[]>();
-  for (const status of CODE_GROUP_ORDER) {
-    codeGroupMap.set(
-      status,
-      sortByPriority(codeNotDone.filter((t) => t.displayStatus === status)),
-    );
-  }
-
   const urgentEffectiveCount = codeNotDone.filter(isEffectivelyUrgent).length;
   const urgentDirectCount = codeNotDone.filter((t) => t.urgent).length;
 
@@ -850,48 +838,44 @@ export function TaskList({
             🚨 {urgentEffectiveCount} urgent ({urgentDirectCount} flagged)
           </div>
         )}
-        {CODE_GROUP_ORDER.map((status) => {
-          const groupTasks = codeGroupMap.get(status) ?? [];
-          if (groupTasks.length === 0) return null;
-
-          const isExpanded = !collapsed.has(status);
-          const label = GROUP_LABELS[status];
-
-          return (
-            <div key={status} className={styles.group} data-status={status}>
-              <div
-                className={`${styles.groupHeader} ${styles.groupHeaderToggle}`}
-                onClick={() => toggleGroup(status)}
-                role="button"
-                aria-expanded={isExpanded}
-                data-testid={`group-header-${status}`}
-              >
-                <span className={styles.groupLabel}>{label}</span>
-                <span className={styles.groupCount}>{groupTasks.length}</span>
-                <span className={styles.toggle} aria-hidden="true">
-                  {isExpanded ? '▼' : '▶'}
-                </span>
-              </div>
-
-              {isExpanded && (
-                <div className={styles.groupCards}>
-                  {groupTasks.map((task) => (
-                    <TaskCard
-                      key={task.taskId}
-                      task={task}
-                      selected={task.taskId === selectedTaskId}
-                      onClick={() => onSelectTask(task.taskId)}
-                      send={send}
-                      project={project}
-                      boardId={boardId}
-                      onMoveStaged={setMoveIntent}
-                    />
-                  ))}
-                </div>
-              )}
+        {inProgressCodeTasks.length > 0 && (
+          <div className={styles.group} data-status="in_progress">
+            <div
+              className={`${styles.groupHeader} ${styles.groupHeaderToggle}`}
+              onClick={() => toggleGroup('in_progress')}
+              role="button"
+              aria-expanded={!collapsed.has('in_progress')}
+              data-testid="group-header-in_progress"
+            >
+              <span className={styles.groupLabel}>
+                {GROUP_LABELS.in_progress}
+              </span>
+              <span className={styles.groupCount}>
+                {inProgressCodeTasks.length}
+              </span>
+              <span className={styles.toggle} aria-hidden="true">
+                {!collapsed.has('in_progress') ? '▼' : '▶'}
+              </span>
             </div>
-          );
-        })}
+
+            {!collapsed.has('in_progress') && (
+              <div className={styles.groupCards}>
+                {inProgressCodeTasks.map((task) => (
+                  <TaskCard
+                    key={task.taskId}
+                    task={task}
+                    selected={task.taskId === selectedTaskId}
+                    onClick={() => onSelectTask(task.taskId)}
+                    send={send}
+                    project={project}
+                    boardId={boardId}
+                    onMoveStaged={setMoveIntent}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {readyCodeTasks.length > 0 && (
           <ReadySection
