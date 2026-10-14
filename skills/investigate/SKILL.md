@@ -769,7 +769,10 @@ difference.
    ```bash
    node ~/.claude/scripts/investigate-load.mjs --project claude-dashboard
    ```
-   It opens `dashboard.db` **read-only** and emits: the true `deployed` SHA + a `deployHint` (deployed
+   It opens `dashboard.db` **read-only** when the host has it; on a host without it (e.g. a Remote
+   Control box) it transparently reads the same snapshot from the device-authed backend route
+   `GET /api/investigate-snapshot` (`ORCHESTRATOR_BACKEND_HOST`/`_PORT` + `ORCHESTRATOR_DEVICE_TOKEN`;
+   `--remote` forces it) and stamps `source: 'local-db' | 'backend-route'`. It emits: the true `deployed` SHA + a `deployHint` (deployed
    ≠ HEAD ≠ attempted), the `activeMilestone` (+ board id), `erroredSessions` (each with its on-disk
    prompt-file path), **`recentPlanningSessions`** (recent non-Done groom/design/ops — the idle/killed
    "looks fine but bungled it" class, each with its prompt file), `recentDeploys` (failed attempts
@@ -819,7 +822,9 @@ difference.
 All read-only or draft-then-confirm; all sanctioned by `procedures.md` / `context.md`:
 
 - **`investigate-load.mjs`** — the read-only live-health snapshot loader (see `reference/snapshot.md`).
-- **The read-only `better-sqlite3` accessor** — for anything the loader doesn't surface: a query using
+  Works from any host with the device token (falls back to the backend route when no local DB).
+- **The read-only `better-sqlite3` accessor** — needs the host that holds `dashboard.db` (paulie-orch);
+  remote ad-hoc SQL is not available. For anything the loader doesn't surface: a query using
   the bundled driver, `{ readonly: true }`, against the orchestrator's SQLite DB. **The DB path and
   the runtime directory to run from are host facts — read them from the project's `context.md`**
   (§ Inspecting live state), or take `$ORCHESTRATOR_DB_PATH` where it is set; this skill deliberately

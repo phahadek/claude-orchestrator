@@ -163,6 +163,7 @@ import { createGroomContextRouter } from './routes/groomContext';
 import { createGroomFlipRouter } from './routes/groomFlip';
 import { createMergeCandidatesRouter } from './routes/mergeCandidates';
 import { createOpsContextRouter } from './routes/opsContext';
+import { createInvestigateSnapshotRouter } from './routes/investigateSnapshot';
 import { createMilestonesRouter } from './routes/milestones';
 import { createPlanningLaunchRouter } from './routes/planningLaunch';
 import {
@@ -432,6 +433,7 @@ const opsSessionLauncher = new OpsSessionLauncher(sessionManager);
 app.use('/api', createGroomFlipRouter(opsSessionLauncher));
 app.use('/api', createMergeCandidatesRouter());
 app.use('/api', createOpsContextRouter());
+app.use('/api', createInvestigateSnapshotRouter());
 app.use('/api', createMilestonesRouter());
 app.use('/api', createPlanningLaunchRouter(opsSessionLauncher));
 
