@@ -1049,6 +1049,103 @@ describe('PreReviewPipeline — verify gate', () => {
     });
   });
 
+  it('charges the failure to the HEAD at gate entry when HEAD moves mid-run, and audits the move', async () => {
+    mockGetHeadSha
+      .mockResolvedValueOnce('head-A') // run start
+      .mockResolvedValueOnce('head-A') // gate entry
+      .mockResolvedValueOnce('head-B'); // post-failure
+    mockLaneResult({
+      passed: false,
+      output: 'type error',
+      failedCommand: 'tsc',
+    });
+    const pipeline = new PreReviewPipeline(makeSessionManager());
+
+    await pipeline.run(makeJob(), makeProject());
+
+    const [, , reviewResultJson] = vi.mocked(mockSetPRReviewResult).mock
+      .calls[0];
+    expect(parseGateFailureDetail(reviewResultJson as string)).toMatchObject({
+      failedHeadSha: 'head-A',
+    });
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'gate_head_moved_during_run',
+        payload: {
+          prNumber: PR_NUMBER,
+          repo: REPO,
+          stage: 'verify',
+          entryHead: 'head-A',
+          currentHead: 'head-B',
+        },
+      }),
+    );
+  });
+
+  it('does not audit a head move when HEAD is unchanged across the gate', async () => {
+    mockGetHeadSha.mockResolvedValue('head-A');
+    mockLaneResult({ passed: false, output: 'boom', failedCommand: 'tsc' });
+    const pipeline = new PreReviewPipeline(makeSessionManager());
+
+    await pipeline.run(makeJob(), makeProject());
+
+    expect(mockRecordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'gate_head_moved_during_run' }),
+    );
+  });
+
+  it('falls back to the post-failure HEAD when the gate-entry read throws', async () => {
+    mockGetHeadSha
+      .mockResolvedValueOnce('head-A') // run start
+      .mockRejectedValueOnce(new Error('git busy')) // gate entry
+      .mockResolvedValueOnce('head-B'); // post-failure
+    mockLaneResult({
+      passed: false,
+      output: 'type error',
+      failedCommand: 'tsc',
+    });
+    const pipeline = new PreReviewPipeline(makeSessionManager());
+
+    await pipeline.run(makeJob(), makeProject());
+
+    const [, , reviewResultJson] = vi.mocked(mockSetPRReviewResult).mock
+      .calls[0];
+    expect(parseGateFailureDetail(reviewResultJson as string)).toMatchObject({
+      failedHeadSha: 'head-B',
+    });
+  });
+
+  it('re-runs the gate on the next run at the moved HEAD B after a failure charged to A', async () => {
+    mockGetPRByNumber.mockReturnValue(
+      makePRRow({
+        pre_review_stage: 'blocked_verify',
+        pause_reason: 'ci_failing',
+        review_result: JSON.stringify({
+          verdict: 'verify_failed',
+          summary: 'verify failed',
+          failedHeadSha: 'head-A',
+        }),
+      }),
+    );
+    mockLoadAutofixCommands.mockReturnValue(['npm run fix']);
+    mockRunAutofix.mockResolvedValue({
+      success: true,
+      summary: 'autofix commands produced no diff',
+      commitSha: null,
+    });
+    mockGetHeadSha.mockResolvedValue('head-B');
+    mockLaneResult({ passed: true, output: '' });
+    const pipeline = new PreReviewPipeline(makeSessionManager());
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(true);
+    expect(mockAdmitTestRequest).toHaveBeenCalledOnce();
+    expect(mockRecordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'autofix_noop_retry_skipped' }),
+    );
+  });
+
   it('passes when verify succeeds', async () => {
     mockLaneResult({ passed: true, output: '' });
     const sm = makeSessionManager();

@@ -1199,6 +1199,7 @@ export class PreReviewPipeline {
     job: ReviewJob,
     detail: GateFailureDetail,
     worktreePath: string,
+    headAtGateEntry?: string,
   ): Promise<void> {
     const prRow = getPRByNumber(job.prNumber, job.repo);
 
@@ -1210,19 +1211,37 @@ export class PreReviewPipeline {
           ? 'gate_timeout_infra_failure'
           : stage.verdict;
 
-    // The worktree's HEAD at the moment this gate failed — not
-    // pull_requests.head_sha, which can already be behind by the time this
-    // runs. Read fresh so the no-diff-autofix guard below can tell a true
-    // retry of this exact tree apart from a push that landed in between.
-    let failedHeadSha: string | undefined;
+    // Charge the failure to the HEAD the gate started on: the worktree can
+    // move mid-run (session commit, lane merge), and blaming a commit the
+    // gate never saw would make the no-diff-autofix guard refuse to test it.
+    let currentHead: string | undefined;
     if (worktreePath) {
       try {
-        failedHeadSha = await getHeadSha(worktreePath);
+        currentHead = await getHeadSha(worktreePath);
       } catch (e) {
         logger.warn(
           `[PreReviewPipeline] handleGateFailure: failed to read worktree HEAD for PR #${job.prNumber}: ${e}`,
         );
       }
+    }
+    const failedHeadSha = headAtGateEntry ?? currentHead;
+    if (headAtGateEntry && currentHead && headAtGateEntry !== currentHead) {
+      logger.warn(
+        `[PreReviewPipeline] PR #${job.prNumber}: HEAD moved during gate stage=${stage.id} (${headAtGateEntry.slice(0, 8)} → ${currentHead.slice(0, 8)}) — failure charged to ${headAtGateEntry.slice(0, 8)}`,
+      );
+      recordEvent({
+        event_type: 'gate_head_moved_during_run',
+        actor_type: 'system',
+        project_id: null,
+        task_id: job.taskId ?? null,
+        payload: {
+          prNumber: job.prNumber,
+          repo: job.repo,
+          stage: stage.id,
+          entryHead: headAtGateEntry,
+          currentHead,
+        },
+      });
     }
 
     setPRReviewResult(
@@ -1386,6 +1405,16 @@ export class PreReviewPipeline {
       );
 
       if (stage.mode === 'gate') {
+        let headAtGateEntry: string | undefined;
+        if (ctx.worktreePath) {
+          try {
+            headAtGateEntry = await getHeadSha(ctx.worktreePath);
+          } catch (e) {
+            logger.warn(
+              `[PreReviewPipeline] run: failed to read gate-entry worktree HEAD for PR #${job.prNumber}: ${e}`,
+            );
+          }
+        }
         const failure = await stage.run(ctx);
         if (failure?.stopWithoutVerdict) {
           logger.info(
@@ -1415,7 +1444,13 @@ export class PreReviewPipeline {
               failedCommand: failure.failedCommand,
             },
           );
-          await this.handleGateFailure(stage, job, failure, ctx.worktreePath);
+          await this.handleGateFailure(
+            stage,
+            job,
+            failure,
+            ctx.worktreePath,
+            headAtGateEntry,
+          );
           return { passed: false };
         }
         logger.info(
