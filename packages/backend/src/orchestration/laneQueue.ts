@@ -25,6 +25,8 @@ interface Waiter {
   skippedSince?: number;
 }
 
+export type LaneEligibility = 'eligible' | 'session_busy' | 'worktree_busy';
+
 export interface PriorityLaneQueueOpts {
   rerank?: (projectId: string, runIds: string[]) => Map<string, LaneWaiterKey>;
   onGrant?: (runId: string) => void;
@@ -32,9 +34,10 @@ export interface PriorityLaneQueueOpts {
    * Called when a free slot could go to this waiter. May have side effects
    * (the lane takes the owner's merge hold here), so it is called only for a
    * waiter about to be granted when it returns true. An ineligible waiter is
-   * passed over without losing its rank.
+   * passed over without losing its rank. Only 'session_busy' counts toward
+   * skipCeilingMs; 'worktree_busy' clears when the blocking run releases.
    */
-  eligible?: (runId: string) => boolean;
+  eligible?: (runId: string) => LaneEligibility;
   /** Wall-clock ms an ineligible waiter may stay passed over before being withdrawn. */
   skipCeilingMs?: number;
   /** Called after a waiter is withdrawn for exceeding skipCeilingMs. */
@@ -101,13 +104,18 @@ export class PriorityLaneQueue {
   }
 
   async acquire(runId: string, key: LaneWaiterKey): Promise<() => void> {
-    if (this.available > 0 && (this.opts.eligible?.(runId) ?? true)) {
+    const verdict: LaneEligibility =
+      this.available > 0
+        ? (this.opts.eligible?.(runId) ?? 'eligible')
+        : 'eligible';
+    if (this.available > 0 && verdict === 'eligible') {
       this.available--;
       this.opts.onGrant?.(runId);
       return () => this.release();
     }
     return new Promise((resolve, reject) => {
-      const parkedWithFreeSlot = this.available > 0;
+      const parkedWithFreeSlot =
+        this.available > 0 && verdict === 'session_busy';
       this.insert({
         id: runId,
         key,
@@ -205,8 +213,9 @@ export class PriorityLaneQueue {
       const list = this.lists.get(pid)!;
       for (let i = 0; i < list.length; i++) {
         const w = list[i];
-        if (this.opts.eligible && !this.opts.eligible(w.id)) {
-          w.skippedSince ??= this.now();
+        const verdict = this.opts.eligible?.(w.id) ?? 'eligible';
+        if (verdict !== 'eligible') {
+          if (verdict === 'session_busy') w.skippedSince ??= this.now();
           continue;
         }
         this.removeFrom(list, i, pid);
