@@ -390,6 +390,24 @@ describe('buildOrchestratorClaudeMd', () => {
     expect(flakySection).toContain('cross-SHA');
   });
 
+  it('Responding to Review Comments section instructs staging review_dispute for the four disputable verdicts', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    const start = result.indexOf('## Responding to Review Comments');
+    const section = result.slice(
+      start,
+      result.indexOf('## Status Ownership', start),
+    );
+    expect(section).toContain('mcp__orchestrator__review_dispute');
+    for (const v of [
+      'needs_changes',
+      'incomplete',
+      'verify_failed',
+      'autofix_failed',
+    ]) {
+      expect(section).toContain(v);
+    }
+  });
+
   it('Flaky/Transient section points at the digest wait instruction instead of re-calling flaky_confirm periodically', () => {
     const result = buildOrchestratorClaudeMd(defaultParams);
     const flakySection = result.slice(

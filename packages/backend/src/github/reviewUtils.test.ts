@@ -392,6 +392,19 @@ describe('formatReviewFeedback() — conflict state', () => {
     ...overrides,
   });
 
+  it.each(['needs_changes', 'incomplete'] as const)(
+    'includes the review.dispute line for %s with an unchanged Verdict line',
+    (verdict) => {
+      const result = formatReviewFeedback(makeResult({ verdict }), 1);
+      expect(result).toContain(
+        'stage review.dispute with your evidence instead of leaving it unaddressed.',
+      );
+      expect(result).toContain(
+        `**Verdict:** ${verdict === 'needs_changes' ? 'Needs changes' : 'Incomplete'}\n\n`,
+      );
+    },
+  );
+
   it('non-conflicted PR keeps the do-not-rebase guidance', () => {
     const result = formatReviewFeedback(makeResult(), 1, {
       conflicted: false,

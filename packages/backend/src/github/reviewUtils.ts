@@ -198,7 +198,46 @@ export function formatReviewFeedback(
     `**Overall:** ${result.summary}\n\n` +
     `Please address these issues and push your changes. ` +
     `The orchestrator will automatically re-review.\n\n` +
+    `${DISPUTE_HINT}\n\n` +
     buildRebaseGuidance(conflicted, baseBranch)
+  );
+}
+
+const DISPUTE_HINT =
+  'If you conclude an item is wrong or cannot be satisfied (e.g. a Project Rule forbids it), stage review.dispute with your evidence instead of leaving it unaddressed.';
+
+/**
+ * Prompt for a session_inert relaunch when the PR holds an outstanding
+ * blocking AI verdict; null when it does not (caller falls back to its
+ * generic prompt).
+ */
+export function formatBlockingVerdictNudge(
+  reviewResult: string | null,
+  prNumber: number,
+  repo: string,
+): string | null {
+  if (!reviewResult) return null;
+  let result: PRReviewResult;
+  try {
+    result = JSON.parse(reviewResult) as PRReviewResult;
+  } catch {
+    return null;
+  }
+  if (result.verdict !== 'needs_changes' && result.verdict !== 'incomplete') {
+    return null;
+  }
+  const failing = (result.dimensions ?? []).filter((d) => !d.passed);
+  const dimensionLines =
+    failing.length > 0
+      ? failing.map((d) => `- **${d.name}**: ${d.notes}`).join('\n')
+      : '(no specific dimension failures recorded)';
+  return (
+    `This session has shown no activity for a while, but PR #${prNumber} (${repo}) is still open with an outstanding blocking review verdict.\n\n` +
+    `**Verdict:** ${result.verdict === 'needs_changes' ? 'Needs changes' : 'Incomplete'}\n\n` +
+    `### Issues found:\n${dimensionLines}\n\n` +
+    `**Overall:** ${result.summary}\n\n` +
+    `Two routes forward: push a fix, or stage review.dispute with your evidence if you conclude an item is wrong or cannot be satisfied (e.g. a Project Rule forbids it). ` +
+    `The AI verdict is not posted on GitHub, so re-checking GitHub will not show it.`
   );
 }
 

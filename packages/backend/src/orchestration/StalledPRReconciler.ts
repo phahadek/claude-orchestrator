@@ -27,6 +27,7 @@ import {
   isRunFailureBreadthAttributable,
   resolveBreadthOwnTree,
   hasUndispositionedNoOpForSession,
+  hasPendingReviewDisputeForPR,
 } from '../db/queries';
 import { isManualActionPause } from '../db/pauseReason';
 import { getProjectByGithubRepo } from '../config';
@@ -48,6 +49,7 @@ import { yieldToEventLoop } from '../utils/concurrency';
 import {
   formatCIFailureFeedback,
   formatMergeConflictFeedback,
+  formatBlockingVerdictNudge,
 } from '../github/reviewUtils';
 import { supersedeReviewSession } from '../github/reviewSessionSupersede';
 import { parseGateFailureDetail } from './gateFailureDetail';
@@ -310,9 +312,12 @@ export class StalledPRReconciler {
       // recency, mirroring isBusyInFlightToolCall above. See
       // isSessionIdAwaitingOperatorDecision and OrphanedTaskSweeper's
       // matching guard.
-      const isAwaitingOperatorDecision = pr.session_id
-        ? sessionAwaitingOperatorDecision(pr.session_id)
-        : false;
+      // A staged review.dispute on this PR is the same condition: the
+      // operator owns the next move.
+      const isAwaitingOperatorDecision =
+        (pr.session_id
+          ? sessionAwaitingOperatorDecision(pr.session_id)
+          : false) || hasPendingReviewDisputeForPR(pr.pr_number, pr.repo);
 
       const isPreReviewPipelineInFlight =
         this.reviewOrchestrator?.isReviewInFlight(pr.pr_number, pr.repo) ??
@@ -452,6 +457,9 @@ export class StalledPRReconciler {
     // the 2026-09-27 operator ruling closes off. Abstain until the operator
     // dispositions it; the retry count is left untouched.
     if (sessionId && hasUndispositionedNoOpForSession(sessionId)) {
+      return false;
+    }
+    if (hasPendingReviewDisputeForPR(prNumber, repo)) {
       return false;
     }
 
@@ -760,7 +768,8 @@ export class StalledPRReconciler {
             baseBranch: pr.base_branch ?? 'dev',
           })
         : kind === 'session_inert'
-          ? `This session has shown no activity for a while, but PR #${prNumber} (${repo}) is still open and unmerged. Please check the current state of the branch and PR and continue toward getting it mergeable, or report back if it's already complete.`
+          ? (formatBlockingVerdictNudge(pr.review_result, prNumber, repo) ??
+            `This session has shown no activity for a while, but PR #${prNumber} (${repo}) is still open and unmerged. Please check the current state of the branch and PR and continue toward getting it mergeable, or report back if it's already complete.`)
           : formatCIFailureFeedback({
               source: 'verify',
               ...parseGateFailureDetail(pr.review_result),

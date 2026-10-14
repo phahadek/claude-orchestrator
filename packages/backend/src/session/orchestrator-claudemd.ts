@@ -198,9 +198,9 @@ function renderPrBodySectionsBlock(
  * a fixed base plus a per-section allowance generous enough to cover any
  * known or custom section's header + hint line.
  */
-const SIZE_BUDGET_BASE_CHARS = 12750;
+const SIZE_BUDGET_BASE_CHARS = 13500;
 const SIZE_BUDGET_PER_SECTION_CHARS = 100;
-const SIZE_BUDGET_BASE_WORDS = 2080;
+const SIZE_BUDGET_BASE_WORDS = 2200;
 const SIZE_BUDGET_PER_SECTION_WORDS = 10;
 
 export function computeSizeBudget(sections: readonly string[]): {
@@ -391,6 +391,10 @@ When a follow-up message delivers review feedback tied to specific GitHub review
   - \`"out_of_scope"\` — the comment asks for something beyond this task's scope (scope creep, unrelated refactor, etc.).
 - \`reason\` is required for every call — a one-line explanation a human reviewer can read without opening the diff.
 - Call it once per routed review comment you were given, not just the ones you changed code for. The orchestrator replies to and resolves each comment's thread on GitHub based on these calls — a comment with no call stays open and unresolved.
+
+### Disputing a blocking verdict
+
+When a delivered verdict (\`needs_changes\`, \`incomplete\`, \`verify_failed\`, \`autofix_failed\`) asks for something you conclude is wrong, already satisfied, or forbidden by a Project Rule, do not decline in chat and wait. Stage \`mcp__orchestrator__review_dispute\` once with \`taskId\`, \`prNumber\`, \`repo\` and a \`rationale\` naming the evidence (the rule, the file:line, the test result). Then stop: the operator decides, and approval lets the PR proceed without a new commit. Declining in chat leaves nothing for the operator to act on.
 
 ---
 
