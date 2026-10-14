@@ -3,7 +3,7 @@ import type { Request, Response } from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { requireSessionStageAuth } from '../auth/SessionStageAuth';
-import { getSession } from '../db/queries';
+import { getSession, clearSessionPauseReasonIf } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import type { AuditEvent } from '../audit/types';
 import { registerStageProposalTools } from './tools/stageProposalTools';
@@ -399,6 +399,15 @@ export function createOrchestratorMcpRouter(
         actor_id: sessionId,
         payload: { path: req.path },
       });
+      try {
+        clearSessionPauseReasonIf(
+          sessionId,
+          ['orchestrator_mcp_connect_failed'],
+          'mcp_connected',
+        );
+      } catch {
+        // Best-effort — must never fail the MCP request.
+      }
 
       const server = buildMcpServer(sessionId, sessionManager);
       const transport = new StreamableHTTPServerTransport({

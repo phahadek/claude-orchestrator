@@ -376,6 +376,42 @@ export function setSessionPauseReason(sessionId: string, reason: string): void {
   ).run({ session_id: sessionId, pause_reason: reason });
 }
 
+/**
+ * Compare-and-clear: nulls sessions.pause_reason only when its current value
+ * is in `reasons`, so a reason set for another cause is never erased.
+ * Returns true when a row changed.
+ */
+export function clearSessionPauseReasonIf(
+  sessionId: string,
+  reasons: readonly string[],
+  cause: string,
+): boolean {
+  if (reasons.length === 0) return false;
+  const row = db
+    .prepare<{
+      session_id: string;
+    }>(`SELECT pause_reason FROM sessions WHERE session_id = @session_id`)
+    .get({ session_id: sessionId }) as
+    | { pause_reason: string | null }
+    | undefined;
+  const from = row?.pause_reason;
+  if (!from || !reasons.includes(from)) return false;
+  const placeholders = reasons.map(() => '?').join(', ');
+  const res = db
+    .prepare(
+      `UPDATE sessions SET pause_reason = NULL WHERE session_id = ? AND pause_reason IN (${placeholders})`,
+    )
+    .run(sessionId, ...reasons);
+  if (res.changes === 0) return false;
+  recordEvent({
+    event_type: 'session_pause_reason_cleared',
+    actor_type: 'system',
+    actor_id: sessionId,
+    payload: { sessionId, from, cause },
+  });
+  return true;
+}
+
 export function setSessionLastErrorDetail(
   sessionId: string,
   detail: string,
