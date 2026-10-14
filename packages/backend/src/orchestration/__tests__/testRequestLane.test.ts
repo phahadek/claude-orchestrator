@@ -146,6 +146,7 @@ import {
   insertMilestone,
   upsertTaskCache,
   setTaskUrgent,
+  insertSession,
 } from '../../db/queries';
 import { logger } from '../../logger';
 import type { NotionTask } from '../../notion/types';
@@ -155,6 +156,7 @@ import {
   __checkoutInstallLockMapSizeForTest,
 } from '../checkoutInstallLock';
 import { typedSetSetting } from '../../config/settings';
+import { isMergeHeld } from '../mergeHold';
 
 beforeEach(() => {
   mockRunTestCommands.mockReset();
@@ -721,9 +723,15 @@ describe('runProjectTestRequest — coalescing', () => {
         }),
     );
 
-    const p1 = runProjectTestRequest(baseSpec({ contentHash: 'cap-a' }));
-    const p2 = runProjectTestRequest(baseSpec({ contentHash: 'cap-b' }));
-    const p3 = runProjectTestRequest(baseSpec({ contentHash: 'cap-c' }));
+    const p1 = runProjectTestRequest(
+      baseSpec({ contentHash: 'cap-a', worktreePath: '/tmp/wt-cap-a' }),
+    );
+    const p2 = runProjectTestRequest(
+      baseSpec({ contentHash: 'cap-b', worktreePath: '/tmp/wt-cap-b' }),
+    );
+    const p3 = runProjectTestRequest(
+      baseSpec({ contentHash: 'cap-c', worktreePath: '/tmp/wt-cap-c' }),
+    );
     await vi.waitFor(() => expect(resolvers).toHaveLength(2));
 
     resolvers[0]({ passed: true, output: 'ok' });
@@ -1373,7 +1381,7 @@ describe('runProjectTestRequest — checkout install lock', () => {
       baseSpec({
         projectId: 'proj-lock-readers',
         contentHash: 'lock-readers-b',
-        worktreePath: '/tmp/checkout-lock-readers',
+        worktreePath: '/tmp/checkout-lock-readers-2',
       }),
     );
 
@@ -1919,8 +1927,12 @@ describe('concurrent_run_count', () => {
         }),
     );
 
-    const p1 = runProjectTestRequest(baseSpec({ contentHash: 'hash-conc-1' }));
-    const p2 = runProjectTestRequest(baseSpec({ contentHash: 'hash-conc-2' }));
+    const p1 = runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-conc-1', worktreePath: '/tmp/wt-conc-1' }),
+    );
+    const p2 = runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-conc-2', worktreePath: '/tmp/wt-conc-2' }),
+    );
 
     await vi.waitFor(() =>
       expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
@@ -1988,7 +2000,11 @@ describe('foreign_concurrent_run_count', () => {
       baseSpec({ contentHash: 'hash-foreign-1' }),
     );
     const p2 = runProjectTestRequest(
-      baseSpec({ projectId: 'proj-2', contentHash: 'hash-foreign-2' }),
+      baseSpec({
+        projectId: 'proj-2',
+        contentHash: 'hash-foreign-2',
+        worktreePath: '/tmp/wt-proj-2',
+      }),
     );
 
     await vi.waitFor(() =>
@@ -2205,13 +2221,25 @@ describe('global test-run concurrency cap', () => {
     // project A plus one from project B should admit exactly two, and the
     // third (from B) must queue, regardless of it being a different project.
     const a1 = runProjectTestRequest(
-      baseSpec({ projectId: 'proj-global-a', contentHash: 'ga-1' }),
+      baseSpec({
+        projectId: 'proj-global-a',
+        contentHash: 'ga-1',
+        worktreePath: '/tmp/wt-ga-1',
+      }),
     );
     const a2 = runProjectTestRequest(
-      baseSpec({ projectId: 'proj-global-a', contentHash: 'ga-2' }),
+      baseSpec({
+        projectId: 'proj-global-a',
+        contentHash: 'ga-2',
+        worktreePath: '/tmp/wt-ga-2',
+      }),
     );
     const b1 = runProjectTestRequest(
-      baseSpec({ projectId: 'proj-global-b', contentHash: 'gb-1' }),
+      baseSpec({
+        projectId: 'proj-global-b',
+        contentHash: 'gb-1',
+        worktreePath: '/tmp/wt-gb-1',
+      }),
     );
     await vi.waitFor(() =>
       expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
@@ -2239,7 +2267,11 @@ describe('global test-run concurrency cap', () => {
     const resolvers = queueingRunTestCommands();
 
     const first = runProjectTestRequest(
-      baseSpec({ projectId: 'proj-live-resize', contentHash: 'resize-a' }),
+      baseSpec({
+        projectId: 'proj-live-resize',
+        contentHash: 'resize-a',
+        worktreePath: '/tmp/wt-resize-a',
+      }),
     );
     await vi.waitFor(() =>
       expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
@@ -2247,7 +2279,11 @@ describe('global test-run concurrency cap', () => {
 
     // Second request queues behind the limit-1 semaphore — not yet admitted.
     const second = runProjectTestRequest(
-      baseSpec({ projectId: 'proj-live-resize', contentHash: 'resize-b' }),
+      baseSpec({
+        projectId: 'proj-live-resize',
+        contentHash: 'resize-b',
+        worktreePath: '/tmp/wt-resize-b',
+      }),
     );
 
     // Raise the limit without restarting the process — the next acquire
@@ -2255,7 +2291,11 @@ describe('global test-run concurrency cap', () => {
     // wake the already-queued second request too.
     typedSetSetting('test_request_max_concurrent', 2);
     const third = runProjectTestRequest(
-      baseSpec({ projectId: 'proj-live-resize', contentHash: 'resize-c' }),
+      baseSpec({
+        projectId: 'proj-live-resize',
+        contentHash: 'resize-c',
+        worktreePath: '/tmp/wt-resize-c',
+      }),
     );
 
     await vi.waitFor(() =>
@@ -2327,6 +2367,124 @@ describe('global test-run concurrency cap', () => {
     typedSetSetting('test_request_memory_ceiling_mb', 100);
     typedSetSetting('test_request_per_run_memory_mb', 400);
     expect(await burstAndCountAdmitted(3, 'proj-mem-c')).toBe(1);
+  });
+});
+
+describe('one executing run per worktree', () => {
+  function queueingRunTestCommands() {
+    const resolvers: Array<(v: { passed: boolean; output: string }) => void> =
+      [];
+    mockRunTestCommands.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    return resolvers;
+  }
+  const gate = (overrides = {}) =>
+    baseSpec({
+      runOrigin: 'pr_pipeline',
+      producer: 'pr_gate',
+      ...overrides,
+    } as never);
+
+  it('holds a session run until an executing gate run in the same worktree settles', async () => {
+    insertProject({
+      id: 'proj-1',
+      name: 'P',
+      project_dir: '/tmp/p1',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    const resolvers = queueingRunTestCommands();
+    const g = runProjectTestRequest(gate({ contentHash: 'wt-gate' }));
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
+    const s = runProjectTestRequest(baseSpec({ contentHash: 'wt-sess' }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    resolvers[0]({ passed: true, output: 'ok' });
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
+    );
+    resolvers[1]({ passed: true, output: 'ok' });
+    await Promise.all([g, s]);
+  });
+
+  it('holds a gate run until an executing session run in the same worktree settles', async () => {
+    const resolvers = queueingRunTestCommands();
+    const s = runProjectTestRequest(baseSpec({ contentHash: 'wt-sess2' }));
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
+    const g = runProjectTestRequest(gate({ contentHash: 'wt-gate2' }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    resolvers[0]({ passed: true, output: 'ok' });
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
+    );
+    resolvers[1]({ passed: true, output: 'ok' });
+    await Promise.all([s, g]);
+  });
+
+  it('runs different worktrees concurrently up to the global cap', async () => {
+    const resolvers = queueingRunTestCommands();
+    const a = runProjectTestRequest(
+      baseSpec({ contentHash: 'wt-a', worktreePath: '/tmp/wt-a' }),
+    );
+    const b = runProjectTestRequest(
+      gate({ contentHash: 'wt-b', worktreePath: '/tmp/wt-b' }),
+    );
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
+    );
+    resolvers.forEach((r) => r({ passed: true, output: 'ok' }));
+    await Promise.all([a, b]);
+  });
+
+  it('does not take the merge hold for a worktree-busy pass-over', async () => {
+    insertProject({
+      id: 'proj-1',
+      name: 'P',
+      project_dir: '/tmp/p1',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    db.prepare('DELETE FROM sessions WHERE session_id = ?').run('sess-mh');
+    insertSession({
+      session_id: 'sess-mh',
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      project_id: 'proj-1',
+      status: 'done',
+      started_at: new Date().toISOString(),
+    } as Parameters<typeof insertSession>[0]);
+    const resolvers = queueingRunTestCommands();
+    const g = runProjectTestRequest(gate({ contentHash: 'mh-gate' }));
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
+    const s = runProjectTestRequest(
+      baseSpec({ contentHash: 'mh-sess', sessionId: 'sess-mh' }),
+    );
+    await new Promise((r) => setTimeout(r, 50));
+    expect(isMergeHeld('sess-mh')).toBe(false);
+
+    resolvers[0]({ passed: true, output: 'ok' });
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
+    );
+    expect(isMergeHeld('sess-mh')).toBe(false);
+    resolvers[1]({ passed: true, output: 'ok' });
+    await Promise.all([g, s]);
   });
 });
 
@@ -3605,12 +3763,13 @@ describe('admitTestRequest — same-worktree supersession', () => {
         contentHash: 'sup2-b',
       }),
     );
+    // One executing run per worktree: the second waits for the first.
+    expect(second.status).toBe('queued');
+    resolvers[0]({ passed: true, output: 'ok' });
     await vi.waitFor(() =>
       expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
     );
-    expect(second.status).toBe('running');
-
-    resolvers.forEach((resolve) => resolve({ passed: true, output: 'ok' }));
+    resolvers[1]({ passed: true, output: 'ok' });
     const [firstResult, secondResult] = await Promise.all([
       first.result,
       second.result,

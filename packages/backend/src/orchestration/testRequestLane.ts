@@ -35,6 +35,7 @@ import { EventEmitter } from 'events';
 import { LaneRunWithdrawnError } from '../tasks/deferralClassifier';
 import {
   PriorityLaneQueue,
+  type LaneEligibility,
   SKIP_EXPIRED_REASON,
   type LaneWaiterKey,
 } from './laneQueue';
@@ -395,8 +396,17 @@ const queuedRunMeta = new Map<
     requestedAt: number;
     /** Owning session whose worktree the pre-test merge mutates; null for a run that never merges. */
     mergeSessionId: string | null;
+    worktreePath: string;
   }
 >();
+
+/** The one run currently holding a permit per worktree (grant → permit release). */
+const executingByWorktree = new Map<string, string>();
+
+function markRunExecuting(runId: string): void {
+  const worktreePath = queuedRunMeta.get(runId)?.worktreePath;
+  if (worktreePath) executingByWorktree.set(worktreePath, runId);
+}
 
 /** Runs whose owner's merge hold was taken at grant time, mapped to that session. */
 const mergeHoldByRun = new Map<string, string>();
@@ -415,15 +425,20 @@ const BUSY_SESSION_STATUSES = new Set([
  * over (keeping its rank). For an idle owner the merge hold is taken here,
  * synchronously with the idle check, so no wake can land between them.
  */
-function isRunEligible(runId: string): boolean {
-  const sessionId = queuedRunMeta.get(runId)?.mergeSessionId;
-  if (!sessionId) return true;
+function isRunEligible(runId: string): LaneEligibility {
+  const meta = queuedRunMeta.get(runId);
+  if (meta) {
+    const executing = executingByWorktree.get(meta.worktreePath);
+    if (executing !== undefined && executing !== runId) return 'worktree_busy';
+  }
+  const sessionId = meta?.mergeSessionId;
+  if (!sessionId) return 'eligible';
   const session = getSession(sessionId);
-  if (!session) return true;
-  if (BUSY_SESSION_STATUSES.has(session.status)) return false;
-  if (!acquireMergeHold(sessionId)) return false;
+  if (!session) return 'eligible';
+  if (BUSY_SESSION_STATUSES.has(session.status)) return 'session_busy';
+  if (!acquireMergeHold(sessionId)) return 'session_busy';
   mergeHoldByRun.set(runId, sessionId);
-  return true;
+  return 'eligible';
 }
 
 function withdrawSkippedRun(runId: string): void {
@@ -581,6 +596,7 @@ function getGlobalTestRunSemaphore(): PriorityLaneQueue {
     globalTestRunSemaphore = new PriorityLaneQueue(limit, {
       rerank: rerankQueuedRuns,
       eligible: isRunEligible,
+      onGrant: markRunExecuting,
       skipCeilingMs: SESSION_NOT_IDLE_CEILING_MS,
       onSkipExpired: withdrawSkippedRun,
     });
@@ -622,6 +638,7 @@ export function __resetProjectSemaphoresForTest(): void {
   globalTestRunSemaphore = null;
   queuedRunMeta.clear();
   mergeHoldByRun.clear();
+  executingByWorktree.clear();
   inFlightRuns.clear();
   pendingBySession.clear();
 }
@@ -1273,6 +1290,7 @@ export function admitTestRequest(
     requestedAt,
     mergeSessionId:
       spec.sessionId && spec.runOrigin == null ? spec.sessionId : null,
+    worktreePath: spec.worktreePath,
   });
   const permitPromise = semaphore
     .acquire(runId, toWaiterKey(spec.projectId, rank, requestedAt))
@@ -1287,7 +1305,11 @@ export function admitTestRequest(
           );
         }
       }
-      return release;
+      return () => {
+        if (executingByWorktree.get(spec.worktreePath) === runId)
+          executingByWorktree.delete(spec.worktreePath);
+        release();
+      };
     })
     .finally(() => queuedRunMeta.delete(runId));
   const admission = () => {
