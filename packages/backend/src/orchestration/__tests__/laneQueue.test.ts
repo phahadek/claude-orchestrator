@@ -168,7 +168,7 @@ describe('PriorityLaneQueue idle guard', () => {
   it('keeps a passed-over waiter ranked ahead across a slot release', async () => {
     const busy = new Set(['head']);
     const q = new PriorityLaneQueue(1, {
-      eligible: (id) => !busy.has(id),
+      eligible: (id) => (busy.has(id) ? 'session_busy' : 'eligible'),
       reevaluateIntervalMs: 1_000_000,
     });
     const order: string[] = [];
@@ -193,7 +193,7 @@ describe('PriorityLaneQueue idle guard', () => {
     try {
       const expired: string[] = [];
       const q = new PriorityLaneQueue(1, {
-        eligible: () => false,
+        eligible: () => 'session_busy',
         skipCeilingMs: 3 * 60 * 60 * 1000,
         reevaluateIntervalMs: 60_000,
         onSkipExpired: (id) => expired.push(id),
@@ -216,5 +216,44 @@ describe('PriorityLaneQueue idle guard', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('does not stamp or expire a worktree_busy waiter past the ceiling', async () => {
+    vi.useFakeTimers();
+    try {
+      const expired: string[] = [];
+      const q = new PriorityLaneQueue(1, {
+        eligible: () => 'worktree_busy',
+        skipCeilingMs: 1000,
+        reevaluateIntervalMs: 100,
+        onSkipExpired: (id) => expired.push(id),
+      });
+      void q.acquire('w', key('A', 'priority')).catch(() => {});
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(expired).toEqual([]);
+      expect(q.queueDepth()).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('grants a worktree_busy waiter in rank order in the same drain as the blocker release', async () => {
+    const blocked = new Set(['head']);
+    const q = new PriorityLaneQueue(2, {
+      eligible: (id) => (blocked.has(id) ? 'worktree_busy' : 'eligible'),
+    });
+    const order: string[] = [];
+    const rel: Record<string, () => void> = {};
+    const blocker = await q.acquire('blocker', key('A', 'priority'));
+    await q.acquire('other', key('A', 'priority'));
+    enqueue(q, 'head', key('A', 'priority', [1]), order, rel);
+    enqueue(q, 'tail', key('A', 'priority', [2]), order, rel);
+    expect(order).toEqual([]);
+
+    blocked.delete('head');
+    blocker();
+    await flush();
+    expect(order).toEqual(['head']);
+    expect(q.queueDepth()).toBe(1);
   });
 });
