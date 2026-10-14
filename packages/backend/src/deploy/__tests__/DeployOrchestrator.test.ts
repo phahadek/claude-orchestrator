@@ -152,6 +152,36 @@ describe('DeployOrchestrator: step execution order and kinds', () => {
   });
 });
 
+describe('DeployOrchestrator: succeeded shell step output retention', () => {
+  async function runWithOutput(output: string) {
+    const deps = makeDeps(playbookWith([step({ id: 'build', kind: 'shell' })]), {
+      runShell: vi.fn(
+        async (): Promise<ShellResult> => ({ ok: true, output, exitCode: 0 }),
+      ),
+    });
+    const run = await new DeployOrchestrator('proj', '/tmp/proj', deps).startDeploy('sha-target');
+    await flush();
+    return listDeployRunEvents(run.run_id).find((e) => e.event_type === 'step_succeeded');
+  }
+
+  it('persists short output verbatim', async () => {
+    expect((await runWithOutput('risk: ok'))?.detail).toBe('risk: ok');
+  });
+
+  it('keeps head and tail with an elision marker when output exceeds the cap', async () => {
+    const output = 'H'.repeat(8192) + 'M'.repeat(5000) + 'T'.repeat(8192);
+    const detail = (await runWithOutput(output))?.detail as string;
+    expect(detail.startsWith('H'.repeat(8192))).toBe(true);
+    expect(detail.endsWith('T'.repeat(8192))).toBe(true);
+    expect(detail).toContain('5000 chars elided');
+    expect(detail).not.toContain('M');
+  });
+
+  it('leaves detail null for empty output', async () => {
+    expect((await runWithOutput(''))?.detail ?? null).toBeNull();
+  });
+});
+
 describe('DeployOrchestrator: latest-dev target resolution', () => {
   it('resolves the target via the injected resolver when no targetSha is passed', async () => {
     const playbook = playbookWith([step({ id: 'build', kind: 'shell' })]);
