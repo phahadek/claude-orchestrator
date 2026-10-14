@@ -28,7 +28,7 @@ export class UnknownInvestigateProjectError extends Error {
   }
 }
 
-export interface TaskIdForms {
+interface TaskIdForms {
   raw: string;
   bare: string;
   notion: string;
