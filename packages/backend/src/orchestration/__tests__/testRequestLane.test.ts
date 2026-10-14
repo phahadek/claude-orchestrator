@@ -146,6 +146,7 @@ import {
   insertMilestone,
   upsertTaskCache,
   setTaskUrgent,
+  insertSession,
 } from '../../db/queries';
 import { logger } from '../../logger';
 import type { NotionTask } from '../../notion/types';
@@ -155,6 +156,7 @@ import {
   __checkoutInstallLockMapSizeForTest,
 } from '../checkoutInstallLock';
 import { typedSetSetting } from '../../config/settings';
+import { isMergeHeld } from '../mergeHold';
 
 beforeEach(() => {
   mockRunTestCommands.mockReset();
@@ -2327,6 +2329,124 @@ describe('global test-run concurrency cap', () => {
     typedSetSetting('test_request_memory_ceiling_mb', 100);
     typedSetSetting('test_request_per_run_memory_mb', 400);
     expect(await burstAndCountAdmitted(3, 'proj-mem-c')).toBe(1);
+  });
+});
+
+describe('one executing run per worktree', () => {
+  function queueingRunTestCommands() {
+    const resolvers: Array<(v: { passed: boolean; output: string }) => void> =
+      [];
+    mockRunTestCommands.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    return resolvers;
+  }
+  const gate = (overrides = {}) =>
+    baseSpec({
+      runOrigin: 'pr_pipeline',
+      producer: 'pr_gate',
+      ...overrides,
+    } as never);
+
+  it('holds a session run until an executing gate run in the same worktree settles', async () => {
+    insertProject({
+      id: 'proj-1',
+      name: 'P',
+      project_dir: '/tmp/p1',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    const resolvers = queueingRunTestCommands();
+    const g = runProjectTestRequest(gate({ contentHash: 'wt-gate' }));
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
+    const s = runProjectTestRequest(baseSpec({ contentHash: 'wt-sess' }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    resolvers[0]({ passed: true, output: 'ok' });
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
+    );
+    resolvers[1]({ passed: true, output: 'ok' });
+    await Promise.all([g, s]);
+  });
+
+  it('holds a gate run until an executing session run in the same worktree settles', async () => {
+    const resolvers = queueingRunTestCommands();
+    const s = runProjectTestRequest(baseSpec({ contentHash: 'wt-sess2' }));
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
+    const g = runProjectTestRequest(gate({ contentHash: 'wt-gate2' }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    resolvers[0]({ passed: true, output: 'ok' });
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
+    );
+    resolvers[1]({ passed: true, output: 'ok' });
+    await Promise.all([s, g]);
+  });
+
+  it('runs different worktrees concurrently up to the global cap', async () => {
+    const resolvers = queueingRunTestCommands();
+    const a = runProjectTestRequest(
+      baseSpec({ contentHash: 'wt-a', worktreePath: '/tmp/wt-a' }),
+    );
+    const b = runProjectTestRequest(
+      gate({ contentHash: 'wt-b', worktreePath: '/tmp/wt-b' }),
+    );
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
+    );
+    resolvers.forEach((r) => r({ passed: true, output: 'ok' }));
+    await Promise.all([a, b]);
+  });
+
+  it('does not take the merge hold for a worktree-busy pass-over', async () => {
+    insertProject({
+      id: 'proj-1',
+      name: 'P',
+      project_dir: '/tmp/p1',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    db.prepare('DELETE FROM sessions WHERE session_id = ?').run('sess-mh');
+    insertSession({
+      session_id: 'sess-mh',
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      project_id: 'proj-1',
+      status: 'done',
+      started_at: new Date().toISOString(),
+    } as Parameters<typeof insertSession>[0]);
+    const resolvers = queueingRunTestCommands();
+    const g = runProjectTestRequest(gate({ contentHash: 'mh-gate' }));
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
+    const s = runProjectTestRequest(
+      baseSpec({ contentHash: 'mh-sess', sessionId: 'sess-mh' }),
+    );
+    await new Promise((r) => setTimeout(r, 50));
+    expect(isMergeHeld('sess-mh')).toBe(false);
+
+    resolvers[0]({ passed: true, output: 'ok' });
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
+    );
+    expect(isMergeHeld('sess-mh')).toBe(false);
+    resolvers[1]({ passed: true, output: 'ok' });
+    await Promise.all([g, s]);
   });
 });
 
