@@ -129,6 +129,26 @@ built-in git-hook-safety guard when they ignore it.
 
 ---
 
+## The harness permission boundary — escalation order (all session types)
+
+The harness can block an action (a systemd write, a wrapped-marker `POST`, a `group-commit`)
+that the session's task legitimately needs. When a command or surface is blocked, escalate in
+exactly this order, and do not skip a step:
+
+1. **Try the action under the generic approval already given.** A block is not final until the
+   action has actually been attempted that way.
+2. **If it is blocked, explain exactly what was blocked** — which command or surface, and the
+   classifier's stated reason — **and ask the operator for explicit approval of that action.**
+3. **If it is still blocked after explicit approval, ask for an approval-mode change.**
+
+**Never** open with "ask the operator to change the session's permission mode or add a
+permission rule" as the first escalation. The operator has no such mechanism to hand; asking
+for it costs a round-trip and reads as a hallucination. A block on the final mutating step
+is expected in some sessions (see the `/gate` skill) — stage the handoff, then follow the order
+above.
+
+---
+
 ## Asking the human — plain text only, never the AskUserQuestion tool
 
 The **`AskUserQuestion` tool is disabled** in this environment (a PreToolUse hook denies

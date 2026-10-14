@@ -1660,7 +1660,12 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'it), or `needs-triage` (genuinely unclear — accrete it flagged, as ' +
       'today). The deciding question: would a headless verifier be able to ' +
       'cite a behavioural trace for this, or only cite the code? If only the ' +
-      "code, it is a test, not a gate item. Record every candidate's " +
+      'code, it is a test, not a gate item. A gate item is a post-merge, ' +
+      'post-deploy observation and never gates a merge: reject candidates ' +
+      'phrased as "before merge" or "record in the PR description" — a ' +
+      'condition that must hold before merge belongs in acceptance criteria ' +
+      'or sequencing (Depends On plus a dated soak). ' +
+      "Record every candidate's " +
       'classification in the `gate_contribution` artifact — the check enforced ' +
       'is that a classification was recorded for each candidate, never a ' +
       'judgment on which classification was chosen. The count of candidates in ' +

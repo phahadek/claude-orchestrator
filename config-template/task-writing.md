@@ -402,6 +402,12 @@ record — there is no dated run-note written back into a task body).
   structure (e.g. "<100 shared buffers" for a query that touches ≥6×20 heap pages by construction),
   comes from a different population, or assumes a cadence the system does not run on (calendar
   15-min buckets vs 15 min after the last success) fails the item on the number, not the behaviour.
+- **A gate item never gates a merge.** A gate item is a post-merge, post-deploy observation, so
+  it cannot block a merge. A condition that must hold *before* merge (e.g. "≥7 days of dual-write
+  parity before retiring an alarm gauge") belongs in the task's acceptance criteria and PR, or in
+  sequencing (`Depends On` plus a dated soak) — never in a gate item. Grooming must reject gate
+  items phrased as "before merge" or "record in the PR description". (Polimarket M19 accreted
+  three such items; the work shipped with zero overlap and the items were invalid as written.)
 - **Never accrete an item that manufactures host load.** Load and isolation properties are verified
   from historical telemetry, not by forcing a heavy run on a shared prod host.
 - **Follow-up tasks** that depend on confirmed runtime behaviour cannot list a gate *task* in
