@@ -87,7 +87,7 @@ When a follow-up message delivers review feedback tied to specific GitHub review
 
 ### Disputing a blocking verdict
 
-When a delivered verdict (`needs_changes`, `incomplete`, `verify_failed`, `autofix_failed`) asks for something you conclude is wrong, already satisfied, or forbidden by a Project Rule, do not decline in chat and wait. Stage `mcp__orchestrator__review_dispute` once with `taskId`, `prNumber`, `repo` and a `rationale` naming the evidence (the rule, the file:line, the test result). Then stop: the operator decides, and approval lets the PR proceed without a new commit. Declining in chat leaves nothing for the operator to act on.
+When a delivered verdict (\`needs_changes\`, \`incomplete\`, \`verify_failed\`, \`autofix_failed\`) asks for something you conclude is wrong, already satisfied, or forbidden by a Project Rule, do not decline in chat and wait. Stage \`mcp__orchestrator__review_dispute\` once with \`taskId\`, \`prNumber\`, \`repo\` and a \`rationale\` naming the evidence (the rule, the file:line, the test result). Then stop: the operator decides, and approval lets the PR proceed without a new commit. Declining in chat leaves nothing for the operator to act on.
 
 ---
 
@@ -323,7 +323,7 @@ When a follow-up message delivers review feedback tied to specific GitHub review
 
 ### Disputing a blocking verdict
 
-When a delivered verdict (`needs_changes`, `incomplete`, `verify_failed`, `autofix_failed`) asks for something you conclude is wrong, already satisfied, or forbidden by a Project Rule, do not decline in chat and wait. Stage `mcp__orchestrator__review_dispute` once with `taskId`, `prNumber`, `repo` and a `rationale` naming the evidence (the rule, the file:line, the test result). Then stop: the operator decides, and approval lets the PR proceed without a new commit. Declining in chat leaves nothing for the operator to act on.
+When a delivered verdict (\`needs_changes\`, \`incomplete\`, \`verify_failed\`, \`autofix_failed\`) asks for something you conclude is wrong, already satisfied, or forbidden by a Project Rule, do not decline in chat and wait. Stage \`mcp__orchestrator__review_dispute\` once with \`taskId\`, \`prNumber\`, \`repo\` and a \`rationale\` naming the evidence (the rule, the file:line, the test result). Then stop: the operator decides, and approval lets the PR proceed without a new commit. Declining in chat leaves nothing for the operator to act on.
 
 ---
 
@@ -561,7 +561,7 @@ When a follow-up message delivers review feedback tied to specific GitHub review
 
 ### Disputing a blocking verdict
 
-When a delivered verdict (`needs_changes`, `incomplete`, `verify_failed`, `autofix_failed`) asks for something you conclude is wrong, already satisfied, or forbidden by a Project Rule, do not decline in chat and wait. Stage `mcp__orchestrator__review_dispute` once with `taskId`, `prNumber`, `repo` and a `rationale` naming the evidence (the rule, the file:line, the test result). Then stop: the operator decides, and approval lets the PR proceed without a new commit. Declining in chat leaves nothing for the operator to act on.
+When a delivered verdict (\`needs_changes\`, \`incomplete\`, \`verify_failed\`, \`autofix_failed\`) asks for something you conclude is wrong, already satisfied, or forbidden by a Project Rule, do not decline in chat and wait. Stage \`mcp__orchestrator__review_dispute\` once with \`taskId\`, \`prNumber\`, \`repo\` and a \`rationale\` naming the evidence (the rule, the file:line, the test result). Then stop: the operator decides, and approval lets the PR proceed without a new commit. Declining in chat leaves nothing for the operator to act on.
 
 ---
 
@@ -797,7 +797,7 @@ When a follow-up message delivers review feedback tied to specific GitHub review
 
 ### Disputing a blocking verdict
 
-When a delivered verdict (`needs_changes`, `incomplete`, `verify_failed`, `autofix_failed`) asks for something you conclude is wrong, already satisfied, or forbidden by a Project Rule, do not decline in chat and wait. Stage `mcp__orchestrator__review_dispute` once with `taskId`, `prNumber`, `repo` and a `rationale` naming the evidence (the rule, the file:line, the test result). Then stop: the operator decides, and approval lets the PR proceed without a new commit. Declining in chat leaves nothing for the operator to act on.
+When a delivered verdict (\`needs_changes\`, \`incomplete\`, \`verify_failed\`, \`autofix_failed\`) asks for something you conclude is wrong, already satisfied, or forbidden by a Project Rule, do not decline in chat and wait. Stage \`mcp__orchestrator__review_dispute\` once with \`taskId\`, \`prNumber\`, \`repo\` and a \`rationale\` naming the evidence (the rule, the file:line, the test result). Then stop: the operator decides, and approval lets the PR proceed without a new commit. Declining in chat leaves nothing for the operator to act on.
 
 ---
 
