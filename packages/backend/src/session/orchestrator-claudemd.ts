@@ -597,7 +597,22 @@ ${projectContextContent}`
 export function buildReviewClaudeMd(
   taskName: string,
   reviewRules?: string[],
+  sessionRules?: string[],
 ): string {
+  const projectRulesSection =
+    sessionRules && sessionRules.length > 0
+      ? `
+## Project Rules (binding on the implementing session)
+
+> These rules bound the coding session that produced this PR. They take precedence over the task spec:
+> where the task spec (Context, Acceptance criteria, Files/paths affected) asks for something a Project Rule forbids,
+> a PR that follows the Project Rule is correct. Do not fail any dimension for it, and do not ask the session to break the rule.
+> If a spec item is unsatisfiable only because of a Project Rule, note the conflict in your summary for the operator
+> instead of returning needs_changes for it.
+
+${sessionRules.map((rule) => `- ${rule}`).join('\n')}
+`
+      : '';
   return `# Review Session Rules
 
 You are a **PR review session**. Your only job is to evaluate pull request diffs
@@ -645,9 +660,9 @@ actions. Your verdict must be based solely on the automated, code-checkable item
 
 ## Task
 ${taskName}
-${
-  reviewRules && reviewRules.length > 0
-    ? `
+${projectRulesSection}${
+    reviewRules && reviewRules.length > 0
+      ? `
 ## Project Review Criteria
 
 > Per-project enforcement criteria this review must apply, in addition to the
@@ -657,8 +672,8 @@ ${
 
 ${reviewRules.map((rule) => `- ${rule}`).join('\n')}
 `
-    : ''
-}
+      : ''
+  }
 ## On session resume
 If this session is resumed or receives a follow-up message, it means there is
 a new diff to review. Wait for the diff content, then call \`review.verdict\` again
