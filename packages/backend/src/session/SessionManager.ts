@@ -2657,6 +2657,9 @@ export class SessionManager extends EventEmitter {
         orchConfig.review_rules.length > 0
           ? orchConfig.review_rules
           : undefined,
+        orchConfig.session_rules.length > 0
+          ? orchConfig.session_rules
+          : undefined,
       );
     } else if (sessionType === 'depth_review') {
       sessionContextContent = buildDepthReviewClaudeMd(taskName ?? taskUrl);
@@ -3274,6 +3277,9 @@ export class SessionManager extends EventEmitter {
           taskName,
           orchConfig.review_rules.length > 0
             ? orchConfig.review_rules
+            : undefined,
+          orchConfig.session_rules.length > 0
+            ? orchConfig.session_rules
             : undefined,
         );
         const filePath = writeSystemPromptFile(
