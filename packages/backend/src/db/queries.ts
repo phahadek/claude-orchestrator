@@ -15690,3 +15690,210 @@ export function listCompletingSignalsForSession(
     session_id: sessionId,
   }) as CompletingSignalLedgerRow[];
 }
+
+// ─── investigate live-health snapshot (read-only) ───────────────────────────
+
+export interface InvestigateProjectRow {
+  id: string;
+  name: string;
+  projectDir: string;
+  mid: string | null;
+}
+
+export function getInvestigateProject(
+  projectId: string,
+): InvestigateProjectRow | null {
+  const row = db
+    .prepare(
+      `SELECT id, name, project_dir AS projectDir, auto_launch_milestone_id AS mid FROM projects WHERE id = ?`,
+    )
+    .get(projectId) as InvestigateProjectRow | undefined;
+  return row ?? null;
+}
+
+export interface InvestigateMilestoneRow {
+  id: string;
+  name: string;
+  shortId: string | null;
+  boardId: string | null;
+}
+
+export function getInvestigateMilestone(
+  milestoneId: string,
+): InvestigateMilestoneRow | null {
+  const row = db
+    .prepare(
+      `SELECT id, name, canonical_short_id AS shortId, source_id AS boardId FROM milestones WHERE id = ?`,
+    )
+    .get(milestoneId) as InvestigateMilestoneRow | undefined;
+  return row ?? null;
+}
+
+export interface InvestigateErroredSessionRow {
+  sessionId: string;
+  taskId: string | null;
+  taskName: string | null;
+  sessionType: string;
+  status: string;
+  endedAt: number | null;
+  worktreePath: string | null;
+  prUrl: string | null;
+  lastErrorDetail: string | null;
+}
+
+export function listInvestigateErroredSessions(
+  projectId: string,
+  limit: number,
+): InvestigateErroredSessionRow[] {
+  return db
+    .prepare(
+      `SELECT session_id AS sessionId, task_id AS taskId, task_name AS taskName, session_type AS sessionType,
+              status, ended_at AS endedAt, worktree_path AS worktreePath, pr_url AS prUrl,
+              last_error_detail AS lastErrorDetail
+         FROM sessions
+        WHERE project_id = ? AND status = 'error'
+        ORDER BY COALESCE(ended_at, started_at) DESC
+        LIMIT ?`,
+    )
+    .all(projectId, limit) as InvestigateErroredSessionRow[];
+}
+
+export interface InvestigatePlanningSessionRow {
+  sessionId: string;
+  taskId: string | null;
+  taskName: string | null;
+  sessionType: string;
+  status: string;
+  startedAt: number;
+  endedAt: number | null;
+  worktreePath: string | null;
+  pauseReason: string | null;
+  lastErrorDetail: string | null;
+  grantedCapabilities: string | null;
+}
+
+export function listInvestigateNonDonePlanningSessions(
+  projectId: string,
+  planningTypes: readonly string[],
+  sinceMs: number,
+  limit: number,
+): InvestigatePlanningSessionRow[] {
+  return db
+    .prepare(
+      `SELECT session_id AS sessionId, task_id AS taskId, task_name AS taskName, session_type AS sessionType,
+              status, started_at AS startedAt, ended_at AS endedAt, worktree_path AS worktreePath,
+              pause_reason AS pauseReason, last_error_detail AS lastErrorDetail,
+              granted_capabilities AS grantedCapabilities
+         FROM sessions
+        WHERE project_id = ? AND session_type IN (${planningTypes.map(() => '?').join(',')})
+          AND status != 'done'
+          AND COALESCE(ended_at, started_at) >= ?
+        ORDER BY COALESCE(ended_at, started_at) DESC
+        LIMIT ?`,
+    )
+    .all(
+      projectId,
+      ...planningTypes,
+      sinceMs,
+      limit,
+    ) as InvestigatePlanningSessionRow[];
+}
+
+export interface InvestigateDeployRunRow {
+  runId: string;
+  targetSha: string;
+  currentStep: string | null;
+  status: string;
+  startedAt: string;
+  completedAt: string | null;
+}
+
+export function listInvestigateDeployRuns(
+  projectId: string,
+  limit: number,
+): InvestigateDeployRunRow[] {
+  return db
+    .prepare(
+      `SELECT run_id AS runId, target_sha AS targetSha, current_step AS currentStep, status,
+              started_at AS startedAt, completed_at AS completedAt
+         FROM deploy_run
+        WHERE project = ?
+        ORDER BY started_at DESC
+        LIMIT ?`,
+    )
+    .all(projectId, limit) as InvestigateDeployRunRow[];
+}
+
+export interface InvestigateDeployEventRow {
+  step: string;
+  eventType: string;
+  disposition: string | null;
+  detail: string | null;
+  at: string;
+}
+
+export function getInvestigateLastDeployEvent(
+  runId: string,
+): InvestigateDeployEventRow | null {
+  const row = db
+    .prepare(
+      `SELECT step, event_type AS eventType, disposition, detail, at
+         FROM deploy_run_event WHERE run_id = ? ORDER BY at DESC LIMIT 1`,
+    )
+    .get(runId) as InvestigateDeployEventRow | undefined;
+  return row ?? null;
+}
+
+export interface InvestigateNeedsAttentionPrRow {
+  prNumber: number;
+  prUrl: string;
+  repo: string;
+  state: string;
+  mergeState: string | null;
+  pauseReason: string | null;
+  headBranch: string | null;
+  sessionId: string | null;
+  taskId: string | null;
+  updatedAt: string | number | null;
+}
+
+export function listInvestigateNeedsAttentionPrs(
+  limit: number,
+): InvestigateNeedsAttentionPrRow[] {
+  return db
+    .prepare(
+      `SELECT pr_number AS prNumber, pr_url AS prUrl, repo, state, merge_state AS mergeState,
+              pause_reason AS pauseReason, head_branch AS headBranch, session_id AS sessionId,
+              task_id AS taskId, updated_at AS updatedAt
+         FROM pull_requests
+        WHERE state = 'open'
+           OR (pause_reason IS NOT NULL AND state NOT IN ('merged', 'closed'))
+        ORDER BY updated_at DESC
+        LIMIT ?`,
+    )
+    .all(limit) as InvestigateNeedsAttentionPrRow[];
+}
+
+export interface InvestigateAuditEventRow {
+  ts: number;
+  eventType: string;
+  actorType: string;
+  taskId: string | null;
+  payload: string | null;
+}
+
+export function listInvestigateAuditEvents(
+  projectId: string,
+  eventTypes: readonly string[],
+  limit: number,
+): InvestigateAuditEventRow[] {
+  return db
+    .prepare(
+      `SELECT ts, event_type AS eventType, actor_type AS actorType, task_id AS taskId, payload
+         FROM audit_log
+        WHERE project_id = ? AND event_type IN (${eventTypes.map(() => '?').join(',')})
+        ORDER BY ts DESC
+        LIMIT ?`,
+    )
+    .all(projectId, ...eventTypes, limit) as InvestigateAuditEventRow[];
+}

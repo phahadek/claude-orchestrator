@@ -62,6 +62,9 @@
  *                      /srv/orchestrator/data/dashboard.db).
  *   --env <path>       .env holding NOTION_API_KEY for the board fetch (default: try
  *                      <projectDir>/packages/backend/.env, else $NOTION_API_KEY).
+ *   --remote           Force the device-authed backend route (GET /api/investigate-snapshot) even
+ *                      when a local DB exists. Without it the route is used only when no local DB
+ *                      is found (env: ORCHESTRATOR_BACKEND_HOST/PORT, ORCHESTRATOR_DEVICE_TOKEN).
  *   --no-board         Skip the Notion board fetch (DB snapshot only).
  *   --hours <n>        recentPlanningSessions look-back window (default 48).
  *   --no-verify-prs    Skip GitHub verification of needs-attention PRs (they degrade to
@@ -205,92 +208,128 @@ function ghVerifyPr(repo, number) {
   }
 }
 
-const db = openDb();
-const q = (sql, ...a) => db.prepare(sql).all(...a);
-const one = (sql, ...a) => db.prepare(sql).get(...a);
+// ---- source selection ------------------------------------------------------
+// Local DB when present (or --db given); otherwise the device-authed backend route, so the loader
+// works from a host that does not hold dashboard.db. --remote forces the route.
+const FORCE_REMOTE = flag('--remote');
+const USE_LOCAL =
+  !FORCE_REMOTE && (process.argv.includes('--db') || existsSync(DB_PATH));
 
-// ---- project + deployed sha + active milestone ---------------------------
-const project = one(
-  'SELECT id, name, project_dir AS projectDir, auto_launch_milestone_id AS mid FROM projects WHERE id = ?',
-  PROJECT,
-);
-if (!project)
-  fail(
-    `no project '${PROJECT}' in the projects table. Remember: --project is the registry id ` +
-      `(claude-dashboard), NOT the config-dir name (claude-orchestrator).`,
-  );
-
-const deployedRow = one(
-  'SELECT sha, recorded_at AS recordedAt FROM project_deployed_sha WHERE project_id = ?',
-  PROJECT,
-);
-const deployed = deployedRow
-  ? {
-      sha: deployedRow.sha,
-      shortSha: short(deployedRow.sha),
-      recordedAt: deployedRow.recordedAt,
-    }
-  : { sha: null, shortSha: null, recordedAt: null };
-
-let activeMilestone = null;
-if (project.mid) {
-  const m = one(
-    'SELECT id, name, canonical_short_id AS shortId, source_id AS boardId FROM milestones WHERE id = ?',
-    project.mid,
-  );
-  if (m)
-    activeMilestone = {
-      id: m.id,
-      name: m.name,
-      shortId: m.shortId,
-      boardId: m.boardId,
-    };
+async function loadFromBackend() {
+  const host = process.env.ORCHESTRATOR_BACKEND_HOST ?? '127.0.0.1';
+  const port = process.env.ORCHESTRATOR_BACKEND_PORT ?? '3000';
+  const token = process.env.ORCHESTRATOR_DEVICE_TOKEN;
+  if (!token)
+    fail(
+      'no local DB and ORCHESTRATOR_DEVICE_TOKEN is not set — cannot call the backend route.',
+    );
+  const url =
+    `http://${host}:${port}/api/investigate-snapshot?project=${encodeURIComponent(PROJECT)}` +
+    `&limit=${LIMIT}&hours=${HOURS}`;
+  let res;
+  try {
+    res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  } catch (e) {
+    fail(`GET ${url} failed: ${e.message}`);
+  }
+  if (res.status !== 200) {
+    const body = trunc(await res.text().catch(() => ''), 200);
+    fail(`GET ${url} returned HTTP ${res.status}${body ? `: ${body}` : ''}`);
+  }
+  try {
+    return await res.json();
+  } catch (e) {
+    fail(`GET ${url} returned non-JSON body: ${e.message}`);
+  }
 }
 
-// ---- health: errored sessions (+ their on-disk prompt files) --------------
-const erroredSessions = q(
-  `SELECT session_id AS sessionId, task_id AS taskId, task_name AS taskName, session_type AS sessionType,
+function loadFromLocalDb() {
+  const db = openDb();
+  const q = (sql, ...a) => db.prepare(sql).all(...a);
+  const one = (sql, ...a) => db.prepare(sql).get(...a);
+
+  // ---- project + deployed sha + active milestone ---------------------------
+  const project = one(
+    'SELECT id, name, project_dir AS projectDir, auto_launch_milestone_id AS mid FROM projects WHERE id = ?',
+    PROJECT,
+  );
+  if (!project)
+    fail(
+      `no project '${PROJECT}' in the projects table. Remember: --project is the registry id ` +
+        `(claude-dashboard), NOT the config-dir name (claude-orchestrator).`,
+    );
+
+  const deployedRow = one(
+    'SELECT sha, recorded_at AS recordedAt FROM project_deployed_sha WHERE project_id = ?',
+    PROJECT,
+  );
+  const deployed = deployedRow
+    ? {
+        sha: deployedRow.sha,
+        shortSha: short(deployedRow.sha),
+        recordedAt: deployedRow.recordedAt,
+      }
+    : { sha: null, shortSha: null, recordedAt: null };
+
+  let activeMilestone = null;
+  if (project.mid) {
+    const m = one(
+      'SELECT id, name, canonical_short_id AS shortId, source_id AS boardId FROM milestones WHERE id = ?',
+      project.mid,
+    );
+    if (m)
+      activeMilestone = {
+        id: m.id,
+        name: m.name,
+        shortId: m.shortId,
+        boardId: m.boardId,
+      };
+  }
+
+  // ---- health: errored sessions (+ their on-disk prompt files) --------------
+  const erroredSessions = q(
+    `SELECT session_id AS sessionId, task_id AS taskId, task_name AS taskName, session_type AS sessionType,
           status, ended_at AS endedAt, worktree_path AS worktreePath, pr_url AS prUrl,
           last_error_detail AS lastErrorDetail
      FROM sessions
     WHERE project_id = ? AND status = 'error'
     ORDER BY COALESCE(ended_at, started_at) DESC
     LIMIT ?`,
-  PROJECT,
-  LIMIT,
-).map((s) => {
-  const promptFile = join(
-    project.projectDir,
-    '.claude',
-    'session-prompts',
-    `${s.sessionId}.md`,
-  );
-  const err = s.lastErrorDetail || '';
-  // Pre-assembly fail-loud: the session errored BEFORE its injected prompt was written, so no
-  // prompt file exists — the diagnostic is last_error_detail + the launcher's journalctl line
-  // ("[OpsSessionLauncher] failed to assemble planning procedure …"), NOT a prompt file.
-  const preAssemblyFailure =
-    /injectedProcedureContent|assemble planning procedure/i.test(err);
-  return {
-    ...s,
-    endedAt: isoOf(s.endedAt),
-    taskIdForms: normId(s.taskId),
-    lastErrorDetail: trunc(s.lastErrorDetail, 240),
-    promptFile: existsSync(promptFile) ? promptFile : null,
-    preAssemblyFailure,
-  };
-});
+    PROJECT,
+    LIMIT,
+  ).map((s) => {
+    const promptFile = join(
+      project.projectDir,
+      '.claude',
+      'session-prompts',
+      `${s.sessionId}.md`,
+    );
+    const err = s.lastErrorDetail || '';
+    // Pre-assembly fail-loud: the session errored BEFORE its injected prompt was written, so no
+    // prompt file exists — the diagnostic is last_error_detail + the launcher's journalctl line
+    // ("[OpsSessionLauncher] failed to assemble planning procedure …"), NOT a prompt file.
+    const preAssemblyFailure =
+      /injectedProcedureContent|assemble planning procedure/i.test(err);
+    return {
+      ...s,
+      endedAt: isoOf(s.endedAt),
+      taskIdForms: normId(s.taskId),
+      lastErrorDetail: trunc(s.lastErrorDetail, 240),
+      promptFile: existsSync(promptFile) ? promptFile : null,
+      preAssemblyFailure,
+    };
+  });
 
-// ---- health: recent NON-DONE planning sessions (groom/design/ops) ---------
-// A1 — the highest-yield block for the current bug class. A planning session that bungled its task
-// does NOT error: it parks `idle` (or is `killed`) and looks fine on the dashboard, while having
-// groomed/designed/opsed the WRONG thing. Those never appear in erroredSessions above. Surface every
-// recent non-Done planning session (any status: idle/killed/error) so its prompt-file + transcript
-// can be read. This is where most dispatched-session findings actually come from.
-const PLANNING_TYPES = ['groom', 'design', 'ops'];
-const planningCutoff = Date.now() - HOURS * 3600 * 1000;
-const recentPlanningSessions = q(
-  `SELECT session_id AS sessionId, task_id AS taskId, task_name AS taskName, session_type AS sessionType,
+  // ---- health: recent NON-DONE planning sessions (groom/design/ops) ---------
+  // A1 — the highest-yield block for the current bug class. A planning session that bungled its task
+  // does NOT error: it parks `idle` (or is `killed`) and looks fine on the dashboard, while having
+  // groomed/designed/opsed the WRONG thing. Those never appear in erroredSessions above. Surface every
+  // recent non-Done planning session (any status: idle/killed/error) so its prompt-file + transcript
+  // can be read. This is where most dispatched-session findings actually come from.
+  const PLANNING_TYPES = ['groom', 'design', 'ops'];
+  const planningCutoff = Date.now() - HOURS * 3600 * 1000;
+  const recentPlanningSessions = q(
+    `SELECT session_id AS sessionId, task_id AS taskId, task_name AS taskName, session_type AS sessionType,
           status, started_at AS startedAt, ended_at AS endedAt, worktree_path AS worktreePath,
           pause_reason AS pauseReason, last_error_detail AS lastErrorDetail,
           granted_capabilities AS grantedCapabilities
@@ -300,84 +339,84 @@ const recentPlanningSessions = q(
       AND COALESCE(ended_at, started_at) >= ?
     ORDER BY COALESCE(ended_at, started_at) DESC
     LIMIT ?`,
-  PROJECT,
-  ...PLANNING_TYPES,
-  planningCutoff,
-  LIMIT,
-).map((s) => {
-  const promptFile = join(
-    project.projectDir,
-    '.claude',
-    'session-prompts',
-    `${s.sessionId}.md`,
-  );
-  return {
-    ...s,
-    startedAt: isoOf(s.startedAt),
-    endedAt: isoOf(s.endedAt),
-    taskIdForms: normId(s.taskId),
-    pauseReason: parsePauseReason(s.pauseReason),
-    lastErrorDetail: trunc(s.lastErrorDetail, 200),
-    promptFile: existsSync(promptFile) ? promptFile : null,
-  };
-});
+    PROJECT,
+    ...PLANNING_TYPES,
+    planningCutoff,
+    LIMIT,
+  ).map((s) => {
+    const promptFile = join(
+      project.projectDir,
+      '.claude',
+      'session-prompts',
+      `${s.sessionId}.md`,
+    );
+    return {
+      ...s,
+      startedAt: isoOf(s.startedAt),
+      endedAt: isoOf(s.endedAt),
+      taskIdForms: normId(s.taskId),
+      pauseReason: parsePauseReason(s.pauseReason),
+      lastErrorDetail: trunc(s.lastErrorDetail, 200),
+      promptFile: existsSync(promptFile) ? promptFile : null,
+    };
+  });
 
-// ---- health: deploy_run attempts -----------------------------------------
-const recentDeploys = q(
-  `SELECT run_id AS runId, target_sha AS targetSha, current_step AS currentStep, status,
+  // ---- health: deploy_run attempts -----------------------------------------
+  const recentDeploys = q(
+    `SELECT run_id AS runId, target_sha AS targetSha, current_step AS currentStep, status,
           started_at AS startedAt, completed_at AS completedAt
      FROM deploy_run
     WHERE project = ?
     ORDER BY started_at DESC
     LIMIT ?`,
-  PROJECT,
-  LIMIT,
-).map((r) => {
-  const lastEvent = one(
-    `SELECT step, event_type AS eventType, disposition, detail, at
+    PROJECT,
+    LIMIT,
+  ).map((r) => {
+    const lastEvent = one(
+      `SELECT step, event_type AS eventType, disposition, detail, at
        FROM deploy_run_event WHERE run_id = ? ORDER BY at DESC LIMIT 1`,
-    r.runId,
-  );
-  return {
-    ...r,
-    shortSha: short(r.targetSha),
-    startedAt: isoOf(r.startedAt),
-    completedAt: isoOf(r.completedAt),
-    completed: r.status === 'succeeded',
-    lastEvent: lastEvent
-      ? {
-          ...lastEvent,
-          at: isoOf(lastEvent.at),
-          detail: trunc(lastEvent.detail, 200),
-        }
-      : null,
-  };
-});
+      r.runId,
+    );
+    return {
+      ...r,
+      shortSha: short(r.targetSha),
+      startedAt: isoOf(r.startedAt),
+      completedAt: isoOf(r.completedAt),
+      completed: r.status === 'succeeded',
+      lastEvent: lastEvent
+        ? {
+            ...lastEvent,
+            at: isoOf(lastEvent.at),
+            detail: trunc(lastEvent.detail, 200),
+          }
+        : null,
+    };
+  });
 
-// deployHint — the load-bearing "deployed ≠ HEAD ≠ attempted" reminder, computed from data.
-let deployHint;
-const latestDeploy = recentDeploys[0];
-if (!deployed.sha) {
-  deployHint =
-    'No deployed SHA recorded — cannot assert what is live. Do not diagnose against HEAD.';
-} else if (
-  latestDeploy &&
-  !latestDeploy.completed &&
-  isoOf(latestDeploy.startedAt) > (deployed.recordedAt || '')
-) {
-  deployHint =
-    `Live SHA is still ${deployed.shortSha} (recorded ${deployed.recordedAt}). A LATER deploy attempt ` +
-    `(${latestDeploy.shortSha}, ${latestDeploy.status} at step '${latestDeploy.currentStep}') did NOT complete — ` +
-    `the checkout/HEAD may be ahead of what is actually running. Re-verify current deployed state before asserting a fix landed.`;
-} else {
-  deployHint =
-    `Live SHA is ${deployed.shortSha} (recorded ${deployed.recordedAt}). This is the deployed truth — ` +
-    `the checkout HEAD is NOT it. Fixes land fast: re-check this before framing anything as still-broken.`;
-}
+  // deployHint — the load-bearing "deployed ≠ HEAD ≠ attempted" reminder, computed from data.
+  let deployHint;
+  const latestDeploy = recentDeploys[0];
+  if (!deployed.sha) {
+    deployHint =
+      'No deployed SHA recorded — cannot assert what is live. Do not diagnose against HEAD.';
+  } else if (
+    latestDeploy &&
+    !latestDeploy.completed &&
+    isoOf(latestDeploy.startedAt) > (deployed.recordedAt || '')
+  ) {
+    deployHint =
+      `Live SHA is still ${deployed.shortSha} (recorded ${deployed.recordedAt}). A LATER deploy attempt ` +
+      `(${latestDeploy.shortSha}, ${latestDeploy.status} at step '${latestDeploy.currentStep}') did NOT complete — ` +
+      `the checkout/HEAD may be ahead of what is actually running. Re-verify current deployed state before asserting a fix landed.`;
+  } else {
+    deployHint =
+      `Live SHA is ${deployed.shortSha} (recorded ${deployed.recordedAt}). This is the deployed truth — ` +
+      `the checkout HEAD is NOT it. Fixes land fast: re-check this before framing anything as still-broken.`;
+  }
 
-// ---- health: needs-attention PRs -----------------------------------------
-const needsAttentionPRs = q(
-  `SELECT pr_number AS prNumber, pr_url AS prUrl, repo, state, merge_state AS mergeState,
+  // ---- health: needs-attention PRs -----------------------------------------
+  const needsAttentionPRs = q(
+    `SELECT pr_number AS prNumber, pr_url AS prUrl, repo, state, merge_state AS mergeState,
           pause_reason AS pauseReason, head_branch AS headBranch, session_id AS sessionId,
           task_id AS taskId, updated_at AS updatedAt
      FROM pull_requests
@@ -385,11 +424,114 @@ const needsAttentionPRs = q(
        OR (pause_reason IS NOT NULL AND state NOT IN ('merged', 'closed'))
     ORDER BY updated_at DESC
     LIMIT ?`,
-  LIMIT,
-).map((p) => {
-  // Always carry the exact per-repo verify command, even when we verify here — so a skipped/failed
-  // verification still hands the operator the correct `-R <repo>` incantation (never a bare number).
-  const verifyCommand = `gh -R ${p.repo} pr view ${p.prNumber} --json state,mergedAt,closedAt`;
+    LIMIT,
+  ).map((p) => {
+    // Always carry the exact per-repo verify command, even when we verify here — so a skipped/failed
+    // verification still hands the operator the correct `-R <repo>` incantation (never a bare number).
+    const verifyCommand = `gh -R ${p.repo} pr view ${p.prNumber} --json state,mergedAt,closedAt`;
+    return {
+      ...p,
+      pauseReason: parsePauseReason(p.pauseReason),
+      taskIdForms: normId(p.taskId),
+      verifyCommand,
+    };
+  });
+
+  // ---- health: recent incident-shaped audit events -------------------------
+  const INCIDENT_EVENTS = [
+    'session_errored',
+    'deploy_failed',
+    'stalled_pr_reconcile_attempt',
+    'stalled_pr_retry_exhausted',
+    'task_orphan_nudged',
+    'task_orphan_reverted',
+    'pr_closed',
+    'pipeline_stage_failed',
+    'session_marked_done_while_running',
+    'process_boot',
+  ];
+  const placeholders = INCIDENT_EVENTS.map(() => '?').join(',');
+  const recentAuditEvents = q(
+    `SELECT ts, event_type AS eventType, actor_type AS actorType, task_id AS taskId, payload
+     FROM audit_log
+    WHERE project_id = ? AND event_type IN (${placeholders})
+    ORDER BY ts DESC
+    LIMIT ?`,
+    PROJECT,
+    ...INCIDENT_EVENTS,
+    LIMIT * 2,
+  ).map((e) => {
+    let payloadSummary = null;
+    if (e.payload) {
+      try {
+        const p = JSON.parse(e.payload);
+        payloadSummary = trunc(
+          Object.entries(p)
+            .slice(0, 4)
+            .map(
+              ([k, v]) =>
+                `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`,
+            )
+            .join(' '),
+          160,
+        );
+      } catch {
+        payloadSummary = trunc(e.payload, 160);
+      }
+    }
+    return {
+      ts: isoOf(e.ts),
+      eventType: e.eventType,
+      actorType: e.actorType,
+      taskId: e.taskId,
+      taskIdForms: normId(e.taskId),
+      payloadSummary,
+    };
+  });
+
+  db.close();
+  return {
+    project,
+    deployed,
+    activeMilestone,
+    deployHint,
+    erroredSessions,
+    recentPlanningSessions,
+    recentDeploys,
+    needsAttentionPRs,
+    recentAuditEvents,
+  };
+}
+
+let project, deployed, activeMilestone, deployHint;
+let erroredSessions, recentPlanningSessions, recentDeploys;
+let needsAttentionPRs, recentAuditEvents;
+if (USE_LOCAL) {
+  ({
+    project,
+    deployed,
+    activeMilestone,
+    deployHint,
+    erroredSessions,
+    recentPlanningSessions,
+    recentDeploys,
+    needsAttentionPRs,
+    recentAuditEvents,
+  } = loadFromLocalDb());
+} else {
+  const snap = await loadFromBackend();
+  ({ project, deployed, activeMilestone, deployHint } = snap);
+  ({
+    erroredSessions,
+    recentPlanningSessions,
+    recentDeploys,
+    needsAttentionPRs,
+    recentAuditEvents,
+  } = snap.health);
+}
+
+// GitHub verification stays client-side (gh CLI) for both sources.
+needsAttentionPRs = needsAttentionPRs.map((p) => {
   let github = null;
   let verification = 'unverified';
   let stale = false;
@@ -401,69 +543,8 @@ const needsAttentionPRs = q(
       stale = github.state === 'merged' || github.state === 'closed';
     }
   }
-  return {
-    ...p,
-    pauseReason: parsePauseReason(p.pauseReason),
-    taskIdForms: normId(p.taskId),
-    verifyCommand,
-    github,
-    verification,
-    stale,
-  };
+  return { ...p, github, verification, stale };
 });
-
-// ---- health: recent incident-shaped audit events -------------------------
-const INCIDENT_EVENTS = [
-  'session_errored',
-  'deploy_failed',
-  'stalled_pr_reconcile_attempt',
-  'stalled_pr_retry_exhausted',
-  'task_orphan_nudged',
-  'task_orphan_reverted',
-  'pr_closed',
-  'pipeline_stage_failed',
-  'session_marked_done_while_running',
-  'process_boot',
-];
-const placeholders = INCIDENT_EVENTS.map(() => '?').join(',');
-const recentAuditEvents = q(
-  `SELECT ts, event_type AS eventType, actor_type AS actorType, task_id AS taskId, payload
-     FROM audit_log
-    WHERE project_id = ? AND event_type IN (${placeholders})
-    ORDER BY ts DESC
-    LIMIT ?`,
-  PROJECT,
-  ...INCIDENT_EVENTS,
-  LIMIT * 2,
-).map((e) => {
-  let payloadSummary = null;
-  if (e.payload) {
-    try {
-      const p = JSON.parse(e.payload);
-      payloadSummary = trunc(
-        Object.entries(p)
-          .slice(0, 4)
-          .map(
-            ([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`,
-          )
-          .join(' '),
-        160,
-      );
-    } catch {
-      payloadSummary = trunc(e.payload, 160);
-    }
-  }
-  return {
-    ts: isoOf(e.ts),
-    eventType: e.eventType,
-    actorType: e.actorType,
-    taskId: e.taskId,
-    taskIdForms: normId(e.taskId),
-    payloadSummary,
-  };
-});
-
-db.close();
 
 // ---- board (authoritative non-Done, via the sanctioned enumerator) --------
 let board = {
@@ -533,9 +614,14 @@ if (WANT_BOARD && activeMilestone?.boardId) {
 }
 
 // ---- assemble -------------------------------------------------------------
+const SOURCE = USE_LOCAL ? 'local-db' : 'backend-route';
+const SOURCE_PATH = USE_LOCAL
+  ? DB_PATH
+  : `http://${process.env.ORCHESTRATOR_BACKEND_HOST ?? '127.0.0.1'}:${process.env.ORCHESTRATOR_BACKEND_PORT ?? '3000'}/api/investigate-snapshot`;
 const snapshot = {
+  source: SOURCE,
   generatedAt: new Date().toISOString(),
-  db: { path: DB_PATH, readonly: true },
+  db: { path: SOURCE_PATH, readonly: true },
   project: {
     id: project.id,
     name: project.name,
@@ -565,7 +651,7 @@ L.push(`investigate live-health snapshot   ·   ${snapshot.generatedAt}`);
 L.push(
   `  project        : ${project.name}  [${project.id}]   dir=${project.projectDir}`,
 );
-L.push(`  DB (read-only) : ${DB_PATH}`);
+L.push(`  source         : ${SOURCE}  (${SOURCE_PATH})`);
 L.push(
   `  active milestone: ${activeMilestone ? `${activeMilestone.shortId} — ${activeMilestone.name}` : '(none)'}` +
     (activeMilestone?.boardId ? `   board=${activeMilestone.boardId}` : ''),
