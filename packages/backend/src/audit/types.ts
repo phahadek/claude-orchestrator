@@ -62,6 +62,7 @@ type EventType =
   | 'autofix_started'
   | 'autofix_complete'
   | 'autofix_noop_retry_skipped'
+  | 'gate_head_moved_during_run'
   | 'pr_terminal_flags_cleared'
   | 'stalled_pr_reconcile_attempt'
   | 'stalled_pr_escalated'
