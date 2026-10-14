@@ -97,6 +97,7 @@ import {
   renderBaseAttributableFilterDigest,
   applyF2GateMaskingGuards,
   shouldMarkAwaitingDisposition,
+  DIGEST_FAILING_TEST_LIST_CAP,
   type BaseAttributableFilterResult,
 } from '../baseAttributableFilter';
 
@@ -880,5 +881,60 @@ describe('renderBaseAttributableFilterDigest', () => {
     });
 
     expect(digest).toContain('no failing test was excused');
+  });
+
+  describe('failing-test list cap', () => {
+    const many = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        test_id: `suite.test${i}`,
+        name: `test${i}`,
+      }));
+    const partial = (n: number): BaseAttributableFilterResult => ({
+      outcome: 'filtered_partial',
+      passed: false,
+      excludedTests: [],
+      flakyExcludedTests: [],
+      remainingTests: many(n),
+      baseRun: null,
+    });
+    const testLineCount = (d: string) =>
+      d.split('\n').filter((l) => l.startsWith('- `')).length;
+
+    it('caps 4818 remaining tests at 50 lines plus an overflow line, header keeps full count', () => {
+      const digest = renderBaseAttributableFilterDigest(partial(4818));
+      expect(testLineCount(digest)).toBe(50);
+      expect(digest).toContain('**Test results:** 4818 failed');
+      expect(digest).toContain('- … and 4768 more failing test(s) not listed');
+    });
+
+    it('lists exactly 50 tests with no overflow line', () => {
+      const digest = renderBaseAttributableFilterDigest(
+        partial(DIGEST_FAILING_TEST_LIST_CAP),
+      );
+      expect(testLineCount(digest)).toBe(DIGEST_FAILING_TEST_LIST_CAP);
+      expect(digest).not.toContain('not listed');
+    });
+
+    it('caps a 200-entry guardBlocked list at 50 plus an overflow line', () => {
+      const digest = renderBaseAttributableFilterDigest(
+        {
+          outcome: 'unfiltered',
+          passed: false,
+          excludedTests: [],
+          flakyExcludedTests: [],
+          remainingTests: [],
+          baseRun: null,
+        },
+        many(200),
+      );
+      expect(testLineCount(digest)).toBe(50);
+      expect(digest).toContain('- … and 150 more failing test(s) not listed');
+    });
+
+    it('keeps a 10,000-test digest under 20,000 characters', () => {
+      expect(
+        renderBaseAttributableFilterDigest(partial(10000)).length,
+      ).toBeLessThan(20000);
+    });
   });
 });

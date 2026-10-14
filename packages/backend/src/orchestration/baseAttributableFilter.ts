@@ -423,6 +423,8 @@ export function shouldMarkAwaitingDisposition(inputs: {
   );
 }
 
+export const DIGEST_FAILING_TEST_LIST_CAP = 50;
+
 /**
  * Renders a session-facing digest for a filter result whose outcome isn't
  * `unfiltered` — the caller's fallback (buildTestResultDigest /
@@ -441,12 +443,23 @@ export function renderBaseAttributableFilterDigest(
   result: BaseAttributableFilterResult,
   guardBlocked: FailingTest[] = [],
 ): string {
+  const testLines = (tests: FailingTest[]): string[] => {
+    const out = tests
+      .slice(0, DIGEST_FAILING_TEST_LIST_CAP)
+      .map((t) => `- \`${t.test_id}\` — ${t.name}`);
+    if (tests.length > DIGEST_FAILING_TEST_LIST_CAP) {
+      out.push(
+        `- … and ${tests.length - DIGEST_FAILING_TEST_LIST_CAP} more failing test(s) not listed`,
+      );
+    }
+    return out;
+  };
   const guardBlockedSection = (): string =>
     guardBlocked.length === 0
       ? ''
       : '\n\n**Candidate base-attributable, blocked by masking guard ' +
         `(still counted as real failures):**\n` +
-        guardBlocked.map((t) => `- \`${t.test_id}\` — ${t.name}`).join('\n');
+        testLines(guardBlocked).join('\n');
 
   if (result.outcome === 'unfiltered') {
     return (
@@ -471,8 +484,6 @@ export function renderBaseAttributableFilterDigest(
     '',
     '**Failing tests:**',
   ];
-  for (const t of result.remainingTests) {
-    lines.push(`- \`${t.test_id}\` — ${t.name}`);
-  }
+  lines.push(...testLines(result.remainingTests));
   return lines.join('\n') + guardBlockedSection();
 }

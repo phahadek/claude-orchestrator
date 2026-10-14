@@ -525,10 +525,12 @@ describe('DecisionPanel', () => {
       );
 
       // the excluded group is still fully dispositionable in place
-      expect(screen.getByText('Group group-clean-5')).toBeTruthy();
-      expect(
-        screen.getAllByRole('button', { name: /approve groom/i }),
-      ).toHaveLength(1);
+      await waitFor(() => {
+        expect(screen.getByText('Group group-clean-5')).toBeTruthy();
+        expect(
+          screen.getAllByRole('button', { name: /approve groom/i }),
+        ).toHaveLength(1);
+      });
     });
 
     it('renders full disposition controls for a panel containing only clean groups', async () => {
