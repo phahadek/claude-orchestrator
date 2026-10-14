@@ -1144,6 +1144,7 @@ describe('AutoMerger.pollOnce() — local branch dispatch', () => {
     vi.mocked(getApprovedOpenPRs).mockReturnValue([]);
     vi.mocked(getApprovedLocalBranches).mockReturnValue([makeLocalBranchRow()]);
     vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(detectMergeConflict).mockReset();
     vi.mocked(detectMergeConflict).mockResolvedValueOnce(true);
 
     const github = makeMockGitHub([]);

@@ -230,8 +230,21 @@ export interface DeployOrchestratorDeps {
 interface StepOutcome {
   ok: boolean;
   detail?: string;
+  /** Bounded captured output of a succeeded shell step. */
+  successDetail?: string;
   /** True when the outcome is verify's bounded wall-clock budget expiring, rather than an ordinary poll failure — recorded as a distinct event type. */
   timedOut?: boolean;
+}
+
+const SUCCESS_OUTPUT_HALF_CHARS = 8192;
+const SUCCESS_OUTPUT_MAX_CHARS = SUCCESS_OUTPUT_HALF_CHARS * 2;
+
+/** Head+tail truncation of a succeeded step's output; undefined when empty. */
+function boundSuccessOutput(output: string): string | undefined {
+  if (output.length === 0) return undefined;
+  if (output.length <= SUCCESS_OUTPUT_MAX_CHARS) return output;
+  const elided = output.length - SUCCESS_OUTPUT_MAX_CHARS;
+  return `${output.slice(0, SUCCESS_OUTPUT_HALF_CHARS)}\n... [${elided} chars elided] ...\n${output.slice(-SUCCESS_OUTPUT_HALF_CHARS)}`;
 }
 
 const REMOTE_HOST_BINDING = 'REMOTE_HOST';
@@ -880,6 +893,7 @@ export class DeployOrchestrator {
         runId,
         step: step.id,
         eventType: 'step_succeeded',
+        detail: outcome.successDetail,
         at: this.now(),
       });
     }
@@ -1021,6 +1035,9 @@ export class DeployOrchestrator {
         return {
           ok: result.ok,
           detail: result.ok ? undefined : shellFailureDetail(step.id, result),
+          successDetail: result.ok
+            ? boundSuccessOutput(result.output)
+            : undefined,
         };
       }
 
