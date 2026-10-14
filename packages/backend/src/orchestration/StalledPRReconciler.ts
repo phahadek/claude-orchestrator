@@ -59,7 +59,10 @@ import { parseGateFailureDetail } from './gateFailureDetail';
  * when `pr`'s own most recent test-request run's failures are all
  * breadth-attributable (see db/queries.ts's isRunFailureBreadthAttributable)
  * right now — a run with no failing tests, or one with a failure unique to
- * it, is never attributable. Evaluated live (beforeMs = now), same as the
+ * it, is never attributable. Only a failed latest run can make an escalation
+ * base-recoverable: a passed run (even one carrying an excused failure row)
+ * is direct evidence the base did not break the session, so it is never
+ * attributable. Evaluated live (beforeMs = now), same as the
  * retired whole-tree base-health checks' live-sample semantics —
  * this project no longer distinguishes a "corroborated at recovery time"
  * pass from a live sample, since there's no separate probe history left to
@@ -72,6 +75,7 @@ function isPrLatestRunBreadthAttributable(
   if (!pr.session_id) return false;
   const run = getLatestTestRequestRunForSession(project.id, pr.session_id);
   if (!run) return false;
+  if (run.state === 'passed') return false;
   return isRunFailureBreadthAttributable(
     run.id,
     typedGetSetting('flip_rate_breadth_n'),
