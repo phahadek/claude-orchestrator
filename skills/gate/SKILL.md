@@ -218,7 +218,31 @@ The six disciplines below are how that rule is kept:
 > then stage the handoff as one paste-able command** with its expected output — rather than hitting
 > the block mid-step and improvising. This is *not* the `Prod-Mutating` consent gate (a deliberate
 > design feature); it is the harness permission boundary, and it lands on actions this skill
-> otherwise treats as routine.
+> otherwise treats as routine. When it blocks, follow `procedures.md` § The harness permission
+> boundary: try under the generic approval, then explain exactly what was blocked (surface +
+> classifier reason) and ask for explicit approval of that action, and only then ask for an
+> approval-mode change. Never open with "change the permission mode / add a permission rule".
+
+## Doctrine rulings and gate scope
+
+- **A broken baseline is itself a failure.** If the bar is unattainable because the system's
+  normal-state value is already broken, record a `fail` and RCA the baseline. Do not restate the
+  bar to fit the broken state. (Polimarket M19: a ≈280 s no-backfill lag plateau was real lag from
+  poison files, not a mis-specified 60 s bar.)
+- **Invalid as written, intent observably met → pass on intent.** Say so in the first line of the
+  evidence and attach the intent check.
+- **An item whose check depends on a 🔧 Operational task's run cannot pass until that run
+  happens.** Disposition `needs-setup` naming the owning task; never restate the item to pass early.
+- **Gate scope: lightweight items only.** Heavy work — multi-step RCAs, recomputes, backfills, long
+  observations, multi-agent investigations — belongs in a separate `/ops` or `/investigate` run
+  spun out from the gate. Record a disposition with a trace guide and name that run; do not do the
+  heavy work inline.
+- **Ownership check includes seed items.** Before declaring a prod action unowned, check the
+  milestone's seed items (`seed-state-client.mjs` `readiness` / `next`) as well as the board's
+  🔧/🔎/🧪 tasks, and read the fix task's own text — it may assign the apply to the deploy. (The
+  pgBackRest host install was once declared unowned without this check.) Known gap: the client has
+  no route listing confirmed or discarded seed items, so those cannot be enumerated; add one when
+  touching the client.
 
 ---
 
@@ -290,6 +314,15 @@ Beyond the DB-safety rules above, every verifier brief MUST:
 - **Forbid background watchers, polling loops, and sleeps** beyond ~2 minutes. An item whose window
   is pending is reported as not-yet-triggerable with an interim reading and trace guide, not waited
   on.
+- **Point the agent at the actual budget or spec source.** Name the exact page/task that holds it
+  (it may live in a Done investigation's Implementation notes, not a Deferred task). Verifiers
+  once read a Deferred task and concluded "no budget exists" while the budget sat in a Done
+  investigation.
+- **Send back an under-trying verifier.** An agent that reports items "not attempted (budget)"
+  after using a fraction of its time budget (e.g. ~3 of 12 minutes) is sent back to do them.
+- **"Deployed" is not "installed" for host config.** A merged change under `infra/` is not live
+  until it is on the host: verify the `/etc/...` content and mtime, not just git ancestry. Say so
+  in the brief.
 - **Require the agent to write its results as a JSON array to a named file** in the worktree scratch
   area (one entry per item: id, disposition, evidence, trace guide), and return only the path and a
   one-line tally.
