@@ -260,6 +260,24 @@ describe('SessionManager — _buildAndWriteResumeSystemPrompt', () => {
     expect(content).toContain('Review Session Rules');
   });
 
+  it('passes session_rules into the resumed review prompt as binding Project Rules', async () => {
+    const row = makeRow('review');
+
+    const result = await (sm as any)._buildAndWriteResumeSystemPrompt(
+      row,
+      PROJECT,
+      { ...ORCH_CONFIG, session_rules: ['Do NOT edit schema.sql'] },
+      projectDir,
+      projectDir,
+    );
+
+    const content = fs.readFileSync(result as string, 'utf-8');
+    expect(content).toContain(
+      '## Project Rules (binding on the implementing session)',
+    );
+    expect(content).toContain('- Do NOT edit schema.sql');
+  });
+
   it('calls buildDepthReviewClaudeMd (not buildSessionContext, not a reused file) for a resumed depth_review session', async () => {
     const row = makeRow('depth_review');
 

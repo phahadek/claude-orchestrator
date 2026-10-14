@@ -5,6 +5,7 @@ import os from 'os';
 import {
   buildOrchestratorClaudeMd,
   buildReviewClaudeMd,
+  buildDepthReviewClaudeMd,
 } from './orchestrator-claudemd';
 import { buildSessionContext, stripOrchestratorHeader } from './ContextBuilder';
 import { loadOrchestratorConfig } from './orchestrator-config';
@@ -889,5 +890,49 @@ describe('buildReviewClaudeMd', () => {
       'Flag any PR that edits db/migrations/LATEST.txt directly.',
     );
     expect(result).toContain('"escalate": true');
+  });
+
+  it('renders sessionRules as a Project Rules section with the precedence block', () => {
+    const result = buildReviewClaudeMd('Some task', undefined, [
+      'Do NOT edit X',
+    ]);
+
+    expect(result).toContain(
+      '## Project Rules (binding on the implementing session)',
+    );
+    expect(result).toContain('They take precedence over the task spec:');
+    expect(result).toContain('instead of returning needs_changes for it.');
+    expect(result).toContain('- Do NOT edit X');
+    expect(result).not.toContain('Project Review Criteria');
+  });
+
+  it('places Project Rules before Project Review Criteria when both are given', () => {
+    const result = buildReviewClaudeMd(
+      'Some task',
+      ['Review rule'],
+      ['Session rule'],
+    );
+
+    const rulesIdx = result.indexOf('## Project Rules (binding');
+    const criteriaIdx = result.indexOf('## Project Review Criteria');
+    expect(rulesIdx).toBeGreaterThan(-1);
+    expect(criteriaIdx).toBeGreaterThan(rulesIdx);
+    expect(result).toContain('- Session rule');
+    expect(result).toContain('- Review rule');
+  });
+
+  it('is byte-identical when sessionRules is undefined or empty', () => {
+    const base = buildReviewClaudeMd('Some task', ['Review rule']);
+    expect(buildReviewClaudeMd('Some task', ['Review rule'], [])).toBe(base);
+    expect(buildReviewClaudeMd('Some task', ['Review rule'], undefined)).toBe(
+      base,
+    );
+    expect(base).not.toContain('Project Rules');
+  });
+
+  it('buildDepthReviewClaudeMd output has no Project Rules section', () => {
+    expect(buildDepthReviewClaudeMd('Some task')).not.toContain(
+      'Project Rules',
+    );
   });
 });
