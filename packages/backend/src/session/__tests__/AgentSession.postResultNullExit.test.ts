@@ -168,6 +168,39 @@ describe('AgentSession — null exit after a successful result event', () => {
     expect(row?.status).not.toBe('error');
   });
 
+  it('a grace-kill after a result followed by trailing tool_progress events is classified clean, not runner_killed_unexpected', async () => {
+    const sessionId = 'sess-grace-killed-trailing-progress';
+    seedSession(sessionId);
+    for (const payload of [
+      { type: 'result', is_error: false },
+      { type: 'tool_progress' },
+      { type: 'tool_progress' },
+    ]) {
+      upsertSessionEvent({
+        session_id: sessionId,
+        event_type: 'system',
+        payload: JSON.stringify(payload),
+        timestamp: Date.now(),
+      });
+    }
+
+    const { runner, resolveRun } = makeFakeRunner();
+    const sm = makeSessionManager();
+    const session = makeSession(sessionId, sm, runner);
+
+    const runPromise = session.run();
+    resolveRun(null);
+    await runPromise;
+
+    expect(sm.markSessionErrored).not.toHaveBeenCalled();
+    const row = db
+      .prepare('SELECT status, pause_reason FROM sessions WHERE session_id = ?')
+      .get(sessionId) as { status: string; pause_reason: string | null };
+    expect(row.status).not.toBe('killed');
+    expect(row.status).not.toBe('error');
+    expect(row.pause_reason).not.toBe('runner_killed_unexpected');
+  });
+
   it('a CliSessionRunner post-result grace-kill (reported as null per its own contract) routes into handleCleanExit, not the delivery-race resume or runner_non_zero', async () => {
     const sessionId = 'sess-grace-killed-after-result';
     seedSession(sessionId);
