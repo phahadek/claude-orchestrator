@@ -1581,7 +1581,8 @@ describe('StalledPRReconciler', () => {
 
       await reconciler.reconcileOnce();
 
-      const prompt = vi.mocked(sm.relaunchFixerForPR).mock.calls[0][1] as string;
+      const prompt = vi.mocked(sm.relaunchFixerForPR).mock
+        .calls[0][1] as string;
       expect(prompt).toContain('Edit schema.sql please.');
       expect(prompt).toContain('Migrations');
       expect(prompt).not.toContain('Style');

@@ -392,7 +392,10 @@ describe('buildOrchestratorClaudeMd', () => {
   it('Responding to Review Comments section instructs staging review_dispute for the four disputable verdicts', () => {
     const result = buildOrchestratorClaudeMd(defaultParams);
     const start = result.indexOf('## Responding to Review Comments');
-    const section = result.slice(start, result.indexOf('## Status Ownership', start));
+    const section = result.slice(
+      start,
+      result.indexOf('## Status Ownership', start),
+    );
     expect(section).toContain('mcp__orchestrator__review_dispute');
     for (const v of [
       'needs_changes',
