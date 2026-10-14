@@ -6337,7 +6337,7 @@ describe('ReviewOrchestrator — head-already-reviewed admission gate', () => {
     expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
   });
 
-  it('does not block onSessionEnded re-review when head is unchanged since the last needs_changes verdict (PR #668 regression)', async () => {
+  it('blocks onSessionEnded re-review when head is unchanged since the last needs_changes verdict', async () => {
     const needsChangesResult = JSON.stringify({ verdict: 'needs_changes' });
     vi.mocked(getPRByNumber).mockReturnValue({
       ...basePRRow,
@@ -6371,7 +6371,7 @@ describe('ReviewOrchestrator — head-already-reviewed admission gate', () => {
     });
     await new Promise((r) => setTimeout(r, 20));
 
-    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
   });
 });
 

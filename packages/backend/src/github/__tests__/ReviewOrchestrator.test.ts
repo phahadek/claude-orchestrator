@@ -341,28 +341,63 @@ describe('ReviewOrchestrator — session_ended re-review trigger', () => {
     expect(vi.mocked(reviewService.reviewPR)).toHaveBeenCalled();
   });
 
-  it('doc-only fix: re-review fires when session ends without head_sha advance after needs_changes (PR #668 regression)', async () => {
-    const prRow = {
-      ...makePRRowWithVerdict('needs_changes', 0),
-      head_sha: 'abc123',
-      last_reviewed_sha: 'abc123',
-    };
+  async function endSessionWith(prRow: any) {
     vi.mocked(getSession).mockReturnValue(makeStandardSession());
     vi.mocked(getPRBySessionId).mockReturnValue(prRow);
     vi.mocked(getPRByNumber).mockReturnValue(prRow);
-
     const reviewService = makeReviewService('needs_changes');
     new ReviewOrchestrator(reviewService, sm, true);
-
     sm.emit('message', {
       type: 'session_ended',
       sessionId: CODER_SESSION_ID,
       status: 'idle',
     });
-
     await new Promise((resolve) => setTimeout(resolve, 20));
+    return reviewService;
+  }
 
-    expect(vi.mocked(reviewService.reviewPR)).toHaveBeenCalled();
+  it('does NOT re-review when head_sha equals last_reviewed_sha (diff already reviewed)', async () => {
+    const reviewService = await endSessionWith({
+      ...makePRRowWithVerdict('needs_changes', 0),
+      head_sha: 'abc12345',
+      last_reviewed_sha: 'abc12345',
+    });
+    expect(vi.mocked(reviewService.reviewPR)).not.toHaveBeenCalled();
+  });
+
+  it('re-reviews once when head_sha differs from last_reviewed_sha', async () => {
+    const reviewService = await endSessionWith({
+      ...makePRRowWithVerdict('needs_changes', 0),
+      head_sha: 'def67890',
+      last_reviewed_sha: 'abc12345',
+    });
+    expect(vi.mocked(reviewService.reviewPR)).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-reviews when last_reviewed_sha is NULL', async () => {
+    const reviewService = await endSessionWith({
+      ...makePRRowWithVerdict('needs_changes', 0),
+      head_sha: 'abc12345',
+      last_reviewed_sha: null,
+    });
+    expect(vi.mocked(reviewService.reviewPR)).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT re-review on approved verdict or closed PR', async () => {
+    const approved = await endSessionWith({
+      ...makePRRowWithVerdict('approved', 0),
+      head_sha: 'def67890',
+      last_reviewed_sha: 'abc12345',
+    });
+    expect(vi.mocked(approved.reviewPR)).not.toHaveBeenCalled();
+
+    const closed = await endSessionWith({
+      ...makePRRowWithVerdict('needs_changes', 0),
+      state: 'closed',
+      head_sha: 'def67890',
+      last_reviewed_sha: 'abc12345',
+    });
+    expect(vi.mocked(closed.reviewPR)).not.toHaveBeenCalled();
   });
 
   it('does NOT fire re-review when review_iteration >= cap', async () => {
