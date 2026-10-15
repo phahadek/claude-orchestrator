@@ -12551,6 +12551,20 @@ function replaceFlaggedFlakyTestsRollupSync(
   return { itemsProcessed: candidates.testIds.length + ghostsPruned };
 }
 
+export interface FlakyRollupTimings {
+  spawnToOnlineMs: number;
+  dbOpenMs: number;
+  candidatesMs: number;
+  ghostCheckMs: number;
+  workerTotalMs: number;
+}
+
+export interface FlakyRollupResult {
+  itemsProcessed: number;
+  /** Absent on the in-process (`:memory:`) fallback, which has no worker. */
+  timings?: FlakyRollupTimings;
+}
+
 /**
  * Dispatches replaceFlaggedFlakyTestsRollupSync's recompute to a worker
  * thread that opens its OWN connection against `targetPath`, instead of
@@ -12577,7 +12591,7 @@ export function replaceFlaggedFlakyTestsRollupOffMainThread(
   windowN: number,
   thresholdK: number,
   computedAt: number,
-): Promise<{ itemsProcessed: number }> {
+): Promise<FlakyRollupResult> {
   if (!targetPath || targetPath === ':memory:') {
     return Promise.resolve(
       replaceFlaggedFlakyTestsRollupSync(
@@ -12594,6 +12608,8 @@ export function replaceFlaggedFlakyTestsRollupOffMainThread(
       __dirname,
       isTsNode ? 'flakyTestRollupWorker.ts' : 'flakyTestRollupWorker.js',
     );
+    const spawnedAt = performance.now();
+    let spawnToOnlineMs = 0;
     const worker = new Worker(workerPath, {
       workerData: {
         dbPath: targetPath,
@@ -12605,16 +12621,28 @@ export function replaceFlaggedFlakyTestsRollupOffMainThread(
       execArgv: isTsNode ? ['-r', 'ts-node/register/transpile-only'] : [],
     });
     let settled = false;
+    worker.once('online', () => {
+      spawnToOnlineMs = performance.now() - spawnedAt;
+    });
     worker.once(
       'message',
       (
         msg:
-          | { ok: true; result: { itemsProcessed: number } }
+          | {
+              ok: true;
+              result: {
+                itemsProcessed: number;
+                timings: Omit<FlakyRollupTimings, 'spawnToOnlineMs'>;
+              };
+            }
           | { ok: false; error: string },
       ) => {
         settled = true;
         if (msg.ok) {
-          resolve(msg.result);
+          resolve({
+            itemsProcessed: msg.result.itemsProcessed,
+            timings: { spawnToOnlineMs, ...msg.result.timings },
+          });
         } else {
           reject(new Error(`[flaky_test_rollup] worker failed: ${msg.error}`));
         }
@@ -12655,7 +12683,7 @@ export function replaceFlaggedFlakyTestsRollup(
   windowN: number,
   thresholdK: number,
   computedAt: number,
-): Promise<{ itemsProcessed: number }> {
+): Promise<FlakyRollupResult> {
   return replaceFlaggedFlakyTestsRollupOffMainThread(
     db.name,
     projectId,

@@ -46,6 +46,12 @@ interface TestFlipRateFlag {
 
 interface FlakyTestRollupWorkerResult {
   itemsProcessed: number;
+  timings: {
+    dbOpenMs: number;
+    candidatesMs: number;
+    ghostCheckMs: number;
+    workerTotalMs: number;
+  };
 }
 
 // Mirrors FLAGGED_FLAKY_ROLLUP_GHOST_STALE_MS in db/queries.ts — see that
@@ -253,6 +259,7 @@ function getCandidates(
 function run(): FlakyTestRollupWorkerResult {
   const { dbPath, projectId, windowN, thresholdK, computedAt } =
     workerData as FlakyTestRollupWorkerData;
+  const startedAt = performance.now();
   const database = new Database(dbPath);
   // The main-thread `db` singleton (db.ts) always sets journal_mode = WAL
   // before any worker can be dispatched against the same file, so this is a
@@ -269,9 +276,13 @@ function run(): FlakyTestRollupWorkerResult {
   // WAL-mode writer-vs-writer case.
   database.pragma('journal_mode = WAL');
   database.pragma('busy_timeout = 5000');
+  const dbOpenMs = performance.now() - startedAt;
   try {
+    const candidatesStart = performance.now();
     const since = getWatermark(database, projectId);
     const candidates = getCandidates(database, projectId, since);
+    const candidatesMs = performance.now() - candidatesStart;
+    const ghostStart = performance.now();
     const ghostsPruned = hasGhostFlaggedFlakyTests(
       database,
       projectId,
@@ -279,9 +290,16 @@ function run(): FlakyTestRollupWorkerResult {
     )
       ? pruneGhostFlaggedFlakyTests(database, projectId, computedAt)
       : 0;
+    const ghostCheckMs = performance.now() - ghostStart;
+    const timings = (): FlakyTestRollupWorkerResult['timings'] => ({
+      dbOpenMs,
+      candidatesMs,
+      ghostCheckMs,
+      workerTotalMs: performance.now() - startedAt,
+    });
 
     if (candidates.testIds.length === 0) {
-      return { itemsProcessed: ghostsPruned };
+      return { itemsProcessed: ghostsPruned, timings: timings() };
     }
 
     const flags = candidates.testIds.map((testId) =>
@@ -315,7 +333,10 @@ function run(): FlakyTestRollupWorkerResult {
     });
     replace();
 
-    return { itemsProcessed: candidates.testIds.length + ghostsPruned };
+    return {
+      itemsProcessed: candidates.testIds.length + ghostsPruned,
+      timings: timings(),
+    };
   } finally {
     database.close();
   }

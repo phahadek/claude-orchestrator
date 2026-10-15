@@ -5,7 +5,21 @@ import type { ProjectConfig } from '../config';
 import { typedGetSetting } from '../config/settings';
 import { replaceFlaggedFlakyTestsRollup } from '../db/queries';
 
+import type { FlakyRollupTimings } from '../db/queries';
+
 const INTERVAL_MS = 15 * 60_000;
+const SLOW_ZERO_ITEM_TICK_MS = 1000;
+
+function roundTimings(t: FlakyRollupTimings): FlakyRollupTimings {
+  const r = (n: number) => Math.round(n * 10) / 10;
+  return {
+    spawnToOnlineMs: r(t.spawnToOnlineMs),
+    dbOpenMs: r(t.dbOpenMs),
+    candidatesMs: r(t.candidatesMs),
+    ghostCheckMs: r(t.ghostCheckMs),
+    workerTotalMs: r(t.workerTotalMs),
+  };
+}
 
 /**
  * Recomputes flagged_flaky_tests_rollup for every project on a 15-minute
@@ -53,6 +67,7 @@ export class FlakyTestRollupJob {
     const windowN = typedGetSetting('flip_rate_window_n');
     const thresholdK = typedGetSetting('flip_rate_threshold_k');
     const computedAt = Date.now();
+    const tickStart = performance.now();
 
     // Dispatched concurrently rather than one `await` per project: each
     // recompute spawns its own worker thread (see
@@ -86,6 +101,20 @@ export class FlakyTestRollupJob {
         );
       }
     });
+
+    const tickMs = performance.now() - tickStart;
+    if (itemsProcessed === 0 && tickMs > SLOW_ZERO_ITEM_TICK_MS) {
+      const phases = settlements.flatMap((settlement, i) =>
+        settlement.status === 'fulfilled' && settlement.value.timings
+          ? [
+              `${projects[i].id}=${JSON.stringify(roundTimings(settlement.value.timings))}`,
+            ]
+          : [],
+      );
+      logger.warn(
+        `[FlakyTestRollupJob] slow zero-item tick: ${Math.round(tickMs)}ms; phase timings (ms) by project: ${phases.join(' ') || 'none'}`,
+      );
+    }
 
     return { items_processed: itemsProcessed };
   }
