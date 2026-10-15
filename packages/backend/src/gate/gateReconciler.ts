@@ -14,6 +14,7 @@ import {
   hasLiveGateVerifyIntentForItem,
   hasLiveVerifySessionForGateItem,
   isStructurallyUnresolvableSource,
+  isSourceTaskDeferred,
   listActiveGateVerifyMirrors,
   type GateVerifyMirrorOrigin,
 } from '../db/queries';
@@ -941,7 +942,9 @@ function isUnresolvedSourceStillLive(item: GateItem): boolean {
     !TERMINAL_GATE_ITEM_STATES.has(item.state) &&
     item.sources.some(
       (s) =>
-        !s.mergeCommit && !isStructurallyUnresolvableSource(s.sourceTaskId),
+        !s.mergeCommit &&
+        !isStructurallyUnresolvableSource(s.sourceTaskId) &&
+        !isSourceTaskDeferred(s.sourceTaskId),
     )
   );
 }
@@ -959,6 +962,13 @@ function retireReasonFor(origin: GateItemMirrorOrigin, item: GateItem): string {
       )
     ) {
       return 'source structurally unresolvable';
+    }
+    if (
+      item.sources.some(
+        (s) => !s.mergeCommit && isSourceTaskDeferred(s.sourceTaskId),
+      )
+    ) {
+      return 'source deferred, never merged';
     }
     return `gate_item resolved to ${item.state}`;
   }

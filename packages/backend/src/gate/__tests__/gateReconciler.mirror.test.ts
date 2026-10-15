@@ -519,6 +519,25 @@ describe('reconcileHumanObservationMirrors — unresolved-source mirrors', () =>
     expect(liveMirrorRows('unresolved-source')).toHaveLength(1);
   });
 
+  it('retires a mirror whose only unmerged source is a ⏭️ Deferred 💻 Code task, with a specific reason', () => {
+    const item = makeUnresolvedSourceItem('notion:deferred-code-src');
+    upsertTaskCache(
+      'notion:deferred-code-src',
+      JSON.stringify({ type: '💻 Code', status: '⏭️ Deferred' }),
+    );
+    stageUnresolvedSourceMirror(item);
+    expect(liveMirrorRows('unresolved-source')).toHaveLength(1);
+
+    const result = reconcileHumanObservationMirrors();
+
+    expect(result.retired).toHaveLength(1);
+    expect(liveMirrorRows('unresolved-source')).toHaveLength(0);
+    const row = db
+      .prepare('SELECT disposition_reason FROM staged_intent WHERE id = ?')
+      .get(result.retired[0]) as { disposition_reason: string | null };
+    expect(row.disposition_reason).toMatch(/source deferred, never merged/);
+  });
+
   it('keeps a mirror live for a Done 💻 Code source with a genuine dropped-webhook merge-commit gap', () => {
     const item = makeUnresolvedSourceItem('notion:dropped-webhook');
     upsertTaskCache(
