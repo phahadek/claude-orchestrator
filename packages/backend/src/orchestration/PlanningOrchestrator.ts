@@ -625,7 +625,10 @@ export class PlanningOrchestrator {
         i.state === 'committed' &&
         !isPRIntentConsumed(i.id),
     );
-    if (awaitingPrOpen) return false;
+    if (awaitingPrOpen) {
+      this.stagedCountAtResume.set(sessionId, countable.length);
+      return false;
+    }
     const reachedTerminal =
       !stillPending && stagedNothingNew && !owesGatedArtifacts;
 
