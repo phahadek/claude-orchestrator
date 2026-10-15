@@ -68,6 +68,7 @@ import type { DesignLoadResult } from '../design/designLoad';
 import type { DocsLoadResult } from '../docs/docsLoad';
 import type { OpsLoadResult, OpsTaskEntry } from '../ops/opsLoad';
 import type { OpsJournalEntry } from '../ops/opsJournal';
+import type { PriorOpsSession } from '../db/queries';
 import { GATE_ITEM_TIER_SELECTION_GUIDANCE } from '../gate/gateItemClassificationGuidance';
 import {
   PLANNING_INTENT_KINDS,
@@ -191,6 +192,8 @@ export interface DocsDigestSlice {
 export interface OpsDigestSlice {
   task: OpsTaskEntry;
   journalEntry: OpsJournalEntry | null;
+  /** Earlier ops sessions on this task, newest first (committed staged intents only). */
+  priorSessions: PriorOpsSession[];
   /** Which dual-read branch produced `archUnits` — see `OpsTaskEntry.archSource`. */
   archSource: OpsTaskEntry['archSource'];
   /** Active-invariant units (an ops task has no file scope/topic) once adopted, else the fixed Notion context pages. Titles/ids only — never inlined (see `renderOpsDigest`). */
@@ -318,6 +321,7 @@ export function deriveOpsDigestSlice(
   result: OpsLoadResult,
   taskId: string,
   journalEntry: OpsJournalEntry | null,
+  priorSessions: PriorOpsSession[] = [],
 ): OpsDigestSlice {
   const allTasks = [
     ...result.worklist.executable,
@@ -334,6 +338,7 @@ export function deriveOpsDigestSlice(
   return {
     task,
     journalEntry,
+    priorSessions,
     archSource: task.archSource,
     archUnits: task.archUnits,
   };
@@ -1507,6 +1512,28 @@ function renderOpsDigest(data: OpsDigestSlice): string {
       ? `\`\`\`json\n${JSON.stringify(data.journalEntry, null, 2)}\n\`\`\``
       : '_No prior entry — this is a fresh pass._',
   );
+  if (data.priorSessions.length) {
+    lines.push('', '### Prior ops sessions on this task', '');
+    for (const ps of data.priorSessions) {
+      lines.push(
+        `- Session \`${ps.sessionId}\` — terminal_completion_reason: ${ps.terminalCompletionReason ?? '(none)'}`,
+      );
+      if (ps.finalState) {
+        lines.push(
+          `  - journal.setState → ${ps.finalState}${ps.findingOrProposal ? `; findingOrProposal: ${JSON.stringify(ps.findingOrProposal)}` : ''}`,
+        );
+      }
+      for (const t of ps.createdTasks) {
+        lines.push(
+          `  - task.create: ${JSON.stringify(t.title)}${t.taskId ? ` → \`${t.taskId}\`` : ''}`,
+        );
+      }
+    }
+    lines.push(
+      '',
+      'DO check this list before filing a follow-on. DO NOT re-file a task it already contains.',
+    );
+  }
   return lines.join('\n');
 }
 

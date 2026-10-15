@@ -1729,6 +1729,41 @@ describe('assemblePlanningProcedure', () => {
     expect(output).not.toContain('Ops Master Context');
   });
 
+  it('renders prior ops sessions with finding and filed task titles, omitting the section when none', () => {
+    const assemble = (
+      prior: Parameters<typeof deriveOpsDigestSlice>[3],
+    ): string =>
+      assemblePlanningProcedure({
+        taskName: 'A task',
+        taskUrl: 'https://notion.so/x',
+        milestoneId: 'm1',
+        projectId: 'p1',
+        digest: {
+          workflow: 'ops',
+          data: deriveOpsDigestSlice(
+            fixtureOpsLoadResult(),
+            'task-3',
+            null,
+            prior,
+          ),
+        },
+      });
+    const output = assemble([
+      {
+        sessionId: 'sess-prior',
+        terminalCompletionReason: 'resolved',
+        finalState: 'resolved',
+        findingOrProposal: 'index-only skip-scan is the fix',
+        createdTasks: [{ title: 'Replace the full read', taskId: 'abc' }],
+      },
+    ]);
+    expect(output).toContain('### Prior ops sessions on this task');
+    expect(output).toContain('index-only skip-scan is the fix');
+    expect(output).toContain('Replace the full read');
+    expect(output).toContain('DO NOT re-file');
+    expect(assemble([])).not.toContain('Prior ops sessions on this task');
+  });
+
   it('points a store-sourced ops digest at the architecture read tools, rendering only titles/ids never a unit body', () => {
     const result = fixtureOpsLoadResult();
     result.worklist.executable[0].archSource = 'store';

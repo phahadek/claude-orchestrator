@@ -12,7 +12,7 @@ import { loadGroomContext } from '../groom/groomLoad';
 import { GroomTaskSourceUnsupportedError } from '../planning/errors';
 import { loadDesignContext } from '../design/designLoad';
 import { loadDocsContext } from '../docs/docsLoad';
-import { getProjectRowById } from '../db/queries';
+import { getPriorOpsSessionsForTask, getProjectRowById } from '../db/queries';
 import { resolveMilestoneForProject } from '../projects/milestoneResolver';
 import {
   isPlanningSession,
@@ -375,7 +375,12 @@ export class OpsSessionLauncher {
         const journalEntry = getOpsJournalEntry(task.id) ?? null;
         digest = {
           workflow: 'ops',
-          data: deriveOpsDigestSlice(opsContext, task.id, journalEntry),
+          data: deriveOpsDigestSlice(
+            opsContext,
+            task.id,
+            journalEntry,
+            getPriorOpsSessionsForTask(task.id),
+          ),
         };
       } else {
         throw new Error(
