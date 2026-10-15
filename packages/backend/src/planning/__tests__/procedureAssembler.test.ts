@@ -572,6 +572,7 @@ describe('assemblePlanningProcedure', () => {
       expect(output).toContain('## Structured Output Contract');
       expect(output).toContain('mcp__orchestrator__');
       expect(output).toContain('decisionProposal');
+      expect(output).not.toContain('"hasOpenQuestionsHeading": true|false');
 
       // Per-kind procedure core, sourced from procedureCore.ts.
       expect(output).toMatch(/## .+ Procedure/);

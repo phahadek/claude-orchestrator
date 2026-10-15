@@ -50,6 +50,7 @@ import {
 } from './constraintCatalog';
 import {
   applyTriageFloorForType,
+  deriveRequiredHeadingFact,
   isTriageEligibleType,
   INTERACTIVE_TASK_TYPES,
   TRIAGE_ELIGIBLE_TYPES,
@@ -237,14 +238,17 @@ export interface GroomingGateEntry {
    * Required for those types before promotion; rejected outright for
    * auto-dispatched/ineligible types (💻 Code stays per-task-gated).
    * `proposedVerdict` is the groomer's judgment-primary
-   * call; `hasOpenQuestionsHeading` is a structural fact groomLoad.ts
-   * computes from the task body. The deterministic floor is re-applied here
+   * call; `hasOpenQuestionsHeading` is IGNORED — the server derives the
+   * required-heading fact from the composed task body (the field is only
+   * still accepted so in-flight sessions don't fail validation). The
+   * deterministic floor is re-applied here
    * from server-derived facts (hard-block Depends On, routed constraint
    * conflicts) rather than trusting a caller-asserted final verdict.
    */
   triage?: {
     proposedVerdict: TriageVerdict;
-    hasOpenQuestionsHeading: boolean;
+    /** Ignored — the server derives the heading fact from the composed body. */
+    hasOpenQuestionsHeading?: boolean;
   };
   /**
    * The per-line triage of the pre-groom "### 👁️ Manual verification"
@@ -963,6 +967,7 @@ function isInteractiveTriageClean(
   type: string | undefined,
   entry: GroomingGateEntry,
   dependsOnTasks: DependsOnTaskRef[],
+  taskBody: string,
 ): { ok: boolean; reasons: string[] } {
   if (!isTriageEligibleType(type)) return { ok: true, reasons: [] };
   if (!entry.triage) {
@@ -971,7 +976,7 @@ function isInteractiveTriageClean(
       reasons: [
         `triage-eligible task type "${type}" requires a recorded triage verdict before promotion — ` +
           `types ${TRIAGE_ELIGIBLE_TYPES_LIST} require groomingGate.triage ` +
-          '(`{"proposedVerdict": "clean"|"blocked"|"needs-attention", "hasOpenQuestionsHeading": true|false}`); ' +
+          '(`{"proposedVerdict": "clean"|"blocked"|"needs-attention"}`); ' +
           'promotion without a per-item human sign-off requires a clean verdict.',
       ],
     };
@@ -989,7 +994,7 @@ function isInteractiveTriageClean(
   const floored = applyTriageFloorForType(type, {
     proposedVerdict: entry.triage.proposedVerdict,
     hardBlockDepNotDone,
-    hasOpenQuestionsHeading: entry.triage.hasOpenQuestionsHeading,
+    hasOpenQuestionsHeading: deriveRequiredHeadingFact(type, taskBody),
     hasRoutedConstraintConflict,
   });
 
@@ -1117,8 +1122,12 @@ export async function checkGroomingPromotionGate(
   );
   reasons.push(...isTriageEligibleForType(resolvedType, entry).reasons);
   reasons.push(
-    ...isInteractiveTriageClean(resolvedType, entry, resolvedDependsOnTasks)
-      .reasons,
+    ...isInteractiveTriageClean(
+      resolvedType,
+      entry,
+      resolvedDependsOnTasks,
+      taskBody ?? '',
+    ).reasons,
   );
 
   return { allowed: reasons.length === 0, reasons };

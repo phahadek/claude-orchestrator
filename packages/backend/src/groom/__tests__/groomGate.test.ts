@@ -91,12 +91,16 @@ import {
  * above) by default, so none of the pre-existing call sites below need to
  * change their arguments, only await the now-async result.
  */
+const ALL_HEADINGS_BODY =
+  '## Open Questions\n- q?\n\n## Targets / surfaces affected\n- surface\n\n## Deliverables\n- d\n';
+
 async function gate(
   entry: GroomingGateEntry,
   taskId: string,
   authoritativeType?: string,
   accretionOpts?: AccretionCheckOptions,
   projectId: string = 'polimarket-analyser',
+  taskBody: string = ALL_HEADINGS_BODY,
 ) {
   return checkGroomingPromotionGate(
     entry,
@@ -104,6 +108,7 @@ async function gate(
     authoritativeType,
     accretionOpts,
     projectId,
+    taskBody,
   );
 }
 
@@ -1913,7 +1918,25 @@ describe('checkGroomingPromotionGate — Operational/Investigation triage floor'
     expect(result.allowed).toBe(true);
   });
 
-  it('uses the 🔧 Operational required-heading label when the heading fact is false', async () => {
+  it('uses the 🔧 Operational required-heading label when the body lacks the heading', async () => {
+    const result = await gate(
+      {
+        ...operationalCleanEntry,
+        triage: { proposedVerdict: 'clean' as const },
+      },
+      'notion:operational-triage-no-heading',
+      undefined,
+      undefined,
+      'polimarket-analyser',
+      '## Summary\nNothing here.\n',
+    );
+    expect(result.allowed).toBe(false);
+    expect(
+      result.reasons.some((r) => r.includes('Targets / surfaces affected')),
+    ).toBe(true);
+  });
+
+  it('does not block a 🔧 Operational body that has the heading even when the caller sends false', async () => {
     const result = await gate(
       {
         ...operationalCleanEntry,
@@ -1922,12 +1945,35 @@ describe('checkGroomingPromotionGate — Operational/Investigation triage floor'
           hasOpenQuestionsHeading: false,
         },
       },
-      'notion:operational-triage-no-heading',
+      'notion:operational-triage-caller-false',
+      undefined,
+      undefined,
+      'polimarket-analyser',
+      '## Targets / surfaces affected\n- the thing\n',
     );
-    expect(result.allowed).toBe(false);
     expect(
       result.reasons.some((r) => r.includes('Targets / surfaces affected')),
-    ).toBe(true);
+    ).toBe(false);
+    expect(result.allowed).toBe(true);
+  });
+
+  it('still blocks a 🔎 Investigation body without Deliverables when the caller sends true', async () => {
+    const result = await gate(
+      {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'n/a' },
+        seam_check: { decision: 'n/a' },
+        type: '🔎 Investigation',
+        triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
+      },
+      'notion:investigation-triage-no-deliverables',
+      undefined,
+      undefined,
+      'polimarket-analyser',
+      '## Summary\nNo deliverables.\n',
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('Deliverables'))).toBe(true);
   });
 });
 
