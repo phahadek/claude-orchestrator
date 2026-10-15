@@ -20,6 +20,8 @@ import {
   setEntryState,
   reconcileJournal,
   isValidOpsTransition,
+  opsResolveRequiresReconciliationOrReason,
+  hasReconciliationOrNoChangeReason,
   foldOpsTransitionChain,
   InvalidOpsTransitionChainError,
 } from '../opsJournal.js';
@@ -137,8 +139,62 @@ describe('isValidOpsTransition', () => {
     expect(isValidOpsTransition('staged-proposal', 'resolved')).toBe(true);
   });
 
-  it('still rejects pending -> resolved (an entry never worked cannot be closed)', () => {
+  it('allows pending -> resolved only for a 🔎 Investigation', () => {
+    expect(
+      isValidOpsTransition('pending', 'resolved', '🔎 Investigation'),
+    ).toBe(true);
+    expect(isValidOpsTransition('pending', 'resolved', '🔧 Operational')).toBe(
+      false,
+    );
+    expect(isValidOpsTransition('pending', 'resolved', undefined)).toBe(false);
+    expect(isValidOpsTransition('pending', 'resolved', null)).toBe(false);
     expect(isValidOpsTransition('pending', 'resolved')).toBe(false);
+    expect(isValidOpsTransition('pending', 'resolved', '🎨 Design')).toBe(
+      false,
+    );
+  });
+
+  it('requires reconciliation or noChangeReason for non-Investigation -> resolved except from applied-pending-confirm', () => {
+    for (const from of [
+      'candidate',
+      'staged-proposal',
+      'blocked',
+      'incident-frozen',
+    ] as const) {
+      expect(
+        opsResolveRequiresReconciliationOrReason(
+          from,
+          'resolved',
+          '🔧 Operational',
+        ),
+      ).toBe(true);
+      expect(
+        opsResolveRequiresReconciliationOrReason(
+          from,
+          'resolved',
+          '🔎 Investigation',
+        ),
+      ).toBe(false);
+    }
+    expect(
+      opsResolveRequiresReconciliationOrReason(
+        'applied-pending-confirm',
+        'resolved',
+        '🔧 Operational',
+      ),
+    ).toBe(false);
+    expect(hasReconciliationOrNoChangeReason({})).toBe(false);
+    expect(hasReconciliationOrNoChangeReason({ noChangeReason: '  ' })).toBe(
+      false,
+    );
+    expect(hasReconciliationOrNoChangeReason({ noChangeReason: 'x' })).toBe(
+      true,
+    );
+    expect(
+      hasReconciliationOrNoChangeReason({
+        reconciliation: { description: 'd', passed: true },
+      }),
+    ).toBe(true);
   });
 
   it('every pre-existing allowed transition still holds', () => {

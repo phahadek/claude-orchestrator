@@ -1065,6 +1065,14 @@ describe('procedureCore', () => {
         /`staged-proposal` is NOT reachable directly from\s*`pending`/,
       );
       expect(rendered).toMatch(/stage `candidate` first/);
+      // resolved is reachable from pending for Investigations only.
+      expect(ALLOWED_TRANSITIONS.pending).not.toContain('resolved');
+      expect(rendered).toMatch(
+        /🔎 Investigation, which alone may go `pending` → `resolved` directly/,
+      );
+      expect(rendered).toMatch(
+        /`reconciliation` assertion or a non-empty `noChangeReason`/,
+      );
     });
 
     it('is included in the assembled dispatched ops procedure', () => {

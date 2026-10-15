@@ -60,7 +60,11 @@ function renderOpsJournalStateMachine(): string {
     'to, any non-terminal state — not part of the normal path). From ' +
     `\`pending\` specifically, the only legal \`journal.setState\` targets are: ` +
     `${pendingTargets} — \`staged-proposal\` is NOT reachable directly from ` +
-    '`pending`; stage `candidate` first. The closing group carries the whole ' +
+    '`pending`; stage `candidate` first, unless the task is a 🔎 Investigation, which ' +
+    'alone may go `pending` → `resolved` directly (no `candidate` hop). Any ' +
+    'non-Investigation → `resolved` from a state other than ' +
+    '`applied-pending-confirm` must carry a `reconciliation` assertion or a ' +
+    'non-empty `noChangeReason`. The closing group carries the whole ' +
     'remaining chain: when it commits, your earlier loose `journal.setState` ' +
     'intents for the same task are applied first, in staged order, then the ' +
     "group's own, one at a time, and nothing is written unless every link is " +

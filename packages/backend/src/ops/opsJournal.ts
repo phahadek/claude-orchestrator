@@ -98,9 +98,81 @@ export const ALLOWED_TRANSITIONS: Record<OpsState, OpsState[]> = {
   resolved: [],
 };
 
-export function isValidOpsTransition(from: OpsState, to: OpsState): boolean {
+const INVESTIGATION_TYPE = '🔎 Investigation';
+
+/**
+ * Edges legal only for a given task Type, on top of the static table. An
+ * Investigation has no prod effect, so it may close pending -> resolved in
+ * one hop; every other (or unknown) Type must walk the normal path.
+ */
+function isTypeGatedEdge(
+  from: OpsState,
+  to: OpsState,
+  taskType: string | null | undefined,
+): boolean {
+  return (
+    from === 'pending' && to === 'resolved' && taskType === INVESTIGATION_TYPE
+  );
+}
+
+export function isValidOpsTransition(
+  from: OpsState,
+  to: OpsState,
+  taskType?: string | null,
+): boolean {
   if (from === to) return true;
-  return ALLOWED_TRANSITIONS[from].includes(to);
+  return (
+    ALLOWED_TRANSITIONS[from].includes(to) ||
+    isTypeGatedEdge(from, to, taskType)
+  );
+}
+
+/** The legal targets out of `from` for a task Type — the static table plus any Type-gated edge. */
+export function legalOpsTargets(
+  from: OpsState,
+  taskType?: string | null,
+): OpsState[] {
+  return isTypeGatedEdge(from, 'resolved', taskType)
+    ? [...ALLOWED_TRANSITIONS[from], 'resolved']
+    : ALLOWED_TRANSITIONS[from];
+}
+
+/**
+ * True when a non-Investigation -> resolved from any source other than
+ * applied-pending-confirm must carry a reconciliation assertion or a
+ * non-empty noChangeReason (applied-pending-confirm already carried its
+ * assertion on the way in).
+ */
+export function opsResolveRequiresReconciliationOrReason(
+  from: OpsState,
+  to: OpsState,
+  taskType: string | null | undefined,
+): boolean {
+  return (
+    to === 'resolved' &&
+    from !== 'applied-pending-confirm' &&
+    from !== 'resolved' &&
+    taskType !== INVESTIGATION_TYPE
+  );
+}
+
+/** True when the input carries a valid reconciliation assertion or a non-empty noChangeReason. */
+export function hasReconciliationOrNoChangeReason(input: {
+  reconciliation?: { description?: unknown; passed?: unknown } | null;
+  noChangeReason?: unknown;
+}): boolean {
+  const r = input.reconciliation;
+  if (
+    r &&
+    typeof r.description === 'string' &&
+    r.description.trim() &&
+    typeof r.passed === 'boolean'
+  ) {
+    return true;
+  }
+  return (
+    typeof input.noChangeReason === 'string' && !!input.noChangeReason.trim()
+  );
 }
 
 /**
@@ -197,10 +269,11 @@ export class InvalidOpsTransitionChainError extends Error {
 export function foldOpsTransitionChain(
   from: OpsState,
   chain: readonly OpsState[],
+  taskType?: string | null,
 ): OpsState {
   let current = from;
   for (const next of chain) {
-    if (!isValidOpsTransition(current, next)) {
+    if (!isValidOpsTransition(current, next, taskType)) {
       throw new InvalidOpsTransitionChainError(current, next);
     }
     current = next;
@@ -277,6 +350,7 @@ export function setEntryState(
   taskId: string,
   state: OpsState,
   fields?: Partial<Omit<OpsJournalEntry, 'taskId' | 'state' | 'updatedAt'>>,
+  taskType?: string | null,
 ): OpsState {
   const row = getOpsJournalEntry(taskId);
   if (!row) {
@@ -285,7 +359,7 @@ export function setEntryState(
     );
   }
   const current = rowToEntry(row);
-  if (!isValidOpsTransition(current.state, state)) {
+  if (!isValidOpsTransition(current.state, state, taskType)) {
     throw new Error(
       `ops_journal: invalid transition ${current.state} -> ${state} for task ${taskId}`,
     );

@@ -141,8 +141,10 @@ import {
   getEntry as getOpsJournalEntry,
   isValidOpsTransition,
   foldOpsTransitionChain,
-  ALLOWED_TRANSITIONS,
+  legalOpsTargets,
   opsCompletionRequiresReconciliation,
+  opsResolveRequiresReconciliationOrReason,
+  hasReconciliationOrNoChangeReason,
   type OpsState,
   type OpsJournalEntry,
 } from '../ops/opsJournal';
@@ -2248,6 +2250,12 @@ interface JournalSetStatePayload {
    */
   reconciliation?: OpsReconciliationAssertion;
   /**
+   * Alternative to `reconciliation` on a non-Investigation -> "resolved"
+   * from any state other than applied-pending-confirm: a non-empty reason
+   * naming why no change was needed.
+   */
+  noChangeReason?: string;
+  /**
    * Required on a transition to "blocked" staged by an ops session that has
    * never staged a session.requestCapability intent — a substantive
    * attestation naming why no capability request could unblock the task
@@ -3263,6 +3271,7 @@ function effectiveOpsStateForStaging(
   taskId: string,
   appliedState: OpsState,
   grouped?: { groupId: string; sessionId: string | null },
+  taskType?: string | null,
 ): OpsState {
   // A grouped intent folds only what its commit will apply: the group's own
   // members plus the same session's loose ones (see collectJournalChains).
@@ -3278,7 +3287,7 @@ function effectiveOpsStateForStaging(
     .map((row) => (JSON.parse(row.payload) as { state?: OpsState }).state);
   const chain = priorTargets.filter((s): s is OpsState => s !== undefined);
   try {
-    return foldOpsTransitionChain(appliedState, chain);
+    return foldOpsTransitionChain(appliedState, chain, taskType);
   } catch {
     return appliedState;
   }
@@ -3320,16 +3329,22 @@ function findActiveStagedOpsTransitionForState(
  * first), so apply time remains the sole hard authority.
  */
 class OpsJournalTransitionRejectedError extends Error {
-  constructor(taskId: string, from: OpsState, to: OpsState);
+  constructor(
+    taskId: string,
+    from: OpsState,
+    to: OpsState,
+    taskType?: string | null,
+  );
   constructor(taskId: string, reason: 'blocked-without-capability-request');
   constructor(
     taskId: string,
     fromOrReason: OpsState | 'blocked-without-capability-request',
     to?: OpsState,
+    taskType?: string | null,
   ) {
     if (to !== undefined) {
       const from = fromOrReason as OpsState;
-      const legalTargets = ALLOWED_TRANSITIONS[from];
+      const legalTargets = legalOpsTargets(from, taskType);
       const legalTargetsText = legalTargets.length
         ? legalTargets.map((s) => `"${s}"`).join(', ')
         : `(none — "${from}" is terminal)`;
@@ -3376,6 +3391,18 @@ class OpsReconciliationAssertionMissingError extends Error {
         'evaluated automatically once this intent applies.',
     );
     this.name = 'OpsReconciliationAssertionMissingError';
+  }
+}
+
+class OpsResolveReasonMissingError extends Error {
+  constructor(taskId: string, from: OpsState) {
+    super(
+      `[stagedIntents] journal.setState rejected for task "${taskId}": a non-Investigation ` +
+        `"${from}" -> "resolved" must carry either a reconciliation assertion ` +
+        '("reconciliation": {"description": "<what must be true>", "passed": <boolean>}) or a ' +
+        'non-empty "noChangeReason" naming why no change was needed.',
+    );
+    this.name = 'OpsResolveReasonMissingError';
   }
 }
 
@@ -3631,24 +3658,37 @@ export async function validateAndNormalizeTaskReferences(
     if (typeof p?.taskId === 'string' && typeof p?.state === 'string') {
       const entry = getOpsJournalEntry(p.taskId);
       const targetState = p.state as OpsState;
+      const taskType = getCachedType(p.taskId);
       if (entry) {
         const effectiveFrom = effectiveOpsStateForStaging(
           projectId,
           p.taskId,
           entry.state,
           groupId ? { groupId, sessionId: sessionId ?? null } : undefined,
+          taskType,
         );
-        if (!isValidOpsTransition(effectiveFrom, targetState)) {
+        if (!isValidOpsTransition(effectiveFrom, targetState, taskType)) {
           throw new OpsJournalTransitionRejectedError(
             p.taskId,
             effectiveFrom,
             targetState,
+            taskType,
           );
+        }
+        if (
+          opsResolveRequiresReconciliationOrReason(
+            effectiveFrom,
+            targetState,
+            taskType,
+          ) &&
+          !hasReconciliationOrNoChangeReason(p)
+        ) {
+          throw new OpsResolveReasonMissingError(p.taskId, effectiveFrom);
         }
       }
       if (
         targetState === 'applied-pending-confirm' &&
-        opsCompletionRequiresReconciliation(getCachedType(p.taskId))
+        opsCompletionRequiresReconciliation(taskType)
       ) {
         assertReconciliationAssertionPresent(p.taskId, p.reconciliation);
       }
@@ -5587,6 +5627,7 @@ async function applyIntent(
         payload.taskId,
         payload.state,
         payload.fields,
+        getCachedType(payload.taskId),
       );
       if (
         payload.state === 'applied-pending-confirm' &&
@@ -9233,13 +9274,19 @@ function findIllegalJournalLink(
   const entry = getOpsJournalEntry(taskId);
   if (!entry) return null;
   let current = entry.state;
+  const taskType = getCachedType(taskId);
   for (const row of chain) {
     const target = (JSON.parse(row.payload) as { state?: OpsState }).state;
     if (target === undefined) continue;
-    if (!isValidOpsTransition(current, target)) {
+    if (!isValidOpsTransition(current, target, taskType)) {
       return {
         row,
-        error: new OpsJournalTransitionRejectedError(taskId, current, target),
+        error: new OpsJournalTransitionRejectedError(
+          taskId,
+          current,
+          target,
+          taskType,
+        ),
       };
     }
     current = target;
@@ -10055,7 +10102,8 @@ export function createStagedIntentsRouter(
           err instanceof DependencyCycleError ||
           err instanceof InvestigationAccretionRejectedError ||
           err instanceof OpsJournalTransitionRejectedError ||
-          err instanceof OpsReconciliationAssertionMissingError
+          err instanceof OpsReconciliationAssertionMissingError ||
+          err instanceof OpsResolveReasonMissingError
         ) {
           res.status(400).json({ error: err.message });
           return;

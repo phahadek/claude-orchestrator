@@ -5,6 +5,8 @@ import {
   getEntry,
   setEntryState,
   isValidOpsTransition,
+  opsResolveRequiresReconciliationOrReason,
+  hasReconciliationOrNoChangeReason,
   type OpsState,
 } from '../ops/opsJournal';
 import { requireDeviceAuth } from '../auth/DeviceAuth';
@@ -16,6 +18,7 @@ import {
   UnknownMilestoneError,
 } from '../projects/milestoneResolver';
 import { closeDeferredOpsTask } from '../orchestration/PlanningOrchestrator';
+import { getCachedType } from '../tasks/TaskWriteCommands';
 import { logger } from '../logger';
 import { asyncHandler } from './asyncHandler';
 
@@ -99,6 +102,8 @@ export function createOpsJournalRouter(): Router {
         falsification?: unknown;
         filedFollowons?: unknown;
         needsFromOperator?: unknown;
+        reconciliation?: { description?: unknown; passed?: unknown } | null;
+        noChangeReason?: unknown;
       };
       const state =
         typeof body.state === 'string' ? (body.state as OpsState) : null;
@@ -114,9 +119,25 @@ export function createOpsJournalRouter(): Router {
           .json({ error: `no ops_journal entry for task ${taskId}` });
         return;
       }
-      if (!isValidOpsTransition(current.state, state)) {
+      const taskType = getCachedType(taskId);
+      if (!isValidOpsTransition(current.state, state, taskType)) {
         res.status(400).json({
           error: `invalid transition ${current.state} -> ${state} for task ${taskId}`,
+        });
+        return;
+      }
+      if (
+        opsResolveRequiresReconciliationOrReason(
+          current.state,
+          state,
+          taskType,
+        ) &&
+        !hasReconciliationOrNoChangeReason(body)
+      ) {
+        res.status(400).json({
+          error:
+            `${current.state} -> resolved for task ${taskId} requires either a ` +
+            '"reconciliation" assertion ({"description", "passed"}) or a non-empty "noChangeReason"',
         });
         return;
       }
@@ -140,7 +161,7 @@ export function createOpsJournalRouter(): Router {
       }
 
       try {
-        setEntryState(taskId, state, fields);
+        setEntryState(taskId, state, fields, taskType);
         const updated = getEntry(taskId);
         // The entry becomes an operator-reviewable decision at
         // staged-proposal — mirror it into a staged_intent so it actually
