@@ -79,6 +79,19 @@ interface AnalyzeCommandEntry {
   command: string;
   trigger_paths?: string[];
   transient_output_patterns?: string[];
+  /** When true, the command is also listed in the session's injected Pre-PR Gate. Changes only the injected text, not the pipeline's analyze stage. Default false. */
+  pre_pr?: boolean;
+}
+
+/** Commands of `pre_pr: true` analyze entries, in declared order. */
+export function getPrePrAnalyzeCommands(cfg: {
+  analyze: AnalyzeCommand[];
+}): string[] {
+  return cfg.analyze
+    .filter(
+      (c): c is AnalyzeCommandEntry => typeof c !== 'string' && c.pre_pr === true,
+    )
+    .map((c) => c.command);
 }
 
 /** Backward-compatible: a bare string is a command with no path trigger (always runs, no content-hash caching). */
@@ -437,6 +450,9 @@ function isValidAnalyzeEntry(v: unknown): v is AnalyzeCommand {
         obj.transient_output_patterns.every((p) => typeof p === 'string')
       )
     ) {
+      return false;
+    }
+    if (obj.pre_pr !== undefined && typeof obj.pre_pr !== 'boolean') {
       return false;
     }
     return true;

@@ -10,6 +10,7 @@ export interface BuildSessionContextParams {
   projectDir: string;
   worktreePath: string;
   verify?: string[];
+  prePrAnalyze?: string[];
   bashRules?: string[];
   sessionRules?: string[];
   taskBackend?: 'notion' | 'local' | 'github' | 'jira';
@@ -69,6 +70,7 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
     projectDir,
     worktreePath,
     verify,
+    prePrAnalyze,
     bashRules,
     sessionRules,
     taskBackend,
@@ -102,6 +104,7 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
     targetBranch,
     worktreePath,
     verify,
+    prePrAnalyze,
     bashRules,
     sessionRules,
     taskBackend,

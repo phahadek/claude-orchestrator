@@ -33,6 +33,12 @@ export interface OrchestratorClaudeMdParams {
    */
   verify?: string[];
   /**
+   * Analyze commands the project marked `pre_pr: true`. Rendered as extra
+   * numbered Pre-PR Gate steps after the verify steps. Omitted/empty → the
+   * gate renders exactly as before.
+   */
+  prePrAnalyze?: string[];
+  /**
    * Bash rules (Rule 5+). Each item is the full rule text — the first line
    * becomes the bold heading, subsequent lines become the body paragraph.
    * Defaults to the `npx` convention when omitted.
@@ -256,6 +262,7 @@ export function buildOrchestratorClaudeMd(
     targetBranch,
     worktreePath,
     verify,
+    prePrAnalyze,
     bashRules,
     sessionRules,
     taskBackend = 'notion',
@@ -478,14 +485,28 @@ ${(() => {
         .map((cmd, i) => `${i + 2}. \`${cmd}\` — must pass.`)
         .join('\n')
     : `2. No local verify step configured — CI is the gate.`;
-  const stageNum = verifyItems ? verifyItems.length + 2 : 3;
+  const verifyCount = verifyItems ? verifyItems.length : 0;
+  const analyzeItems =
+    prePrAnalyze && prePrAnalyze.length > 0 ? prePrAnalyze : null;
+  const analyzeSteps = analyzeItems
+    ? '\n' +
+      analyzeItems
+        .map((cmd, i) => `${verifyCount + i + 2}. \`${cmd}\` — must pass.`)
+        .join('\n')
+    : '';
+  const analyzeNote = analyzeItems
+    ? `\n\nRun the analyze steps above before your final \`test_request\`: the orchestrator's analyze stage rejects the same failures after the PR opens, and fixing one after the test run means a new tree and a new full test run.`
+    : '';
+  const stageNum =
+    (verifyItems ? verifyItems.length + 2 : 3) +
+    (analyzeItems ? analyzeItems.length : 0);
   return `## Pre-PR Gate
 
 Run in order — all must pass before opening the PR:
 
 1. Rebase onto \`${targetBranch}\` and resolve any conflicts. If this branch was already pushed, update the remote with \`git push --force-with-lease origin <your feature branch>\` — a bare \`git push\` will be rejected after a rebase.
-${verifySteps}
-${stageNum}. Stage only your implementation files for commit.
+${verifySteps}${analyzeSteps}
+${stageNum}. Stage only your implementation files for commit.${analyzeNote}
 
 Tests are blocked at the permission layer, not part of this gate — run via \`test_request\`. A failed \`test_request\` here: first follow "Investigate a Failing Test First" above. Only if you have named a concrete cause outside your diff, call \`flaky_confirm\` with \`gate: "test_request"\` rather than retrying (see "Flaky / Transient CI or F2 Gate Failures" above).`;
 })()}

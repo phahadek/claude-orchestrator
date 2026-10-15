@@ -8,7 +8,10 @@ import {
   buildDepthReviewClaudeMd,
 } from './orchestrator-claudemd';
 import { buildSessionContext, stripOrchestratorHeader } from './ContextBuilder';
-import { loadOrchestratorConfig } from './orchestrator-config';
+import {
+  loadOrchestratorConfig,
+  getPrePrAnalyzeCommands,
+} from './orchestrator-config';
 
 const defaultParams = {
   taskName: 'My test task',
@@ -377,6 +380,50 @@ describe('buildOrchestratorClaudeMd', () => {
     expect(prGateSection).not.toContain('npm run format');
   });
 
+  it('renders pre_pr analyze commands as numbered steps after verify, before final test_request', () => {
+    const gate = (params: Record<string, unknown>) => {
+      const r = buildOrchestratorClaudeMd({ ...defaultParams, ...params });
+      return r.slice(
+        r.indexOf('## Pre-PR Gate'),
+        r.indexOf('## Forbidden Actions'),
+      );
+    };
+    const section = gate({
+      verify: ['npm run build'],
+      prePrAnalyze: ['npx knip'],
+    });
+    expect(section).toContain('2. `npm run build` — must pass.');
+    expect(section).toContain('3. `npx knip` — must pass.');
+    expect(section).toContain('4. Stage only your implementation files');
+    expect(section).toContain('before your final `test_request`');
+
+    const without = gate({ verify: ['npm run build'] });
+    expect(without).toBe(
+      gate({ verify: ['npm run build'], prePrAnalyze: [] }),
+    );
+    expect(without).toContain('3. Stage only your implementation files');
+    expect(without).not.toContain('before your final `test_request`');
+  });
+
+  it('real repo config: knip is a pre_pr step and lint/format stay out of the gate', () => {
+    const cfg = loadOrchestratorConfig(path.resolve(__dirname, '../../../..'));
+    const pre = getPrePrAnalyzeCommands(cfg);
+    expect(pre).toHaveLength(1);
+    expect(pre[0]).toContain('knip');
+    const r = buildOrchestratorClaudeMd({
+      ...defaultParams,
+      verify: cfg.verify,
+      prePrAnalyze: pre,
+    });
+    const gate = r.slice(
+      r.indexOf('## Pre-PR Gate'),
+      r.indexOf('## Forbidden Actions'),
+    );
+    expect(gate).toContain('knip');
+    expect(gate).not.toContain('npm run lint');
+    expect(gate).not.toContain('npm run format');
+  });
+
   it('Flaky/Transient section no longer instructs a mandatory second or third test_request call to establish flakiness', () => {
     const result = buildOrchestratorClaudeMd(defaultParams);
     const flakySection = result.slice(
@@ -725,6 +772,27 @@ describe('loadOrchestratorConfig', () => {
 
   afterEach(() => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('parses analyze pre_pr and drops entries with a non-boolean pre_pr', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      [
+        'analyze:',
+        '  - command: npx knip',
+        '    pre_pr: true',
+        '  - command: bad',
+        '    pre_pr: "yes"',
+        '  - npm run lint',
+      ].join('\n'),
+      'utf-8',
+    );
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.analyze).toEqual([
+      { command: 'npx knip', pre_pr: true },
+      'npm run lint',
+    ]);
+    expect(getPrePrAnalyzeCommands(config)).toEqual(['npx knip']);
   });
 
   it('returns empty defaults when no config file exists', () => {
