@@ -537,6 +537,7 @@ export function renderOpsCapabilities(
   projectId: string,
   taskId?: string | null,
 ): string[] {
+  const adHocRead = renderAdHocReadCapability(projectId);
   const preGrants = resolveOpsPreGrants(projectId, taskId);
   return [
     '## Capabilities',
@@ -547,7 +548,7 @@ export function renderOpsCapabilities(
       'surface (analyst/alarm/read-only-DB MCP tools, where configured)' +
       (preGrants.length > 0 ? ', plus the grants listed below' : '') +
       '. No write, no ' +
-      'Write/Edit tool, and no prod-mutating command is granted beyond that — do not ' +
+      'Write/Edit tool, and no prod-mutating command is granted by default — do not ' +
       'probe for one.',
     '',
     ...(preGrants.length > 0
@@ -599,7 +600,7 @@ export function renderOpsCapabilities(
       '`{"projectId":"<project-id>"}` (optionally narrowed by `taskId` / `eventType` / ' +
       "`since` / `until`) to read this project's audit_log rows.",
     '',
-    ...renderAdHocReadCapability(projectId),
+    ...adHocRead,
     '',
     'DO NOT request the resolved / ✅ Done / task-intent-apply transition, or the ' +
       'Write/Edit tools, as a capability — both are never grantable this way, no ' +
