@@ -210,7 +210,7 @@ describe('the assembled groom procedure documents groomingGate.triage', () => {
     const output = assembleGroomOutput();
     expect(output).toMatch(/triage-eligible 📐 Design task, triaged clean/);
     expect(output).toMatch(
-      /"triage":\{"proposedVerdict":"clean","hasOpenQuestionsHeading":true\}/,
+      /"triage":\{"proposedVerdict":"clean"\}/,
     );
   });
 
