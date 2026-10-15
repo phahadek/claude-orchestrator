@@ -80,6 +80,21 @@ describe('buildGateVerifyProcedure', () => {
     );
   });
 
+  it('inlines the three root-cause locks and the needs-setup-when-not-located instruction', () => {
+    const procedure = buildGateVerifyProcedure(makeItem());
+    expect(procedure).toMatch(/\*\*The branch\.\*\*/);
+    expect(procedure).toMatch(/\*\*The input that takes that branch\.\*\*/);
+    expect(procedure).toMatch(
+      /\*\*The fix that follows from that branch\.\*\*/,
+    );
+    expect(procedure).toMatch(
+      /If you cannot write all three locks within budget, report `needs-setup`/,
+    );
+    expect(procedure).toContain('cause not located:');
+    expect(procedure).toContain('existingTaskId');
+    expect(procedure).toMatch(/Stage before the budget runs out/);
+  });
+
   it('names both abstains and the condition distinguishing them', () => {
     const procedure = buildGateVerifyProcedure(makeItem());
     expect(procedure).toMatch(/`needs-setup`/);

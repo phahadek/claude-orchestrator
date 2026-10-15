@@ -2,6 +2,8 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { randomUUID } from 'crypto';
 import { execSync } from 'child_process';
+import fs from 'fs';
+import path from 'path';
 import { runWithConcurrency } from '../utils/concurrency';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import {
@@ -49,6 +51,8 @@ import {
   type GroomingGateEntry,
 } from '../groom/groomGate';
 import type { TrackedFileSetCache } from '../groom/groomLoad';
+import { extractPathToken } from '../groom/groomLoad';
+import type { GateVerifyProposedFix } from '../mcp/tools/schemas';
 import { isInteractiveTaskType } from '../planning/triage';
 import {
   isInvestigateSession,
@@ -106,6 +110,7 @@ import {
   getSessionDeclaredWrites,
   getLatestOpsSessionByTaskId,
   getAllBoardCacheTasks,
+  getTaskCache,
   type CachedBoardTaskEntry,
   markSessionDone,
   setSessionTerminalCompletionReason,
@@ -2268,7 +2273,7 @@ interface GateVerifyIntentPayload {
    * that path). Threaded verbatim into the `GateVerificationResult` passed
    * to `routeVerificationResult` at apply time.
    */
-  proposedFix?: { title: string; summary: string };
+  proposedFix?: GateVerifyProposedFix;
   /**
    * Marks a reconciler-originated stand-in the operator sees on the
    * decision surface instead of dispatching a real verify session (see
@@ -2717,13 +2722,145 @@ class GateVerifyPayloadValidationError extends Error {
   }
 }
 
+class GateVerifyProposedFixError extends Error {
+  constructor(message: string) {
+    super(`[stagedIntents] gate.verify rejected: ${message}`);
+    this.name = 'GateVerifyProposedFixError';
+  }
+}
+
+const NEW_PATH_SUFFIX_RE = /\s*\*\(new\)\*\s*$/;
+
+/**
+ * Whether `relativePath` resolves to a real, existing file inside
+ * `repoRoot` — a synchronous, subprocess-free stand-in for "tracked in the
+ * project's repo" at stage time (no `stageIntent` caller can be made async
+ * without a much larger blast radius; this check only needs to catch a
+ * fabricated/hallucinated path, not distinguish a real-but-gitignored one).
+ * Rejects any path that escapes `repoRoot` (e.g. `../../etc/passwd`).
+ */
+function existsInRepoCheckout(repoRoot: string, relativePath: string): boolean {
+  const abs = path.resolve(repoRoot, relativePath);
+  const rel = path.relative(repoRoot, abs);
+  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return false;
+  try {
+    return fs.statSync(abs).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether `dir` is a real git checkout — a direct `.git` entry (directory
+ * for a normal clone, file for a worktree), not one found by upward
+ * discovery from some ancestor. A project's configured `projectDir` that
+ * doesn't actually exist on this host (common in tests, which register a
+ * project against a path nothing ever creates) must not be mistaken for an
+ * empty-but-real checkout — and a `projectDir` that happens to exist as a
+ * bare directory (e.g. stray leftover state on a long-lived host) must not
+ * be mistaken for a real one either. Both cases skip the tracked-file
+ * check rather than rejecting a path that would be valid in the real repo.
+ */
+function isGitCheckoutSync(dir: string): boolean {
+  try {
+    fs.statSync(path.join(dir, '.git'));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isOpenBoardTaskStatus(status: string): boolean {
+  return !['Done', 'Deferred'].some((token) => status.includes(token));
+}
+
+/** A fail's proposedFix must name tracked files, or an open task on the item's milestone board by full id. */
+function validateGateVerifyProposedFix(
+  proposedFix: GateVerifyProposedFix,
+  gateItemId: string,
+  projectId: string,
+): void {
+  if ('existingTaskId' in proposedFix) {
+    const item = getGateItem(gateItemId);
+    if (!item) return;
+    const wanted = normalizeTaskId(proposedFix.existingTaskId);
+    let boardTasks: Array<{ id?: unknown; status?: unknown }> = [];
+    try {
+      const milestone = resolveMilestoneRowForProject(
+        item.project,
+        item.milestone,
+      );
+      const raw = getTaskCache(`board:${milestone.id}`)?.raw_json;
+      const parsed: unknown = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(parsed)) boardTasks = parsed;
+    } catch {
+      boardTasks = [];
+    }
+    const found = boardTasks.some(
+      (t) =>
+        typeof t.id === 'string' &&
+        normalizeTaskId(t.id) === wanted &&
+        typeof t.status === 'string' &&
+        isOpenBoardTaskStatus(t.status),
+    );
+    if (!found) {
+      throw new GateVerifyProposedFixError(
+        `existingTaskId ${JSON.stringify(proposedFix.existingTaskId)} is not the full id of an open task on milestone ${item.milestone}'s board. ` +
+          'Pass the complete task id of an open task found via task_queryTasks, or drop existingTaskId and supply the structured cause/input/fix.',
+      );
+    }
+    return;
+  }
+
+  const repoRoot = getProjectById(projectId)?.projectDir;
+  if (!repoRoot) return;
+  let offending: string[];
+  try {
+    if (!isGitCheckoutSync(repoRoot)) return;
+    offending = [];
+    if (!existsInRepoCheckout(repoRoot, proposedFix.cause.file.trim())) {
+      offending.push(proposedFix.cause.file);
+    }
+    for (const entry of proposedFix.filesAffected) {
+      if (NEW_PATH_SUFFIX_RE.test(entry)) continue;
+      const token = extractPathToken(entry);
+      if (!token || !existsInRepoCheckout(repoRoot, token)) {
+        offending.push(entry);
+      }
+    }
+  } catch (err) {
+    // A filesystem read is never grounds to reject a stage it didn't set
+    // out to validate — any unexpected failure here (permissions, a race
+    // on a long-lived host, anything this function didn't anticipate)
+    // falls back to skipping the check, same as an unresolvable repoRoot.
+    logger.warn(
+      `[stagedIntents] gate.verify proposedFix tracked-file check failed for project "${projectId}", skipping: ${err instanceof Error ? err.message : err}`,
+    );
+    return;
+  }
+  if (offending.length > 0) {
+    throw new GateVerifyProposedFixError(
+      `proposedFix names path(s) that are not tracked files in the project repo: ${offending
+        .map((p) => JSON.stringify(p))
+        .join(
+          ', ',
+        )}. Locate the real file (git ls-files / git grep) and correct cause.file or filesAffected; ` +
+        'mark a file the fix will create with a trailing " *(new)*" in filesAffected.',
+    );
+  }
+}
+
 function validateGateVerifyPayload(
   payload: unknown,
+  projectId: string,
 ): asserts payload is GateVerifyIntentPayload {
   const p = payload as Partial<GateVerifyIntentPayload> | null;
   const gateItemId = p?.gateItemId;
   if (typeof gateItemId !== 'string' || !GATE_ITEM_UUID_RE.test(gateItemId)) {
     throw new GateVerifyPayloadValidationError(gateItemId);
+  }
+  if (p?.disposition === 'fail' && p.proposedFix && !p.origin) {
+    validateGateVerifyProposedFix(p.proposedFix, gateItemId, projectId);
   }
 }
 
@@ -4419,7 +4556,7 @@ export function stageIntent(
     validateTestOverridePayload(payload, groupId, sessionId);
   }
   if (kind === 'gate.verify') {
-    validateGateVerifyPayload(payload);
+    validateGateVerifyPayload(payload, projectId);
   }
   if (kind === 'ops.prIntent') {
     validateOpsPrIntentPayload(payload, groupId);
@@ -9719,6 +9856,7 @@ export function createStagedIntentsRouter(
           err instanceof ReadyPathMissingGroupError ||
           err instanceof UnknownMilestoneError ||
           err instanceof GateVerifyPayloadValidationError ||
+          err instanceof GateVerifyProposedFixError ||
           err instanceof OpsJournalTransitionRejectedError
         ) {
           res.status(400).json({ error: err.message });

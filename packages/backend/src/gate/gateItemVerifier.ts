@@ -349,19 +349,61 @@ export function buildGateVerifyProcedure(item: GateItem): string {
     '{"expected": "...", "found": "...", "query": "...", "source": "path/to/file.ts:123"}',
     '```',
     '',
-    "On a `fail`, you may also propose the follow-up fix task's title and " +
-      'summary via a top-level `proposedFix` field (admissible only on ' +
-      'fail) — when you omit it, the reconciler falls back to a generic ' +
-      '"Fix gate item: <item text>" title. `title` is a single capped line ' +
-      '(a real task title, not a restatement of the gate item text); ' +
-      '`summary` is a short scope paragraph, not a full markdown body — the ' +
-      'reconciler still assembles the Context section (gate item text, your ' +
-      'evidence, deploy SHA, originating source) deterministically on its ' +
-      'own regardless of what you propose here:',
+    '### Reaching a `fail`: locate the root cause first',
+    '',
+    'A `fail` files a follow-on 💻 Code task, and a Code task that fixes a ' +
+      'defect is filed only after the cause is located. A fail without a ' +
+      'located cause is never reported — it is `needs-setup`. Three locks ' +
+      '(from the task-writing standard, "Root cause, before a Code task is ' +
+      'filed") must all be written:',
+    '',
+    '1. **The branch.** The file, the function, and the condition that ' +
+      'produces the bad result.',
+    '2. **The input that takes that branch.** A real row, or a real run, ' +
+      'from the process that is running the code the task is filed ' +
+      'against. A window that still contains a previous process or a ' +
+      'previous deploy is not that input.',
+    '3. **The fix that follows from that branch.** What the branch must do ' +
+      'instead, and what it must still do for the input that is supposed ' +
+      'to take it.',
+    '',
+    'These are not a cause, and are not enough to file: a count, a share, ' +
+      'or a histogram of labels; the desired end state; a label the branch ' +
+      'already produces on purpose for that input; a write the current ' +
+      'code no longer contains (rows from an older process).',
+    '',
+    'On reaching a fail, and before staging, continue read-only:',
+    '',
+    '- Locate the cause in the project checkout (your cwd) with the read ' +
+      'verbs you already hold (`git grep`, `git show <deployed-sha>:<file>`, ' +
+      "`git log`, `git blame`, Read), against the project's deployed SHA, " +
+      'not the checkout HEAD.',
+    '- Tie the cause to a real row or run from the operational record.',
+    '- Search the milestone board with `task_queryTasks` for an open task ' +
+      'whose body already names the same cause. If one exists, report ' +
+      '`proposedFix: {"existingTaskId": "<full task id>"}` and file nothing new.',
+    '',
+    'If you cannot write all three locks within budget, report ' +
+      '`needs-setup` (never `fail`), with `evidence.found` keeping the ' +
+      'observed failure prefixed `cause not located:`. Stage before the ' +
+      "budget runs out: a budget-exceeded abstain loses this session's " +
+      'evidence.',
+    '',
+    'A `fail` requires a top-level `proposedFix` (admissible only on fail), ' +
+      'either a new-task payload or an existing task:',
     '',
     '```json',
-    '{"proposedFix": {"title": "...", "summary": "..."}}',
+    '{"proposedFix": {"title": "...", "cause": {"file": "path/to/file.ts", "line": 123, "condition": "..."}, "input": "...", "fix": "...", "filesAffected": ["path/to/file.ts", "path/to/new.test.ts *(new)*"], "automatedCriteria": ["..."]}}',
+    '{"proposedFix": {"existingTaskId": "<full id of an open task on this milestone board>"}}',
     '```',
+    '',
+    '`title` is a real task title, not a restatement of the gate item text. ' +
+      '`cause.file` and every `filesAffected` entry not marked `*(new)*` ' +
+      'must be tracked files in the repo, and `existingTaskId` must be the ' +
+      'full id of an open task on this milestone board: staging is ' +
+      'rejected otherwise, with a message naming the offending value. The ' +
+      'reconciler renders the full task body from this payload; this ' +
+      'grants you no write authority.',
   ].join('\n');
 }
 

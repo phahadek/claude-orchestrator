@@ -284,7 +284,15 @@ describe('gate.verify auto-commit — staging-time attempt', () => {
         disposition: 'fail',
         proposedFix: {
           title: 'Fix the missing audit write',
-          summary: 'The endpoint never writes an audit_log row on success.',
+          cause: {
+            file: 'packages/backend/src/endpoint.ts',
+            line: 7,
+            condition: 'the success path returns before the audit write',
+          },
+          input: 'request 99 on 2026-10-14',
+          fix: 'write the audit_log row before returning',
+          filesAffected: ['packages/backend/src/endpoint.ts'],
+          automatedCriteria: ['a successful call writes an audit_log row'],
         },
       },
       'proj-auto-commit',
@@ -372,7 +380,27 @@ describe('gate.verify auto-commit — with the real retire sink wired', () => {
 
       const staged = stageIntent(
         'gate.verify',
-        { gateItemId: item.id, disposition, evidence: 'observed no trigger' },
+        {
+          gateItemId: item.id,
+          disposition,
+          evidence: 'observed no trigger',
+          ...(disposition === 'fail'
+            ? {
+                proposedFix: {
+                  title: 'Fix the missing trigger',
+                  cause: {
+                    file: 'packages/backend/src/endpoint.ts',
+                    line: 7,
+                    condition: 'the trigger path never fires',
+                  },
+                  input: 'request 99 on 2026-10-14',
+                  fix: 'fire the trigger on the success path',
+                  filesAffected: ['packages/backend/src/endpoint.ts'],
+                  automatedCriteria: ['a successful call fires the trigger'],
+                },
+              }
+            : {}),
+        },
         'proj-auto-commit',
         null,
         sid,
