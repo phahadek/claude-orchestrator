@@ -1784,7 +1784,15 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'change is categorically routed through a staged 💻 Code task, never ' +
         'applied by ops itself — stage the task and continue driving the rest of ' +
         'the operational change (or park on it if the whole thing is now blocked ' +
-        'on that Code task landing).',
+        'on that Code task landing). A follow-on 💻 Code task must be ' +
+        'completable by an unattended session in a worktree, with no prod host, ' +
+        'no browser and no live dashboard. DO NOT put a step that measures the ' +
+        'deployed system, re-runs a gate item, or probes a live service under ' +
+        '🤖 Automated tests — it goes under 👁️ Manual verification, never ' +
+        '🤖 Automated tests. If the code change cannot be specified until that ' +
+        'measurement or probe is done, file a 🔎 Investigation whose output is ' +
+        'the Code task — the Type is 🔎 Investigation, not 💻 Code. DO resolve ' +
+        'a choice between approaches in the task body, or the task is not Code.',
     },
   },
   {
