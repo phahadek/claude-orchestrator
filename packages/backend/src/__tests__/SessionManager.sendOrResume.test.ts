@@ -1087,6 +1087,7 @@ describe('sendOrResume() respawn-path delivery confirmation', () => {
 
   beforeEach(() => {
     vi.mocked(queries.getSession).mockReturnValue(CONFIRM_SESSION_ROW as never);
+    vi.mocked(fs.existsSync).mockReturnValue(true);
   });
 
   it('retries a persistently failing send() with bounded backoff, then returns null, records inbox_delivery_unconfirmed, and leaves the item undelivered', async () => {
@@ -1132,9 +1133,17 @@ describe('sendOrResume() respawn-path delivery confirmation', () => {
         payload: expect.objectContaining({
           session_id: CONFIRM_SESSION_ID,
           reason: 'send_failed',
+          path: 'resume',
         }),
       }),
     );
+    expect(
+      vi
+        .mocked(recordEvent)
+        .mock.calls.filter(
+          ([e]) => e.event_type === 'inbox_delivery_unconfirmed',
+        ),
+    ).toHaveLength(1);
     // Retries terminate without creating duplicate inbox rows for the same text.
     const undelivered = queries.listUndeliveredInboxItems(CONFIRM_SESSION_ID);
     expect(
@@ -1188,6 +1197,84 @@ describe('sendOrResume() respawn-path delivery confirmation', () => {
     expect(undelivered.some((i) => i.payload === 'retried payload')).toBe(
       false,
     );
+  });
+
+  describe('recreated-worktree path', () => {
+    const makeRunner = (sendMessageMock: ReturnType<typeof vi.fn>) =>
+      vi.mocked(CliSessionRunner).mockImplementationOnce(
+        () =>
+          ({
+            sendMessage: sendMessageMock,
+            endSession: vi.fn(),
+            run: vi.fn((_p, _r, _o, onEvent) => {
+              queueMicrotask(() =>
+                onEvent({ type: 'system', subtype: 'hook_started' }),
+              );
+              return new Promise(() => {});
+            }),
+          }) as never,
+      );
+
+    const runWithFakeTimers = async (text: string) => {
+      const sm = new SessionManager();
+      vi.useFakeTimers();
+      try {
+        const p = sm.sendOrResume(CONFIRM_SESSION_ID, text);
+        for (let i = 0; i < 8; i++) await vi.advanceTimersByTimeAsync(10_000);
+        return await p;
+      } finally {
+        vi.useRealTimers();
+      }
+    };
+
+    beforeEach(() => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+    });
+
+    it('delivers after send() fails on the first event and succeeds on a later attempt', async () => {
+      const sendMessageMock = vi
+        .fn()
+        .mockReturnValueOnce(false)
+        .mockReturnValueOnce(false)
+        .mockReturnValue(true);
+      makeRunner(sendMessageMock);
+
+      const result = await runWithFakeTimers('recreated retry payload');
+
+      expect(result).toBe(CONFIRM_SESSION_ID);
+      expect(sendMessageMock.mock.calls.length).toBe(3);
+      expect(recordEvent).not.toHaveBeenCalledWith(
+        expect.objectContaining({ event_type: 'inbox_delivery_unconfirmed' }),
+      );
+      expect(
+        queries
+          .listUndeliveredInboxItems(CONFIRM_SESSION_ID)
+          .some((i) => i.payload === 'recreated retry payload'),
+      ).toBe(false);
+    });
+
+    it('records exactly one send_failed with path resume_fresh_worktree after bounded retries', async () => {
+      const sendMessageMock = vi.fn().mockReturnValue(false);
+      makeRunner(sendMessageMock);
+
+      const result = await runWithFakeTimers('recreated failing payload');
+
+      expect(result).toBeNull();
+      expect(sendMessageMock.mock.calls.length).toBe(5);
+      const unconfirmed = vi
+        .mocked(recordEvent)
+        .mock.calls.filter(
+          ([e]) => e.event_type === 'inbox_delivery_unconfirmed',
+        );
+      expect(unconfirmed).toHaveLength(1);
+      expect(unconfirmed[0][0].payload).toMatchObject({
+        reason: 'send_failed',
+        path: 'resume_fresh_worktree',
+      });
+      queries.markInboxItemsDelivered(
+        queries.listUndeliveredInboxItems(CONFIRM_SESSION_ID).map((i) => i.id),
+      );
+    });
   });
 
   it('stamps delivered_at exactly once and records no inbox_delivery_unconfirmed event when send() confirms', async () => {
