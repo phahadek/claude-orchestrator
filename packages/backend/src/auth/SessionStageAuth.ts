@@ -23,9 +23,11 @@ function safeRecordEvent(event: AuditEvent): void {
 /**
  * Per-session scoped stage credential: minted once per session at spawn,
  * injected into the session's spawn env, and only ever accepted by the
- * loopback-only stage endpoint (POST /api/task-intents) and the orchestrator
- * MCP endpoint (POST /api/mcp). It authorizes staging a task-write intent
- * (never applying one) and the session's own read-only MCP tool surface. See
+ * loopback-only stage endpoint (POST /api/task-intents), the orchestrator
+ * MCP endpoint (POST /api/mcp), and the read-only Notion proxy
+ * (/api/notion-proxy/*, see routes/notionReadProxy.ts). It authorizes staging
+ * a task-write intent (never applying one), the session's own read-only MCP
+ * tool surface, and read-only Notion reads. See
  * Technical Architecture § Task-Write Command Vocabulary & Transport.
  */
 interface StageCredential {

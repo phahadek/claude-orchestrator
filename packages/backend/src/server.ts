@@ -148,6 +148,7 @@ import {
 } from './orchestration/testRequestLane';
 import { createOrchestratorMcpRouter } from './mcp/orchestratorMcpServer';
 import { createSessionRecordReadRouter } from './routes/sessionRecordRead';
+import { createNotionReadProxyRouter } from './routes/notionReadProxy';
 import { createOpsJournalRouter } from './routes/opsJournal';
 import { createTaskAbortRouter } from './routes/taskAbort';
 import { createGateStateRouter } from './routes/gateState';
@@ -321,6 +322,9 @@ app.use('/api', createOrchestratorMcpRouter(sessionManager));
 // loopback-only, stage-credential auth as above, plus its own per-request
 // granted-capability check (see routes/sessionRecordRead.ts).
 app.use('/api', createSessionRecordReadRouter());
+// Read-only retrying Notion proxy the per-session notion MCP server targets
+// (BASE_URL) — stage-credential auth, real Notion key stays server-side.
+app.use('/api', createNotionReadProxyRouter());
 // Ops-journal read + operator-resolve surface — device-authed only; the
 // dispatched-session write path (a scoped journal-write credential) has
 // been retired in favor of staging journal.setState through the MCP tool

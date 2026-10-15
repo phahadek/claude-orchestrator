@@ -292,7 +292,7 @@ describe('writeMcpConfig — per-session collision fix', () => {
     expect(written.mcpServers.orchestrator).toBeDefined();
   });
 
-  it('inlines the resolved Notion API key under NOTION_TOKEN and writes the config file mode 600', () => {
+  it('writes no Notion API key; the notion entry carries only BASE_URL and OPENAPI_MCP_HEADERS (stage bearer), file mode 600', () => {
     const p = writeMcpConfig(
       PROJECT_DIR,
       'notion-session-secret',
@@ -300,8 +300,22 @@ describe('writeMcpConfig — per-session collision fix', () => {
       'notion',
     );
     const rawContent = writtenFiles.get(p)!;
-    expect(rawContent).toContain('"NOTION_TOKEN": "ntn_test-key-1234567890"');
-    expect(rawContent).not.toContain('${NOTION_API_KEY}');
+    expect(rawContent).not.toContain('ntn_test-key-1234567890');
+    expect(rawContent).not.toContain('NOTION_TOKEN');
+
+    const written = JSON.parse(rawContent);
+    const env = written.mcpServers.notion.env as Record<string, string>;
+    expect(Object.keys(env).sort()).toEqual([
+      'BASE_URL',
+      'OPENAPI_MCP_HEADERS',
+    ]);
+    expect(env.BASE_URL).toMatch(
+      /^http:\/\/127\.0\.0\.1:\d+\/api\/notion-proxy$/,
+    );
+    const stageBearer = (
+      written.mcpServers.orchestrator.headers.Authorization as string
+    ).trim();
+    expect(JSON.parse(env.OPENAPI_MCP_HEADERS).Authorization).toBe(stageBearer);
 
     const call = vi
       .mocked(fsModule.writeFileSync)

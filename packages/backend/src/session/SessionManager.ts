@@ -70,7 +70,6 @@ import {
 } from './DockerSessionRunner';
 import { getCorporateMode } from '../config/corporateMode';
 import {
-  config,
   getAllProjects,
   getProjectById,
   normalizePath,
@@ -372,16 +371,10 @@ function resolveBackendPort(): number {
 /**
  * Directory the per-session MCP config file is written under —
  * `<app-data-dir>/session-mcp-configs/`, deliberately outside any project
- * checkout. The notion server entry (when present) carries the resolved
- * Notion API key inlined directly (see
- * mcp/notionMcpServer.ts#buildNotionMcpServerEntry): the installed
- * `@notionhq/notion-mcp-server` only reads its credential from a literal env
- * value, not a `${VAR}` placeholder the CLI would expand, so the real secret
- * has to land in this file's bytes. Siting the file under the project
- * checkout (as previously done, alongside the per-session system-prompt
- * file) would put that secret at a path the dispatched session's own file
- * tools — and anything that inspects the checkout — can read. The app data
- * dir is backend-owned and never part of a project's git tree.
+ * checkout. The file carries the session's stage credential (the notion
+ * entry targets the backend's read-only proxy with it — the real Notion key
+ * is never written here, see mcp/notionMcpServer.ts). The app data dir is
+ * backend-owned and never part of a project's git tree.
  *
  * `MCP_CONFIG_DIR` overrides the base location (tests use this to redirect
  * writes to a temp dir instead of the real app data dir).
@@ -407,9 +400,8 @@ export function mcpConfigDir(): string {
  * worktreePath === projectDir, so a worktree-relative path would collide
  * across concurrently dispatched sessions and the last writer's stage
  * credential would win for all of them. Siting it outside any project
- * checkout additionally keeps the inlined Notion API key (see below) off a
- * path the dispatched session — or anything else with checkout access — can
- * read.
+ * checkout additionally keeps the stage credential off a path the dispatched
+ * session — or anything else with checkout access — can read.
  *
  * `taskSource` gates in the Notion read MCP server (mcp/notionMcpServer.ts):
  * only Notion-task-source projects get it registered, matching the
@@ -417,11 +409,8 @@ export function mcpConfigDir(): string {
  * orchestrator-config.ts#getSessionAllowedTools — a Jira/GitHub/YAML project
  * gets no notion entry here and no Notion tools in its allow-list.
  *
- * Written with mode 600: the notion server entry (when present) carries the
- * resolved Notion API key inlined directly (see
- * mcp/notionMcpServer.ts#buildNotionMcpServerEntry), and the file already
- * carries the orchestrator stage credential regardless, so it's kept
- * unreadable to other users.
+ * Written with mode 600: the file carries the orchestrator stage credential,
+ * so it's kept unreadable to other users.
  * Exported for unit testing.
  */
 export function writeMcpConfig(
@@ -443,9 +432,7 @@ export function writeMcpConfig(
     ...mcpServers,
     ...(taskSource === 'notion'
       ? {
-          [NOTION_MCP_SERVER_NAME]: buildNotionMcpServerEntry(
-            config.notionApiKey,
-          ),
+          [NOTION_MCP_SERVER_NAME]: buildNotionMcpServerEntry(port, stageToken),
         }
       : {}),
     [ORCHESTRATOR_MCP_SERVER_NAME]: buildOrchestratorMcpServerEntry(

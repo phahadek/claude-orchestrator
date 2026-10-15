@@ -13,6 +13,7 @@ import {
   ResolvedTask,
   parseCreatedAt,
 } from './types';
+import { fetchWithNotionRetry } from './notionFetchRetry';
 import { DependencyResolver } from './DependencyResolver';
 import { toExternalId, normalizeTaskId } from '../tasks/taskId';
 import { markdownToBlocks } from '../tasks/bodyRender';
@@ -195,26 +196,6 @@ function buildHeaders(): Record<string, string> {
   };
 }
 
-// Bounded 429 retry: honour a server-supplied Retry-After (seconds), capped,
-// falling back to bounded exponential backoff when the header is absent or
-// unparseable. MAX_RETRIES bounds total attempts so a pathological or
-// continuous 429 cannot stall or loop a request indefinitely.
-const MAX_429_RETRIES = 3;
-const MAX_RETRY_DELAY_MS = 30_000;
-const BASE_BACKOFF_MS = 500;
-
-function parseRetryAfterMs(res: Response): number | null {
-  const header = res.headers.get('Retry-After');
-  if (!header) return null;
-  const secs = Number(header);
-  if (!Number.isFinite(secs) || secs <= 0) return null;
-  return secs * 1000;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 async function notionRequest<T>(
   method: string,
   path: string,
@@ -227,32 +208,14 @@ async function notionRequest<T>(
     body: body !== undefined ? JSON.stringify(body) : undefined,
   };
 
-  for (let attempt = 0; ; attempt++) {
-    const res = await fetch(url, init);
+  const { response: res, retryDelayMs } = await fetchWithNotionRetry(url, init);
 
-    if (res.ok) {
-      return res.json() as Promise<T>;
-    }
-
-    if (res.status !== 429) {
-      const text = await res.text().catch(() => res.statusText);
-      throw new NotionApiError(res.status, text);
-    }
-
-    const headerDelayMs = parseRetryAfterMs(res);
-    const backoffDelayMs = BASE_BACKOFF_MS * 2 ** attempt;
-    const delayMs = Math.min(
-      headerDelayMs ?? backoffDelayMs,
-      MAX_RETRY_DELAY_MS,
-    );
-
-    if (attempt >= MAX_429_RETRIES) {
-      const text = await res.text().catch(() => res.statusText);
-      throw new NotionApiError(res.status, text, delayMs);
-    }
-
-    await sleep(delayMs);
+  if (res.ok) {
+    return res.json() as Promise<T>;
   }
+
+  const text = await res.text().catch(() => res.statusText);
+  throw new NotionApiError(res.status, text, retryDelayMs);
 }
 
 /**
