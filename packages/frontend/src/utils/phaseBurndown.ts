@@ -29,12 +29,7 @@ export const GATE_STATE_KEY: Record<string, GateState> = {
   discarded: 'discarded',
 };
 
-export const PHASE_ORDER = [
-  'design',
-  'code',
-  'ops',
-  'gate',
-] as const;
+export const PHASE_ORDER = ['design', 'code', 'ops', 'gate'] as const;
 
 export type PhaseKey = (typeof PHASE_ORDER)[number];
 
