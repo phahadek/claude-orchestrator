@@ -438,7 +438,7 @@ const proposedFixTextSchema = z
  * tests the filed Code task needs. `filesAffected` entries are repo paths
  * with an optional ` *(new)*` suffix.
  */
-export const gateVerifyNewTaskFixSchema = z.object({
+const gateVerifyNewTaskFixSchema = z.object({
   title: z
     .string()
     .max(
@@ -459,7 +459,7 @@ export const gateVerifyNewTaskFixSchema = z.object({
 });
 
 /** An open task on the item's milestone board whose body already names the same cause: attached instead of filing a duplicate. */
-export const gateVerifyExistingTaskFixSchema = z.object({
+const gateVerifyExistingTaskFixSchema = z.object({
   existingTaskId: z.string().min(1),
 });
 

@@ -250,7 +250,7 @@ type ExistingTaskFix = Extract<
   { existingTaskId: string }
 >;
 
-export function isNewTaskFix(
+function isNewTaskFix(
   fix: GateVerifyProposedFix | undefined,
 ): fix is NewTaskFix {
   return (
