@@ -83,8 +83,10 @@ function seedEntry(taskId: string, state: OpsState) {
   } as any);
 }
 
+import { normalizeTaskId } from '../tasks/taskId';
+
 function seedTaskType(taskId: string, type: string) {
-  upsertTaskCache(taskId, JSON.stringify({ type }));
+  upsertTaskCache(normalizeTaskId(taskId), JSON.stringify({ type }));
 }
 
 function seedOpsSession(sessionId: string, taskId: string, reason: string) {

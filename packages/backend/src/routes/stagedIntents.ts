@@ -10102,7 +10102,8 @@ export function createStagedIntentsRouter(
           err instanceof DependencyCycleError ||
           err instanceof InvestigationAccretionRejectedError ||
           err instanceof OpsJournalTransitionRejectedError ||
-          err instanceof OpsReconciliationAssertionMissingError
+          err instanceof OpsReconciliationAssertionMissingError ||
+          err instanceof OpsResolveReasonMissingError
         ) {
           res.status(400).json({ error: err.message });
           return;

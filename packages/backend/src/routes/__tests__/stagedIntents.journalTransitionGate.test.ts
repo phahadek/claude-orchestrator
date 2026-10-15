@@ -42,6 +42,7 @@ import {
   insertSession,
   upsertTaskCache,
 } from '../../db/queries';
+import { normalizeTaskId } from '../../tasks/taskId';
 import { isValidOpsTransition, type OpsState } from '../../ops/opsJournal';
 
 function buildApp() {
@@ -184,7 +185,7 @@ describe('POST /api/staged-intents — journal.setState stage-time transition ga
     }
 
     function seedType(taskId: string, type: string) {
-      upsertTaskCache(taskId, JSON.stringify({ type }));
+      upsertTaskCache(normalizeTaskId(taskId), JSON.stringify({ type }));
     }
 
     it('stages and applies an Investigation pending -> resolved', async () => {
@@ -396,7 +397,11 @@ describe('POST /api/staged-intents — journal.setState stage-time transition ga
         .post('/api/staged-intents')
         .send({
           kind: 'journal.setState',
-          payload: { taskId: 'task-chain-1', state: 'resolved' },
+          payload: {
+            taskId: 'task-chain-1',
+            state: 'resolved',
+            noChangeReason: 'no change needed',
+          },
           projectId: 'proj-1',
           groupId,
         });
