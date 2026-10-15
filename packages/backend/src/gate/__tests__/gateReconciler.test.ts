@@ -651,6 +651,71 @@ describe('runGateReconcilerTick', () => {
     typedSetSetting('max_concurrent_verify_sessions', 5);
   });
 
+  it('does not re-dispatch a backoff-elapsed pending item whose latest disposition is needs-setup, giving its budget slot to a runnable item', async () => {
+    typedSetSetting('max_concurrent_planning_sessions', 1);
+    typedSetSetting('human_reserve', 0);
+    typedSetSetting('max_concurrent_verify_sessions', 1);
+    const runnable = await makeRunnableItem({
+      text: 'runnable competitor',
+      classification: 'Read-Only',
+    });
+    const parked = await makeRunnableItem({
+      text: 'parked, needs-setup',
+      classification: 'Read-Only',
+    });
+    appendGateItemEvent(parked.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'still waiting',
+    });
+    appendGateItemEvent(parked.id, { disposition: 'needs-setup' });
+    schedulePendingAttempt(
+      parked.id,
+      new Date(Date.now() - 1000).toISOString(),
+      1,
+      new Date().toISOString(),
+    );
+    expect(getItem(parked.id)?.state).toBe('pending');
+    expect(getItem(parked.id)?.latestDisposition).toBe('needs-setup');
+
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(verify).toHaveBeenCalledWith(
+      expect.objectContaining({ id: runnable.id }),
+    );
+    expect(getItem(runnable.id)?.state).toBe('pass');
+    expect(getItem(parked.id)?.state).toBe('pending');
+
+    typedSetSetting('max_concurrent_planning_sessions', 5);
+    typedSetSetting('human_reserve', 1);
+    typedSetSetting('max_concurrent_verify_sessions', 5);
+  });
+
+  it('still dispatches a backoff-elapsed pending item whose latest disposition is not-yet-triggerable', async () => {
+    const item = await makeRunnableItem({ classification: 'Read-Only' });
+    appendGateItemEvent(item.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'still waiting',
+    });
+    schedulePendingAttempt(
+      item.id,
+      new Date(Date.now() - 1000).toISOString(),
+      1,
+      new Date().toISOString(),
+    );
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(getItem(item.id)?.state).toBe('pass');
+  });
+
   it('files a follow-up fix task on failure, attaches it as a new source, and re-opens the item', async () => {
     const item = await makeRunnableItem({ classification: 'Read-Only' });
     const verifier: GateItemVerifier = {
