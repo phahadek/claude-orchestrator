@@ -319,7 +319,7 @@ describe('gate.verify auto-commit — with the real retire sink wired', () => {
 
       const staged = stageIntent(
         'gate.verify',
-        { gateItemId: item.id, disposition },
+        { gateItemId: item.id, disposition, evidence: 'observed no trigger' },
         'proj-auto-commit',
         null,
         sid,
