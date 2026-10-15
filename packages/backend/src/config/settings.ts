@@ -100,6 +100,9 @@ const SettingsSchema = z.object({
   flip_rate_breadth_n: z.coerce.number().int().min(1),
   flip_rate_breadth_window_hours: z.coerce.number().int().min(1),
   attribution_wait_deadline_minutes: z.coerce.number().int().min(1),
+  // Above this many unattributed failing test ids in one run the digest
+  // renders grouped-by-module output instead of per-test indicator lines.
+  mass_breakage_threshold: z.coerce.number().int().min(1),
   flaky_remediation_file_threshold: z.coerce.number().int().min(1),
   decision_pick_one_paragraph_threshold: z.coerce.number().int().min(100),
   // Tier-3 classifier chronic-error-rate signal — rolling window plus
@@ -231,6 +234,7 @@ export const SETTING_DEFAULTS: Settings = {
   flip_rate_breadth_n: 3,
   flip_rate_breadth_window_hours: 24,
   attribution_wait_deadline_minutes: 120,
+  mass_breakage_threshold: 20,
   flaky_remediation_file_threshold: 2,
   decision_pick_one_paragraph_threshold: 560,
   tier3_error_rate_window_seconds: 7 * 24 * 60 * 60,

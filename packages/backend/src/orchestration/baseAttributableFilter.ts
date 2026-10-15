@@ -34,6 +34,10 @@ import {
 } from '../db/queries';
 import { typedGetSetting } from '../config/settings';
 import {
+  renderUnattributedFailures,
+  type UnattributedView,
+} from '../session/testResultDigest';
+import {
   getRunTestOutcomes,
   getRunTestOutcomesForRun,
   outcomesFromStructuredResult,
@@ -47,6 +51,7 @@ type BaseAttributableFilterOutcome =
 export interface FailingTest {
   test_id: string;
   name: string;
+  failure_message?: string | null;
 }
 
 export interface BaseAttributableFilterResult {
@@ -351,6 +356,7 @@ export const DIGEST_FAILING_TEST_LIST_CAP = 50;
 export function renderBaseAttributableFilterDigest(
   result: BaseAttributableFilterResult,
   guardBlocked: FailingTest[] = [],
+  unattributedView?: UnattributedView,
 ): string {
   const testLines = (tests: FailingTest[]): string[] => {
     const out = tests
@@ -393,6 +399,16 @@ export function renderBaseAttributableFilterDigest(
     '',
     '**Failing tests:**',
   ];
+  if (unattributedView) {
+    lines.push(
+      ...renderUnattributedFailures(
+        result.remainingTests,
+        result.excludedTests.length + result.flakyExcludedTests.length,
+        unattributedView,
+      ),
+    );
+    return lines.join('\n') + guardBlockedSection();
+  }
   lines.push(...testLines(result.remainingTests));
   return lines.join('\n') + guardBlockedSection();
 }

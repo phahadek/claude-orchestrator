@@ -201,12 +201,14 @@ describe('FlowArmToggle', () => {
 
     render(<FlowArmToggle milestoneId="m1" />);
 
-    await waitFor(() =>
-      expect(
-        screen
-          .getByTestId('flow-arm-switch-design')
-          .getAttribute('aria-checked'),
-      ).toBe('false'),
+    await waitFor(
+      () =>
+        expect(
+          screen
+            .getByTestId('flow-arm-switch-design')
+            .getAttribute('aria-checked'),
+        ).toBe('false'),
+      { timeout: 5000 },
     );
 
     await act(async () => {

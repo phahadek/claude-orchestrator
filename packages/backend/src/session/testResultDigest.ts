@@ -11,6 +11,91 @@ export interface TestResultDigestOptions {
   maxFailuresShown?: number;
   /** Supplied by callers for a run that did not pass. */
   runFailure?: { failedCommand: string | null; outputTail: string };
+  /** When set, failing tests render as unattributed (indicator lines / grouped) with `knownCount` collapsed. */
+  unattributed?: { view: UnattributedView; knownCount: number };
+}
+
+export interface UnattributedFailure {
+  test_id: string;
+  name: string;
+  failure_message?: string | null;
+}
+
+/** Per-test breadth/flip numbers plus the thresholds they are shown against. */
+export interface UnattributedView {
+  runId: string | null;
+  breadthN: number;
+  flipWindowW: number;
+  /** X: more unattributed failing ids than this renders grouped, not per-test. */
+  massBreakageThreshold: number;
+  /** Populated only when the unattributed count is within the threshold. */
+  indicators: Map<string, { breadth: number; flips: number }>;
+}
+
+const MAX_GROUPS_SHOWN = 5;
+
+const TRACE_PULL_POINTER = (runId: string | null): string =>
+  `trace: testHealth.getTestTrace(${runId ? `runId=${runId}, ` : ''}testId)`;
+
+/** Module of a test id: the file part before "::", else everything before the last "/" segment's test name. */
+function testIdModule(testId: string): string {
+  const sep = testId.indexOf('::');
+  if (sep > 0) return testId.slice(0, sep);
+  const slash = testId.lastIndexOf('/');
+  return slash > 0 ? testId.slice(0, slash) : testId;
+}
+
+/**
+ * Renders unattributed failing tests (already-attributed ones collapse into
+ * "+N known failures"): one indicator line per test when within the
+ * mass-breakage threshold, else the top groups by test-id module.
+ */
+export function renderUnattributedFailures(
+  tests: UnattributedFailure[],
+  knownCount: number,
+  view: UnattributedView,
+): string[] {
+  const lines: string[] = [];
+  if (tests.length > view.massBreakageThreshold) {
+    const groups = new Map<
+      string,
+      { count: number; messages: Map<string, number> }
+    >();
+    for (const t of tests) {
+      const mod = testIdModule(t.test_id);
+      const g = groups.get(mod) ?? { count: 0, messages: new Map() };
+      g.count++;
+      const msg = (t.failure_message ?? '').trim().split('\n')[0].slice(0, 200);
+      if (msg) g.messages.set(msg, (g.messages.get(msg) ?? 0) + 1);
+      groups.set(mod, g);
+    }
+    const sorted = [...groups.entries()].sort(
+      (a, b) => b[1].count - a[1].count,
+    );
+    lines.push(
+      `**Mass breakage:** ${tests.length} unattributed failing tests (threshold ${view.massBreakageThreshold}) — top groups by module:`,
+    );
+    for (const [mod, g] of sorted.slice(0, MAX_GROUPS_SHOWN)) {
+      const top = [...g.messages.entries()].sort((a, b) => b[1] - a[1])[0];
+      lines.push(
+        `- \`${mod}\` — ${g.count} failing` +
+          (top ? `; most common: ${top[0]}` : ''),
+      );
+    }
+    if (sorted.length > MAX_GROUPS_SHOWN) {
+      lines.push(`- … ${sorted.length - MAX_GROUPS_SHOWN} more module(s)`);
+    }
+    lines.push(`_Per-test detail: ${TRACE_PULL_POINTER(view.runId)}_`);
+  } else {
+    for (const t of tests) {
+      const ind = view.indicators.get(t.test_id);
+      lines.push(
+        `- \`${t.test_id}\` — ${t.name} [breadth ${ind?.breadth ?? 0}/${view.breadthN}, flips ${ind?.flips ?? 0}/${view.flipWindowW}] (${TRACE_PULL_POINTER(view.runId)})`,
+      );
+    }
+  }
+  if (knownCount > 0) lines.push('', `+${knownCount} known failures`);
+  return lines;
 }
 
 const AWAITING_DISPOSITION_INSTRUCTION =
@@ -35,7 +120,11 @@ export function appendAwaitingDispositionInstruction(
 export function buildTestResultDigestFromOutcomes(
   outcomes: {
     incomplete?: boolean;
-    failingTests: { test_id: string; name: string }[];
+    failingTests: {
+      test_id: string;
+      name: string;
+      failure_message?: string | null;
+    }[];
     totals: {
       passed: number;
       failed: number;
@@ -63,7 +152,18 @@ export function buildTestResultDigestFromOutcomes(
       (otherCount > 0 ? `, ${otherCount} other` : '') +
       ` (${totals.total} total)`,
   ];
-  if (shown.length > 0) {
+  if (opts.unattributed) {
+    if (failingTests.length > 0 || opts.unattributed.knownCount > 0) {
+      lines.push(
+        '',
+        ...renderUnattributedFailures(
+          failingTests,
+          opts.unattributed.knownCount,
+          opts.unattributed.view,
+        ),
+      );
+    }
+  } else if (shown.length > 0) {
     lines.push('', '**Failing tests:**');
     for (const t of shown) {
       lines.push(`- \`${t.test_id}\` — ${t.name}`);
