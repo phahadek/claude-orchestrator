@@ -1898,7 +1898,9 @@ describe('intent-kind example payloads', () => {
     )) {
       const schema = schemas[kind];
       if (!schema) continue;
-      const result = schema.safeParse(JSON.parse(example));
+      const result = schema.safeParse(
+        JSON.parse(example.replace('<current-version-number>', '1')),
+      );
       expect(
         result.success,
         `${kind}: ${result.success ? '' : result.error.message}`,

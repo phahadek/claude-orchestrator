@@ -355,12 +355,12 @@ const INTENT_KIND_EXAMPLE_PAYLOADS: Record<string, string> = {
   'task.setType': '{"taskId":"<task-id>","type":"💻 Code"}',
   'task.setDependsOn': '{"taskId":"<task-id>","dependsOn":["<other-task-id>"]}',
   'gate.accrete':
-    '{"project":"<project-id>","taskId":"<task-id>","title":"<title>",' +
-    '"milestone":"<milestone-id>","classification":"Read-Only",' +
+    '{"sourceTask":{"id":"<task-id>","title":"<title>","project":"<project-id>",' +
+    '"milestone":"<milestone-id>"},"classification":"Read-Only",' +
     '"items":[{"text":"<gate item text>"}]}',
   'seed.stage':
-    '{"project":"<project-id>","taskId":"<task-id>","title":"<title>",' +
-    '"milestone":"<milestone-id>","decision":"seeds",' +
+    '{"sourceTask":{"id":"<task-id>","title":"<title>","project":"<project-id>",' +
+    '"milestone":"<milestone-id>"},"decision":"seeds",' +
     '"seeds":[{"spec":"<config-seed spec>"}]}',
   'task.create':
     '{"title":"<title>","type":"💻 Code","priority":"🟡 Medium","milestone":"<milestone-id>",' +
