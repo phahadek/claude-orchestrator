@@ -84,6 +84,7 @@ import { CapabilityDispositionMiner } from './orchestration/CapabilityDispositio
 import { StalledPRReconciler } from './orchestration/StalledPRReconciler';
 import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiver';
 import { SessionEventsPruner } from './orchestration/SessionEventsPruner';
+import { TestRunResultsPruner } from './orchestration/TestRunResultsPruner';
 import { Scheduler } from './orchestration/Scheduler';
 import { register as registerWorktreeReconciler } from './orchestration/WorktreeReconciler';
 import { register as registerTempClusterReconciler } from './orchestration/TempClusterReconciler';
@@ -738,6 +739,7 @@ capabilityDispositionMiner.register(scheduler);
 stalledPRReconciler.register(scheduler);
 taskCacheRefresher.register(scheduler);
 sessionEventsPruner.register(scheduler);
+new TestRunResultsPruner().register(scheduler);
 stuckSessionMonitor.register(scheduler);
 planUsagePoller.register(scheduler);
 convergenceSnapshotJob.register(scheduler);

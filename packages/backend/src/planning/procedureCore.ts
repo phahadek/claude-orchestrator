@@ -60,10 +60,13 @@ function renderOpsJournalStateMachine(): string {
     'to, any non-terminal state — not part of the normal path). From ' +
     `\`pending\` specifically, the only legal \`journal.setState\` targets are: ` +
     `${pendingTargets} — \`staged-proposal\` is NOT reachable directly from ` +
-    '`pending`; stage `candidate` first. This is enforced at both stage time ' +
-    'and apply time (the same `isValidOpsTransition` check) — a session that ' +
-    'stages an illegal transition is rejected immediately, before it ever ' +
-    'reaches the operator.'
+    '`pending`; stage `candidate` first. The closing group carries the whole ' +
+    'remaining chain: when it commits, your earlier loose `journal.setState` ' +
+    'intents for the same task are applied first, in staged order, then the ' +
+    "group's own, one at a time, and nothing is written unless every link is " +
+    'legal. Stage `candidate` before the group member that follows it (loose ' +
+    'or inside the group); a chain with an illegal link is rejected at stage ' +
+    'time, and at commit time applies nothing and is pushed back.'
   );
 }
 

@@ -3242,11 +3242,20 @@ function effectiveOpsStateForStaging(
   projectId: string,
   taskId: string,
   appliedState: OpsState,
+  grouped?: { groupId: string; sessionId: string | null },
 ): OpsState {
-  const priorTargets = listActiveOpsSetStateIntentsForTask(
-    projectId,
-    taskId,
-  ).map((row) => (JSON.parse(row.payload) as { state?: OpsState }).state);
+  // A grouped intent folds only what its commit will apply: the group's own
+  // members plus the same session's loose ones (see collectJournalChains).
+  const priorTargets = listActiveOpsSetStateIntentsForTask(projectId, taskId)
+    .filter(
+      (row) =>
+        !grouped ||
+        row.group_id === grouped.groupId ||
+        (row.group_id === null &&
+          row.session_id !== null &&
+          row.session_id === grouped.sessionId),
+    )
+    .map((row) => (JSON.parse(row.payload) as { state?: OpsState }).state);
   const chain = priorTargets.filter((s): s is OpsState => s !== undefined);
   try {
     return foldOpsTransitionChain(appliedState, chain);
@@ -3510,6 +3519,7 @@ export async function validateAndNormalizeTaskReferences(
    * milestone" error fires unchanged at apply time.
    */
   sessionMilestone?: string | null,
+  sessionId?: string | null,
 ): Promise<unknown> {
   // gate.accrete/seed.stage key off `sourceTask.id` rather than a top-level
   // `taskId` — normalized here on the same rule as SUBJECT_TASK_ID_KINDS
@@ -3570,6 +3580,7 @@ export async function validateAndNormalizeTaskReferences(
           projectId,
           p.taskId,
           entry.state,
+          groupId ? { groupId, sessionId: sessionId ?? null } : undefined,
         );
         if (!isValidOpsTransition(effectiveFrom, targetState)) {
           throw new OpsJournalTransitionRejectedError(
@@ -9052,6 +9063,60 @@ async function applyGroupMember(
  * siblings) so both surfaces apply, annotate, and audit through the exact
  * same path.
  */
+/**
+ * Per task, the journal.setState rows this group commit applies in order:
+ * the same session's earlier loose (ungrouped, active) journal.setState
+ * intents for that task, then the group's own, by created_at.
+ */
+function collectJournalChains(
+  live: readonly StagedIntentRow[],
+): Map<string, StagedIntentRow[]> {
+  const chains = new Map<string, StagedIntentRow[]>();
+  const byTask = new Map<string, StagedIntentRow[]>();
+  for (const row of live) {
+    if (row.kind !== 'journal.setState' || !row.task_id) continue;
+    byTask.set(row.task_id, [...(byTask.get(row.task_id) ?? []), row]);
+  }
+  for (const [taskId, own] of byTask) {
+    own.sort((a, b) => a.created_at - b.created_at);
+    const first = own[0];
+    const loose = listActiveOpsSetStateIntentsForTask(
+      first.project_id,
+      taskId,
+    ).filter(
+      (r) =>
+        r.group_id === null &&
+        r.session_id !== null &&
+        r.session_id === first.session_id &&
+        r.created_at < first.created_at,
+    );
+    chains.set(taskId, [...loose, ...own]);
+  }
+  return chains;
+}
+
+function findIllegalJournalLink(
+  chain: readonly StagedIntentRow[],
+): { row: StagedIntentRow; error: OpsJournalTransitionRejectedError } | null {
+  const taskId = chain[0]?.task_id;
+  if (!taskId) return null;
+  const entry = getOpsJournalEntry(taskId);
+  if (!entry) return null;
+  let current = entry.state;
+  for (const row of chain) {
+    const target = (JSON.parse(row.payload) as { state?: OpsState }).state;
+    if (target === undefined) continue;
+    if (!isValidOpsTransition(current, target)) {
+      return {
+        row,
+        error: new OpsJournalTransitionRejectedError(taskId, current, target),
+      };
+    }
+    current = target;
+  }
+  return null;
+}
+
 export async function commitGroupIntents(
   groupId: string,
   opts: GroupCommitOptions,
@@ -9183,6 +9248,29 @@ export async function commitGroupIntents(
     }
   }
 
+  const journalChains = collectJournalChains(live);
+  for (const chain of journalChains.values()) {
+    const rejection = findIllegalJournalLink(chain);
+    if (!rejection) continue;
+    const { reason } = await routeApplyTimeFailure(
+      rejection.row,
+      rejection.error,
+      planningOrchestrator,
+    );
+    return {
+      status: 409,
+      body: {
+        error: reason,
+        committed: [],
+        failedId: rejection.row.id,
+        remaining: live.map((r) => r.id),
+      },
+    };
+  }
+  const journalRowIds = new Set(
+    [...journalChains.values()].flat().map((r) => r.id),
+  );
+
   const ordered = [
     ...live.filter((r) => !isArmingReadyIntent(r)),
     ...live.filter((r) => isArmingReadyIntent(r)),
@@ -9263,18 +9351,26 @@ export async function commitGroupIntents(
   // sequential loop's all-or-nothing short-circuit.
   const nonArming = ordered.filter((r) => !isArmingReadyIntent(r));
   const arming = ordered.filter((r) => isArmingReadyIntent(r));
-  const stages: StagedIntentRow[][] = [
-    nonArming.filter((r) => !hasSymbolicCreateDependency(r)),
-    nonArming.filter((r) => hasSymbolicCreateDependency(r)),
-    arming,
-  ].filter((stage) => stage.length > 0);
+  const journalStage = [...journalChains.values()].flat();
+  const stages: Array<{ members: StagedIntentRow[]; concurrency: number }> = [
+    { members: journalStage, concurrency: 1 },
+    {
+      members: nonArming.filter(
+        (r) => !journalRowIds.has(r.id) && !hasSymbolicCreateDependency(r),
+      ),
+      concurrency: 6,
+    },
+    {
+      members: nonArming.filter((r) => hasSymbolicCreateDependency(r)),
+      concurrency: 6,
+    },
+    { members: arming, concurrency: 6 },
+  ].filter((stage) => stage.members.length > 0);
 
-  const GROUP_COMMIT_APPLY_CONCURRENCY = 6;
-
-  for (const stageMembers of stages) {
+  for (const { members: stageMembers, concurrency } of stages) {
     const outcomes = await runWithConcurrency(
       stageMembers,
-      GROUP_COMMIT_APPLY_CONCURRENCY,
+      concurrency,
       (row) =>
         applyGroupMember(
           row,

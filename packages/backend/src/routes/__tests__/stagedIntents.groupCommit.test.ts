@@ -66,6 +66,7 @@ import {
   insertSession,
   transitionStagedIntent,
   upsertTaskCache,
+  upsertOpsJournalEntry,
 } from '../../db/queries';
 import {
   createStagedIntentsRouter,
@@ -3860,5 +3861,207 @@ describe('commitGroupIntents — independent members apply concurrently', () => 
     // is not.
     const spreadMs = Math.max(...callStartTimes) - Math.min(...callStartTimes);
     expect(spreadMs).toBeLessThan(LATENCY_MS / 2);
+  });
+});
+
+describe('group commit — ops_journal chain across loose and grouped journal.setState', () => {
+  const PROJECT = 'proj-journal';
+  const SESSION = 'sess-journal';
+
+  function seedJournal(taskId: string, state: string) {
+    upsertOpsJournalEntry({
+      task_id: taskId,
+      project: PROJECT,
+      milestone: 'M1',
+      state,
+      disposition: null,
+      worked_in: null,
+      evidence: null,
+      finding_or_proposal: null,
+      falsification: null,
+      filed_followons: null,
+      needs_from_operator: null,
+      resolution: null,
+      updated_at: new Date(0).toISOString(),
+    } as never);
+  }
+
+  function insertRow(
+    id: string,
+    kind: string,
+    payload: Record<string, unknown>,
+    taskId: string,
+    groupId: string | null,
+    createdAt: number,
+    state: 'staged' | 'approved' = 'approved',
+  ) {
+    insertStagedIntent({
+      id,
+      kind,
+      payload: JSON.stringify(payload),
+      payload_hash: `hash-${id}`,
+      task_id: taskId,
+      project_id: PROJECT,
+      session_id: SESSION,
+      group_id: groupId,
+      state,
+      supersedes: null,
+      annotation: null,
+      decision_proposal: null,
+      groom_proposal: null,
+      advisory: null,
+      disposition_reason: null,
+      answer: null,
+      milestone: null,
+      created_at: createdAt,
+      updated_at: createdAt,
+    });
+  }
+
+  function journalState(taskId: string): string {
+    return (
+      db
+        .prepare('SELECT state FROM ops_journal WHERE task_id = ?')
+        .get(taskId) as { state: string }
+    ).state;
+  }
+
+  beforeEach(() => {
+    db.prepare('DELETE FROM ops_journal').run();
+    db.prepare('DELETE FROM sessions WHERE session_id = ?').run(SESSION);
+    insertSession({
+      session_id: SESSION,
+      task_id: 't-j',
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'ops',
+      note: null,
+      tags: null,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      compaction_count: 0,
+      context_occupancy_tokens: 0,
+      task_name: null,
+      metadata: null,
+      review_result: null,
+      pause_reason: null,
+      last_error_detail: null,
+      events_pruned_at: null,
+      granted_capabilities: '[]',
+    });
+  });
+
+  it('applies a loose earlier candidate ahead of the grouped resolved, committing both in order', async () => {
+    seedJournal('t-j1', 'pending');
+    insertRow(
+      'j-loose',
+      'journal.setState',
+      { taskId: 't-j1', state: 'candidate' },
+      't-j1',
+      null,
+      1000,
+      'staged',
+    );
+    insertRow(
+      'j-group',
+      'journal.setState',
+      { taskId: 't-j1', state: 'resolved' },
+      't-j1',
+      'g-j1',
+      2000,
+    );
+
+    const commit = await supertest(makeApp())
+      .post('/api/staged-intents/group/g-j1/commit')
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(commit.body.committed).toEqual(['j-loose', 'j-group']);
+    expect(journalState('t-j1')).toBe('resolved');
+    expect(getStagedIntent('j-loose')!.state).toBe('committed');
+    expect(getStagedIntent('j-group')!.state).toBe('committed');
+  });
+
+  it('applies two grouped journal members for one task sequentially in created_at order', async () => {
+    seedJournal('t-j2', 'pending');
+    insertRow(
+      'j-late',
+      'journal.setState',
+      { taskId: 't-j2', state: 'resolved' },
+      't-j2',
+      'g-j2',
+      3000,
+    );
+    insertRow(
+      'j-early',
+      'journal.setState',
+      { taskId: 't-j2', state: 'candidate' },
+      't-j2',
+      'g-j2',
+      2000,
+    );
+
+    const commit = await supertest(makeApp())
+      .post('/api/staged-intents/group/g-j2/commit')
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(commit.body.committed).toEqual(['j-early', 'j-late']);
+    expect(journalState('t-j2')).toBe('resolved');
+  });
+
+  it('writes no member when a journal link is illegal and pushes the offending intent back', async () => {
+    seedJournal('t-j3', 'pending');
+    const setDependsOn = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn,
+    });
+    insertRow(
+      'd-other',
+      'task.setDependsOn',
+      { taskId: 't-j3', dependsOn: [] },
+      't-j3',
+      'g-j3',
+      1000,
+    );
+    insertRow(
+      'j-bad',
+      'journal.setState',
+      { taskId: 't-j3', state: 'staged-proposal' },
+      't-j3',
+      'g-j3',
+      2000,
+    );
+
+    const commit = await supertest(makeApp())
+      .post('/api/staged-intents/group/g-j3/commit')
+      .send({});
+
+    expect(commit.status).toBe(409);
+    expect(commit.body.committed).toEqual([]);
+    expect(commit.body.failedId).toBe('j-bad');
+    expect(setDependsOn).not.toHaveBeenCalled();
+    expect(journalState('t-j3')).toBe('pending');
+    expect(getStagedIntent('d-other')!.state).toBe('approved');
+    expect(getStagedIntent('j-bad')!.state).not.toBe('committed');
+  });
+
+  it('rejects at stage time a grouped journal.setState the stored state cannot satisfy', async () => {
+    seedJournal('t-j4', 'pending');
+    const res = await supertest(makeApp())
+      .post('/api/staged-intents')
+      .send({
+        kind: 'journal.setState',
+        projectId: PROJECT,
+        groupId: 'g-j4',
+        payload: { taskId: 't-j4', state: 'staged-proposal' },
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('"pending" -> "staged-proposal"');
   });
 });
