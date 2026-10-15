@@ -253,7 +253,7 @@ export const SETTING_DEFAULTS: Settings = {
   groom_session_model: '',
   design_session_model: '',
   docs_session_model: '',
-  tier3_classifier_model: 'claude-haiku-4-5-20251001',
+  tier3_classifier_model: 'claude-haiku-5-5',
   session_mode: 'cli',
   release_channel: 'stable',
   corporate_mode: 'personal',
