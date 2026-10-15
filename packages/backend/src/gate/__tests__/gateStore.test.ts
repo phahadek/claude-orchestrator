@@ -663,7 +663,11 @@ describe('gateStore.carryForwardItem — item-level sourceless carry-forward', (
 
   it('re-carrying a pending item returns the existing copy without inserting another', () => {
     const original = makePendingSource();
-    const first = carryForwardItem(original.id, 'M13', new Date(2).toISOString());
+    const first = carryForwardItem(
+      original.id,
+      'M13',
+      new Date(2).toISOString(),
+    );
     const second = carryForwardItem(
       original.id,
       'M13',
@@ -686,7 +690,12 @@ describe('gateStore.carryForwardItem — item-level sourceless carry-forward', (
       sources: [{ sourceTaskId: 'notion:d1', sourceTaskTitle: 'Task' }],
       updatedAt: new Date(0).toISOString(),
     });
-    advanceState(original.id, 'deferred', 'deferred', new Date(1).toISOString());
+    advanceState(
+      original.id,
+      'deferred',
+      'deferred',
+      new Date(1).toISOString(),
+    );
 
     const carried = carryForwardItem(
       original.id,
