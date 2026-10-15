@@ -58,7 +58,6 @@ import {
   runTestCommands,
   collectStructuredTestResultOffMainThread,
   clearReportFiles,
-  isTestIdTouchedByChangedFiles,
   type TestCommandResult,
 } from '../session/test-runner';
 import {
@@ -2402,19 +2401,14 @@ export function classifyTestRunOutcome(
  * The lane-side f2-only auto-disposition eligibility check (see
  * PRMergeWatcher.tryF2LaneAutoDisposition, the sole caller): a failing F2 run
  * is only eligible for auto-recovery when EVERY one of its failing tests
- * (getFailingTestIdsForRun) clears both masking guards —
- *  1. flagged as unrelated-to-this-diff by either signal, using only samples
- *     predating this PR's own runs (`beforeMs`, keyed off the PR's
- *     created_at):
- *       - flip-rate flagged (pass<->fail alternation), or
- *       - breadth flagged (failed across `breadthN`+ distinct content
- *         hashes within the lookback window) — a deterministically-failing
- *         test never alternates, so this is what makes it reachable at all
- *     Purely additive: either signal alone is sufficient, so nothing that
- *     already cleared guard 1 via flip-rate stops doing so.
- *  2. the PR's diff (`changedFiles`) does not touch the test's own file,
- *     confidently resolved (isTestIdTouchedByChangedFiles fails closed —
- *     an unmappable test_id blocks auto-disposition, same as a touched file)
+ * (getFailingTestIdsForRun) is flagged as unrelated-to-this-diff by either
+ * signal, using only samples predating this PR's own runs (`beforeMs`, keyed
+ * off the PR's created_at):
+ *  - flip-rate flagged (pass<->fail alternation), or
+ *  - breadth flagged (failed across `breadthN`+ distinct content hashes
+ *    within the lookback window)
+ * There is no touched-file locality check (superseded by the unified
+ * breadth-only attribution design).
  *
  * A run with no per-test detail (structured_result never ingested) is never
  * eligible — there's nothing to individually clear, so it must route through
@@ -2422,7 +2416,7 @@ export function classifyTestRunOutcome(
  *
  * `baseExcusedTestIds` (default empty) is the set of test ids the gate-level
  * baseAttributableFilter (see orchestration/baseAttributableFilter.ts's
- * applyF2GateMaskingGuards) already excused for this same run — the two
+ * filterBaseAttributableFailuresForF2Gate) already excused for this same run — the two
  * filters are independent per-test checks over the same failing-test set, so
  * a test in this set is skipped here entirely rather than re-evaluated: it's
  * already excused, and this function must not veto it just because it
@@ -2431,7 +2425,6 @@ export function classifyTestRunOutcome(
 export function evaluateF2LaneFlakyDisposition(
   testRequestRunId: string,
   beforeMs: number,
-  changedFiles: string[],
   flipRateWindowN: number,
   flipRateThresholdK: number,
   breadthN: number,
@@ -2459,13 +2452,6 @@ export function evaluateF2LaneFlakyDisposition(
       ownTree,
     );
     if (!flipFlag.flagged && !breadthFlag.flagged) return false;
-
-    const { touched, confident } = isTestIdTouchedByChangedFiles(
-      test.test_id,
-      test.name,
-      changedFiles,
-    );
-    if (!confident || touched) return false;
   }
 
   return true;

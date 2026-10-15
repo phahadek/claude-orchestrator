@@ -76,15 +76,6 @@ vi.mock('../../config/settings', () => ({
   typedGetSetting: mockTypedGetSetting,
 }));
 
-const { mockIsTestIdTouchedByChangedFiles } = vi.hoisted(() => ({
-  mockIsTestIdTouchedByChangedFiles: vi.fn(() => ({
-    touched: false,
-    confident: true,
-  })),
-}));
-vi.mock('../../session/test-runner', () => ({
-  isTestIdTouchedByChangedFiles: mockIsTestIdTouchedByChangedFiles,
-}));
 
 // The filter reads failing tests through the real run-outcome accessor, which
 // awaits this run's own in-flight ingestion dispatch (tracked via
@@ -95,7 +86,6 @@ import {
   filterVerifyFailureByBaseHealth,
   filterBaseAttributableFailuresForF2Gate,
   renderBaseAttributableFilterDigest,
-  applyF2GateMaskingGuards,
   shouldMarkAwaitingDisposition,
   DIGEST_FAILING_TEST_LIST_CAP,
   type BaseAttributableFilterResult,
@@ -103,8 +93,6 @@ import {
 
 describe('shouldMarkAwaitingDisposition', () => {
   const all = {
-    changedFilesKnown: true,
-    guardBlockedCount: 0,
     unexcusedFailureCount: 2,
     reportComplete: true,
   };
@@ -114,8 +102,6 @@ describe('shouldMarkAwaitingDisposition', () => {
   });
 
   it.each([
-    ['changedFiles unknown', { changedFilesKnown: false }],
-    ['guard-blocked candidates present', { guardBlockedCount: 1 }],
     ['no unexcused failure remains', { unexcusedFailureCount: 0 }],
     ['report incomplete', { reportComplete: false }],
   ])('withholds when %s', (_name, override) => {
@@ -169,11 +155,6 @@ beforeEach(() => {
   mockListTestRequestRunsForSession.mockReturnValue([]);
   mockComputeTestFailureBreadthFlag.mockReset();
   stubBreadthFlags(new Set());
-  mockIsTestIdTouchedByChangedFiles.mockReset();
-  mockIsTestIdTouchedByChangedFiles.mockReturnValue({
-    touched: false,
-    confident: true,
-  });
   mockMarkTestResultExcused.mockReset();
   summaryState.incomplete = 0;
 });
@@ -257,7 +238,7 @@ describe('filterBaseAttributableFailures', () => {
     expect(result.passed).toBe(false);
   });
 
-  it('excludes a failure flagged flaky for this project even when not breadth-flagged', async () => {
+  it('does not auto-excuse a flip-rate-only-flagged (flaky-rollup, never breadth-flagged) failure', async () => {
     stubBreadthFlags(new Set());
     mockGetFailingTestIdsForRun.mockReturnValue([
       { test_id: 'suite.flakyTest', name: 'flakyTest' },
@@ -270,11 +251,10 @@ describe('filterBaseAttributableFailures', () => {
       'task-1',
     );
 
-    expect(result.outcome).toBe('filtered_pass');
-    expect(result.passed).toBe(true);
-    expect(result.flakyExcludedTests).toEqual([
-      { test_id: 'suite.flakyTest', name: 'flakyTest' },
-    ]);
+    expect(result.outcome).toBe('unfiltered');
+    expect(result.passed).toBe(false);
+    expect(result.flakyExcludedTests).toEqual([]);
+    expect(mockGetFlaggedFlakyTestIds).not.toHaveBeenCalled();
   });
 
   it("resolves the run's own tree by its session and worktree and evaluates breadth at call time, not at the session's first run", async () => {
@@ -345,17 +325,14 @@ describe('filterBaseAttributableFailures', () => {
 
   it('writes the same excused marker shape flaky.confirm(gate:"test_request") writes for a filtered_pass outcome', async () => {
     stubBreadthFlags(new Set(['suite.testA']));
-    mockGetFlaggedFlakyTestIds.mockReturnValue(new Set(['suite.testB']));
     mockGetFailingTestIdsForRun.mockReturnValue([
       { test_id: 'suite.testA', name: 'testA' },
-      { test_id: 'suite.testB', name: 'testB' },
     ]);
 
     const run = makeRun({ id: 'run-42' });
     const { result } = await filterBaseAttributableFailuresForF2Gate(
       PROJECT,
       run,
-      [],
       'task-1',
     );
 
@@ -364,11 +341,6 @@ describe('filterBaseAttributableFailures', () => {
       'run-42',
       'suite.testA',
       'breadth_corpus',
-    );
-    expect(mockMarkTestResultExcused).toHaveBeenCalledWith(
-      'run-42',
-      'suite.testB',
-      'flaky_rollup',
     );
   });
 
@@ -646,12 +618,10 @@ describe('filterVerifyFailureByBaseHealth', () => {
     expect(mockGetFailingTestIdsForRun).toHaveBeenCalledWith('run-replayed');
   });
 
-  it('marks breadth_corpus and flaky_rollup excusals on the given verify lane run', async () => {
+  it('marks breadth_corpus excusals on the given verify lane run', async () => {
     stubBreadthFlags(new Set(['t1']));
-    mockGetFlaggedFlakyTestIds.mockReturnValue(new Set(['t2']));
     mockGetFailingTestIdsForRun.mockReturnValue([
       { test_id: 't1', name: 'a' },
-      { test_id: 't2', name: 'b' },
       { test_id: 't3', name: 'c' },
     ]);
 
@@ -668,11 +638,6 @@ describe('filterVerifyFailureByBaseHealth', () => {
       't1',
       'breadth_corpus',
     );
-    expect(mockMarkTestResultExcused).toHaveBeenCalledWith(
-      'verify-run',
-      't2',
-      'flaky_rollup',
-    );
     expect(mockMarkTestResultExcused).not.toHaveBeenCalledWith(
       'verify-run',
       't3',
@@ -681,75 +646,24 @@ describe('filterVerifyFailureByBaseHealth', () => {
   });
 });
 
-describe('applyF2GateMaskingGuards', () => {
-  const candidateResult: BaseAttributableFilterResult = {
-    outcome: 'filtered_pass',
-    passed: true,
-    excludedTests: [{ test_id: 'suite.testA', name: 'testA' }],
-    flakyExcludedTests: [],
-    remainingTests: [],
-    baseRun: null,
-  };
-
-  it('clears the exclusion when the diff does not touch the test file and the breadth signal re-confirms', () => {
-    mockIsTestIdTouchedByChangedFiles.mockReturnValue({
-      touched: false,
-      confident: true,
-    });
-    stubBreadthFlags(new Set(['suite.testA']));
-    const prRun = makeRun();
-
-    const { result, guardBlocked } = applyF2GateMaskingGuards(
-      candidateResult,
-      prRun,
-      ['unrelated/file.ts'],
-    );
-
-    expect(guardBlocked).toEqual([]);
-    expect(result.outcome).toBe('filtered_pass');
-    expect(result.excludedTests).toEqual([
-      { test_id: 'suite.testA', name: 'testA' },
-    ]);
-  });
-
-  it('blocks the exclusion when the diff touches the test file', () => {
-    mockIsTestIdTouchedByChangedFiles.mockReturnValue({
-      touched: true,
-      confident: true,
-    });
-    stubBreadthFlags(new Set(['suite.testA']));
-    const prRun = makeRun();
-
-    const { result, guardBlocked } = applyF2GateMaskingGuards(
-      candidateResult,
-      prRun,
-      ['suite/testA.spec.ts'],
-    );
-
-    expect(guardBlocked).toEqual([{ test_id: 'suite.testA', name: 'testA' }]);
-    expect(result.excludedTests).toEqual([]);
-    expect(result.remainingTests).toEqual([
-      { test_id: 'suite.testA', name: 'testA' },
-    ]);
-    expect(result.passed).toBe(false);
-  });
-
-  it('blocks the exclusion when the breadth signal no longer re-confirms', () => {
-    mockIsTestIdTouchedByChangedFiles.mockReturnValue({
-      touched: false,
-      confident: true,
-    });
-    stubBreadthFlags(new Set());
-    const prRun = makeRun();
-
-    const { result, guardBlocked } = applyF2GateMaskingGuards(
-      candidateResult,
-      prRun,
-      ['unrelated/file.ts'],
-    );
-
-    expect(guardBlocked).toEqual([{ test_id: 'suite.testA', name: 'testA' }]);
-    expect(result.excludedTests).toEqual([]);
+describe('masking-guard layer is retired (static)', () => {
+  it('no source on the attribution/F2/lane path references applyF2GateMaskingGuards or isTestIdTouchedByChangedFiles', () => {
+    const root = path.resolve(__dirname, '../..');
+    const files = [
+      'orchestration/baseAttributableFilter.ts',
+      'orchestration/testRequestLane.ts',
+      'orchestration/reattributionService.ts',
+      'github/PRMergeWatcher.ts',
+      'github/PreReviewPipeline.ts',
+      'github/AutoMerger.ts',
+      'routes/stagedIntents.ts',
+    ];
+    for (const f of files) {
+      const src = fs.readFileSync(path.join(root, f), 'utf8');
+      const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+      expect(code, f).not.toContain('applyF2GateMaskingGuards');
+      expect(code, f).not.toContain('isTestIdTouchedByChangedFiles');
+    }
   });
 });
 
@@ -776,7 +690,6 @@ describe('filterBaseAttributableFailuresForF2Gate — the shared PreReviewPipeli
     const gatePromise = filterBaseAttributableFailuresForF2Gate(
       PROJECT,
       makeRun(),
-      [],
       'task-1',
     );
 
@@ -792,31 +705,25 @@ describe('filterBaseAttributableFailuresForF2Gate — the shared PreReviewPipeli
 });
 
 describe('excused-marker write ordering and completeness guard', () => {
-  it('never marks a diff-touching, breadth-flagged test excused', async () => {
+  it('excuses and marks a breadth-flagged test regardless of the diff (no masking guard)', async () => {
     stubBreadthFlags(new Set(['suite.testA', 'suite.testB']));
     mockGetFailingTestIdsForRun.mockReturnValue([
       { test_id: 'suite.testA', name: 'testA' },
       { test_id: 'suite.testB', name: 'testB' },
     ]);
-    mockIsTestIdTouchedByChangedFiles.mockImplementation(((id: string) => ({
-      touched: id === 'suite.testA',
-      confident: true,
-    })) as never);
 
     const { result, guardBlocked } =
       await filterBaseAttributableFailuresForF2Gate(
         PROJECT,
         makeRun(),
-        ['suite/testA.spec.ts'],
         'task-1',
       );
 
-    expect(guardBlocked).toEqual([{ test_id: 'suite.testA', name: 'testA' }]);
-    expect(result.remainingTests).toEqual([
-      { test_id: 'suite.testA', name: 'testA' },
-    ]);
+    expect(guardBlocked).toEqual([]);
+    expect(result.outcome).toBe('filtered_pass');
+    expect(result.remainingTests).toEqual([]);
     const marked = mockMarkTestResultExcused.mock.calls.map((c) => c[1]);
-    expect(marked).not.toContain('suite.testA');
+    expect(marked).toContain('suite.testA');
     expect(marked).toContain('suite.testB');
   });
 
@@ -830,7 +737,6 @@ describe('excused-marker write ordering and completeness guard', () => {
     const { result } = await filterBaseAttributableFailuresForF2Gate(
       PROJECT,
       makeRun(),
-      [],
       'task-1',
     );
 

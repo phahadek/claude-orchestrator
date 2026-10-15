@@ -140,7 +140,6 @@ describe('breadth corpus own-tree exclusion', () => {
       await filterBaseAttributableFailuresForF2Gate(
         PROJECT,
         getTestRequestRunById(later)!,
-        ['src/unrelated.ts'],
         null,
       );
     expect(guardBlocked).toEqual([]);
@@ -186,7 +185,6 @@ describe('breadth corpus own-tree exclusion', () => {
     const { result } = await filterBaseAttributableFailuresForF2Gate(
       PROJECT,
       getTestRequestRunById(prGate)!,
-      ['src/unrelated.ts'],
       null,
     );
     expect(result.outcome).toBe('unfiltered');
