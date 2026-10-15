@@ -242,4 +242,40 @@ describe('PlanningOrchestrator.checkTerminal', () => {
     applyPendingDone(SESSION_ID);
     expect(getSession(SESSION_ID)?.status).toBe('done');
   });
+
+  describe('committed ops.prIntent', () => {
+    function insertLinkedPR(intentId: string): void {
+      const now = '2024-01-01T00:00:00Z';
+      db.prepare(
+        `INSERT INTO pull_requests
+          (pr_number, pr_url, task_id, repo, state, created_at, updated_at, synced_at, pr_intent_id)
+         VALUES (1, 'https://github.com/o/r/pull/1', 'task-1', 'o/r', 'open', @n, @n, @n, @intent_id)`,
+      ).run({ n: now, intent_id: intentId });
+    }
+
+    beforeEach(() => {
+      db.prepare('DELETE FROM pull_requests').run();
+    });
+
+    it('does not terminalize while the committed intent has no linked PR', () => {
+      seedSession('session-1', 'ops');
+      const orchestrator = new PlanningOrchestrator(makeSessionManager());
+      stageIntent({ kind: 'ops.prIntent', state: 'committed' });
+      stageIntent({ kind: 'journal.setState', state: 'committed' });
+
+      expect(orchestrator.checkTerminal(SESSION_ID)).toBe(false);
+      expect(getSession(SESSION_ID)?.status).toBe('running');
+    });
+
+    it('terminalizes once a PR links to the intent', () => {
+      seedSession('session-1', 'ops');
+      const orchestrator = new PlanningOrchestrator(makeSessionManager());
+      const intent = stageIntent({ kind: 'ops.prIntent', state: 'committed' });
+      stageIntent({ kind: 'journal.setState', state: 'committed' });
+      expect(orchestrator.checkTerminal(SESSION_ID)).toBe(false);
+
+      insertLinkedPR(intent.id);
+      expect(orchestrator.checkTerminal(SESSION_ID)).toBe(true);
+    });
+  });
 });

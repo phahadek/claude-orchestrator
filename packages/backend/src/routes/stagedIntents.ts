@@ -10418,6 +10418,19 @@ export function createStagedIntentsRouter(
         });
         const committedIntent = rowToApi(committed);
         broadcastIntentChange(committedIntent);
+        if (intent.kind === 'ops.prIntent' && intent.sessionId) {
+          sessionManager
+            ?.enqueueFeedback(
+              intent.sessionId,
+              'ops-pr-intent-approved',
+              `Your ops.prIntent ${intent.id} was approved. Commit your changes and open the one PR it authorizes; it is linked to this intent when opened.`,
+            )
+            .catch((err) => {
+              logger.error(
+                `[stagedIntents] ops-pr-intent-approved feedback failed for session ${intent.sessionId?.slice(0, 8)}: ${err}`,
+              );
+            });
+        }
         res.json(committedIntent);
         return;
       }
