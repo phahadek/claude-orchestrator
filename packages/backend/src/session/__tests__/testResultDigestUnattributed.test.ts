@@ -63,7 +63,7 @@ describe('unattributed digest rendering', () => {
     })!;
     expect(d).toContain('Mass breakage');
     expect(d).toContain('`pkg/m0.test.ts` — 13 failing');
-    expect(d).toContain('most common: boom');
+    expect(d).toContain('most common: other');
     expect(d).not.toContain('breadth ');
     expect(d.split('\n').some((l) => l.includes('::t1`'))).toBe(false);
   });
