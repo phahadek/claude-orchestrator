@@ -3,6 +3,10 @@ import http from 'node:http';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { createStagedIntent } from '../staged-intents-client.mjs';
 
 const execFileAsync = promisify(execFile);
 const scriptPath = fileURLToPath(
@@ -172,6 +176,69 @@ describe('staged-intents-client.mjs existing subcommands', () => {
 
     expect(lastRequestMethod).toBe('GET');
     expect(lastRequestPath).toBe('/api/staged-intents');
+  });
+});
+
+describe('staged-intents-client.mjs create milestone and payload file', () => {
+  function tmpFile(content) {
+    const f = path.join(mkdtempSync(path.join(tmpdir(), 'sic-')), 'p.json');
+    writeFileSync(f, content);
+    return f;
+  }
+
+  const base = {
+    host: '127.0.0.1',
+    token: 'test-token',
+    kind: 'k',
+    payload: {},
+    projectId: 'proj-1',
+  };
+
+  it('createStagedIntent sends milestone when given', async () => {
+    await createStagedIntent({
+      ...base,
+      port: server.address().port,
+      milestone: 'M16',
+    });
+    expect(lastRequestBody.milestone).toBe('M16');
+  });
+
+  it('createStagedIntent omits the milestone key when absent', async () => {
+    await createStagedIntent({ ...base, port: server.address().port });
+    expect('milestone' in lastRequestBody).toBe(false);
+  });
+
+  it('forwards --milestone', async () => {
+    await runScript(['create', 'k', '{}', 'proj-1', '--milestone', 'M16']);
+    expect(lastRequestBody.milestone).toBe('M16');
+    expect(lastRequestBody.projectId).toBe('proj-1');
+  });
+
+  it('reads the payload from --payload-file', async () => {
+    const f = tmpFile(JSON.stringify({ body: "line one\nline 'two'" }));
+    await runScript(['create', 'k', 'proj-1', 'grp-1', '--payload-file', f]);
+    expect(lastRequestBody).toEqual({
+      kind: 'k',
+      payload: { body: "line one\nline 'two'" },
+      projectId: 'proj-1',
+      groupId: 'grp-1',
+    });
+  });
+
+  it('rejects a positional payload together with --payload-file', async () => {
+    const f = tmpFile('{}');
+    await expect(
+      runScript(['create', 'k', '{}', 'proj-1', '--payload-file', f]),
+    ).rejects.toThrow(/usage/);
+    expect(lastRequestPath).toBeNull();
+  });
+
+  it('names the file when --payload-file holds invalid JSON', async () => {
+    const f = tmpFile('{nope');
+    await expect(
+      runScript(['create', 'k', 'proj-1', '--payload-file', f]),
+    ).rejects.toThrow(f);
+    expect(lastRequestPath).toBeNull();
   });
 });
 
