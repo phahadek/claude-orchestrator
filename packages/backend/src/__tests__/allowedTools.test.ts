@@ -41,7 +41,6 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
   'session.requestCapability',
   'review.disposition',
   'review.verdict',
-  'flaky.confirm',
   'gate.verify',
   'ops.prIntent',
   'test.request',
@@ -95,7 +94,6 @@ const CORE_KINDS = new Set([
   ...CODE_INTENT_KINDS,
   'review.disposition',
   'review.verdict',
-  'flaky.confirm',
   ...TIER_B_KINDS,
 ]);
 
@@ -105,9 +103,7 @@ function coreRegisteredKinds(
 ): string[] {
   const kinds = workflow ? PLANNING_INTENT_KINDS[workflow] : CODE_INTENT_KINDS;
   const verdictKinds =
-    workflow === null
-      ? ['review.disposition', 'review.verdict', 'flaky.confirm']
-      : [];
+    workflow === null ? ['review.disposition', 'review.verdict'] : [];
   return ['health', ...kinds, ...verdictKinds, ...TIER_B_KINDS];
 }
 
@@ -393,6 +389,19 @@ describe('NOTION_READ_MCP_TOOLS', () => {
       for (const notionTool of NOTION_READ_MCP_TOOLS) {
         expect(list).not.toContain(notionTool);
       }
+    }
+  });
+});
+
+describe('retired flaky.confirm', () => {
+  it('is in no allow-list', () => {
+    for (const list of [
+      ALLOWED_TOOLS,
+      GROOM_ALLOWED_TOOLS,
+      DESIGN_ALLOWED_TOOLS,
+      OPS_ALLOWED_TOOLS,
+    ]) {
+      expect(list.some((t) => /flaky[_.]confirm/.test(t))).toBe(false);
     }
   });
 });

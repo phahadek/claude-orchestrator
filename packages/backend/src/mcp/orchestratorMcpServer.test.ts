@@ -398,7 +398,7 @@ describe('buildMcpServer — tool surface per session type', () => {
     },
   );
 
-  it('a standard session still exposes review.disposition and flaky.confirm and the architecture read tools, but does get the Tier-A read tools', async () => {
+  it('a standard session still exposes review.disposition and no flaky.confirm, plus the architecture read tools, but does get the Tier-A read tools', async () => {
     insertSession({
       session_id: 'mcp-standard-1',
       task_id: null,
@@ -411,7 +411,7 @@ describe('buildMcpServer — tool surface per session type', () => {
     });
     const names = await toolNamesFor('mcp-standard-1');
     expect(names).toContain('review.disposition');
-    expect(names).toContain('flaky.confirm');
+    expect(names).not.toContain('flaky.confirm');
     expect(names).toContain('architecture.getUnit');
     expect(names).toContain('architecture.queryUnits');
     expect(names).not.toContain('task.getById');

@@ -25,7 +25,6 @@ import type { ProjectConfig } from '../config';
 import type { TestRequestRunRow, StructuredTestResult } from '../db/types';
 import {
   getTestRunSummary,
-  listTestRequestRunsForSession,
   computeTestFailureBreadthFlag,
   markTestResultExcused,
   resolveBreadthOwnTree,
@@ -81,30 +80,6 @@ const UNFILTERED = (passed: boolean): BaseAttributableFilterResult => ({
   remainingTests: [],
   baseRun: null,
 });
-
-/**
- * The flip-rate cutoff (a genuinely temporal guard; breadth excludes the
- * subject's own tree by identity instead) — the earliest started_at among `run`'s own session's test_request_runs, so a
- * PR's own repeated runs (all sharing that session) can never count toward
- * their own breadth. Falls back to `run.started_at` itself when the run
- * carries no session (nothing else to look up against).
- */
-export function firstRunCutoffMs(
-  project: ProjectConfig,
-  run: TestRequestRunRow,
-): number {
-  if (!run.session_id) return run.started_at;
-  const sessionRuns = listTestRequestRunsForSession(
-    project.id,
-    run.session_id,
-    1000,
-  );
-  if (sessionRuns.length === 0) return run.started_at;
-  return sessionRuns.reduce(
-    (min, r) => Math.min(min, r.started_at),
-    run.started_at,
-  );
-}
 
 /**
  * Classifies `run` (an already-completed, failed test.request run) against
