@@ -173,7 +173,10 @@ describe('buildGateVerifyProcedure', () => {
       const spoolIdx = procedure.indexOf('Reading a spooled tool result');
       expect(procIdx).toBeGreaterThanOrEqual(0);
       expect(spoolIdx).toBeGreaterThan(procIdx);
-      const para = procedure.slice(spoolIdx, procedure.indexOf('\n\n', spoolIdx));
+      const para = procedure.slice(
+        spoolIdx,
+        procedure.indexOf('\n\n', spoolIdx),
+      );
       expect(para).toMatch(/ONE Bash command on that absolute path/);
       expect(para).toMatch(/`sort`, `uniq -c` or `head`/);
       expect(para).toMatch(/`cd` prefix/);
