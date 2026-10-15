@@ -430,10 +430,7 @@ export function writeMcpConfig(
     ...mcpServers,
     ...(taskSource === 'notion'
       ? {
-          [NOTION_MCP_SERVER_NAME]: buildNotionMcpServerEntry(
-            port,
-            stageToken,
-          ),
+          [NOTION_MCP_SERVER_NAME]: buildNotionMcpServerEntry(port, stageToken),
         }
       : {}),
     [ORCHESTRATOR_MCP_SERVER_NAME]: buildOrchestratorMcpServerEntry(

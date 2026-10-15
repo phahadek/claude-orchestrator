@@ -208,10 +208,7 @@ async function notionRequest<T>(
     body: body !== undefined ? JSON.stringify(body) : undefined,
   };
 
-  const { response: res, retryDelayMs } = await fetchWithNotionRetry(
-    url,
-    init,
-  );
+  const { response: res, retryDelayMs } = await fetchWithNotionRetry(url, init);
 
   if (res.ok) {
     return res.json() as Promise<T>;
