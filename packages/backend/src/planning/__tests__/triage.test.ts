@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   applyTriageFloor,
   applyTriageFloorForType,
+  deriveRequiredHeadingFact,
   hasOpenQuestionsHeading,
   isInteractiveTaskType,
   isTriageEligibleType,
@@ -61,6 +62,30 @@ describe('hasOpenQuestionsHeading', () => {
 
   it('is false when the body has no such heading at all', () => {
     expect(hasOpenQuestionsHeading('## Summary\nAll good.')).toBe(false);
+  });
+});
+
+describe('deriveRequiredHeadingFact', () => {
+  it('uses Open Questions for Design/Planning', () => {
+    expect(deriveRequiredHeadingFact('📐 Design', '## Open Questions\n- q')).toBe(
+      true,
+    );
+    expect(deriveRequiredHeadingFact('📋 Planning', '## Summary\nx')).toBe(false);
+  });
+
+  it('uses the readiness required heading for Operational/Investigation', () => {
+    expect(
+      deriveRequiredHeadingFact(
+        '🔧 Operational',
+        '## Targets / surfaces affected\n- x',
+      ),
+    ).toBe(true);
+    expect(deriveRequiredHeadingFact('🔧 Operational', '## Open Questions\n- q')).toBe(
+      false,
+    );
+    expect(deriveRequiredHeadingFact('🔎 Investigation', '## Deliverables\n- d')).toBe(
+      true,
+    );
   });
 });
 

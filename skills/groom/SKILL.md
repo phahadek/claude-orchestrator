@@ -538,15 +538,13 @@ the needs-attention + blocked rows; every task left in the **clean** set promote
 default (visible + veto-able) — you do **not** collect a per-item positive stamp.
 
 - **Record a `triage` *object*** per interactive task in `grooming-state.json` (**not** a bare
-  string) — `groomGate.applyTriageFloor` reads `entry.triage.proposedVerdict` and
-  `entry.triage.hasOpenQuestionsHeading`, so the entry must be:
+  string) — `groomGate.applyTriageFloor` reads `entry.triage.proposedVerdict`, so the entry must be:
   ```json
-  "triage": { "proposedVerdict": "clean" | "blocked" | "needs-attention",
-              "hasOpenQuestionsHeading": true }
+  "triage": { "proposedVerdict": "clean" | "blocked" | "needs-attention" }
   ```
   Setting `triage: "clean"` (a string) makes `.proposedVerdict` `undefined` and the task floors to
-  `needs-attention`. `proposedVerdict` is your judgment call; `hasOpenQuestionsHeading` is the
-  structural fact (does the body still carry a `## Open Questions` heading). Record it alongside
+  `needs-attention`. `proposedVerdict` is your judgment call; the required-heading
+  fact is derived server-side from the composed body — do not send it. Record it alongside
   `constraints_dispositioned` (see Step 1 § constraint disposition). The flip client carries the
   whole `triage` object in `groomingGate`; the server re-derives the **deterministic floor** and can
   only ever **downgrade** a proposed `clean` (a hard-block dep not ✅ Done → `blocked`; no

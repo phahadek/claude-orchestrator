@@ -1030,12 +1030,13 @@ function renderSkeleton(
           '— derived from `TRIAGE_ELIGIBLE_TYPES` in `planning/triage.ts`, so this ' +
           'list moves if that set does) and is rejected outright, not silently ' +
           'ignored, for every other Type: `{"proposedVerdict": "clean"|"blocked"|' +
-          '"needs-attention", "hasOpenQuestionsHeading": true|false}`. ' +
+          '"needs-attention"}`. ' +
           "`proposedVerdict` is this session's judgment call on the task's own " +
           'required-heading section (`## Open Questions` for 📐 Design/📋 Planning, ' +
           "that Type's own registry-defined heading otherwise — see " +
-          '`planning/triage.ts`); `hasOpenQuestionsHeading` is the structural fact ' +
-          'of whether that heading is actually present in the body. A `clean` ' +
+          '`planning/triage.ts`); the server ' +
+          'derives whether that heading is present from the composed body itself, so ' +
+          'do not send a heading flag. A `clean` ' +
           'verdict promotes the task without a further per-item human sign-off; ' +
           '`blocked` or `needs-attention` keeps the task at its current status — ' +
           'the server re-derives the verdict from hard facts (a non-Done blocking ' +
@@ -1069,7 +1070,7 @@ function renderSkeleton(
           '"constraintsDispositioned":{},' +
           '"filesPathsEntries":[],' +
           '"dependsOnTasks":[],' +
-          '"triage":{"proposedVerdict":"clean","hasOpenQuestionsHeading":true}' +
+          '"triage":{"proposedVerdict":"clean"}' +
           '}}}` — the ninth field here, `triage`, is what a triage-eligible ' +
           'Type adds; a 💻 Code (or other non-eligible) task must omit it ' +
           'entirely rather than carry it as `null` or `false`.\n\n' +

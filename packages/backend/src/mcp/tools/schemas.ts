@@ -270,7 +270,12 @@ export const groomingGateEntrySchema = z
     triage: z
       .object({
         proposedVerdict: z.enum(TRIAGE_VERDICTS),
-        hasOpenQuestionsHeading: z.boolean(),
+        hasOpenQuestionsHeading: z
+          .boolean()
+          .optional()
+          .describe(
+            'Ignored — the server derives the required-heading fact from the composed task body. Accepted only so in-flight sessions do not fail validation.',
+          ),
       })
       .optional(),
     /** Structural fact: whether the pre-groom body carried a `## Operational seed` section — see groomGate.ts's GroomingGateEntry. */
