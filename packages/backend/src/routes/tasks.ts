@@ -51,7 +51,7 @@ import {
 import { rerankTestLaneProject } from '../orchestration/testRequestLane';
 import yaml from 'js-yaml';
 import { asyncHandler } from './asyncHandler';
-import { composeReviewFixMessage } from './prs';
+import { composeReviewFixMessage } from './reviewFixMessage';
 export type { TaskView } from '../ws/types';
 
 export interface TasksActiveResponse {
