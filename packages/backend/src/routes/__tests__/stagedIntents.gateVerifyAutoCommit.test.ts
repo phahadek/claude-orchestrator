@@ -370,10 +370,16 @@ describe('gate.verify auto-commit — staging-time attempt', () => {
       expect(cls.classification).toBe('Human-Observation');
       const dispositionEvents = db
         .prepare(
-          `SELECT COUNT(*) AS n FROM gate_item_event WHERE gate_item_id = ? AND disposition IS NOT NULL AND disposition != 'needs-setup'`,
+          `SELECT COUNT(*) AS n FROM gate_item_event WHERE gate_item_id = ? AND disposition IN ('pass', 'fail', 'deferred')`,
         )
         .get(item.id) as { n: number };
       expect(dispositionEvents.n).toBe(0);
+      const needsSetupEvents = db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM gate_item_event WHERE gate_item_id = ? AND disposition = 'needs-setup'`,
+        )
+        .get(item.id) as { n: number };
+      expect(needsSetupEvents.n).toBe(1);
       expect(eventsBefore).toBeGreaterThan(0);
     });
 
