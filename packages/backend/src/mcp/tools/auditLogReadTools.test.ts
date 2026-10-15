@@ -271,6 +271,155 @@ describe('auditLog.query', () => {
     }
   });
 
+  describe('pattern / groupBy', () => {
+    async function setup(sessionId: string, projectId: string) {
+      insertSession({
+        session_id: sessionId,
+        task_id: null,
+        task_url: null,
+        project_context_url: null,
+        status: 'running',
+        started_at: Date.now(),
+      });
+      addGrantedCapability(sessionId, auditLogReadCapability(projectId));
+      return connectedClient(sessionId);
+    }
+    const parse = (result: unknown) =>
+      JSON.parse(
+        (result as { content: Array<{ text?: string }> }).content[0]?.text ??
+          '{}',
+      ) as Record<string, any>;
+
+    function seed(projectId: string) {
+      for (const [type, marker] of [
+        ['type_a', 'needle-1'],
+        ['type_a', 'hay'],
+        ['type_b', 'needle-2'],
+      ]) {
+        recordEvent({
+          event_type: type,
+          actor_type: 'system',
+          project_id: projectId,
+          payload: { marker },
+        });
+      }
+    }
+
+    it('filters by payload pattern with a since bound; matchedCount agrees', async () => {
+      seed('proj-p1');
+      const { client, close } = await setup('req-p1', 'proj-p1');
+      try {
+        const body = parse(
+          await client.callTool({
+            name: 'auditLog.query',
+            arguments: { projectId: 'proj-p1', pattern: 'needle', since: 0 },
+          }),
+        );
+        expect(body.entries).toHaveLength(2);
+        expect(body.matchedCount).toBe(2);
+      } finally {
+        await close();
+      }
+    });
+
+    it('rejects pattern without since or until', async () => {
+      const { client, close } = await setup('req-p2', 'proj-p2');
+      try {
+        const result = await client.callTool({
+          name: 'auditLog.query',
+          arguments: { projectId: 'proj-p2', pattern: 'needle' },
+        });
+        expect(result.isError).toBe(true);
+        expect(JSON.stringify(result.content)).toMatch(/since.*until/);
+      } finally {
+        await close();
+      }
+    });
+
+    it('groupBy eventType returns uncapped per-type counts', async () => {
+      seed('proj-p3');
+      for (let i = 0; i < AUDIT_LOG_ROW_CAP + 5; i++) {
+        recordEvent({
+          event_type: 'type_c',
+          actor_type: 'system',
+          project_id: 'proj-p3',
+          payload: {},
+        });
+      }
+      const { client, close } = await setup('req-p3', 'proj-p3');
+      try {
+        const body = parse(
+          await client.callTool({
+            name: 'auditLog.query',
+            arguments: { projectId: 'proj-p3', groupBy: 'eventType' },
+          }),
+        );
+        const byType = Object.fromEntries(
+          (body.groups as Array<Record<string, any>>).map((g) => [
+            g.eventType,
+            g,
+          ]),
+        );
+        expect(Object.keys(byType).sort()).toEqual([
+          'type_a',
+          'type_b',
+          'type_c',
+        ]);
+        expect(byType.type_a.count).toBe(2);
+        expect(byType.type_c.count).toBe(AUDIT_LOG_ROW_CAP + 5);
+        expect(byType.type_c.firstTs).toBeLessThanOrEqual(byType.type_c.lastTs);
+        expect(body.matchedCount).toBe(AUDIT_LOG_ROW_CAP + 8);
+      } finally {
+        await close();
+      }
+    });
+
+    it('default call without pattern/groupBy still returns rows', async () => {
+      seed('proj-p4');
+      const { client, close } = await setup('req-p4', 'proj-p4');
+      try {
+        const body = parse(
+          await client.callTool({
+            name: 'auditLog.query',
+            arguments: { projectId: 'proj-p4' },
+          }),
+        );
+        expect(body.entries).toHaveLength(3);
+        expect(body.matchedCount).toBe(3);
+        expect(body.groups).toBeUndefined();
+      } finally {
+        await close();
+      }
+    });
+
+    it('refuses pattern and groupBy queries without the grant', async () => {
+      insertSession({
+        session_id: 'req-p5',
+        task_id: null,
+        task_url: null,
+        project_context_url: null,
+        status: 'running',
+        started_at: Date.now(),
+      });
+      const { client, close } = await connectedClient('req-p5');
+      try {
+        const a = await client.callTool({
+          name: 'auditLog.query',
+          arguments: { projectId: 'proj-p5', pattern: 'x', since: 0 },
+        });
+        const b = await client.callTool({
+          name: 'auditLog.query',
+          arguments: { projectId: 'proj-p5', groupBy: 'eventType' },
+        });
+        expect(a.isError).toBe(true);
+        expect(b.isError).toBe(true);
+        expect(JSON.stringify(a.content)).toMatch(/capability not granted/);
+      } finally {
+        await close();
+      }
+    });
+  });
+
   it('rejects a limit above the row cap rather than silently clamping it', async () => {
     insertSession({
       session_id: 'requester-7',
