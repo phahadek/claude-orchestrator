@@ -25,14 +25,12 @@ const summaryState = vi.hoisted(() => ({ incomplete: 0 }));
 
 const {
   mockGetFailingTestIdsForRun,
-  mockGetFlaggedFlakyTestIds,
   mockListTestRequestRunsForSession,
   mockComputeTestFailureBreadthFlag,
   mockMarkTestResultExcused,
   mockResolveBreadthOwnTree,
 } = vi.hoisted(() => ({
   mockGetFailingTestIdsForRun: vi.fn(),
-  mockGetFlaggedFlakyTestIds: vi.fn(() => new Set<string>()),
   mockListTestRequestRunsForSession: vi.fn(() => []),
   mockComputeTestFailureBreadthFlag: vi.fn(),
   mockMarkTestResultExcused: vi.fn(),
@@ -58,7 +56,6 @@ vi.mock('../../db/queries', () => ({
     total_count: 1,
     incomplete: summaryState.incomplete,
   }),
-  getFlaggedFlakyTestIds: mockGetFlaggedFlakyTestIds,
   listTestRequestRunsForSession: mockListTestRequestRunsForSession,
   computeTestFailureBreadthFlag: mockComputeTestFailureBreadthFlag,
   resolveBreadthOwnTree: mockResolveBreadthOwnTree,
@@ -148,8 +145,6 @@ function stubBreadthFlags(flaggedIds: Set<string>) {
 
 beforeEach(() => {
   mockGetFailingTestIdsForRun.mockReset();
-  mockGetFlaggedFlakyTestIds.mockReset();
-  mockGetFlaggedFlakyTestIds.mockReturnValue(new Set<string>());
   mockListTestRequestRunsForSession.mockReset();
   mockListTestRequestRunsForSession.mockReturnValue([]);
   mockComputeTestFailureBreadthFlag.mockReset();
@@ -237,12 +232,11 @@ describe('filterBaseAttributableFailures', () => {
     expect(result.passed).toBe(false);
   });
 
-  it('does not auto-excuse a flip-rate-only-flagged (flaky-rollup, never breadth-flagged) failure', async () => {
+  it('does not auto-excuse a flip-rate-only-flagged (never breadth-flagged) failure', async () => {
     stubBreadthFlags(new Set());
     mockGetFailingTestIdsForRun.mockReturnValue([
       { test_id: 'suite.flakyTest', name: 'flakyTest' },
     ]);
-    mockGetFlaggedFlakyTestIds.mockReturnValue(new Set(['suite.flakyTest']));
 
     const result = await filterBaseAttributableFailures(
       PROJECT,
@@ -253,7 +247,6 @@ describe('filterBaseAttributableFailures', () => {
     expect(result.outcome).toBe('unfiltered');
     expect(result.passed).toBe(false);
     expect(result.flakyExcludedTests).toEqual([]);
-    expect(mockGetFlaggedFlakyTestIds).not.toHaveBeenCalled();
   });
 
   it("resolves the run's own tree by its session and worktree and evaluates breadth at call time, not at the session's first run", async () => {
