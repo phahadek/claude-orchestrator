@@ -5159,7 +5159,7 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
     expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalled();
   });
 
-  it("does not auto-recover when the diff touches the flagged test's own file", async () => {
+  it('auto-recovers a flip-rate-flagged failure even when the diff touches the test file (no touched-file masking guard)', async () => {
     flagTest('tests.unit.test_foo.test_bar', PR_CREATED_AT_MS);
     const runId = 'f2-run-touched';
     seedRunFailures(runId, [
@@ -5182,7 +5182,8 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
       started_at: 1000,
       finished_at: 2000,
     } as any);
-    // The diff touches the flagged test's own file.
+    // The diff touches the flagged test's own file — no longer a reason to
+    // block exclusion now that the touched-file masking guard is retired.
     vi.mocked(getChangedFiles).mockResolvedValue(['tests/unit/test_foo.py']);
 
     const github = makeMockGitHub();
@@ -5198,16 +5199,13 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
 
     await watcher.poll();
 
-    expect(
-      vi.mocked(reviewOrchestrator.rerunFlakyTests),
-    ).not.toHaveBeenCalled();
-    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+    expect(vi.mocked(reviewOrchestrator.rerunFlakyTests)).toHaveBeenCalled();
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
       42,
       'owner/repo',
       'ci_failing',
       'FAIL touched',
     );
-    expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalled();
   });
 
   it("does not auto-recover when the flip-rate window would only flag using a sample from this PR's own runs", async () => {

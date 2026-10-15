@@ -6479,55 +6479,33 @@ export async function triggerTestRequestExecution(
   // before anything downstream (commit annotation, audit event, session
   // feedback) sees `result.passed` — a failing test flagged across multiple
   // distinct trees must never charge the session or read to it as its own
-  // fault. Routed
-  // through the same guarded entry point PreReviewPipeline/PRMergeWatcher's
-  // f2 gate use (filterBaseAttributableFailuresForF2Gate), so a candidate
-  // exclusion here is also blocked when the session's own diff touches the
-  // test's file, or the breadth signal no longer re-confirms at gate time.
-  // See orchestration/baseAttributableFilter.ts.
+  // fault. Routed through the same unified entry point every other stage
+  // uses (filterBaseAttributableFailuresForF2Gate). See
+  // orchestration/baseAttributableFilter.ts.
   let filterResult: BaseAttributableFilterResult | null = null;
   let guardBlocked: FailingTest[] = [];
   if (runId && !result.passed && !executionFailed) {
     const project = getProjectById(intent.projectId);
     const run = getTestRequestRunById(runId);
     if (project && run && inputs.ok) {
-      let changedFiles: string[] | null = null;
       try {
-        const pr = getPRBySessionId(intent.sessionId ?? '');
-        changedFiles = await getChangedFiles(
-          inputs.worktreePath,
-          pr?.base_branch ?? project.baseBranch,
+        const gated = await filterBaseAttributableFailuresForF2Gate(
+          project,
+          run,
+          (intent.payload as TestRequestPayload).taskId ?? null,
         );
+        filterResult = gated.result;
+        guardBlocked = gated.guardBlocked;
       } catch (err) {
-        logger.warn(
-          `[stagedIntents] getChangedFiles failed for test.request ${intent.id} f2 gate masking guard: ${err instanceof Error ? err.message : err}`,
+        logger.error(
+          `[stagedIntents] base-attributable filter failed for test.request ${intent.id}: ${err instanceof Error ? err.message : err}`,
         );
       }
-      if (changedFiles !== null) {
-        try {
-          const gated = await filterBaseAttributableFailuresForF2Gate(
-            project,
-            run,
-            changedFiles,
-            (intent.payload as TestRequestPayload).taskId ?? null,
-          );
-          filterResult = gated.result;
-          guardBlocked = gated.guardBlocked;
-        } catch (err) {
-          logger.error(
-            `[stagedIntents] base-attributable filter failed for test.request ${intent.id}: ${err instanceof Error ? err.message : err}`,
-          );
-        }
-      }
-      // changedFiles === null: the session's changed files could not be
-      // determined — fail closed. filterResult stays null, so nothing
-      // below excuses the failure or rewrites the run's state.
     }
   }
   if (filterResult && filterResult.outcome !== 'unfiltered') {
     result = { ...result, passed: filterResult.passed };
   }
-  // filterResult non-null implies changedFiles was known.
   let awaitingDisposition = false;
   if (filterResult && runId && !result.passed) {
     const unexcusedFailureCount =
@@ -6536,8 +6514,6 @@ export async function triggerTestRequestExecution(
         : filterResult.remainingTests.length;
     const summary = getTestRunSummary(runId);
     awaitingDisposition = shouldMarkAwaitingDisposition({
-      changedFilesKnown: true,
-      guardBlockedCount: guardBlocked.length,
       unexcusedFailureCount,
       reportComplete: !!summary && !summary.incomplete,
     });

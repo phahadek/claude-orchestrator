@@ -21,11 +21,7 @@ import type { Scheduler } from '../orchestration/Scheduler';
 import { typedGetSetting } from '../config/settings';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import type { OrchestratorConfig } from '../session/orchestrator-config';
-import {
-  loadAutofixCommands,
-  runAutofix,
-  getChangedFiles,
-} from '../session/autofix-runner';
+import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { computeWholeTreeContentHash } from '../session/analyzeGating';
 import {
   evaluateF2LaneFlakyDisposition,
@@ -35,9 +31,7 @@ import {
 } from '../orchestration/testRequestLane';
 import { tailOfLog } from '../orchestration/verifyRunner';
 import {
-  filterBaseAttributableFailures,
   filterBaseAttributableFailuresForF2Gate,
-  applyF2GateMaskingGuards,
   renderBaseAttributableFilterDigest,
   type BaseAttributableFilterResult,
   type FailingTest,
@@ -1859,17 +1853,6 @@ export class PRMergeWatcher extends EventEmitter {
     const run = getLatestTestRequestRunForSession(project.id, pr.session_id);
     if (!run || run.state !== 'failed') return 'skipped';
 
-    let changedFiles: string[];
-    try {
-      const diff = await this.github.fetchDiff(pr.pr_number, pr.repo);
-      changedFiles = diff.filesChanged;
-    } catch (err) {
-      logger.warn(
-        `[PRMergeWatcher] PR #${pr.pr_number}: fetchDiff failed for re-attribution — failing closed: ${(err as Error).message}`,
-      );
-      return 'skipped';
-    }
-
     let gate: Awaited<
       ReturnType<typeof filterBaseAttributableFailuresForF2Gate>
     >;
@@ -1877,7 +1860,6 @@ export class PRMergeWatcher extends EventEmitter {
       gate = await filterBaseAttributableFailuresForF2Gate(
         project,
         run,
-        changedFiles,
         pr.task_id ?? null,
       );
     } catch (err) {
@@ -1918,14 +1900,8 @@ export class PRMergeWatcher extends EventEmitter {
 
   /**
    * Gate-level base-health pre-empt for a failing F2 run: reuses the same
-   * filterBaseAttributableFailures the test.request lane already calls (see
-   * stagedIntents.ts), then applies the two f2-gate-specific masking guards
-   * (applyF2GateMaskingGuards) before trusting any of its exclusions —
-   * f2/merge-time evaluation has no live session worktree to source a diff
-   * from, so `changedFiles` comes from GitHubClient.fetchDiff instead of
-   * getChangedFiles. Never throws: a fetchDiff failure fails closed (every
-   * candidate exclusion is blocked, surfaced via guardBlocked) rather than
-   * risk excusing a test without confirming the diff doesn't touch it.
+   * unified attribution function the test.request lane calls (see
+   * stagedIntents.ts). Never throws: a filter failure yields null.
    */
   private async computeBaseAttributableF2GateFilter(
     pr: PullRequestRow,
@@ -1935,9 +1911,8 @@ export class PRMergeWatcher extends EventEmitter {
     result: BaseAttributableFilterResult;
     guardBlocked: FailingTest[];
   } | null> {
-    let filterResult: BaseAttributableFilterResult;
     try {
-      filterResult = await filterBaseAttributableFailures(
+      return await filterBaseAttributableFailuresForF2Gate(
         project,
         testResult,
         pr.task_id ?? null,
@@ -1948,35 +1923,6 @@ export class PRMergeWatcher extends EventEmitter {
       );
       return null;
     }
-    if (filterResult.excludedTests.length === 0) {
-      return { result: filterResult, guardBlocked: [] };
-    }
-
-    let changedFiles: string[];
-    try {
-      const diff = await this.github.fetchDiff(pr.pr_number, pr.repo);
-      changedFiles = diff.filesChanged;
-    } catch (err) {
-      logger.warn(
-        `[PRMergeWatcher] PR #${pr.pr_number}: fetchDiff failed for f2 gate masking guard — failing closed: ${(err as Error).message}`,
-      );
-      return {
-        result: {
-          outcome: 'unfiltered',
-          passed: false,
-          excludedTests: [],
-          flakyExcludedTests: filterResult.flakyExcludedTests,
-          remainingTests: [
-            ...filterResult.remainingTests,
-            ...filterResult.excludedTests,
-          ],
-          baseRun: filterResult.baseRun,
-        },
-        guardBlocked: filterResult.excludedTests,
-      };
-    }
-
-    return applyF2GateMaskingGuards(filterResult, testResult, changedFiles);
   }
 
   /**
@@ -2037,23 +1983,9 @@ export class PRMergeWatcher extends EventEmitter {
     const prCreatedAtMs = pr.created_at ? Date.parse(pr.created_at) : NaN;
     if (!Number.isFinite(prCreatedAtMs)) return false;
 
-    let changedFiles: string[];
-    try {
-      changedFiles = await getChangedFiles(
-        worktreePath,
-        pr.base_branch ?? 'dev',
-      );
-    } catch (err) {
-      logger.warn(
-        `[PRMergeWatcher] PR #${pr.pr_number}: getChangedFiles failed for f2 lane auto-disposition: ${(err as Error).message}`,
-      );
-      return false;
-    }
-
     const eligible = evaluateF2LaneFlakyDisposition(
       testResult.id,
       prCreatedAtMs,
-      changedFiles,
       typedGetSetting('flip_rate_window_n'),
       typedGetSetting('flip_rate_threshold_k'),
       typedGetSetting('flip_rate_breadth_n'),

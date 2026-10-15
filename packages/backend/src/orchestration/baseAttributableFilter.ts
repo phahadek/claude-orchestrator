@@ -24,7 +24,6 @@
 import type { ProjectConfig } from '../config';
 import type { TestRequestRunRow, StructuredTestResult } from '../db/types';
 import {
-  getFlaggedFlakyTestIds,
   getTestRunSummary,
   listTestRequestRunsForSession,
   computeTestFailureBreadthFlag,
@@ -33,7 +32,6 @@ import {
   type BreadthOwnTree,
 } from '../db/queries';
 import { typedGetSetting } from '../config/settings';
-import { isTestIdTouchedByChangedFiles } from '../session/test-runner';
 import {
   getRunTestOutcomes,
   getRunTestOutcomesForRun,
@@ -61,8 +59,7 @@ export interface BaseAttributableFilterResult {
   /** Failing tests that remain after filtering — what's actually reported as a failure, if any. */
   remainingTests: FailingTest[];
   /**
-   * Retained for callers that carry it through (see applyF2GateMaskingGuards
-   * / PRMergeWatcher) — always null now that attribution no longer consults
+   * Retained for callers that carry it through — always null now that attribution no longer consults
    * a dedicated base-health probe run.
    */
   baseRun: TestRequestRunRow | null;
@@ -128,7 +125,6 @@ export async function filterBaseAttributableFailures(
   }
 
   return attributeFailingTests(
-    project,
     sessionFailing,
     ownTreeOfRun(project, run),
     run.id,
@@ -157,7 +153,6 @@ function ownTreeOfRun(
  * every excluded test's (runId, test_id) row — see markTestResultExcused.
  */
 function attributeFailingTests(
-  project: ProjectConfig,
   sessionFailing: FailingTest[],
   ownTree: BreadthOwnTree,
   runId: string | null = null,
@@ -177,19 +172,12 @@ function attributeFailingTests(
       ).flagged,
   );
   const excludedIds = new Set(excludedTests.map((t) => t.test_id));
-  const notBreadthAttributable = sessionFailing.filter(
+  const remainingTests = sessionFailing.filter(
     (t) => !excludedIds.has(t.test_id),
   );
+  const flakyExcludedTests: FailingTest[] = [];
 
-  const flakyIds = getFlaggedFlakyTestIds(project.id);
-  const flakyExcludedTests = notBreadthAttributable.filter((t) =>
-    flakyIds.has(t.test_id),
-  );
-  const remainingTests = notBreadthAttributable.filter(
-    (t) => !flakyIds.has(t.test_id),
-  );
-
-  if (excludedTests.length === 0 && flakyExcludedTests.length === 0) {
+  if (excludedTests.length === 0) {
     return UNFILTERED(false);
   }
 
@@ -260,7 +248,6 @@ export async function filterVerifyFailureByBaseHealth(
   );
 
   const result = attributeFailingTests(
-    project,
     sessionFailing,
     resolveBreadthOwnTree(project.id, subject),
     runId ?? null,
@@ -289,138 +276,40 @@ function writeExcusedMarkers(
 }
 
 /**
- * The f2-gate masking guard: a test that `filterBaseAttributableFailures`
- * already flagged as breadth-attributable (present in `result.excludedTests`)
- * is only actually excused at gate/merge time once BOTH of these clear it:
- *
- *  1. diff-touches-test-file — the PR's own diff must not touch the
- *     test's file (isTestIdTouchedByChangedFiles fails closed: an
- *     unmappable test id or a touched file blocks exclusion).
- *  2. breadth signal re-confirmed — the same corpus check
- *     filterBaseAttributableFailures used, re-evaluated as of now excluding
- *     `prRun`'s own tree, must still flag the test. Re-pointed here (was
- *     previously a base-probe-run failure-signature comparison) now that
- *     attribution no longer consults a dedicated base-health probe run.
- *
- * A test that fails either guard is moved back into `remainingTests` (a
- * real gate failure) rather than silently staying excused — see
- * renderBaseAttributableFilterDigest for how a caller surfaces that a
- * candidate exclusion was blocked.
- */
-export function applyF2GateMaskingGuards(
-  result: BaseAttributableFilterResult,
-  prRun: TestRequestRunRow,
-  changedFiles: string[],
-): { result: BaseAttributableFilterResult; guardBlocked: FailingTest[] } {
-  if (result.excludedTests.length === 0) {
-    writeExcusedMarkers(prRun.id, result);
-    return { result, guardBlocked: [] };
-  }
-
-  const breadthN = typedGetSetting('flip_rate_breadth_n');
-  const breadthWindowHours = typedGetSetting('flip_rate_breadth_window_hours');
-  const asOfMs = Date.now();
-  const ownTree = resolveBreadthOwnTree(prRun.project_id, {
-    sessionId: prRun.session_id,
-    worktreePath: prRun.worktree_path,
-  });
-
-  const cleared: FailingTest[] = [];
-  const blocked: FailingTest[] = [];
-  for (const t of result.excludedTests) {
-    const { touched, confident } = isTestIdTouchedByChangedFiles(
-      t.test_id,
-      t.name,
-      changedFiles,
-    );
-    if (!confident || touched) {
-      blocked.push(t);
-      continue;
-    }
-    const breadthFlag = computeTestFailureBreadthFlag(
-      t.test_id,
-      breadthWindowHours,
-      breadthN,
-      asOfMs,
-      ownTree,
-    );
-    if (!breadthFlag.flagged) {
-      blocked.push(t);
-      continue;
-    }
-    cleared.push(t);
-  }
-
-  if (blocked.length === 0) {
-    writeExcusedMarkers(prRun.id, result);
-    return { result, guardBlocked: [] };
-  }
-
-  const remainingTests = [...result.remainingTests, ...blocked];
-  const passed = remainingTests.length === 0;
-  const outcome: BaseAttributableFilterOutcome =
-    remainingTests.length === 0
-      ? 'filtered_pass'
-      : cleared.length > 0 || result.flakyExcludedTests.length > 0
-        ? 'filtered_partial'
-        : 'unfiltered';
-
-  const guarded: BaseAttributableFilterResult = {
-    outcome,
-    passed,
-    excludedTests: cleared,
-    flakyExcludedTests: result.flakyExcludedTests,
-    remainingTests,
-    baseRun: result.baseRun,
-  };
-  writeExcusedMarkers(prRun.id, guarded);
-  return { result: guarded, guardBlocked: blocked };
-}
-
-/**
- * The combined gate-level entry point both PreReviewPipeline's tests stage
- * and PRMergeWatcher's F2 gate use: filterBaseAttributableFailures followed
- * by applyF2GateMaskingGuards, in one call. `changedFiles` is caller-sourced
- * (a live session worktree's getChangedFiles for PreReviewPipeline, a
- * GitHubClient.fetchDiff for PRMergeWatcher, which has no worktree at
- * merge-check time) since this module has no way to obtain a diff itself.
+ * The single attribution entry point every stage uses (session test_request
+ * lane, pre-review, F2 gate, merge watcher, re-attribution): the
+ * breadth-only filter plus the per-test excused markers, applied identically
+ * everywhere with no diff-locality or second-pass guard layer. `guardBlocked`
+ * is retained in the return shape for existing callers and is always empty.
  */
 export async function filterBaseAttributableFailuresForF2Gate(
   project: ProjectConfig,
   run: TestRequestRunRow,
-  changedFiles: string[],
   triggeringTaskId: string | null,
 ): Promise<{
   result: BaseAttributableFilterResult;
   guardBlocked: FailingTest[];
 }> {
-  const filterResult = await filterBaseAttributableFailures(
+  const result = await filterBaseAttributableFailures(
     project,
     run,
     triggeringTaskId,
   );
-  return applyF2GateMaskingGuards(filterResult, run, changedFiles);
+  writeExcusedMarkers(run.id, result);
+  return { result, guardBlocked: [] };
 }
 
 /**
  * Write predicate for the run row's awaiting-disposition marker: every input
- * must be affirmatively known-good — an unknown diff, a guard-blocked
- * candidate, no unexcused failure left, or an incomplete/missing report all
- * withhold it (the session could still own the failure, so it must not be
+ * must be affirmatively known-good — no unexcused failure left, or an
+ * incomplete/missing report, withholds it (the session could still own the failure, so it must not be
  * told to wait).
  */
 export function shouldMarkAwaitingDisposition(inputs: {
-  changedFilesKnown: boolean;
-  guardBlockedCount: number;
   unexcusedFailureCount: number;
   reportComplete: boolean;
 }): boolean {
-  return (
-    inputs.changedFilesKnown &&
-    inputs.guardBlockedCount === 0 &&
-    inputs.unexcusedFailureCount > 0 &&
-    inputs.reportComplete
-  );
+  return inputs.unexcusedFailureCount > 0 && inputs.reportComplete;
 }
 
 export const DIGEST_FAILING_TEST_LIST_CAP = 50;
@@ -430,7 +319,7 @@ export const DIGEST_FAILING_TEST_LIST_CAP = 50;
  * `unfiltered` — the caller's fallback (buildTestResultDigest /
  * truncateForDelivery) already covers the unfiltered case.
  *
- * `guardBlocked` (gate callers only — see applyF2GateMaskingGuards) is the
+ * `guardBlocked` (legacy; always empty now) is the
  * set of tests that were breadth-attributable by the raw corpus check but
  * got moved back into the failing set because they failed one of the
  * f2-gate masking guards; appended as its own section so an operator can

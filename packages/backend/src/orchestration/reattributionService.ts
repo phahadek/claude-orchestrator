@@ -18,7 +18,6 @@ import { logger } from '../logger';
 import { getProjectById } from '../config';
 import {
   getFailingTestIdsForRun,
-  getPRBySessionId,
   getSession,
   getTestRequestRunById,
   listAwaitingDispositionRuns,
@@ -27,7 +26,6 @@ import {
   TERMINAL_SESSION_STATUSES,
 } from '../db/queries';
 import type { TestRequestRunRow } from '../db/types';
-import { getChangedFiles } from '../session/autofix-runner';
 import { filterBaseAttributableFailuresForF2Gate } from './baseAttributableFilter';
 import {
   testRequestLaneEvents,
@@ -73,29 +71,12 @@ export async function evaluateSubject(
     return 'skipped';
   }
 
-  let changedFiles: string[];
-  try {
-    const pr = getPRBySessionId(run.session_id);
-    changedFiles = await getChangedFiles(
-      worktree,
-      pr?.base_branch ?? project.baseBranch,
-    );
-  } catch (err) {
-    // Unknown diff fails closed: nothing is excused.
-    logger.warn(
-      `[reattribution] changed files unavailable for run ${runId}: ${err instanceof Error ? err.message : err}`,
-    );
-    return 'skipped';
-  }
-
   const gated = await filterBaseAttributableFailuresForF2Gate(
     project,
     run,
-    changedFiles,
     session.task_id ?? null,
   );
-  // The per-test excused markers are written by the filter itself
-  // (applyF2GateMaskingGuards -> writeExcusedMarkers, on every return path).
+  // The per-test excused markers are written by the unified filter itself.
   if (gated.result.outcome !== 'filtered_pass') return 'not_excused';
 
   const payload = JSON.stringify({

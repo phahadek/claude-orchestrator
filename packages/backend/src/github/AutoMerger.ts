@@ -884,30 +884,17 @@ export class AutoMerger {
   /**
    * Whether `testResult`'s failure is already fully excused by the shared
    * base-attributable filter (same helper PRMergeWatcher's F2 gate uses) —
-   * a confirmed base-attributable or flip-rate-flagged failure that clears
-   * both f2-gate masking guards. Fails closed (not excused) on a fetchDiff
-   * error, same as PRMergeWatcher's own gate.
+   * a confirmed breadth-attributable failure.
    */
   private async isFailureBaseExcused(
     pr: PullRequestRow,
     project: ProjectConfig,
     testResult: TestRequestRunRow,
   ): Promise<boolean> {
-    let changedFiles: string[];
-    try {
-      const diff = await this.github.fetchDiff(pr.pr_number, pr.repo);
-      changedFiles = diff.filesChanged;
-    } catch (err) {
-      logger.warn(
-        `[AutoMerger] PR #${pr.pr_number}: fetchDiff failed for merge-eligibility base-attributable check — failing closed: ${(err as Error).message}`,
-      );
-      return false;
-    }
     try {
       const gate = await filterBaseAttributableFailuresForF2Gate(
         project,
         testResult,
-        changedFiles,
         pr.task_id ?? null,
       );
       return gate.result.outcome !== 'unfiltered' && gate.result.passed;

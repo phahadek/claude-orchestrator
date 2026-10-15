@@ -937,10 +937,7 @@ export class PreReviewPipeline {
    * itself records a failing F2 run — before PRMergeWatcher's own poll would
    * otherwise pause the PR and nudge the session. Reuses the same
    * filterBaseAttributableFailures the test.request lane calls
-   * (stagedIntents.ts), gated by the two f2-gate masking guards
-   * (filterBaseAttributableFailuresForF2Gate), with `changedFiles` sourced
-   * from this stage's own live session worktree (getChangedFiles) since a
-   * worktree is available here, unlike PRMergeWatcher's merge-time check.
+   * (stagedIntents.ts) via the unified filterBaseAttributableFailuresForF2Gate.
    * A fully-excused run has its test_request_runs row flipped to 'passed' —
    * the same state flip stagedIntents.ts's test.request lane applies on
    * filtered_pass — so PRMergeWatcher's own gate read never re-blocks on it,
@@ -956,20 +953,6 @@ export class PreReviewPipeline {
     const run = getTestRequestRunById(runId);
     if (!run) return;
 
-    let changedFiles: string[];
-    try {
-      changedFiles = await getChangedFiles(
-        ctx.worktreePath,
-        getPRByNumber(ctx.prNumber, ctx.repo)?.base_branch ??
-          ctx.project.baseBranch,
-      );
-    } catch (err) {
-      logger.warn(
-        `[PreReviewPipeline] PR #${ctx.prNumber}: getChangedFiles failed for f2 gate masking guard: ${err instanceof Error ? err.message : err}`,
-      );
-      return;
-    }
-
     let gate: Awaited<
       ReturnType<typeof filterBaseAttributableFailuresForF2Gate>
     >;
@@ -977,7 +960,6 @@ export class PreReviewPipeline {
       gate = await filterBaseAttributableFailuresForF2Gate(
         ctx.project,
         run,
-        changedFiles,
         ctx.job.taskId ?? null,
       );
     } catch (err) {

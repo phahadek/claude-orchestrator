@@ -3,12 +3,13 @@
  * per-test eligibility check the lane-side f2-only auto-disposition
  * (PRMergeWatcher.tryF2LaneAutoDisposition) runs against a failing F2 run's
  * test_run_results before auto-recovering instead of pausing+nudging.
- * Per the locked design, ALL of a run's failing tests must clear both
- * masking guards — flip-rate flagged (using only samples predating this
- * PR's own runs) and not-the-test's-own-file-touched — or the run is not
- * eligible.
+ * ALL of a run's failing tests must be flip-rate or breadth flagged (using
+ * only samples predating this PR's own runs) or the run is not eligible;
+ * there is no touched-file locality check.
  */
 
+import * as fs from 'fs';
+import * as path from 'path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('../../db/db', async () => {
@@ -165,7 +166,6 @@ describe('evaluateF2LaneFlakyDisposition', () => {
     const eligible = evaluateF2LaneFlakyDisposition(
       runId,
       CUTOFF,
-      [],
       WINDOW_N,
       THRESHOLD_K,
       BREADTH_N,
@@ -185,7 +185,6 @@ describe('evaluateF2LaneFlakyDisposition', () => {
     const eligible = evaluateF2LaneFlakyDisposition(
       runId,
       CUTOFF,
-      ['src/unrelated.ts'],
       WINDOW_N,
       THRESHOLD_K,
       BREADTH_N,
@@ -207,7 +206,6 @@ describe('evaluateF2LaneFlakyDisposition', () => {
     const eligible = evaluateF2LaneFlakyDisposition(
       runId,
       CUTOFF,
-      ['src/unrelated.ts'],
       WINDOW_N,
       THRESHOLD_K,
       BREADTH_N,
@@ -217,24 +215,18 @@ describe('evaluateF2LaneFlakyDisposition', () => {
     expect(eligible).toBe(false);
   });
 
-  it("is not eligible when the diff touches the flagged test's own file", () => {
-    flagTest('tests.unit.test_foo.test_bar', CUTOFF);
-    const runId = insertTestRequestRun('failed');
-    seedRunFailures(runId, [
-      { testId: 'tests.unit.test_foo.test_bar', name: 'test_bar' },
-    ]);
-
-    const eligible = evaluateF2LaneFlakyDisposition(
-      runId,
-      CUTOFF,
-      ['tests/unit/test_foo.py'],
-      WINDOW_N,
-      THRESHOLD_K,
-      BREADTH_N,
-      BREADTH_WINDOW_HOURS,
-      OWN_TREE,
+  it('takes no changed-files input: evaluateF2LaneFlakyDisposition does not check touched-file', () => {
+    expect(evaluateF2LaneFlakyDisposition.length).toBeLessThanOrEqual(9);
+    const src = fs.readFileSync(
+      path.resolve(__dirname, '../testRequestLane.ts'),
+      'utf8',
     );
-    expect(eligible).toBe(false);
+    const body = src.slice(
+      src.indexOf('export function evaluateF2LaneFlakyDisposition'),
+    );
+    const fnSrc = body.slice(0, body.indexOf('\n}\n'));
+    expect(fnSrc).not.toContain('isTestIdTouchedByChangedFiles');
+    expect(fnSrc).not.toContain('changedFiles');
   });
 
   it("is not eligible when the flip-rate window would only flag using a sample from this PR's own runs", () => {
@@ -253,7 +245,6 @@ describe('evaluateF2LaneFlakyDisposition', () => {
     const eligible = evaluateF2LaneFlakyDisposition(
       runId,
       CUTOFF,
-      ['src/unrelated.ts'],
       WINDOW_N,
       THRESHOLD_K,
       BREADTH_N,
@@ -279,7 +270,6 @@ describe('evaluateF2LaneFlakyDisposition', () => {
     const eligible = evaluateF2LaneFlakyDisposition(
       runId,
       CUTOFF,
-      ['src/unrelated.ts'],
       WINDOW_N,
       THRESHOLD_K,
       BREADTH_N,
@@ -298,26 +288,6 @@ describe('evaluateF2LaneFlakyDisposition', () => {
     const eligible = evaluateF2LaneFlakyDisposition(
       runId,
       CUTOFF,
-      ['src/unrelated.ts'],
-      WINDOW_N,
-      THRESHOLD_K,
-      BREADTH_N,
-      BREADTH_WINDOW_HOURS,
-      OWN_TREE,
-    );
-    expect(eligible).toBe(false);
-  });
-
-  it("is not eligible when the diff touches the breadth-flagged test's own file", () => {
-    const testId = 'tests.unit.test_foo.test_bar';
-    flagTestByBreadth(testId, CUTOFF, BREADTH_N);
-    const runId = insertTestRequestRun('failed');
-    seedRunFailures(runId, [{ testId, name: 'test_bar' }]);
-
-    const eligible = evaluateF2LaneFlakyDisposition(
-      runId,
-      CUTOFF,
-      ['tests/unit/test_foo.py'],
       WINDOW_N,
       THRESHOLD_K,
       BREADTH_N,
@@ -338,7 +308,6 @@ describe('evaluateF2LaneFlakyDisposition', () => {
     const eligible = evaluateF2LaneFlakyDisposition(
       runId,
       CUTOFF,
-      ['src/unrelated.ts'],
       WINDOW_N,
       THRESHOLD_K,
       BREADTH_N,
@@ -368,7 +337,6 @@ describe('evaluateF2LaneFlakyDisposition', () => {
     const eligible = evaluateF2LaneFlakyDisposition(
       runId,
       CUTOFF,
-      ['src/unrelated.ts'],
       WINDOW_N,
       THRESHOLD_K,
       BREADTH_N,
