@@ -539,19 +539,9 @@ describe('reconcileHumanObservationMirrors — unresolved-source mirrors', () =>
       'notion:code-noop-src',
       JSON.stringify({ type: '💻 Code', status: '✅ Done' }),
     );
-    const now = Date.now();
     db.prepare(
-      `INSERT INTO staged_intent
-        (id, kind, payload, payload_hash, task_id, project_id, state, created_at, updated_at)
-       VALUES ('noop-1', 'planning.noOp', ?, 'hash', 'notion:code-noop-src', 'proj-mirror', 'committed', ?, ?)`,
-    ).run(
-      JSON.stringify({
-        taskId: 'notion:code-noop-src',
-        reason: 'already satisfied elsewhere',
-      }),
-      now,
-      now,
-    );
+      `UPDATE gate_item_source SET closed_without_merge_at = ? WHERE source_task_id = 'notion:code-noop-src'`,
+    ).run(new Date(0).toISOString());
     stageUnresolvedSourceMirror(item);
     expect(liveMirrorRows('unresolved-source')).toHaveLength(1);
 

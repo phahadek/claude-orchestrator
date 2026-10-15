@@ -17,6 +17,7 @@ import {
   listGateItemEvents,
   insertGateItemEvent,
   updateGateItemSourceMergeCommit,
+  markGateItemSourceClosedWithoutMerge,
   rehomeGateItemsBySourceTask,
   getGateAccretion,
   upsertGateAccretion,
@@ -521,6 +522,15 @@ export function setSourceMergeCommit(
     normalizedSourceTaskId,
     mergeCommit,
   );
+}
+
+/** Records that the source task was closed (approved no-op) with no merge commit to wait for. */
+export function markSourceClosedWithoutMerge(
+  gateItemId: string,
+  sourceTaskId: string,
+  at: string,
+): void {
+  markGateItemSourceClosedWithoutMerge(gateItemId, sourceTaskId, at);
 }
 
 /**

@@ -494,22 +494,41 @@ describe('catchUpMergeCommits — escalation ceiling excludes structurally/tempo
       'notion:code-noop-src',
       JSON.stringify({ type: '💻 Code', status: '✅ Done' }),
     );
-    const now = Date.now();
     db.prepare(
-      `INSERT INTO staged_intent
-        (id, kind, payload, payload_hash, task_id, project_id, state, created_at, updated_at)
-       VALUES ('noop-1', 'planning.noOp', ?, 'hash', 'notion:code-noop-src', 'polimarket-analyser', 'committed', ?, ?)`,
-    ).run(
-      JSON.stringify({
-        taskId: 'notion:code-noop-src',
-        reason: 'already satisfied elsewhere',
-      }),
-      now,
-      now,
-    );
+      `UPDATE gate_item_source SET closed_without_merge_at = ? WHERE source_task_id = 'notion:code-noop-src'`,
+    ).run(new Date(0).toISOString());
 
     await driveAttempts(10);
 
     expect(stageMock).not.toHaveBeenCalled();
+  });
+
+  it('still escalates a Done 💻 Code source with a closed-unmerged PR row and no marker once the ceiling is reached', async () => {
+    insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M16',
+      text: 'Closed PR, no noOp',
+      classification: 'needs-triage',
+      sources: [
+        {
+          sourceTaskId: 'notion:code-closed-pr',
+          sourceTaskTitle: 'Dropped webhook',
+        },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+    upsertTaskCache(
+      'notion:code-closed-pr',
+      JSON.stringify({ type: '💻 Code', status: '✅ Done' }),
+    );
+    const now = new Date(0).toISOString();
+    db.prepare(
+      `INSERT INTO pull_requests (pr_number, pr_url, task_id, repo, state, created_at, updated_at, synced_at)
+       VALUES (7, 'https://github.com/o/r/pull/7', 'notion:code-closed-pr', 'o/r', 'closed', ?, ?, ?)`,
+    ).run(now, now, now);
+
+    await driveAttempts(10);
+
+    expect(stageMock).toHaveBeenCalled();
   });
 });

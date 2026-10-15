@@ -577,9 +577,8 @@ describe('reconcileGateRunnability', () => {
       upsertTaskCache(id, JSON.stringify({ type: '💻 Code', status }));
       if (opts.noOp) {
         db.prepare(
-          `INSERT INTO staged_intent (id, kind, payload, payload_hash, task_id, project_id, state, created_at, updated_at)
-           VALUES (?, 'planning.noOp', '{}', 'h', ?, 'polimarket-analyser', 'committed', 0, 0)`,
-        ).run(`intent-${id}`, id);
+          `UPDATE gate_item_source SET closed_without_merge_at = ? WHERE source_task_id = ?`,
+        ).run(new Date(0).toISOString(), id);
       }
       if (opts.pr) {
         const now = new Date(0).toISOString();
@@ -620,7 +619,7 @@ describe('reconcileGateRunnability', () => {
 
     it('stays open when a PR row exists but merge_commit is null (dropped webhook)', async () => {
       const item = makeItem({ sources: sourcesOf('notion:noop-3') });
-      seedCodeSource('notion:noop-3', '✅ Done', { noOp: true, pr: true });
+      seedCodeSource('notion:noop-3', '✅ Done', { pr: true });
       const result = await reconcileGateRunnability('sha1', {
         ancestrySource: orderedAncestry,
       });
