@@ -69,7 +69,9 @@ export function renderUnattributedFailures(
       if (msg) g.messages.set(msg, (g.messages.get(msg) ?? 0) + 1);
       groups.set(mod, g);
     }
-    const sorted = [...groups.entries()].sort((a, b) => b[1].count - a[1].count);
+    const sorted = [...groups.entries()].sort(
+      (a, b) => b[1].count - a[1].count,
+    );
     lines.push(
       `**Mass breakage:** ${tests.length} unattributed failing tests (threshold ${view.massBreakageThreshold}) — top groups by module:`,
     );
