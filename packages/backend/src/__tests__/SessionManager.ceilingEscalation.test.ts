@@ -188,7 +188,7 @@ vi.mock('../tasks/TaskStatusEngine', () => ({
 // (resolving firstEvent) but never terminates.
 vi.mock('../session/CliSessionRunner', () => ({
   CliSessionRunner: vi.fn().mockImplementation(() => ({
-    sendMessage: vi.fn(),
+    sendMessage: vi.fn().mockReturnValue(true),
     endSession: vi.fn(),
     run: vi.fn().mockReturnValue(new Promise(() => {})),
   })),
