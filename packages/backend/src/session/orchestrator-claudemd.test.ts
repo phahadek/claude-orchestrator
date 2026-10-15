@@ -422,17 +422,35 @@ describe('buildOrchestratorClaudeMd', () => {
     expect(gate).not.toContain('npm run format');
   });
 
-  it('Flaky/Transient section no longer instructs a mandatory second or third test_request call to establish flakiness', () => {
+  it('failing-test section names the three paths and the targeted-retest lane', () => {
     const result = buildOrchestratorClaudeMd(defaultParams);
-    const flakySection = result.slice(
-      result.indexOf('## Flaky / Transient CI or F2 Gate Failures'),
+    const start = result.indexOf('## When a Test Fails');
+    expect(start).toBeGreaterThan(-1);
+    const section = result.slice(
+      start,
       result.indexOf('## Responding to Review Comments'),
     );
-    expect(flakySection).not.toMatch(/Call `test_request` again/);
-    expect(flakySection).not.toMatch(/1\. Call `test_request`/);
-    expect(flakySection).toContain('mcp__orchestrator__flaky_confirm');
-    expect(flakySection).toContain('testId');
-    expect(flakySection).toContain('cross-SHA');
+    expect(section).toContain('Path 1 — Investigate and fix');
+    expect(section).toContain('Path 2 — Wait');
+    expect(section).toContain('Path 3 — File the operator override and wait');
+    expect(section).toContain('targeted-retest lane');
+    expect(section).toContain('mcp__orchestrator__test_override');
+    expect(section).toContain('**Wait** instruction');
+    expect(section).toContain('woken at most once');
+  });
+
+  it('drops the import-intersection framing and every flaky_confirm reference', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    expect(result).not.toContain(
+      "intersect the failing tests' fixtures and imports",
+    );
+    expect(result).not.toContain('flaky_confirm');
+    expect(result).not.toContain('Investigate a Failing Test First');
+    const gate = result.slice(
+      result.indexOf('## Pre-PR Gate'),
+      result.indexOf('## Forbidden Actions'),
+    );
+    expect(gate).toContain('When a Test Fails');
   });
 
   it('Responding to Review Comments section instructs staging review_dispute for the four disputable verdicts', () => {
@@ -451,44 +469,6 @@ describe('buildOrchestratorClaudeMd', () => {
     ]) {
       expect(section).toContain(v);
     }
-  });
-
-  it('Flaky/Transient section points at the digest wait instruction instead of re-calling flaky_confirm periodically', () => {
-    const result = buildOrchestratorClaudeMd(defaultParams);
-    const flakySection = result.slice(
-      result.indexOf('## Flaky / Transient CI or F2 Gate Failures'),
-      result.indexOf('## Responding to Review Comments'),
-    );
-    expect(flakySection).not.toMatch(/re-calling it/);
-    expect(flakySection).not.toMatch(/periodically/);
-    expect(flakySection).toContain('**Wait** instruction');
-    expect(flakySection).toContain('woken at most once');
-  });
-
-  it('has an investigate-first section before the flaky section, and the Pre-PR Gate points at it before flaky_confirm', () => {
-    const result = buildOrchestratorClaudeMd(defaultParams);
-    const investigate = result.indexOf('## Investigate a Failing Test First');
-    expect(investigate).toBeGreaterThan(-1);
-    expect(investigate).toBeLessThan(
-      result.indexOf('## Flaky / Transient CI or F2 Gate Failures'),
-    );
-    expect(result).toContain(
-      'presumed caused by your diff until you name a concrete cause outside it',
-    );
-    expect(result).toContain('exercises a module your diff changed');
-    expect(result).not.toContain(
-      'Check `mcp__orchestrator__testHealth_getFlakyHistory` first',
-    );
-    const gate = result.slice(
-      result.indexOf('## Pre-PR Gate'),
-      result.indexOf('## Forbidden Actions'),
-    );
-    expect(gate.indexOf('Investigate a Failing Test First')).toBeGreaterThan(
-      -1,
-    );
-    expect(gate.indexOf('Investigate a Failing Test First')).toBeLessThan(
-      gate.indexOf('flaky_confirm'),
-    );
   });
 
   it('includes worktree path in Git Isolation section', () => {
