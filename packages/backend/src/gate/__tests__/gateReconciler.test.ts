@@ -38,6 +38,7 @@ import {
   advanceState,
   getItem,
   schedulePendingAttempt,
+  carryForwardItem,
 } from '../gateStore.js';
 import {
   approveGateItem,
@@ -1382,6 +1383,33 @@ describe('runGateReconcilerTick', () => {
       deployAdvanceTrigger: fixedTrigger(null),
     });
     expect(result.readiness['polimarket-analyser::M20'].status).toBe('blocked');
+  });
+});
+
+describe('reconcileGateRunnability — carried pending copy', () => {
+  it('leaves a carried pending copy with a covered min_deployed_commit pending', async () => {
+    const source = makeItem({
+      sources: [
+        {
+          sourceTaskId: 'notion:abc',
+          sourceTaskTitle: 'Add env var',
+          mergeCommit: 'sha1',
+        },
+      ],
+    });
+    advanceState(source.id, 'pending', undefined, new Date(1).toISOString());
+    schedulePendingAttempt(
+      source.id,
+      '2026-08-22T03:19:10.000Z',
+      1,
+      new Date(1).toISOString(),
+    );
+    const copy = carryForwardItem(source.id, 'M13', new Date(2).toISOString());
+    expect(copy.state).toBe('pending');
+
+    await reconcileGateRunnability('sha1');
+
+    expect(getItem(copy.id)?.state).toBe('pending');
   });
 });
 
