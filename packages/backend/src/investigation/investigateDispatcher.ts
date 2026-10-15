@@ -224,7 +224,11 @@ export async function launchInvestigateBatch(
     taskKind: 'non_milestone',
     taskId,
     sessionType: 'ops',
-    injectedProcedureContent: buildInvestigateProcedure(reports, projectId, taskId),
+    injectedProcedureContent: buildInvestigateProcedure(
+      reports,
+      projectId,
+      taskId,
+    ),
   });
 
   setSessionMetadata(sessionId, { reportIds: [...reportIds] });
