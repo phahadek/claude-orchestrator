@@ -15,6 +15,7 @@ import {
   hasActiveCapabilityRequestForSession,
   listIdlePlanningSessionsEligibleForTerminalSweep,
   insertCompletingSignal,
+  isPRIntentConsumed,
 } from '../db/queries';
 import type {
   Session,
@@ -618,6 +619,13 @@ export class PlanningOrchestrator {
     const priorCount = this.stagedCountAtResume.get(sessionId) ?? 0;
     const stagedNothingNew =
       investigateSession || countable.length <= priorCount;
+    const awaitingPrOpen = all.some(
+      (i) =>
+        i.kind === 'ops.prIntent' &&
+        i.state === 'committed' &&
+        !isPRIntentConsumed(i.id),
+    );
+    if (awaitingPrOpen) return false;
     const reachedTerminal =
       !stillPending && stagedNothingNew && !owesGatedArtifacts;
 

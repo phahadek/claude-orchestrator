@@ -4179,6 +4179,16 @@ export function linkPRToPRIntent(
   ).run({ pr_number: prNumber, repo, intent_id: intentId });
 }
 
+export function isPRIntentConsumed(intentId: string): boolean {
+  return (
+    db
+      .prepare<{
+        intent_id: string;
+      }>(`SELECT 1 FROM pull_requests WHERE pr_intent_id = @intent_id LIMIT 1`)
+      .get({ intent_id: intentId }) !== undefined
+  );
+}
+
 /**
  * Resolves the approved ops.prIntent a PR was linked to at open time (see
  * linkPRToPRIntent), or null for a PR with no linked PR-intent — every
