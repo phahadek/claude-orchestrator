@@ -208,11 +208,9 @@ export const ALLOWED_TOOLS = [
   'mcp__github__update_issue',
   'mcp__github__update_pull_request_branch',
   // Orchestrator MCP verdict-delivery tools — a standard/review session
-  // reports how it addressed a PR review comment or whether a CI/gate
-  // failure is verified-flaky through these, replacing the retired
-  // stdout-scraped `dispositions`/`verified_flaky` JSON blocks (see
-  // mcp/tools/verdictTools.ts, AgentSession.recordReviewDisposition /
-  // recordVerifiedFlakyDisposition).
+  // reports how it addressed a PR review comment through these, replacing
+  // the retired stdout-scraped `dispositions` JSON block (see
+  // mcp/tools/verdictTools.ts, AgentSession.recordReviewDisposition).
   orchestratorMcpToolName('health'),
   orchestratorMcpToolName('review.disposition'),
   // review.verdict is a review session's schema-validated route to report

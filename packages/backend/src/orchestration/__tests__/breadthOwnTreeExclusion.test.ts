@@ -14,7 +14,6 @@ vi.mock('../../db/db', async () => {
 import { db } from '../../db/db';
 import {
   computeTestFailureBreadthFlag,
-  evaluateTestFlakinessCorpus,
   getTestRequestRunById,
   insertSession,
   resolveBreadthOwnTree,
@@ -145,17 +144,6 @@ describe('breadth corpus own-tree exclusion', () => {
     expect(guardBlocked).toEqual([]);
     expect(result.outcome).toBe('filtered_pass');
     expect(result.excludedTests.map((t) => t.test_id)).toEqual([TEST_ID]);
-
-    const corpus = evaluateTestFlakinessCorpus(
-      TEST_ID,
-      NOW - 50 * MIN,
-      20,
-      2,
-      3,
-      24,
-      resolveBreadthOwnTree('proj-1', { sessionId: 'S' }),
-    );
-    expect(corpus.eligible).toBe(true);
   });
 
   it("does not count the subject's own session_request and pr_gate rows (self-inflation regression)", async () => {
@@ -191,9 +179,6 @@ describe('breadth corpus own-tree exclusion', () => {
 
     const own = resolveBreadthOwnTree('proj-1', { sessionId: 'S' });
     expect(breadth(own).distinctContentHashCount).toBe(0);
-    const corpus = evaluateTestFlakinessCorpus(TEST_ID, NOW, 20, 2, 3, 24, own);
-    expect(corpus.eligible).toBe(false);
-    expect(corpus.reason).toContain('0/3 distinct other trees');
   });
 
   it('excludes an earlier session of the same task in a different worktree, whatever the task id spelling', () => {

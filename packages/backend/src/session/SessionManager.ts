@@ -3024,10 +3024,6 @@ export class SessionManager extends EventEmitter {
     session.on('dispositions_parsed', (payload: unknown) =>
       this.emit('dispositions_parsed', payload),
     );
-    // Forward verified_flaky_disposition so PRMergeWatcher can actuate a same-SHA re-run
-    session.on('verified_flaky_disposition', (payload: unknown) =>
-      this.emit('verified_flaky_disposition', payload),
-    );
     // Forward review_verdict_recorded so PRReviewService.waitForVerdict can
     // resolve directly from the review.verdict MCP tool instead of only via
     // its text/session_ended fallback parse.
