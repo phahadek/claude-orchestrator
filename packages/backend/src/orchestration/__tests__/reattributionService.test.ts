@@ -347,9 +347,7 @@ describe('attribution wait wake', () => {
     addOtherPass('o4', 'tw2');
     await evaluateSubject('r1', null);
     expect(wakes()).toHaveLength(0);
-    expect(
-      getTestRequestRunById('r1')?.awaiting_disposition_at,
-    ).not.toBeNull();
+    expect(getTestRequestRunById('r1')?.awaiting_disposition_at).not.toBeNull();
   });
 
   it('does not collide with an existing reattribution row', async () => {
