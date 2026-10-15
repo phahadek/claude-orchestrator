@@ -14280,7 +14280,11 @@ const _stmtFindActiveGateVerifyMirrorForItemByOrigin = new Map<
  * genuine verifier-originated gate.verify report, or the other origin's
  * mirror, for the same item is never mistaken for a live one of this kind.
  */
-export type GateVerifyMirrorOrigin = 'mirror' | 'consent' | 'unresolved-source';
+export type GateVerifyMirrorOrigin =
+  | 'mirror'
+  | 'consent'
+  | 'unresolved-source'
+  | 'reclassify';
 
 export function findActiveGateVerifyMirrorForItem(
   gateItemId: string,
@@ -14372,9 +14376,9 @@ let _stmtListLiveGateVerifyIntentsForMilestoneAndDisposition:
  * milestone whose verdict matches the given disposition class — the
  * auto-commit policy's backlog sweep, run when a policy is armed/updated so
  * an already-staged backlog is committed immediately rather than only
- * intents staged afterward. Excludes mirrors (payload.origin set) and
- * reclassify proposals (payload.reclassify set) — neither is eligible for
- * policy-driven auto-commit.
+ * intents staged afterward. Excludes mirrors/reclassify-origin intents
+ * (payload.origin set) and reclassify-carrying verdicts other than
+ * needs-setup — neither is eligible for policy-driven auto-commit.
  */
 export function listLiveGateVerifyIntentsForMilestoneAndDisposition(
   milestoneId: string,
@@ -14388,7 +14392,8 @@ export function listLiveGateVerifyIntentsForMilestoneAndDisposition(
      WHERE kind = 'gate.verify' AND state IN ('staged', 'approved')
        AND milestone = @milestone_id
        AND json_extract(payload, '$.origin') IS NULL
-       AND json_extract(payload, '$.reclassify') IS NULL
+       AND (json_extract(payload, '$.reclassify') IS NULL
+            OR json_extract(payload, '$.disposition') = 'needs-setup')
        AND json_extract(payload, '$.disposition') = @disposition_class`,
   );
   return _stmtListLiveGateVerifyIntentsForMilestoneAndDisposition.all({
