@@ -422,10 +422,17 @@ describe('gate.verify — stage-time proposedFix validation', () => {
 
   beforeAll(() => {
     repoDir = mkdtempSync(join(tmpdir(), 'gate-verify-repo-'));
-    execFileSync('git', ['init', '-q'], { cwd: repoDir });
+    const { GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, ...cleanEnv } = process.env;
+    void GIT_DIR;
+    void GIT_WORK_TREE;
+    void GIT_INDEX_FILE;
+    execFileSync('git', ['init', '-q'], { cwd: repoDir, env: cleanEnv });
     mkdirSync(join(repoDir, 'scripts'));
     writeFileSync(join(repoDir, 'scripts', 'deploy.sh'), 'echo hi\n');
-    execFileSync('git', ['add', 'scripts/deploy.sh'], { cwd: repoDir });
+    execFileSync('git', ['add', 'scripts/deploy.sh'], {
+      cwd: repoDir,
+      env: cleanEnv,
+    });
     ProjectService.create({
       id: 'proj-git',
       name: 'Project Git',
@@ -770,7 +777,8 @@ describe('gate.verify — Human-Observation mirror apply (operator-supplied disp
     const updated = getItem(item.id);
     expect(updated?.state).toBe('open');
     expect(updated?.events.at(-1)).toMatchObject({ disposition: 'fail' });
-    expect(createTaskMock).toHaveBeenCalledTimes(1);
+    // No verifier ran, so no RCA: the fail is recorded and nothing is filed.
+    expect(createTaskMock).not.toHaveBeenCalled();
   });
 
   it('advances state to pass (not runnable) and never tags the event operator "gate-verifier"', async () => {

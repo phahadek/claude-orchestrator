@@ -2729,10 +2729,27 @@ class GateVerifyProposedFixError extends Error {
 
 const NEW_PATH_SUFFIX_RE = /\s*\*\(new\)\*\s*$/;
 
+/** An inherited GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE would make git ignore `cwd` and list some other repo. */
+function envWithoutGitRepoOverrides(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (
+      key === 'GIT_DIR' ||
+      key === 'GIT_WORK_TREE' ||
+      key === 'GIT_INDEX_FILE' ||
+      key === 'GIT_COMMON_DIR'
+    ) {
+      delete env[key];
+    }
+  }
+  return env;
+}
+
 function listTrackedFilesSync(repoRoot: string): Set<string> | null {
   try {
     const out = execFileSync('git', ['ls-files', '-z'], {
       cwd: repoRoot,
+      env: envWithoutGitRepoOverrides(),
       maxBuffer: 256 * 1024 * 1024,
     }).toString();
     return new Set(out.split('\0').filter(Boolean));
