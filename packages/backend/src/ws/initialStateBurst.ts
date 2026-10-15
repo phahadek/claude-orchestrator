@@ -10,6 +10,7 @@ import {
 } from '../db/queries';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
 import { eventKind } from '../session/eventKind';
+import { isGateVerifySession } from '../session/sessionPredicates';
 
 interface BootTracker {
   getSnapshot(): ServerMessage[] | null;
@@ -71,6 +72,7 @@ export function sendInitialStateBurst(
       effort: s.effort ?? null,
       ...(s.pr_url != null && { prUrl: s.pr_url }),
       ...(s.task_id != null && { taskId: s.task_id }),
+      ...(isGateVerifySession(s.task_id) && { isGateVerify: true }),
     });
     send({
       type: 'session_status',

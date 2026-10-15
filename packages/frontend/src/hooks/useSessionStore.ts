@@ -97,6 +97,8 @@ export interface SessionState {
    * CLI --resume spawn. Transient and self-clearing; never a fault signal.
    */
   feedbackPending?: boolean;
+  /** True for gate-verify sessions; their completion raises no toast/OS notification. */
+  isGateVerify?: boolean;
 }
 
 export interface IncompleteReview {
@@ -291,6 +293,7 @@ export function useSessionStore() {
             model: msg.model ?? null,
             effort: msg.effort ?? null,
             prUrl: msg.prUrl,
+            ...(msg.isGateVerify && { isGateVerify: true }),
           });
           break;
         }

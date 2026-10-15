@@ -8,6 +8,19 @@
   z-index: 1000;
   max-width: 360px;
   width: 100%;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+}
+
+@media (max-width: 420px) {
+  .container {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    width: auto;
+    max-width: none;
+    max-height: calc(100vh - 24px);
+  }
 }
 
 .toast {
