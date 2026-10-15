@@ -111,6 +111,20 @@ describe('useNotifications', () => {
     );
   });
 
+  it('does not fire for a gate-verify session reaching done or error', () => {
+    for (const finalStatus of ['done', 'error']) {
+      NotificationSpy.mockClear();
+      const session = makeSession({ status: 'running', isGateVerify: true });
+      const { rerender } = renderHook(({ s }) => useNotifications(s), {
+        initialProps: { s: [session] },
+      });
+      act(() => {
+        rerender({ s: [{ ...session, status: finalStatus }] });
+      });
+      expect(NotificationSpy).not.toHaveBeenCalled();
+    }
+  });
+
   it('fires permission notification when pendingPermission appears', () => {
     const session = makeSession({ status: 'running' });
     const { rerender } = renderHook(({ s }) => useNotifications(s), {

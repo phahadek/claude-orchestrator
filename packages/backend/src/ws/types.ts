@@ -46,6 +46,8 @@ interface SessionState {
   prUrl?: string;
   /** Notion task ID this session belongs to — enables targeted in-place task updates. */
   taskId?: string;
+  /** True for gate-verify sessions (task_id 'gate-item:*'); absent means false. */
+  isGateVerify?: boolean;
 }
 
 /** A single plan-usage window (5-hour session or 7-day/weekly), as rendered by a usage bar. */

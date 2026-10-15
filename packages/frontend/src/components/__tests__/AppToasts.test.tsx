@@ -186,3 +186,68 @@ describe('App — in-app toast suppression for replayed sessions', () => {
     });
   });
 });
+
+function doneSession(id: string, extra: Record<string, unknown> = {}) {
+  return {
+    sessionId: id,
+    taskName: `Task ${id}`,
+    notionTaskUrl: '',
+    status: 'done',
+    events: [],
+    archived: false,
+    lastStatusReplay: false,
+    ...extra,
+  };
+}
+
+describe('App — gate-verify suppression and toast cap', () => {
+  it('shows no toast for gate-verify done or error sessions', async () => {
+    vi.mocked(useSessionStore).mockReturnValue(
+      baseStoreReturn([
+        doneSession('gv-1', { isGateVerify: true }),
+        doneSession('gv-2', { isGateVerify: true, status: 'error' }),
+      ]) as ReturnType<typeof useSessionStore>,
+    );
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByTestId('task-list')).toBeDefined();
+    });
+    expect(screen.queryAllByRole('alert')).toHaveLength(0);
+  });
+
+  it('caps completions at 3 rows with a +N summary', async () => {
+    const ids = ['a', 'b', 'c', 'd', 'e'];
+    vi.mocked(useSessionStore).mockReturnValue(
+      baseStoreReturn(ids.map((i) => doneSession(i))) as ReturnType<
+        typeof useSessionStore
+      >,
+    );
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.queryAllByRole('alert')).toHaveLength(3);
+    });
+    expect(screen.getByText('+3 more sessions finished')).toBeDefined();
+  });
+
+  it('keeps a non-completion toast as its own row when the cap is reached', async () => {
+    const store = baseStoreReturn(
+      ['a', 'b', 'c', 'd'].map((i) => doneSession(i)),
+    );
+    Object.assign(store, {
+      lastReviewEscalation: {
+        prNumber: 7,
+        repo: 'r',
+        message: 'look at this',
+        receivedAt: 1,
+      },
+    });
+    vi.mocked(useSessionStore).mockReturnValue(
+      store as ReturnType<typeof useSessionStore>,
+    );
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByText(/PR #7 needs your attention/)).toBeDefined();
+    });
+    expect(screen.getByText(/more sessions finished/)).toBeDefined();
+  });
+});

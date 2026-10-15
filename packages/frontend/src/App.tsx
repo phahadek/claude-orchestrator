@@ -94,7 +94,10 @@ const ACTIVE_PROJECT_KEY = 'activeProjectId';
 const ACTIVE_MILESTONE_KEY_PREFIX = 'activeMilestone_';
 const NON_MILESTONE_BOARD_ID = '__non_milestone__';
 
-const TERMINAL_STATUSES = new Set(['done', 'error', 'killed']);
+const MAX_VISIBLE_TOASTS = 3;
+const SUMMARY_TOAST_ID = 'completion-summary';
+
+const TERMINAL_STATUSES =new Set(['done', 'error', 'killed']);
 
 const loopbackErrorStyles: Record<string, React.CSSProperties> = {
   overlay: {
@@ -261,6 +264,7 @@ export default function App() {
   const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
   const prevConnectionState = useRef<ConnectionState>('disconnected');
 
+  const summaryTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const dismissNotification = useCallback((id: string) => {
     setNotifications((prev) => prev.filter((n) => n.id !== id));
   }, []);
@@ -852,18 +856,51 @@ export default function App() {
         !notifiedRef.current.has(session.sessionId)
       ) {
         notifiedRef.current.add(session.sessionId);
-        if (session.lastStatusReplay) continue;
+        if (session.lastStatusReplay || session.isGateVerify) continue;
         const notifId = `${session.sessionId}-notif`;
-        setNotifications((prev) => [
-          ...prev,
-          {
+        setNotifications((prev) => {
+          const item: NotificationItem = {
             id: notifId,
             taskName: session.taskName,
             status: session.status as 'done' | 'error',
             prUrl: session.prUrl,
-          },
-        ]);
+            completion: true,
+          };
+          if (prev.length < MAX_VISIBLE_TOASTS) return [...prev, item];
+          const summaryIdx = prev.findIndex((n) => n.id === SUMMARY_TOAST_ID);
+          if (summaryIdx >= 0) {
+            return prev.map((n, i) =>
+              i === summaryIdx
+                ? {
+                    ...n,
+                    overflowCount: (n.overflowCount ?? 0) + 1,
+                    message: `+${(n.overflowCount ?? 0) + 1} more sessions finished`,
+                  }
+                : n,
+            );
+          }
+          let foldIdx = -1;
+          for (let i = prev.length - 1; i >= 0; i--) {
+            if (prev[i].completion) {
+              foldIdx = i;
+              break;
+            }
+          }
+          const summary: NotificationItem = {
+            id: SUMMARY_TOAST_ID,
+            status: 'done',
+            overflowCount: foldIdx >= 0 ? 2 : 1,
+            message: `+${foldIdx >= 0 ? 2 : 1} more sessions finished`,
+          };
+          if (foldIdx < 0) return [...prev, summary];
+          return prev.map((n, i) => (i === foldIdx ? summary : n));
+        });
         setTimeout(() => dismissNotification(notifId), 10000);
+        clearTimeout(summaryTimerRef.current);
+        summaryTimerRef.current = setTimeout(
+          () => dismissNotification(SUMMARY_TOAST_ID),
+          10000,
+        );
       }
     }
   }, [sessions, dismissNotification]);

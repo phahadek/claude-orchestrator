@@ -2826,6 +2826,7 @@ export class SessionManager extends EventEmitter {
         totalOutputTokens: 0,
         grantedCapabilities: getGrantedCapabilities(sessionId),
         ...(sessionTaskId && { taskId: sessionTaskId }),
+        ...(isGateVerifySession(sessionTaskId) && { isGateVerify: true }),
       } satisfies ServerMessage);
 
       this.wireSession(sessionId, session, projectDir, worktreePath);

@@ -84,6 +84,22 @@ describe('sendInitialStateBurst', () => {
     }
   });
 
+  it('sets isGateVerify only for gate-item: sessions', () => {
+    vi.mocked(queries.getActiveSessions).mockReturnValue([
+      makeSession('gv', 'done', { task_id: 'gate-item:abc' }),
+      makeSession('std', 'done', { task_id: 'task-1' }),
+    ]);
+
+    const sent: ServerMessage[] = [];
+    sendInitialStateBurst((msg) => sent.push(msg));
+
+    const started = sent.filter((m) => m.type === 'session_started') as Array<
+      Extract<ServerMessage, { type: 'session_started' }>
+    >;
+    expect(started.find((m) => m.sessionId === 'gv')?.isGateVerify).toBe(true);
+    expect(started.find((m) => m.sessionId === 'std')?.isGateVerify).toBeFalsy();
+  });
+
   it('also tags session_status for non-terminal sessions', () => {
     const sessions = [
       makeSession('a', 'running'),
