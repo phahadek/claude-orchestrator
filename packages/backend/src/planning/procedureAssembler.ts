@@ -57,7 +57,10 @@ import { orchestratorMcpToolName } from '../mcp/toolNaming';
 import { logger } from '../logger';
 import { recordEvent } from '../audit/AuditLog';
 import { resolveConfigDir } from '../groom/groomLoad';
-import { loadOrchestratorConfig } from '../session/orchestrator-config';
+import {
+  loadOrchestratorConfig,
+  resolvePreGrantCapabilities,
+} from '../session/orchestrator-config';
 import type { GroomLoadResult } from '../groom/groomLoad';
 import type { TaskRegions } from '../groom/codeWorklist';
 import type { TaskDependencyCandidates } from '../orchestration/milestoneDependencyGraph';
@@ -513,17 +516,53 @@ export function renderAdHocReadCapability(projectId: string): string[] {
   ];
 }
 
-export function renderOpsCapabilities(projectId: string): string[] {
+/**
+ * The capabilities `SessionManager.start` will seed for this ops session —
+ * resolved with the same resolver and inputs as the seed, since prompt
+ * assembly runs before the seed writes the DB.
+ */
+function resolveOpsPreGrants(
+  projectId: string,
+  taskId: string | null | undefined,
+): string[] {
+  try {
+    const project = getProjectById(projectId);
+    if (!project?.projectDir) return [];
+    return resolvePreGrantCapabilities(
+      loadOrchestratorConfig(project.projectDir),
+      'ops',
+      taskId,
+    );
+  } catch {
+    return [];
+  }
+}
+
+export function renderOpsCapabilities(
+  projectId: string,
+  taskId?: string | null,
+): string[] {
+  const adHocRead = renderAdHocReadCapability(projectId);
+  const preGrants = resolveOpsPreGrants(projectId, taskId);
   return [
     '## Capabilities',
     '',
-    'This session starts with a fixed base tool set and nothing more: read-only ' +
+    'This session starts with a fixed base tool set: read-only ' +
       'Bash (ls, cat, grep, find, git log/diff/show/status/blame/ls-files/rev-parse, ' +
       "etc.), read-only Notion MCP tools, and this project's audited live-data read " +
-      'surface (analyst/alarm/read-only-DB MCP tools, where configured). No write, no ' +
+      'surface (analyst/alarm/read-only-DB MCP tools, where configured)' +
+      (preGrants.length > 0 ? ', plus the grants listed below' : '') +
+      '. No write, no ' +
       'Write/Edit tool, and no prod-mutating command is granted by default — do not ' +
       'probe for one.',
     '',
+    ...(preGrants.length > 0
+      ? [
+          'Already granted to this session — use directly, do not request:',
+          ...preGrants.map((c) => `- ${c}`),
+          '',
+        ]
+      : []),
     'DO stage a `session.requestCapability` intent naming the exact capability ' +
       '(one Bash command prefix or one named MCP write verb — never a category) the ' +
       'moment the task genuinely needs a write or a prod-mutating command this ' +
@@ -566,7 +605,7 @@ export function renderOpsCapabilities(projectId: string): string[] {
       '`{"projectId":"<project-id>"}` (optionally narrowed by `taskId` / `eventType` / ' +
       "`since` / `until`) to read this project's audit_log rows.",
     '',
-    ...renderAdHocReadCapability(projectId),
+    ...adHocRead,
     '',
     'DO NOT request the resolved / ✅ Done / task-intent-apply transition, or the ' +
       'Write/Edit tools, as a capability — both are never grantable this way, no ' +
@@ -867,6 +906,7 @@ function renderSkeleton(
   projectId: string,
   checkoutDir: string | null,
   docsTargetSurface?: string,
+  taskId?: string,
 ): string {
   const label = SKILL_LABELS[workflow];
   const kinds = PLANNING_INTENT_KINDS[workflow];
@@ -916,7 +956,7 @@ function renderSkeleton(
     '',
     ...(checkoutDir ? [renderCheckoutPathStatement(checkoutDir), ''] : []),
     ...renderProjectRecordAccess(workflow, projectId),
-    ...(workflow === 'ops' ? renderOpsCapabilities(projectId) : []),
+    ...(workflow === 'ops' ? renderOpsCapabilities(projectId, taskId) : []),
     '## Transport',
     '',
     'Do not call the task backend, Notion, or any raw HTTP client directly. Every ' +
@@ -1632,6 +1672,7 @@ export function assemblePlanningProcedure(
       projectId,
       checkoutDir,
       digest.workflow === 'docs' ? digest.data.targetSurface : undefined,
+      digest.data.task.id,
     ),
     renderProcedureCore(digest.workflow),
     renderDigest(digest),
