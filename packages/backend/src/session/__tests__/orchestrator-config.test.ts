@@ -20,6 +20,8 @@ import {
   parsePathReadCapability,
   isSanctionedAutoApproveCapability,
   bashCapabilityConfersFileMutation,
+  bashCapabilityConfersPrivilegeEscalation,
+  bashCapabilityConfersNetworkMutation,
   isDeclaredWriteAutoApprove,
   resolvePreGrantSessionKind,
   resolvePreGrantCapabilities,
@@ -970,6 +972,66 @@ describe('bashCapabilityConfersFileMutation', () => {
       bashCapabilityConfersFileMutation('mcp__github__merge_pull_request'),
     ).toBe(false);
     expect(bashCapabilityConfersFileMutation('Edit')).toBe(false);
+  });
+});
+
+describe('bashCapabilityConfersPrivilegeEscalation / NetworkMutation', () => {
+  const sudoCat = 'Bash(sudo -u postgres cat /etc/pgbouncer/pgbouncer.ini)';
+  const curlPost =
+    'Bash(curl -sS -X POST http://127.0.0.1:8000/ops/commands:*)';
+  const curlGet = 'Bash(curl -sS http://127.0.0.1:8000/health)';
+
+  it('flags sudo as privilege escalation and not network mutation', () => {
+    expect(bashCapabilityConfersPrivilegeEscalation(sudoCat)).toBe(true);
+    expect(bashCapabilityConfersNetworkMutation(sudoCat)).toBe(false);
+    expect(bashCapabilityConfersPrivilegeEscalation('Bash(su:*)')).toBe(true);
+  });
+
+  it('flags a mutating curl as network mutation, not privilege escalation', () => {
+    expect(bashCapabilityConfersNetworkMutation(curlPost)).toBe(true);
+    expect(bashCapabilityConfersPrivilegeEscalation(curlPost)).toBe(false);
+  });
+
+  it.each([
+    'Bash(curl -d @body.json http://x)',
+    'Bash(curl --data-raw {} http://x)',
+    'Bash(curl -XDELETE http://x)',
+    'Bash(wget --method=PUT http://x)',
+    'Bash(wget --post-data=a=b http://x)',
+    'Bash(http POST http://x)',
+    'Bash(psql -h db.example.com -c select1)',
+    'Bash(pg_dump --port=5433 mydb)',
+  ])('flags %s as network mutation', (capability) => {
+    expect(bashCapabilityConfersNetworkMutation(capability)).toBe(true);
+  });
+
+  it('does not flag a body-less GET', () => {
+    expect(bashCapabilityConfersNetworkMutation(curlGet)).toBe(false);
+    expect(bashCapabilityConfersPrivilegeEscalation(curlGet)).toBe(false);
+  });
+
+  it.each(['Bash(pm-ro-query:*)', 'Bash(pm-host:*)', 'Bash(psql:*)'])(
+    'flags %s by neither classifier',
+    (capability) => {
+      expect(bashCapabilityConfersPrivilegeEscalation(capability)).toBe(false);
+      expect(bashCapabilityConfersNetworkMutation(capability)).toBe(false);
+    },
+  );
+
+  it('does not classify non-Bash capabilities', () => {
+    expect(bashCapabilityConfersPrivilegeEscalation('Edit')).toBe(false);
+    expect(bashCapabilityConfersNetworkMutation('mcp__x__y')).toBe(false);
+  });
+
+  it('leaves isGrantable unaffected by the advisories', () => {
+    for (const capability of [sudoCat, curlPost, curlGet]) {
+      const before = isGrantable(capability);
+      bashCapabilityConfersPrivilegeEscalation(capability);
+      bashCapabilityConfersNetworkMutation(capability);
+      expect(isGrantable(capability)).toBe(before);
+    }
+    expect(isGrantable('Bash(pm-ro-query:*)')).toBe(true);
+    expect(isGrantable('Bash(pm-host:*)')).toBe(true);
   });
 });
 

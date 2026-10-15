@@ -129,6 +129,10 @@ export interface StagedIntent {
    * every other kind and for a non-file-mutating capability.
    */
   confersFileMutation?: boolean;
+  /** `session.requestCapability` only: advisory — the Bash command escalates privilege (sudo-class). */
+  confersPrivilegeEscalation?: boolean;
+  /** `session.requestCapability` only: advisory — the Bash command mutates something over the network. */
+  confersNetworkMutation?: boolean;
   /**
    * Mirrors the backend's group-commit non-committability predicate
    * (commitGroupIntents' 409 guard): true when this intent's group has any
