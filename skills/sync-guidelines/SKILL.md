@@ -62,6 +62,12 @@ Each item comes back with a status:
 local content, and that is expected. The delta is *guidance* ("here is what changed upstream");
 you apply the **intent** to the live copy by hand.
 
+The plan also vendors `hooks/inject-code-session-rules.mjs` and `code-session-rules.md` into the
+config tree. After they land, check `~/.claude/settings.json` `hooks.SessionStart`: it must register
+both `load-procedures.mjs` and `inject-code-session-rules.mjs` (absolute paths under the config
+tree). If the second is missing, tell the human and offer the entry — registration is a manual,
+confirm-gated edit; without it worktree sessions never receive the code-session rules.
+
 ## Step 2 — Integrate, per item
 
 For each actionable item:

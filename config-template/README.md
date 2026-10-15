@@ -11,6 +11,8 @@ reconciles them into the live tree.
 | File                        | Live copy                            | Behaviour                                                                                                          |
 | ---------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
 | `hooks/load-procedures.mjs` | `<config>/hooks/load-procedures.mjs` | Pure mechanism — no local content expected, but still reconciled (never force-overwritten) in case a host hotfixed it. |
+| `hooks/inject-code-session-rules.mjs` | `<config>/hooks/inject-code-session-rules.mjs` | SessionStart hook for worktree sessions; reads `<config>/code-session-rules.md`. Must be registered in `~/.claude/settings.json`. |
+| `code-session-rules.md`     | `<config>/code-session-rules.md`     | Universal code-session rules injected by the hook above; merged, never overwritten. |
 | `task-writing.md`          | `<config>/task-writing.md`           | Portable **upstream** guideline source. The live copy carries project examples; updates are **merged** in, never overwritten. |
 | `procedures.md`             | `<config>/procedures.md`             | Portable **upstream** guideline source. The live copy carries the filled **Project index**; updates are **merged** in. |
 

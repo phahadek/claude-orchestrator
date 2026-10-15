@@ -47,7 +47,9 @@
  *                     restating it; tracked as its own kind so it deploys and baselines like
  *                     everything else without skill-shaped loaders mistaking it for one)
  *   - route clients:  `script:<name>.mjs`                              → ~/.claude/scripts/<name>
- *   - hook mechanism: `hook:load-procedures.mjs`                       → <config-tree>/hooks/
+ *   - hook mechanism: `hook:load-procedures.mjs`,
+ *                     `hook:inject-code-session-rules.mjs`             → <config-tree>/hooks/
+ *   - code rules doc: `code-session-rules.md` (read by the inject hook) → central config tree
  *
  * The baseline lives at `<config-tree>/guidelines-baseline.json`:
  *   { "task-writing.md": "<repo-sha>", "skill:ops": "<repo-sha>", "script:ops-client.mjs": "<repo-sha>", ... }
@@ -212,6 +214,29 @@ function buildItems() {
     repoRelPath: join('config-template', 'hooks', 'load-procedures.mjs'),
     upstreamPath: join(repo, 'config-template', 'hooks', 'load-procedures.mjs'),
     livePath: join(configDir, 'hooks', 'load-procedures.mjs'),
+  });
+  items.push({
+    id: 'hook:inject-code-session-rules.mjs',
+    kind: 'hook',
+    repoRelPath: join(
+      'config-template',
+      'hooks',
+      'inject-code-session-rules.mjs',
+    ),
+    upstreamPath: join(
+      repo,
+      'config-template',
+      'hooks',
+      'inject-code-session-rules.mjs',
+    ),
+    livePath: join(configDir, 'hooks', 'inject-code-session-rules.mjs'),
+  });
+  items.push({
+    id: 'code-session-rules.md',
+    kind: 'doc',
+    repoRelPath: join('config-template', 'code-session-rules.md'),
+    upstreamPath: join(repo, 'config-template', 'code-session-rules.md'),
+    livePath: join(configDir, 'code-session-rules.md'),
   });
   return items;
 }
