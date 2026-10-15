@@ -119,8 +119,10 @@ describe('Notion read proxy', () => {
     ['POST', '/api/notion-proxy/v1/blocks/abc/children'],
   ])('rejects %s %s', async (method, path) => {
     const token = mintStageCredential('s1');
-    const res = await supertest(buildApp())
-      [method.toLowerCase() as 'get'](path)
+    const agent = supertest(buildApp());
+    const start = agent[method.toLowerCase() as 'get'];
+    const res = await start
+      .call(agent, path)
       .set('Authorization', `Bearer ${token}`)
       .send({});
     expect(res.status).toBe(403);

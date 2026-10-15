@@ -70,7 +70,6 @@ import {
 } from './DockerSessionRunner';
 import { getCorporateMode } from '../config/corporateMode';
 import {
-  config,
   getAllProjects,
   getProjectById,
   normalizePath,

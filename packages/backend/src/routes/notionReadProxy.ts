@@ -17,29 +17,28 @@ const DEFAULT_NOTION_VERSION = '2025-09-03';
 // the session gets the upstream 429 rather than a transport timeout.
 const NOTION_PROXY_TOTAL_BUDGET_MS = 45_000;
 
-const SEG = '[^/]+';
 // The read surface behind config.ts#NOTION_READ_MCP_TOOLS (paths carry the /v1
 // prefix of the notion-mcp-server OpenAPI spec).
-const READ_GET_PATHS = [
-  `/v1/users`,
-  `/v1/users/me`,
-  `/v1/users/${SEG}`,
-  `/v1/search`,
-  `/v1/comments`,
-  `/v1/blocks/${SEG}`,
-  `/v1/blocks/${SEG}/children`,
-  `/v1/pages/${SEG}`,
-  `/v1/pages/${SEG}/markdown`,
-  `/v1/pages/${SEG}/properties/${SEG}`,
-  `/v1/data_sources/${SEG}`,
-  `/v1/data_sources/${SEG}/templates`,
-  `/v1/databases/${SEG}`,
-].map((p) => new RegExp(`^${p}$`));
-const READ_POST_PATHS = [
-  `/v1/search`,
-  `/v1/data_sources/${SEG}/query`,
-  `/v1/databases/${SEG}/query`,
-].map((p) => new RegExp(`^${p}$`));
+const READ_GET_PATHS: RegExp[] = [
+  /^\/v1\/users$/,
+  /^\/v1\/users\/me$/,
+  /^\/v1\/users\/[^/]+$/,
+  /^\/v1\/search$/,
+  /^\/v1\/comments$/,
+  /^\/v1\/blocks\/[^/]+$/,
+  /^\/v1\/blocks\/[^/]+\/children$/,
+  /^\/v1\/pages\/[^/]+$/,
+  /^\/v1\/pages\/[^/]+\/markdown$/,
+  /^\/v1\/pages\/[^/]+\/properties\/[^/]+$/,
+  /^\/v1\/data_sources\/[^/]+$/,
+  /^\/v1\/data_sources\/[^/]+\/templates$/,
+  /^\/v1\/databases\/[^/]+$/,
+];
+const READ_POST_PATHS: RegExp[] = [
+  /^\/v1\/search$/,
+  /^\/v1\/data_sources\/[^/]+\/query$/,
+  /^\/v1\/databases\/[^/]+\/query$/,
+];
 
 function isNotionReadAllowed(method: string, path: string): boolean {
   const patterns =
