@@ -487,6 +487,17 @@ export function writeSystemPromptFile(
  */
 export const PROACTIVE_ESCALATION_HWM = 0.9;
 
+/** A fresh instance forgets overflow escalation; re-apply it when the row says the session is already on the large model. */
+function restoreEscalationIfLarge(
+  session: AgentSession,
+  row: { model?: string | null },
+): void {
+  const largeModel = runtimeSettings.large_task_model;
+  if (largeModel && row.model === largeModel) {
+    session.restoreEscalation(largeModel);
+  }
+}
+
 /**
  * Returns true when the session's persisted context occupancy is at/over the
  * proactive-escalation high-water mark AND escalation is possible (large_task_model
@@ -5931,6 +5942,7 @@ export class SessionManager extends EventEmitter {
         markInboxItemsDelivered(itemIds);
         return sessionId;
       }
+      restoreEscalationIfLarge(session, row);
 
       // send()'s boolean return is the real confirmation signal — see the
       // matching comment on the worktree-recreation respawn path below.
@@ -6320,6 +6332,7 @@ export class SessionManager extends EventEmitter {
       markInboxItemsDelivered(itemIds);
       return sessionId;
     }
+    restoreEscalationIfLarge(session, row);
 
     // Register the first-event listener BEFORE wireSession starts run() to
     // avoid a race where the first message arrives before the listener is set.
