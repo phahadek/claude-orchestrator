@@ -68,6 +68,32 @@ describe('unattributed digest rendering', () => {
     expect(d.split('\n').some((l) => l.includes('::t1`'))).toBe(false);
   });
 
+  it('groups dotted pytest ids by module above the threshold', () => {
+    const tests = Array.from({ length: 50 }, (_, i) => ({
+      test_id: `tests.daemons.analysis.test_${i < 30 ? 'a' : 'b'}.TestX.test_y${i}`,
+      name: `n${i}`,
+      failure_message: 'boom',
+    }));
+    const d = buildTestResultDigestFromOutcomes(outcomes(tests), {
+      unattributed: { view: view(tests), knownCount: 0 },
+    })!;
+    const lines = d.split('\n').filter((l) => l.startsWith('- `'));
+    expect(lines).toHaveLength(2);
+    expect(d).toContain('`tests.daemons.analysis.test_a` — 30 failing');
+    expect(d).toContain('`tests.daemons.analysis.test_b` — 20 failing');
+  });
+
+  it('keeps the whole id for dotted ids without a test_ segment', () => {
+    const tests = Array.from({ length: 25 }, (_, i) => ({
+      test_id: `pkg.mod.Case${i}`,
+      name: `n${i}`,
+    }));
+    const d = buildTestResultDigestFromOutcomes(outcomes(tests), {
+      unattributed: { view: view(tests), knownCount: 0 },
+    })!;
+    expect(d).toContain('`pkg.mod.Case0` — 1 failing');
+  });
+
   it('collapses already-attributed tests into +N known failures in both modes', () => {
     for (const n of [3, 25]) {
       const tests = failing(n);

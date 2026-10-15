@@ -42,7 +42,10 @@ function testIdModule(testId: string): string {
   const sep = testId.indexOf('::');
   if (sep > 0) return testId.slice(0, sep);
   const slash = testId.lastIndexOf('/');
-  return slash > 0 ? testId.slice(0, slash) : testId;
+  if (slash > 0) return testId.slice(0, slash);
+  const segments = testId.split('.');
+  const idx = segments.findIndex((s) => /^test_/.test(s));
+  return idx >= 0 ? segments.slice(0, idx + 1).join('.') : testId;
 }
 
 /**
