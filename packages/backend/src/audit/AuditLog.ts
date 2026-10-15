@@ -146,6 +146,32 @@ export interface AuditLogQueryFilters {
   since?: number;
   /** Inclusive upper bound on `ts` (epoch ms). */
   until?: number;
+  /** Substring match on the raw `payload` JSON; requires `since` or `until`. */
+  pattern?: string;
+}
+
+class UnboundedAuditPatternQueryError extends Error {
+  constructor() {
+    super(
+      'auditLog.query: `pattern` requires a `since` or `until` bound — ' +
+        'an unbounded substring scan over every audit_log row for the ' +
+        'project is not supported',
+    );
+    this.name = 'UnboundedAuditPatternQueryError';
+  }
+}
+
+interface AuditLogEventTypeCount {
+  eventType: string;
+  count: number;
+  firstTs: number;
+  lastTs: number;
+}
+
+interface AuditLogEventTypeCountResult {
+  groups: AuditLogEventTypeCount[];
+  unattributedCount: number;
+  matchedCount: number;
 }
 
 /**
@@ -177,8 +203,19 @@ function buildFilterClauses(filters: AuditLogQueryFilters): {
   clauses: string[];
   params: (string | number)[];
 } {
+  if (
+    filters.pattern !== undefined &&
+    filters.since === undefined &&
+    filters.until === undefined
+  ) {
+    throw new UnboundedAuditPatternQueryError();
+  }
   const clauses: string[] = [];
   const params: (string | number)[] = [];
+  if (filters.pattern !== undefined) {
+    clauses.push(`payload LIKE '%' || ? || '%'`);
+    params.push(filters.pattern);
+  }
   if (filters.taskId !== undefined) {
     clauses.push('task_id = ?');
     params.push(filters.taskId);
@@ -276,6 +313,47 @@ export function queryAuditLogByProject(
   }
 
   return { entries, unattributedCount, eventTypeRecognized, matchedCount };
+}
+
+/**
+ * Count mode behind `auditLog.query`'s `groupBy: 'eventType'`: one
+ * `{eventType, count, firstTs, lastTs}` per event type among the
+ * project-scoped rows matching the filters. Aggregates, so it is not capped.
+ */
+export function queryAuditLogEventTypeCounts(
+  projectId: string,
+  filters: AuditLogQueryFilters = {},
+): AuditLogEventTypeCountResult {
+  const { clauses, params } = buildFilterClauses(filters);
+  const scopedClauses = ['project_id = ?', ...clauses];
+  const rows = db
+    .prepare<
+      (string | number)[],
+      { event_type: string; cnt: number; first_ts: number; last_ts: number }
+    >(
+      `SELECT event_type, COUNT(*) AS cnt, MIN(ts) AS first_ts, MAX(ts) AS last_ts
+       FROM audit_log WHERE ${scopedClauses.join(' AND ')}
+       GROUP BY event_type ORDER BY cnt DESC, event_type ASC`,
+    )
+    .all(projectId, ...params);
+  const groups = rows.map((r) => ({
+    eventType: r.event_type,
+    count: r.cnt,
+    firstTs: r.first_ts,
+    lastTs: r.last_ts,
+  }));
+  const matchedCount = groups.reduce((n, g) => n + g.count, 0);
+  const unattributedRow = db
+    .prepare<
+      (string | number)[],
+      { cnt: number }
+    >(`SELECT COUNT(*) AS cnt FROM audit_log WHERE ${['project_id IS NULL', ...clauses].join(' AND ')}`)
+    .get(...params);
+  return {
+    groups,
+    unattributedCount: unattributedRow?.cnt ?? 0,
+    matchedCount,
+  };
 }
 
 /**
