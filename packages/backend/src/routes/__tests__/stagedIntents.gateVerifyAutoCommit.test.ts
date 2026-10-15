@@ -397,6 +397,100 @@ describe('gate.verify auto-commit — staging-time attempt', () => {
       expect(eventsBefore).toBeGreaterThan(0);
     });
 
+    it('rejecting the reclassify intent leaves the classification unchanged', async () => {
+      const { item, staged, sm, planningOrchestrator } =
+        await stageReclassifyNeedsSetup(true);
+      await autoCommitGateVerifyIntent(
+        staged as any,
+        sm as any,
+        planningOrchestrator,
+      );
+      const rc = db
+        .prepare(
+          `SELECT id FROM staged_intent WHERE json_extract(payload, '$.origin') = 'reclassify'`,
+        )
+        .get() as { id: string };
+      const app = express();
+      app.use(express.json());
+      app.use('/api', createStagedIntentsRouter(planningOrchestrator, sm as any));
+      const res = await supertest(app)
+        .post(`/api/staged-intents/${rc.id}/reject`)
+        .send({ reason: 'keep as is' });
+      expect(res.status).toBe(200);
+      const cls = db
+        .prepare('SELECT classification, latest_disposition FROM gate_item WHERE id = ?')
+        .get(item.id) as { classification: string; latest_disposition: string };
+      expect(cls.classification).toBe('Read-Only');
+      expect(cls.latest_disposition).toBe('needs-setup');
+    });
+
+    it('does not auto-commit a reclassify carried with a non-needs-setup disposition', async () => {
+      const item = makeRunnableGateItem();
+      seedVerifySession('verify-session-rc-pass', item.id);
+      upsertGateVerifyAutoCommitPolicy('M12', 'pass', true, Date.now());
+      const sm = makeSessionManager();
+      const planningOrchestrator = new PlanningOrchestrator(sm as any);
+      createStagedIntentsRouter(planningOrchestrator, sm as any);
+      const staged = stageIntent(
+        'gate.verify',
+        {
+          gateItemId: item.id,
+          disposition: 'pass',
+          reclassify: { to: 'Human-Observation', reason: 'x' },
+        },
+        'proj-auto-commit',
+        null,
+        'verify-session-rc-pass',
+        `Gate item ${item.id}: reported pass`,
+        null,
+        null,
+        item.milestone,
+        null,
+      );
+      expect(
+        await autoCommitGateVerifyIntent(staged as any, sm as any, planningOrchestrator),
+      ).toBe(false);
+      const row = db
+        .prepare('SELECT state FROM staged_intent WHERE id = ?')
+        .get(staged.id) as { state: string };
+      expect(row.state).toBe('staged');
+    });
+
+    it('arming needs-setup sweeps a staged reclassify-carrying backlog and ignores reclassify-origin intents', async () => {
+      const { item, staged } = await stageReclassifyNeedsSetup(false);
+      expect(
+        (
+          db
+            .prepare('SELECT state FROM staged_intent WHERE id = ?')
+            .get(staged.id) as { state: string }
+        ).state,
+      ).toBe('staged');
+
+      upsertGateVerifyAutoCommitPolicy('M12', 'needs-setup', true, Date.now());
+      const swept = await sweepGateVerifyAutoCommitBacklogForMilestone(
+        'M12',
+        'needs-setup',
+      );
+      expect(swept.committedIds).toEqual([staged.id]);
+
+      const rcRows = db
+        .prepare(
+          `SELECT id, state FROM staged_intent WHERE json_extract(payload, '$.origin') = 'reclassify'`,
+        )
+        .all() as { id: string; state: string }[];
+      expect(rcRows).toHaveLength(1);
+      expect(rcRows[0].state).toBe('staged');
+      const again = await sweepGateVerifyAutoCommitBacklogForMilestone(
+        'M12',
+        'needs-setup',
+      );
+      expect(again.committedIds).toEqual([]);
+      const cls = db
+        .prepare('SELECT classification FROM gate_item WHERE id = ?')
+        .get(item.id) as { classification: string };
+      expect(cls.classification).toBe('Read-Only');
+    });
+
     it('stays staged when needs-setup is disarmed', async () => {
       const { staged, sm, planningOrchestrator } =
         await stageReclassifyNeedsSetup(false);
