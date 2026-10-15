@@ -312,89 +312,6 @@ describe('gate.verify — requires a full gate item id', () => {
 });
 
 describe('gate.verify — fail disposition files a follow-up task via resolveMilestoneSourceId', () => {
-  it('DIAG-1 stages a fail with a structured proposedFix and returns 201', async () => {
-    const item = makeGateItem({ milestone: 'M13' });
-    const app = makeApp();
-    const agent = supertest(app);
-
-    const staged = await agent.post('/api/staged-intents').send({
-      kind: 'gate.verify',
-      projectId: 'proj-a',
-      payload: {
-        gateItemId: item.id,
-        disposition: 'fail',
-        evidence: { basis: 'operational', note: 'the env var is missing' },
-        proposedFix: STRUCTURED_FIX,
-      },
-    });
-    expect(staged.status).toBe(201);
-  });
-
-  it('DIAG-2 approve returns 200', async () => {
-    const item = makeGateItem({ milestone: 'M13' });
-    const app = makeApp();
-    const agent = supertest(app);
-
-    const staged = await agent.post('/api/staged-intents').send({
-      kind: 'gate.verify',
-      projectId: 'proj-a',
-      payload: {
-        gateItemId: item.id,
-        disposition: 'fail',
-        evidence: { basis: 'operational', note: 'the env var is missing' },
-        proposedFix: STRUCTURED_FIX,
-      },
-    });
-
-    const approved = await agent
-      .post(`/api/staged-intents/${staged.body.id}/approve`)
-      .send({});
-    expect(approved.status).toBe(200);
-  });
-
-  it('DIAG-3 apply returns 200 with no redrivenToSession', async () => {
-    const item = makeGateItem({ milestone: 'M13' });
-    const app = makeApp();
-    const agent = supertest(app);
-
-    const staged = await agent.post('/api/staged-intents').send({
-      kind: 'gate.verify',
-      projectId: 'proj-a',
-      payload: {
-        gateItemId: item.id,
-        disposition: 'fail',
-        evidence: { basis: 'operational', note: 'the env var is missing' },
-        proposedFix: STRUCTURED_FIX,
-      },
-    });
-    await agent.post(`/api/staged-intents/${staged.body.id}/approve`).send({});
-    const applied = await agent
-      .post(`/api/staged-intents/${staged.body.id}/apply`)
-      .send({});
-    expect(applied.status).toBe(200);
-    expect(applied.body.redrivenToSession).toBeUndefined();
-  });
-
-  it('DIAG-4 createTask called once after apply', async () => {
-    const item = makeGateItem({ milestone: 'M13' });
-    const app = makeApp();
-    const agent = supertest(app);
-
-    const staged = await agent.post('/api/staged-intents').send({
-      kind: 'gate.verify',
-      projectId: 'proj-a',
-      payload: {
-        gateItemId: item.id,
-        disposition: 'fail',
-        evidence: { basis: 'operational', note: 'the env var is missing' },
-        proposedFix: STRUCTURED_FIX,
-      },
-    });
-    await agent.post(`/api/staged-intents/${staged.body.id}/approve`).send({});
-    await agent.post(`/api/staged-intents/${staged.body.id}/apply`).send({});
-    expect(createTaskMock).toHaveBeenCalledTimes(1);
-  });
-
   it('applies cleanly and reaches appendGateItemEvent, with no routeApplyTimeFailure pushback (regression for the 2026-08-01 auto-rejections)', async () => {
     const item = makeGateItem({ milestone: 'M13' });
     const app = makeApp();
@@ -505,9 +422,14 @@ describe('gate.verify — stage-time proposedFix validation', () => {
   // A plain checkout directory, not a real git repo — the stage-time check
   // is a filesystem existence check (existsInRepoCheckout in stagedIntents.ts),
   // not a `git ls-files` shell-out, so no `git init`/`git add` is needed to
-  // make `scripts/deploy.sh` resolve as "tracked".
+  // make `scripts/deploy.sh` resolve as "tracked". A bare `.git` marker
+  // directory is still required: isGitCheckoutSync gates the whole check on
+  // a direct `.git` entry so a project whose configured projectDir doesn't
+  // exist (or happens to exist as unrelated bare directory on a long-lived
+  // host) is never mistaken for a real checkout.
   beforeAll(() => {
     repoDir = mkdtempSync(join(tmpdir(), 'gate-verify-repo-'));
+    mkdirSync(join(repoDir, '.git'));
     mkdirSync(join(repoDir, 'scripts'));
     writeFileSync(join(repoDir, 'scripts', 'deploy.sh'), 'echo hi\n');
     ProjectService.create({
@@ -591,6 +513,39 @@ describe('gate.verify — stage-time proposedFix validation', () => {
         existingTaskId: 'notion:aaaa1111bbbb2222cccc3333dddd4444',
       }),
     ).not.toThrow();
+  });
+
+  // Regression: a project whose configured projectDir exists on disk as a
+  // bare directory (no `.git`) — e.g. stray leftover state on a long-lived
+  // host, or simply a directory something else created — must not be
+  // mistaken for a real checkout and have its unrelated contents checked
+  // against cause.file/filesAffected.
+  it('skips the tracked-file check for a projectDir that exists but is not a git checkout', () => {
+    const bareDir = mkdtempSync(join(tmpdir(), 'gate-verify-bare-'));
+    ProjectService.create({
+      id: 'proj-bare-dir',
+      name: 'Project Bare Dir',
+      projectDir: bareDir,
+    });
+    ProjectService.createMilestone({
+      id: 'proj-bare-dir:m1',
+      projectId: 'proj-bare-dir',
+      name: 'M1',
+      canonicalShortId: 'M1',
+      sourceId: 'db00d3a1-aaaa-bbbb-cccc-1234567890ad',
+    });
+    const item = makeGateItem({ project: 'proj-bare-dir', milestone: 'M1' });
+    try {
+      expect(() =>
+        stageIntent(
+          'gate.verify',
+          { gateItemId: item.id, disposition: 'fail', proposedFix: STRUCTURED_FIX },
+          'proj-bare-dir',
+        ),
+      ).not.toThrow();
+    } finally {
+      rmSync(bareDir, { recursive: true, force: true });
+    }
   });
 });
 

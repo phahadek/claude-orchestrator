@@ -2750,9 +2750,21 @@ function existsInRepoCheckout(repoRoot: string, relativePath: string): boolean {
   }
 }
 
-function isDirectorySync(dir: string): boolean {
+/**
+ * Whether `dir` is a real git checkout — a direct `.git` entry (directory
+ * for a normal clone, file for a worktree), not one found by upward
+ * discovery from some ancestor. A project's configured `projectDir` that
+ * doesn't actually exist on this host (common in tests, which register a
+ * project against a path nothing ever creates) must not be mistaken for an
+ * empty-but-real checkout — and a `projectDir` that happens to exist as a
+ * bare directory (e.g. stray leftover state on a long-lived host) must not
+ * be mistaken for a real one either. Both cases skip the tracked-file
+ * check rather than rejecting a path that would be valid in the real repo.
+ */
+function isGitCheckoutSync(dir: string): boolean {
   try {
-    return fs.statSync(dir).isDirectory();
+    fs.statSync(path.join(dir, '.git'));
+    return true;
   } catch {
     return false;
   }
@@ -2768,11 +2780,6 @@ function validateGateVerifyProposedFix(
   gateItemId: string,
   projectId: string,
 ): void {
-  // DIAG: temporarily short-circuited to localize a CI-only failure in the
-  // simplest possible staging test, which I cannot reproduce via direct
-  // execution of this exact compiled code. Runtime-gated (not a literal
-  // `return`) so this doesn't affect type narrowing below.
-  if (process.env.GATE_VERIFY_DIAG_ENABLE_VALIDATION !== 'please') return;
   if ('existingTaskId' in proposedFix) {
     const item = getGateItem(gateItemId);
     if (!item) return;
@@ -2806,7 +2813,7 @@ function validateGateVerifyProposedFix(
   }
 
   const repoRoot = getProjectById(projectId)?.projectDir;
-  if (!repoRoot || !isDirectorySync(repoRoot)) return;
+  if (!repoRoot || !isGitCheckoutSync(repoRoot)) return;
   const offending: string[] = [];
   if (!existsInRepoCheckout(repoRoot, proposedFix.cause.file.trim())) {
     offending.push(proposedFix.cause.file);
