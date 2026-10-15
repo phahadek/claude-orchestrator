@@ -259,8 +259,7 @@ describe('staged-intents-client.mjs reject', () => {
       outcome: 'decline',
       reason: 'not needed',
     });
-  }, // This spawns a real child process; under full-suite parallel load the
-  // default 5000ms budget is sometimes consumed by process-scheduling
+  }, // default 5000ms budget is sometimes consumed by process-scheduling // This spawns a real child process; under full-suite parallel load the
   // contention alone, before the script even opens its socket.
   15000);
 
