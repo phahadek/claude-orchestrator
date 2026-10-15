@@ -23,6 +23,7 @@ vi.mock('../db/queries.js', () =>
     getLatestTestRequestRun: vi.fn().mockReturnValue(undefined),
     markSessionDone: vi.fn(),
     updateSessionStatus: vi.fn(),
+    setSessionTerminalCompletionReason: vi.fn(),
     clearTerminalPRFlags: vi.fn(),
     setPreReviewStage: vi.fn(),
     setConflictNudgeSha: vi.fn(),
@@ -123,6 +124,7 @@ import {
   getLatestTestRequestRun,
   markSessionDone,
   updateSessionStatus,
+  setSessionTerminalCompletionReason,
   setPendingPush,
   setConflictNudgeSha,
   recordMergeCommitForSession,
@@ -656,6 +658,10 @@ describe('PRMergeWatcher — idle→error session transition on PR close', () =>
       'review-session',
       'error',
       expect.any(Number),
+    );
+    expect(vi.mocked(setSessionTerminalCompletionReason)).toHaveBeenCalledWith(
+      'review-session',
+      'pr_closed',
     );
   });
 

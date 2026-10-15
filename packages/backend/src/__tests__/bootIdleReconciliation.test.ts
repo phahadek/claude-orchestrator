@@ -89,6 +89,22 @@ describe('runBootIdleReconciliation', () => {
     runBootIdleReconciliation();
 
     expect(getSession('sess-closed-1')?.status).toBe('error');
+    expect(getSession('sess-closed-1')?.terminal_completion_reason).toBe(
+      'boot_idle_pr_closed',
+    );
+  });
+
+  it('errors the review session with boot_idle_pr_closed when the coding session PR is closed', () => {
+    makeSession('code-closed', 'idle', 'https://github.com/owner/repo/pull/21');
+    makeSession('review-closed', 'idle', null, 'review');
+    makePRRow(21, 'code-closed', 'closed', 'owner/repo', 'review-closed');
+
+    runBootIdleReconciliation();
+
+    expect(getSession('review-closed')?.status).toBe('error');
+    expect(getSession('review-closed')?.terminal_completion_reason).toBe(
+      'boot_idle_pr_closed',
+    );
   });
 
   it('sets a non-empty last_error_detail when idle coding session errors on PR closed', () => {
@@ -218,6 +234,9 @@ describe('runBootIdleReconciliation — pass 2: idle review sessions', () => {
     runBootIdleReconciliation();
 
     expect(getSession('review-sess')?.status).toBe('error');
+    expect(getSession('review-sess')?.terminal_completion_reason).toBe(
+      'boot_idle_orphan_review',
+    );
   });
 
   it('transitions idle review session to error when coding session is killed', () => {

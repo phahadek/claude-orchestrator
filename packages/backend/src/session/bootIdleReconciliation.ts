@@ -7,6 +7,7 @@ import {
   setSessionLastErrorDetail,
   setSessionPauseReason,
   setSessionParkedAt,
+  setSessionTerminalCompletionReason,
   updateSessionStatus,
 } from '../db/queries';
 import { logger } from '../logger';
@@ -48,8 +49,14 @@ import { logger } from '../logger';
  *   review idle + closed PR (no terminal coding) → error
  * Mirrors the coding session's terminal status; defaults to done if absent.
  */
-function _errorSession(sessionId: string, now: number, detail: string): void {
+function _errorSession(
+  sessionId: string,
+  now: number,
+  detail: string,
+  reason: string,
+): void {
   updateSessionStatus(sessionId, 'error', now);
+  setSessionTerminalCompletionReason(sessionId, reason);
   try {
     setSessionLastErrorDetail(sessionId, detail);
   } catch {
@@ -126,7 +133,7 @@ function _runPass1(): void {
       }
     } else {
       const detail = `PR #${row.pr_number} ${row.repo} closed`;
-      _errorSession(row.session_id, now, detail);
+      _errorSession(row.session_id, now, detail, 'boot_idle_pr_closed');
       recordPrAnchoredCompletingSignal(
         row.session_id,
         'pr_closed_without_merge',
@@ -136,7 +143,12 @@ function _runPass1(): void {
         `[BootIdleReconciliation] ${row.session_id.slice(0, 8)} idle→error (${detail})`,
       );
       if (row.review_session_id) {
-        _errorSession(row.review_session_id, now, detail);
+        _errorSession(
+          row.review_session_id,
+          now,
+          detail,
+          'boot_idle_pr_closed',
+        );
         recordPrAnchoredCompletingSignal(
           row.review_session_id,
           'pr_closed_without_merge',
@@ -177,7 +189,7 @@ function _runPass2(): void {
       );
     } else {
       const detail = `review session orphaned — coding=${row.coding_session_status ?? 'none'} pr=${row.pr_state}`;
-      _errorSession(row.session_id, now, detail);
+      _errorSession(row.session_id, now, detail, 'boot_idle_orphan_review');
       recordPrAnchoredCompletingSignal(
         row.session_id,
         'pr_closed_without_merge',
