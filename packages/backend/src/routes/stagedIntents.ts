@@ -2813,17 +2813,30 @@ function validateGateVerifyProposedFix(
   }
 
   const repoRoot = getProjectById(projectId)?.projectDir;
-  if (!repoRoot || !isGitCheckoutSync(repoRoot)) return;
-  const offending: string[] = [];
-  if (!existsInRepoCheckout(repoRoot, proposedFix.cause.file.trim())) {
-    offending.push(proposedFix.cause.file);
-  }
-  for (const entry of proposedFix.filesAffected) {
-    if (NEW_PATH_SUFFIX_RE.test(entry)) continue;
-    const token = extractPathToken(entry);
-    if (!token || !existsInRepoCheckout(repoRoot, token)) {
-      offending.push(entry);
+  if (!repoRoot) return;
+  let offending: string[];
+  try {
+    if (!isGitCheckoutSync(repoRoot)) return;
+    offending = [];
+    if (!existsInRepoCheckout(repoRoot, proposedFix.cause.file.trim())) {
+      offending.push(proposedFix.cause.file);
     }
+    for (const entry of proposedFix.filesAffected) {
+      if (NEW_PATH_SUFFIX_RE.test(entry)) continue;
+      const token = extractPathToken(entry);
+      if (!token || !existsInRepoCheckout(repoRoot, token)) {
+        offending.push(entry);
+      }
+    }
+  } catch (err) {
+    // A filesystem read is never grounds to reject a stage it didn't set
+    // out to validate — any unexpected failure here (permissions, a race
+    // on a long-lived host, anything this function didn't anticipate)
+    // falls back to skipping the check, same as an unresolvable repoRoot.
+    logger.warn(
+      `[stagedIntents] gate.verify proposedFix tracked-file check failed for project "${projectId}", skipping: ${err instanceof Error ? err.message : err}`,
+    );
+    return;
   }
   if (offending.length > 0) {
     throw new GateVerifyProposedFixError(
