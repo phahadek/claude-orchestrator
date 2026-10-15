@@ -539,7 +539,11 @@ describe('gate.verify — stage-time proposedFix validation', () => {
       expect(() =>
         stageIntent(
           'gate.verify',
-          { gateItemId: item.id, disposition: 'fail', proposedFix: STRUCTURED_FIX },
+          {
+            gateItemId: item.id,
+            disposition: 'fail',
+            proposedFix: STRUCTURED_FIX,
+          },
           'proj-bare-dir',
         ),
       ).not.toThrow();
