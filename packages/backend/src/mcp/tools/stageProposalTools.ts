@@ -9,6 +9,7 @@ import {
   validateAndNormalizeTaskReferences,
   parseSymbolicCreateRef,
   withdrawIntent,
+  assertNoOpSatisfiedByCommit,
   type StagedIntent,
 } from '../../routes/stagedIntents';
 import type { SessionManager } from '../../session/SessionManager';
@@ -406,14 +407,25 @@ export function registerStageProposalTools(
     {
       title: 'Stage a deliberate no-op for this task',
       description:
-        "Stages a planning.noOp intent — a deliberate declaration that this turn reached terminal with nothing to change, distinct from a silent park. Purely informational/auditable: no operator disposition is required or offered for it. Use only when there is genuinely no decision to make (e.g. a re-dispatch of an already-settled task) — if there is a real gap, name it instead (e.g. groom's Deferred path).",
+        "Stages a planning.noOp intent — a deliberate declaration that this turn reached terminal with nothing to change, distinct from a silent park. Purely informational/auditable: no operator disposition is required or offered for it. Use only when there is genuinely no decision to make (e.g. a re-dispatch of an already-settled task) — if there is a real gap, name it instead (e.g. groom's Deferred path). A code/ops session declaring its task already satisfied passes `satisfiedByCommit`: the full 40-character SHA of the base-branch commit that delivered the work (it must be on origin/<base>); omit it only when no commit delivered the work.",
       inputSchema: envelope({
         taskId: z.string(),
         reason: z.string(),
         skippedKind: z.string().optional(),
+        satisfiedByCommit: z
+          .string()
+          .regex(/^[0-9a-f]{40}$/)
+          .optional(),
       }),
     },
-    async (args) => stage('planning.noOp', args.payload, ctx, args),
+    async (args) => {
+      await assertNoOpSatisfiedByCommit(
+        args.payload,
+        ctx.projectId,
+        ctx.sessionId,
+      );
+      return stage('planning.noOp', args.payload, ctx, args);
+    },
   );
 
   registerTool(

@@ -2096,6 +2096,53 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
+  // gate_item_source.closed_without_merge_at: recorded when the operator
+  // approves a standard/ops session's "already satisfied" planning.noOp and no
+  // merge commit was named. The backfill (idempotent: only touches unmarked,
+  // unfilled rows) marks Done/Deferred Code sources that have a committed
+  // standard/ops noOp (bare or ::noop:<kind> dedup key) and no merged PR row.
+  try {
+    target.exec(
+      `ALTER TABLE gate_item_source ADD COLUMN closed_without_merge_at TEXT`,
+    );
+  } catch {
+    /* already exists */
+  }
+  target.exec(`
+    UPDATE gate_item_source
+    SET closed_without_merge_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE merge_commit IS NULL
+      AND closed_without_merge_at IS NULL
+      AND EXISTS (
+        SELECT 1 FROM task_cache tc
+        WHERE tc.task_id = gate_item_source.source_task_id
+          AND json_valid(tc.raw_json)
+          AND json_extract(tc.raw_json, '$.type') = '💻 Code'
+          AND COALESCE(
+            json_extract(tc.raw_json, '$.status'),
+            json_extract(tc.raw_json, '$.properties.Status.select.name')
+          ) IN ('✅ Done', '⏭️ Deferred')
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM pull_requests pr
+        WHERE pr.task_id = gate_item_source.source_task_id AND pr.state = 'merged'
+      )
+      AND EXISTS (
+        SELECT 1 FROM staged_intent si
+        JOIN sessions se ON se.session_id = si.session_id
+        WHERE si.kind = 'planning.noOp'
+          AND si.state = 'committed'
+          AND (
+            si.task_id = gate_item_source.source_task_id
+            OR substr(si.task_id, 1, length(gate_item_source.source_task_id) + 7)
+               = gate_item_source.source_task_id || '::noop:'
+          )
+          AND se.session_type IN ('standard', 'ops')
+          AND COALESCE(se.task_id, '') NOT LIKE 'gate-item:%'
+          AND COALESCE(se.task_id, '') NOT LIKE 'report-batch:%'
+      );
+  `);
+
   // sessions.terminal_completion_reason: durable copy of the `reason` string
   // PlanningOrchestrator.markTerminal already threads through to
   // markSessionDone's `callSite` argument (previously log/audit-only). Read

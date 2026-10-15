@@ -166,8 +166,10 @@ import type {
 } from '../db/types';
 import {
   getGateItem,
+  probeGitAncestry,
   proposeGateItemReclassification,
 } from '../gate/gateService';
+import * as gateStore from '../gate/gateStore';
 import {
   routeVerificationResult,
   defaultFollowupFiler,
@@ -2590,6 +2592,8 @@ interface NoOpPayload {
    * performs on this same closing-synthesis write.
    */
   skippedKind?: string;
+  /** Full SHA of the base-branch commit that delivered this task's work. */
+  satisfiedByCommit?: string;
 }
 
 /**
@@ -2620,6 +2624,46 @@ function validateNoOpPayload(payload: unknown): asserts payload is NoOpPayload {
       'payload.skippedKind, when present, must be a non-empty staged-intent kind',
     );
   }
+  if (
+    p?.satisfiedByCommit !== undefined &&
+    !/^[0-9a-f]{40}$/.test(p.satisfiedByCommit)
+  ) {
+    throw new NoOpValidationError(
+      'payload.satisfiedByCommit, when present, must be a full 40-character lowercase hex SHA',
+    );
+  }
+}
+
+/**
+ * Stage-time check that a noOp's satisfiedByCommit is actually on the base
+ * branch the staging session's PR targets (else the project's configured base
+ * branch). Only applies to operator-concluded sessions, whose noOp the
+ * operator approves; async because it spawns git, so the staging transport
+ * awaits it before stageIntent.
+ */
+export async function assertNoOpSatisfiedByCommit(
+  payload: unknown,
+  projectId: string,
+  sessionId: string,
+): Promise<void> {
+  const commit = (payload as Partial<NoOpPayload> | null)?.satisfiedByCommit;
+  if (commit === undefined) return;
+  validateNoOpPayload(payload);
+  if (!isOperatorNoOpCandidate({ kind: 'planning.noOp', sessionId })) return;
+  const project = getProjectById(projectId);
+  const base =
+    getPRBySessionId(sessionId)?.base_branch ?? project?.baseBranch ?? 'dev';
+  const ancestry = await probeGitAncestry(
+    project?.projectDir,
+    commit,
+    `origin/${base}`,
+  );
+  if (ancestry === true) return;
+  throw new NoOpValidationError(
+    ancestry === false
+      ? `commit is not on origin/${base}`
+      : 'commit unknown to the project checkout — fetch and re-stage',
+  );
 }
 
 /**
@@ -8276,6 +8320,31 @@ function unresolvedOpsJournalStateForNoOp(
 }
 
 /**
+ * Records the approved noOp's outcome on every unfilled gate_item_source row
+ * for the task: the satisfying commit when the session named one, else a
+ * closed-without-merge marker.
+ */
+function recordNoOpClosureOnGateSources(
+  taskId: string,
+  satisfiedByCommit: string | undefined,
+): void {
+  const normalized = normalizeTaskId(taskId);
+  const now = new Date().toISOString();
+  for (const itemId of gateStore.itemIdsBySourceTask(normalized)) {
+    const source = gateStore
+      .getItem(itemId)
+      ?.sources.find((s) => s.sourceTaskId === normalized);
+    if (!source || source.mergeCommit) continue;
+    if (satisfiedByCommit) {
+      gateStore.setSourceMergeCommit(itemId, normalized, satisfiedByCommit);
+      gateStore.recomputeMinDeployedCommit(itemId, now);
+    } else {
+      gateStore.markSourceClosedWithoutMerge(itemId, normalized, now);
+    }
+  }
+}
+
+/**
  * Applies an operator-approved standalone planning.noOp: commits the intent,
  * writes the bound task Done with the staging session's evidence, and
  * terminalizes the staging session — the one write path left for a
@@ -8313,6 +8382,11 @@ async function applyOperatorApprovedNoOp(
     getTaskBackend(intent.projectId),
     taskId,
     `Approved via planning.noOp — this task's work was already satisfied: ${reason}`,
+  );
+
+  recordNoOpClosureOnGateSources(
+    taskId,
+    (intent.payload as Partial<NoOpPayload> | null)?.satisfiedByCommit,
   );
 
   if (intent.sessionId) {

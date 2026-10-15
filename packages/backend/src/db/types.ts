@@ -683,10 +683,15 @@ export interface GateItemSourceRow {
   source_task_id: string;
   source_task_title: string;
   merge_commit: string | null;
+  /** ISO-8601; set when the task was closed by an approved no-op with no merge commit. */
+  closed_without_merge_at: string | null;
   added_at: string;
 }
 
-export type NewGateItemSourceRow = Omit<GateItemSourceRow, 'id'>;
+export type NewGateItemSourceRow = Omit<
+  GateItemSourceRow,
+  'id' | 'closed_without_merge_at'
+>;
 
 export interface GateItemEventRow {
   id: number;

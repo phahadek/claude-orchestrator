@@ -310,7 +310,7 @@ export function buildOrchestratorClaudeMd(
 
 ## Lifecycle
 
-> ⚠️ **Your task is pre-assigned (see Task Assignment above). Never browse the task board or self-assign a different task. If you have no remaining work because it's already satisfied elsewhere, call \`planning.noOp\` (task id + resolving commit/PR) instead of stopping silently — a silent stop re-dispatches the task forever.**
+> ⚠️ **Your task is pre-assigned (see Task Assignment above). Never browse the task board or self-assign a different task. If you have no remaining work because it's already satisfied elsewhere, call \`planning.noOp\` (task id + resolving commit/PR; pass the full 40-char SHA of the resolving base-branch commit as \`satisfiedByCommit\`) instead of stopping silently — a silent stop re-dispatches the task forever.**
 
 ${
   taskContent
