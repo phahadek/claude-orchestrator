@@ -1134,12 +1134,16 @@ describe('procedureCore', () => {
 
     it('routes live checks to Manual verification, never Automated tests', () => {
       const text = stepSummaryFor(step, 'ops');
-      expect(text).toContain('👁️ Manual verification, never 🤖 Automated tests');
+      expect(text).toContain(
+        '👁️ Manual verification, never 🤖 Automated tests',
+      );
     });
 
     it('names 🔎 Investigation as the Type when the change depends on an untaken measurement', () => {
       const text = stepSummaryFor(step, 'ops');
-      expect(text).toContain('file a 🔎 Investigation whose output is the Code task');
+      expect(text).toContain(
+        'file a 🔎 Investigation whose output is the Code task',
+      );
     });
 
     it('leaves the groom and design overrides without the rule', () => {
