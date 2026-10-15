@@ -1592,6 +1592,15 @@ describe('StagedIntentPanel', () => {
         rationale: 'the flagged file was never touched by this diff',
       },
       'test.request': { taskId: 'notion:abc', reason: 'verify the fix' },
+      'test.override': {
+        taskId: 'notion:abc',
+        testIds: ['tests.broken.test_not_mine'],
+        evidence: {
+          traceReads: 'read the failing trace',
+          targetedRunIds: ['run-1'],
+          investigationNote: 'fails on an untouched module',
+        },
+      },
       'ops.prIntent': {
         taskId: 'notion:abc',
         title: 'add retry to X poller',
