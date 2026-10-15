@@ -20,6 +20,12 @@ export type SessionStatus =
   | 'error'
   | 'killed';
 
+/** Terminal session statuses (db/queries.ts's TERMINAL_SESSION_STATUSES, typed). */
+export type TerminalSessionStatus = Extract<
+  SessionStatus,
+  'done' | 'error' | 'killed'
+>;
+
 export interface Session {
   session_id: string;
   task_id: string | null;
@@ -1641,6 +1647,10 @@ export interface ArchUnitQuery {
  * running out (see SessionManager.flagResumeFailure) — a session-level
  * circuit breaker independent of task type, interpreted directly by the
  * deriver rather than via the per-triple registry.
+ * 'result_reap' rows record a no-PR result-reap done write (StuckSessionMonitor's
+ * stuck_session_no_pr_periodic, SessionManager's boot_orphan_result_event) —
+ * type-agnostic, signal_value is the call-site reason, resolved by the deriver
+ * to 'done' ahead of the registry lookup.
  *
  * 'legacy_status_write' is the dual-write bridge's own class: a mirror of a
  * legacy sessions.status/archived write made by one of the shared
@@ -1657,6 +1667,7 @@ export type CompletingSignalClass =
   | 'staged_intent'
   | 'external_pr_event'
   | 'resume_exhausted'
+  | 'result_reap'
   | 'legacy_status_write';
 
 export interface CompletingSignalLedgerRow {
