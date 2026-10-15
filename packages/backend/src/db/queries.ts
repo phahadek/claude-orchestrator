@@ -4771,11 +4771,15 @@ const DEPTH_REVIEW_HOLD_REASONS: ReadonlySet<CanonicalPauseReason> = new Set([
  * a fresh depth pass (see PRMergeWatcher.handlePushDetected /
  * ReviewOrchestrator.dispatchDepthReview).
  */
-function clearReviewVerdictPauseReasons(prNumber: number, repo: string): void {
+function clearPauseReasonsExceptDepthHold(
+  prNumber: number,
+  repo: string,
+  clearsEntry: (entry: PauseReasonStruct) => boolean,
+): void {
   const before = getPRByNumber(prNumber, repo);
   const preserved = parsePauseReasonSet(before?.pause_reason ?? null).filter(
     (entry) =>
-      entry.source !== 'review' || DEPTH_REVIEW_HOLD_REASONS.has(entry.reason),
+      !clearsEntry(entry) || DEPTH_REVIEW_HOLD_REASONS.has(entry.reason),
   );
   const serialized = preserved.length
     ? serializePauseReasonSet(preserved)
@@ -4833,7 +4837,15 @@ export function clearTerminalPRFlags(
 ): void {
   const pr = getPRByNumber(prNumber, repo);
   if (trigger === 'review_verdict') {
-    clearReviewVerdictPauseReasons(prNumber, repo);
+    clearPauseReasonsExceptDepthHold(
+      prNumber,
+      repo,
+      (entry) => entry.source === 'review',
+    );
+  } else if (trigger === 'head_sha_advance') {
+    // A push must not drop a depth-review hold: only the fresh depth pass on
+    // the new head may discharge it, else AutoMerger merges before re-review.
+    clearPauseReasonsExceptDepthHold(prNumber, repo, () => true);
   } else {
     setPauseReason(prNumber, repo, null);
   }

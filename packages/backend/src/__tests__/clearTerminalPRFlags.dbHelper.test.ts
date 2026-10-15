@@ -31,7 +31,7 @@ import {
   incrementStalledPRRetryCount,
   setStalledRetryBaseExhausted,
 } from '../db/queries.js';
-import { isMergeBlockingPause } from '../db/pauseReason.js';
+import { isMergeBlockingPause, parsePauseReasonSet } from '../db/pauseReason.js';
 
 const NOW = '2024-01-01T00:00:00Z';
 
@@ -258,5 +258,17 @@ describe('clearTerminalPRFlags — DB helper', () => {
     }
     row = getRetryBudgetRow(9);
     expect(row?.stalled_pr_retry_count).toBe(retryCap);
+  });
+
+  it('head_sha_advance keeps depth_review_pending (merge-blocking) and clears other reasons', () => {
+    insertPR(20);
+    setPauseReason(20, 'owner/repo', 'ci_failing');
+    setPauseReason(20, 'owner/repo', 'depth_review_pending');
+
+    clearTerminalPRFlags(20, 'owner/repo', 'head_sha_advance');
+
+    const set = parsePauseReasonSet(getPRRow(20)?.pause_reason ?? null);
+    expect(set.map((e) => e.reason)).toEqual(['depth_review_pending']);
+    expect(isMergeBlockingPause(getPRRow(20)?.pause_reason ?? null)).toBe(true);
   });
 });
