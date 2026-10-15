@@ -194,7 +194,7 @@ describe('POST /api/staged-intents — journal.setState stage-time transition ga
       const res = await stageResolved('task-inv-1');
       expect(res.status).toBe(201);
       const commit = await supertest(buildApp())
-        .post('/api/staged-intents/group/group-task-inv-1/commit')
+        .post('/api/staged-intents/group/group-task-inv-1/approve')
         .send({});
       expect(commit.status).toBe(200);
       expect(
