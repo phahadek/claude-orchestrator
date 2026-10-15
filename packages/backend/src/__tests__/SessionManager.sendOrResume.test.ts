@@ -1132,9 +1132,17 @@ describe('sendOrResume() respawn-path delivery confirmation', () => {
         payload: expect.objectContaining({
           session_id: CONFIRM_SESSION_ID,
           reason: 'send_failed',
+          path: 'resume_fresh_worktree',
         }),
       }),
     );
+    expect(
+      vi
+        .mocked(recordEvent)
+        .mock.calls.filter(
+          ([e]) => e.event_type === 'inbox_delivery_unconfirmed',
+        ),
+    ).toHaveLength(1);
     // Retries terminate without creating duplicate inbox rows for the same text.
     const undelivered = queries.listUndeliveredInboxItems(CONFIRM_SESSION_ID);
     expect(

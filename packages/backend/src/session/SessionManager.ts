@@ -199,6 +199,9 @@ import { logger } from '../logger';
 
 export { deriveTaskId };
 
+const SEND_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000];
+const SEND_RETRY_TOTAL_MS = SEND_RETRY_DELAYS_MS.reduce((a, b) => a + b, 0);
+
 /** Max chars per file snippet to avoid bloating the CLAUDE.md. */
 const MAX_FILE_CHARS = 8_000;
 /** Max total chars for all file snippets combined. */
@@ -5980,26 +5983,9 @@ export class SessionManager extends EventEmitter {
         });
       });
 
-      // Bounded backoff retry on a failed send() — the undelivered_inbox_retry_sweep
-      // job only runs every 600s, so a single transient send() failure (e.g. a
-      // stdin write racing the runner's very first tick) would otherwise cost
-      // up to 10 minutes to recover. Retries stay well inside that window and
-      // give up after a fixed number of attempts, falling through to the same
-      // inbox_delivery_unconfirmed recording (and the sweep as backstop) as
-      // before.
-      const SEND_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000];
-      let sendConfirmed = false;
-      if (!timedOut) {
-        sendConfirmed = this.send(sessionId, combinedText);
-        for (const delayMs of SEND_RETRY_DELAYS_MS) {
-          if (sendConfirmed) break;
-          await new Promise<void>((resolve) => {
-            const t = setTimeout(resolve, delayMs);
-            t.unref();
-          });
-          sendConfirmed = this.send(sessionId, combinedText);
-        }
-      }
+      const sendConfirmed = timedOut
+        ? false
+        : await this.sendWithRetry(sessionId, combinedText);
 
       if (timedOut || !sendConfirmed) {
         logger.warn(
@@ -6016,6 +6002,7 @@ export class SessionManager extends EventEmitter {
             session_id: sessionId,
             inbox_item_ids: itemIds,
             reason: timedOut ? 'first_event_timeout' : 'send_failed',
+            path: 'resume',
           },
         });
         return null;
@@ -6346,8 +6333,10 @@ export class SessionManager extends EventEmitter {
     let sendConfirmed = false;
     const firstEvent = new Promise<void>((resolve) => {
       session.once('message', () => {
-        sendConfirmed = this.send(sessionId, combinedText);
-        resolve();
+        void this.sendWithRetry(sessionId, combinedText).then((ok) => {
+          sendConfirmed = ok;
+          resolve();
+        });
       });
     });
 
@@ -6356,7 +6345,8 @@ export class SessionManager extends EventEmitter {
     // resume paths, preventing the divergence that was silently dropping pr_opened.
     this.wireSession(sessionId, session, projectDir, worktreePath);
 
-    const UNCONFIRMED_DELIVERY_TIMEOUT_MS = 30_000;
+    // The window covers the first event plus the full send retry backoff.
+    const UNCONFIRMED_DELIVERY_TIMEOUT_MS = 30_000 + SEND_RETRY_TOTAL_MS;
     const timedOut = await new Promise<boolean>((resolve) => {
       const timer = setTimeout(
         () => resolve(true),
@@ -6384,6 +6374,7 @@ export class SessionManager extends EventEmitter {
           session_id: sessionId,
           inbox_item_ids: itemIds,
           reason: timedOut ? 'first_event_timeout' : 'send_failed',
+          path: 'resume_fresh_worktree',
         },
       });
       return null;
@@ -6391,6 +6382,27 @@ export class SessionManager extends EventEmitter {
 
     markInboxItemsDelivered(itemIds);
     return sessionId;
+  }
+
+  /**
+   * send() with bounded backoff on false — the undelivered_inbox_retry_sweep
+   * only runs every 600s, so a transient failure (stdin not yet writable at
+   * the respawned session's first event) would otherwise cost up to 10 minutes.
+   */
+  private async sendWithRetry(
+    sessionId: string,
+    text: string,
+  ): Promise<boolean> {
+    let ok = this.send(sessionId, text);
+    for (const delayMs of SEND_RETRY_DELAYS_MS) {
+      if (ok) break;
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, delayMs);
+        t.unref();
+      });
+      ok = this.send(sessionId, text);
+    }
+    return ok;
   }
 
   /**
