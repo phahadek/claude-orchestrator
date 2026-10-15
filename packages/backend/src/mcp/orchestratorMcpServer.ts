@@ -200,7 +200,7 @@ export function buildOrchestratorMcpServerEntry(
  * handshake tool, the stage-proposal tool surface when the connecting
  * session resolves to a project (one tool per staged-intent kind, see
  * mcp/tools/stageProposalTools.ts), and the verdict-delivery tool surface
- * (gate.verify / review.disposition / flaky.confirm, see
+ * (gate.verify / review.disposition, see
  * mcp/tools/verdictTools.ts) scoped to this session's live AgentSession, the
  * 'ops'-scoped gate-item reclassification verb (gate.reclassify, see
  * mcp/tools/gateReclassifyTool.ts — the authenticated-MCP replacement for

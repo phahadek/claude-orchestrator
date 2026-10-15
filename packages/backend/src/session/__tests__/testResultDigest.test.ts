@@ -60,7 +60,7 @@ describe('appendAwaitingDispositionInstruction', () => {
     expect(withMarker).not.toMatch(/not (yours|your (change|diff))/i);
     expect(withMarker).toContain('treat them as possibly yours');
     expect(withMarker).toContain('woken at most once');
-    expect(withMarker).toContain('flaky_confirm');
+    expect(withMarker).not.toMatch(/flaky[_.]confirm/);
     expect(appendAwaitingDispositionInstruction('digest', false)).toBe(
       'digest',
     );
