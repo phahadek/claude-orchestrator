@@ -1115,6 +1115,41 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
       expect(start).toHaveBeenCalledTimes(7);
     });
 
+    it('does not exceed the cap when two launchSelected calls overlap', async () => {
+      opsCfg.cap = 1;
+      const liveIds = new Set<string>();
+      mockListLive.mockImplementation(() =>
+        [...liveIds].map((id) => ({ session_id: id })),
+      );
+      let n = 0;
+      start.mockImplementation(async () => {
+        await new Promise((r) => setTimeout(r, 5));
+        const id = `s-${++n}`;
+        liveIds.add(id);
+        return id;
+      });
+      const launcher = new OpsSessionLauncher(sessionManager as never);
+      const a = makeTask({ id: 'task-a' });
+      const b = makeTask({ id: 'task-b' });
+
+      const [ra, rb] = await Promise.all([
+        launcher.launchSelected({
+          ...base,
+          opsContext: makeOpsContext([a]),
+          tasks: [a],
+        }),
+        launcher.launchSelected({
+          ...base,
+          opsContext: makeOpsContext([b]),
+          tasks: [b],
+        }),
+      ]);
+
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(ra.launched.length + rb.launched.length).toBe(1);
+      expect(ra.deferred.length + rb.deferred.length).toBe(1);
+    });
+
     it('spaces successive ops launches by the stagger interval', async () => {
       vi.useFakeTimers();
       try {

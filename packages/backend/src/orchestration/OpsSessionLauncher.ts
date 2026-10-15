@@ -172,6 +172,7 @@ export class OpsSessionLauncher {
   private readonly deferred = new Map<string, DeferredOpsTask>();
   private readonly liveOpsSessionIds = new Set<string>();
   private lastOpsLaunchAt = 0;
+  private opsLaunchChain: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly sessionManager: SessionManager,
@@ -188,55 +189,66 @@ export class OpsSessionLauncher {
     const sessionType = params.sessionType ?? 'standard';
 
     for (const task of params.tasks) {
-      if (sessionType === 'ops' && !params.force) {
-        const reason = this.concludedReason(task.id);
-        if (reason) {
-          skipped.push({ taskId: task.id, reason });
-          logger.info(
-            `[OpsSessionLauncher] skipping ops task ${task.id} — ${reason}`,
-          );
-          continue;
+      const attempt = async (): Promise<void> => {
+        if (sessionType === 'ops' && !params.force) {
+          const reason = this.concludedReason(task.id);
+          if (reason) {
+            skipped.push({ taskId: task.id, reason });
+            logger.info(
+              `[OpsSessionLauncher] skipping ops task ${task.id} — ${reason}`,
+            );
+            return;
+          }
         }
-      }
-      if (
-        task.blockingDepIds.length > 0 ||
-        (sessionType === 'ops' && this.opsAtCapacity())
-      ) {
-        this.deferred.set(task.id, {
-          projectId: params.projectId,
-          projectContextUrl: params.projectContextUrl,
-          milestoneId: params.milestoneId,
+        if (
+          task.blockingDepIds.length > 0 ||
+          (sessionType === 'ops' && this.opsAtCapacity())
+        ) {
+          this.deferred.set(task.id, {
+            projectId: params.projectId,
+            projectContextUrl: params.projectContextUrl,
+            milestoneId: params.milestoneId,
+            sessionType,
+            opsContext: params.opsContext,
+            task,
+            model: params.model,
+            effort: params.effort,
+          });
+          deferredIds.push(task.id);
+          logger.info(
+            `[OpsSessionLauncher] deferring ops task ${task.id} — ${task.blockingDepIds.length > 0 ? `waiting on ${task.blockingDepIds.join(', ')}` : 'ops launch capacity reached'}`,
+          );
+          return;
+        }
+        if (sessionType === 'ops') await this.staggerOpsLaunch();
+        const outcome = await this.launchOne(
+          params.projectId,
+          params.projectContextUrl,
+          params.milestoneId,
           sessionType,
-          opsContext: params.opsContext,
+          params.opsContext,
           task,
-          model: params.model,
-          effort: params.effort,
-        });
-        deferredIds.push(task.id);
-        logger.info(
-          `[OpsSessionLauncher] deferring ops task ${task.id} — ${task.blockingDepIds.length > 0 ? `waiting on ${task.blockingDepIds.join(', ')}` : 'ops launch capacity reached'}`,
+          params.model,
+          params.effort,
         );
-        continue;
-      }
-      if (sessionType === 'ops') await this.staggerOpsLaunch();
-      const outcome = await this.launchOne(
-        params.projectId,
-        params.projectContextUrl,
-        params.milestoneId,
-        sessionType,
-        params.opsContext,
-        task,
-        params.model,
-        params.effort,
-      );
-      if (outcome.status === 'launched') {
-        launched.push(outcome.taskId);
-      } else if (outcome.status === 'failed') {
-        failed.push({ taskId: outcome.taskId, reason: outcome.reason });
-      }
+        if (outcome.status === 'launched') {
+          launched.push(outcome.taskId);
+        } else if (outcome.status === 'failed') {
+          failed.push({ taskId: outcome.taskId, reason: outcome.reason });
+        }
+      };
+      if (sessionType === 'ops') await this.withOpsLock(attempt);
+      else await attempt();
     }
 
     return { launched, deferred: deferredIds, skipped, failed };
+  }
+
+  /** Serializes ops check-capacity → stagger → launch so overlapping callers can't race the cap or the stagger. */
+  private withOpsLock(fn: () => Promise<void>): Promise<void> {
+    const run = this.opsLaunchChain.then(fn);
+    this.opsLaunchChain = run.catch(() => undefined);
+    return run;
   }
 
   /** Reason when the task's latest ops session is done and its last committed journal.setState targeted resolved/blocked. */
@@ -318,23 +330,29 @@ export class OpsSessionLauncher {
       for (const [taskId, entry] of [...this.deferred]) {
         if (entry.milestoneId !== milestoneId) continue;
         if (!readyIds.has(taskId)) continue;
-        if (entry.sessionType === 'ops') {
-          if (this.opsAtCapacity()) continue;
-          this.deferred.delete(taskId);
-          await this.staggerOpsLaunch();
-        } else {
-          this.deferred.delete(taskId);
-        }
-        await this.launchOne(
-          entry.projectId,
-          entry.projectContextUrl,
-          entry.milestoneId,
-          entry.sessionType,
-          opsContext,
-          entry.task,
-          entry.model,
-          entry.effort,
-        );
+        const attempt = async (): Promise<void> => {
+          // Re-check under the lock: a concurrent launch may have claimed it.
+          if (this.deferred.get(taskId) !== entry) return;
+          if (entry.sessionType === 'ops') {
+            if (this.opsAtCapacity()) return;
+            this.deferred.delete(taskId);
+            await this.staggerOpsLaunch();
+          } else {
+            this.deferred.delete(taskId);
+          }
+          await this.launchOne(
+            entry.projectId,
+            entry.projectContextUrl,
+            entry.milestoneId,
+            entry.sessionType,
+            opsContext,
+            entry.task,
+            entry.model,
+            entry.effort,
+          );
+        };
+        if (entry.sessionType === 'ops') await this.withOpsLock(attempt);
+        else await attempt();
       }
     }
   }
