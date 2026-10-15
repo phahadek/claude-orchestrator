@@ -531,11 +531,7 @@ export const PAUSE_REASON_REGISTRY: Record<
 
 // ── Recovery descriptor ──────────────────────────────────────────────────────
 
-type RecoveryAction =
-  | 'redispatch'
-  | 'rerun'
-  | 'resume'
-  | 'send_review';
+type RecoveryAction = 'redispatch' | 'rerun' | 'resume' | 'send_review';
 
 export interface RecoveryDescriptor {
   available: boolean;
