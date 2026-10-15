@@ -1123,6 +1123,34 @@ describe('procedureCore', () => {
     });
   });
 
+  describe('the ops follow-on Code task must be headless-executable', () => {
+    const step = ORDERED_STEPS.find((s) => s.id === 'file-follow-on-tasks')!;
+
+    it('states the headless-executability rule in the ops follow-on section', () => {
+      const text = stepSummaryFor(step, 'ops');
+      expect(text).toContain('unattended session in a worktree');
+      expect(text).toContain('no prod host');
+    });
+
+    it('routes live checks to Manual verification, never Automated tests', () => {
+      const text = stepSummaryFor(step, 'ops');
+      expect(text).toContain('👁️ Manual verification, never 🤖 Automated tests');
+    });
+
+    it('names 🔎 Investigation as the Type when the change depends on an untaken measurement', () => {
+      const text = stepSummaryFor(step, 'ops');
+      expect(text).toContain('file a 🔎 Investigation whose output is the Code task');
+    });
+
+    it('leaves the groom and design overrides without the rule', () => {
+      for (const skill of ['groom', 'design'] as const) {
+        const text = stepSummaryFor(step, skill);
+        expect(text).not.toContain('unattended session in a worktree');
+        expect(text).not.toContain('Manual verification');
+      }
+    });
+  });
+
   describe('a dispatched ops run is write-capable and must drive to applied-pending-confirm', () => {
     it('states the write-capable doctrine, scoped to ops only', () => {
       const principle = CORE_PRINCIPLES.find(
