@@ -181,7 +181,11 @@ describe('isStructurallyUnresolvableSource', () => {
     );
     expect(marker(itemId)).not.toBeNull();
 
-    updateGateItemSourceMergeCommit(itemId, 'notion:code-remerged', 'a'.repeat(40));
+    updateGateItemSourceMergeCommit(
+      itemId,
+      'notion:code-remerged',
+      'a'.repeat(40),
+    );
 
     expect(marker(itemId)).toBeNull();
     expect(isStructurallyUnresolvableSource('notion:code-remerged')).toBe(
@@ -192,7 +196,11 @@ describe('isStructurallyUnresolvableSource', () => {
   it('markGateItemSourceClosedWithoutMerge leaves a row that already has a merge_commit unmarked', () => {
     cacheDoneCode('notion:code-filled');
     const itemId = seedGateSource('notion:code-filled');
-    updateGateItemSourceMergeCommit(itemId, 'notion:code-filled', 'b'.repeat(40));
+    updateGateItemSourceMergeCommit(
+      itemId,
+      'notion:code-filled',
+      'b'.repeat(40),
+    );
     markGateItemSourceClosedWithoutMerge(
       itemId,
       'notion:code-filled',
