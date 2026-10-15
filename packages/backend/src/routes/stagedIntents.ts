@@ -162,7 +162,10 @@ import type {
   ArchUnitStatus,
   GateItemClassification,
 } from '../db/types';
-import { getGateItem } from '../gate/gateService';
+import {
+  getGateItem,
+  proposeGateItemReclassification,
+} from '../gate/gateService';
 import {
   routeVerificationResult,
   defaultFollowupFiler,
@@ -2306,9 +2309,12 @@ interface GateVerifyIntentPayload {
    * still be `open`, never having reached `runnable`), carrying a static
    * `evidence` string naming why (dropped webhook vs. a cross-milestone
    * rehome) for the operator to act on. Absent for a genuine
-   * verifier-originated report.
+   * verifier-originated report. `'reclassify'` is the session-free
+   * classification decision split off an auto-committed needs-setup verdict
+   * (see commitGateVerifyAutoCommit): it carries `reclassify` and no
+   * disposition, and its approval only calls proposeGateItemReclassification.
    */
-  origin?: 'mirror' | 'consent' | 'unresolved-source';
+  origin?: 'mirror' | 'consent' | 'unresolved-source' | 'reclassify';
 }
 /**
  * Payload for the notion.pageEdit staged intent — the Notion
@@ -5607,6 +5613,21 @@ async function applyIntent(
           `[stagedIntents] gate.verify apply: gate item "${payload.gateItemId}" was not found`,
         );
       }
+      if (payload.origin === 'reclassify') {
+        // The needs-setup was already committed when this was staged; approval
+        // only applies the classification change. No verdict is routed.
+        if (!payload.reclassify) {
+          throw new Error(
+            `[stagedIntents] gate.verify apply: reclassify intent for "${payload.gateItemId}" carries no reclassify proposal`,
+          );
+        }
+        const outcome = proposeGateItemReclassification(
+          item.id,
+          payload.reclassify.to,
+          payload.reclassify.reason,
+        );
+        return { ok: true, reclassified: outcome.applied };
+      }
       // A mirror intent (Human-Observation, or an 'unresolved-source'
       // merge-commit escalation — neither has a verifier report behind it)
       // carries no pre-set disposition — the operator supplies pass/fail/
@@ -5803,10 +5824,11 @@ export function isGateVerifyAutoCommitDispositionClass(
  * policy-driven auto-commit: a genuine verifier report (never a mirror —
  * `payload.origin` set means a Human-Observation/consent mirror, which
  * carries no pre-set disposition until an operator supplies one at apply
- * time), carrying no `reclassify` proposal (a structural self-correction
- * that always requires operator review, regardless of disposition class —
- * decision 3's exclusion), attributed to a milestone, whose disposition
- * matches an armed policy for that milestone.
+ * time), attributed to a milestone, whose disposition matches an armed
+ * policy for that milestone. A `reclassify` proposal (a structural
+ * self-correction that always requires operator review — decision 3) keeps a
+ * row out of auto-commit unless it is a needs-setup verdict: that half
+ * commits now and the reclassify is split into a session-free decision.
  */
 function isGateVerifyAutoCommitEligible(row: StagedIntentRow): boolean {
   if (row.kind !== 'gate.verify') return false;
@@ -5819,7 +5841,7 @@ function isGateVerifyAutoCommitEligible(row: StagedIntentRow): boolean {
     return false;
   }
   if (payload.origin) return false;
-  if (payload.reclassify) return false;
+  if (payload.reclassify && payload.disposition !== 'needs-setup') return false;
   if (
     !payload.disposition ||
     !isGateVerifyAutoCommitDispositionClass(payload.disposition)
@@ -5899,6 +5921,23 @@ async function commitGateVerifyAutoCommit(
   planningOrchestrator: PlanningOrchestrator | undefined,
 ): Promise<boolean> {
   const apiIntent = rowToApi(fresh);
+  const originalPayload = apiIntent.payload as GateVerifyIntentPayload;
+  const splitReclassify = originalPayload.reclassify;
+  if (splitReclassify) {
+    const { reclassify: _dropped, ...rest } = originalPayload;
+    const priorEvidence = originalPayload.evidence;
+    apiIntent.payload = {
+      ...rest,
+      evidence: {
+        ...(priorEvidence && typeof priorEvidence === 'object'
+          ? (priorEvidence as Record<string, unknown>)
+          : priorEvidence !== undefined
+            ? { verifierEvidence: priorEvidence }
+            : {}),
+        proposedReclassify: splitReclassify,
+      },
+    };
+  }
   try {
     await applyIntentShielded(
       apiIntent,
@@ -5933,6 +5972,33 @@ async function commitGateVerifyAutoCommit(
     intent: committed,
     disposition: 'approve',
   });
+
+  if (splitReclassify) {
+    const item = getGateItem(originalPayload.gateItemId);
+    try {
+      stageIntent(
+        'gate.verify',
+        {
+          gateItemId: originalPayload.gateItemId,
+          origin: 'reclassify',
+          reclassify: splitReclassify,
+          evidence: originalPayload.evidence,
+        },
+        committed.project_id,
+        null,
+        null,
+        `Reclassify ${item?.classification ?? '?'} → ${splitReclassify.to}: ${splitReclassify.reason}`,
+        null,
+        null,
+        committed.milestone,
+        null,
+      );
+    } catch (err) {
+      logger.error(
+        `[stagedIntents] failed to stage reclassify decision for ${originalPayload.gateItemId}: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
 
   return true;
 }
@@ -10418,6 +10484,19 @@ export function createStagedIntentsRouter(
         });
         const committedIntent = rowToApi(committed);
         broadcastIntentChange(committedIntent);
+        if (intent.kind === 'ops.prIntent' && intent.sessionId) {
+          sessionManager
+            ?.enqueueFeedback(
+              intent.sessionId,
+              'ops-pr-intent-approved',
+              `Your ops.prIntent ${intent.id} was approved. Commit your changes and open the one PR it authorizes; it is linked to this intent when opened.`,
+            )
+            .catch((err) => {
+              logger.error(
+                `[stagedIntents] ops-pr-intent-approved feedback failed for session ${intent.sessionId?.slice(0, 8)}: ${err}`,
+              );
+            });
+        }
         res.json(committedIntent);
         return;
       }
