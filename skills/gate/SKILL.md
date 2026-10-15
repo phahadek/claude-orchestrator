@@ -326,10 +326,18 @@ Beyond the DB-safety rules above, every verifier brief MUST:
 - **Require the agent to write its results as a JSON array to a named file** in the worktree scratch
   area (one entry per item: id, disposition, evidence, trace guide), and return only the path and a
   one-line tally.
+- **Carry the refusal procedure.** A refused command covers that action only: the verifier keeps
+  working every other item and never stops the shard. It records a refused item as `noted` (never
+  `needs-setup`), with evidence starting `refused: <exact command shape> (<classifier reason>)`, plus
+  the read that would settle it. It never asks the parent to run the refused action for it
+  (permission laundering). The parent re-runs refused items only after the operator changes the
+  approval mode.
 
 The parent **records from that file** and spot-checks all fails plus a sample of passes against the
-evidence. It never hand-transcribes verifier evidence into JSON. Don't wait on the slowest agent
-past the run budget; record what has returned and park the rest.
+evidence. It never hand-transcribes verifier evidence into JSON. Before recording a shard whose
+verifier reports a refusal, the parent checks that it did not mass-convert unattempted items to
+`needs-setup`. Don't wait on the slowest agent past the run budget; record what has returned and
+park the rest.
 
 ---
 
