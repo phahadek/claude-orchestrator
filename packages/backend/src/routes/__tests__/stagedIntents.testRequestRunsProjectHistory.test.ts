@@ -154,4 +154,22 @@ describe('GET /api/test-request-runs/project', () => {
       },
     });
   });
+
+  it('reports mergedDevSha and conflictOutcome for a run that took a pre-test merge', async () => {
+    insertTestRequestRun('run-merged', 'proj-1', 'hash-merged', null, 1000);
+    db.prepare(
+      `UPDATE test_request_runs SET merged_dev_sha = ?, conflict_outcome = ? WHERE id = ?`,
+    ).run('a0455af799f5b1235415c463556fb18be2431b26', 'merged', 'run-merged');
+
+    const res = await supertest(makeApp())
+      .get('/api/test-request-runs/project')
+      .query({ projectId: 'proj-1' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.runs[0]).toMatchObject({
+      id: 'run-merged',
+      mergedDevSha: 'a0455af799f5b1235415c463556fb18be2431b26',
+      conflictOutcome: 'merged',
+    });
+  });
 });
