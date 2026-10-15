@@ -2994,6 +2994,43 @@ describe('admitTestRequest — settled-run guard', () => {
     expect(rowCount.n).toBe(2);
   });
 
+  it('a passed verify run with test_report_glob configured records acquisition_attempted=0 and is replayed as unchangedReplay with no new row', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '*.xml' });
+    mockCollectStructuredTestResult.mockReturnValue(null);
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: true,
+      output: 'tsc ok',
+    });
+
+    const first = await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-settled-verify',
+        contentHash: 'settled-verify-hash',
+        runKind: 'verify',
+      }),
+    );
+    expect(first.passed).toBe(true);
+
+    const second = await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-settled-verify',
+        contentHash: 'settled-verify-hash',
+        runKind: 'verify',
+      }),
+    );
+
+    expect(second.unchangedReplay).toBe(true);
+    expect(second.runId).toBe(first.runId);
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    const rows = db
+      .prepare(
+        `SELECT test_report_acquisition_attempted AS a FROM test_request_runs WHERE project_id = ? AND content_hash = ?`,
+      )
+      .all('proj-settled-verify', 'settled-verify-hash') as { a: number }[];
+    expect(rows).toEqual([{ a: 0 }]);
+  });
+
   describe('expected report count passed to the collector', () => {
     const verifyCommands = ['pyright', 'task test', 'npx vitest run'];
     const cfg = {
