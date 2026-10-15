@@ -122,6 +122,16 @@ export function buildGateVerifyProcedure(item: GateItem): string {
       'is a known failure mode for this session: it burns the turn budget ' +
       'without ever checking whether the behavior actually ran.',
     '',
+    '**Reading a spooled tool result.** A large tool result is saved to a ' +
+      'file whose absolute path the tool output names. Read it with ONE Bash ' +
+      'command on that absolute path: `grep`, `head` or `wc`, optionally ' +
+      'piped into `sort`, `uniq -c` or `head`. Never use a `cd` prefix, a ' +
+      '`VAR=` prefix, `;` or `&&` chains, heredocs, or `python3 -` / ' +
+      '`python3 -c` — these shapes are denied and a denial costs a turn. ' +
+      'Prefer narrowing the query itself (an `eventType`, a tighter ' +
+      '`since`/`until`, a pattern where the tool supports one) over ' +
+      'grepping a spool.',
+    '',
     "**The operational record IS** — the running system's behavioral " +
       'trace. A pass must cite one of these:',
     '- `audit_log` entries',

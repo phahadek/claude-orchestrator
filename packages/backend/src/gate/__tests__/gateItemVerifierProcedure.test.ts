@@ -165,6 +165,28 @@ describe('buildGateVerifyProcedure', () => {
     expect(procedure).not.toMatch(/Do NOT reclassify just because/);
   });
 
+  it.each(['Read-Only', 'Human-Observation'] as const)(
+    'tells a %s item how to read a spooled tool result, inside the Procedure section',
+    (classification) => {
+      const procedure = buildGateVerifyProcedure(makeItem({ classification }));
+      const procIdx = procedure.indexOf('### Procedure');
+      const spoolIdx = procedure.indexOf('Reading a spooled tool result');
+      expect(procIdx).toBeGreaterThanOrEqual(0);
+      expect(spoolIdx).toBeGreaterThan(procIdx);
+      const para = procedure.slice(
+        spoolIdx,
+        procedure.indexOf('\n\n', spoolIdx),
+      );
+      expect(para).toMatch(/ONE Bash command on that absolute path/);
+      expect(para).toMatch(/`sort`, `uniq -c` or `head`/);
+      expect(para).toMatch(/`cd` prefix/);
+      expect(para).toMatch(/`VAR=` prefix/);
+      expect(para).toMatch(/`;` or `&&` chains/);
+      expect(para).toMatch(/heredocs/);
+      expect(para).toMatch(/`python3 -`/);
+    },
+  );
+
   it('falls back to a generic ad hoc read paragraph naming no script when the project declares no ad_hoc_read_command', () => {
     const procedure = buildGateVerifyProcedure(makeItem());
     expect(procedure).not.toContain('adhoc-query');
