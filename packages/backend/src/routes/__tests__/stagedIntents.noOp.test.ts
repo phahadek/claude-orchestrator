@@ -16,6 +16,7 @@ vi.mock('../../db/db', async () => {
 
 import { db } from '../../db/db';
 import { stageIntent, KNOWN_INTENT_KINDS } from '../stagedIntents';
+import { upsertOpsJournalEntry, insertSession } from '../../db/queries';
 
 beforeEach(() => {
   db.prepare('DELETE FROM staged_intent').run();
@@ -127,6 +128,61 @@ describe('planning.noOp decision-surface kind', () => {
         'sess-7',
       ),
     ).toThrow(/reason.*required/i);
+  });
+
+  describe('ops session over a frozen journal', () => {
+    const seed = (state: string) => {
+      db.prepare('DELETE FROM ops_journal').run();
+      upsertOpsJournalEntry({
+        task_id: 'ops-task-1',
+        project: 'proj-1',
+        milestone: 'M1',
+        state,
+        disposition: null,
+        worked_in: null,
+        evidence: null,
+        finding_or_proposal: null,
+        falsification: null,
+        filed_followons: null,
+        needs_from_operator: null,
+        resolution: null,
+        updated_at: new Date(0).toISOString(),
+      } as any);
+      db.prepare('DELETE FROM session WHERE session_id = ?').run('ops-noop-1');
+      insertSession({
+        session_id: 'ops-noop-1',
+        task_id: 'ops-task-1',
+        task_url: null,
+        project_context_url: null,
+        project_id: 'proj-1',
+        status: 'running',
+        started_at: 1,
+        session_type: 'ops',
+      } as any);
+    };
+    const stage = () =>
+      stageIntent(
+        'planning.noOp',
+        { taskId: 'ops-task-1', reason: 'blocked on deploy' },
+        'proj-1',
+        null,
+        'ops-noop-1',
+      );
+
+    it('rejects staging when the journal is blocked, naming journal.setState', () => {
+      seed('blocked');
+      expect(stage).toThrow(/journal\.setState/);
+    });
+
+    it('rejects staging when the journal is incident-frozen', () => {
+      seed('incident-frozen');
+      expect(stage).toThrow(/journal\.setState/);
+    });
+
+    it('still stages when the journal is resolved', () => {
+      seed('resolved');
+      expect(stage().state).toBe('staged');
+    });
   });
 
   it('rejects a blank skippedKind', () => {

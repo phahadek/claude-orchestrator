@@ -59,7 +59,9 @@ vi.mock('../../ops/opsJournal', async (importOriginal) => {
 import {
   getSession,
   listStagedIntentsBySession,
+  listStagedIntentsByGroup,
   getPRBySessionId,
+  setTaskPauseReason,
 } from '../../db/queries';
 import { getTaskBackend } from '../../tasks/TaskBackend';
 import { emitTaskUpdated } from '../../routes/tasks';
@@ -284,6 +286,86 @@ describe('PlanningOrchestrator — ops task completion', () => {
     await flush();
 
     expect(updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('closes the task when the only blocked member is a declined task.create and the group resolved transition committed', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    const resolvedIntent = makeIntent({
+      id: 'intent-1',
+      kind: 'journal.setState',
+      state: 'committed',
+      group_id: 'closing-group-1',
+      payload: JSON.stringify({ taskId: 'task-1', state: 'resolved' }),
+    });
+    const declined = makeIntent({
+      id: 'intent-2',
+      kind: 'task.create',
+      state: 'rejected',
+      group_id: 'closing-group-1',
+    });
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      resolvedIntent,
+      declined,
+    ]);
+    vi.mocked(listStagedIntentsByGroup).mockReturnValue([
+      resolvedIntent,
+      declined,
+    ]);
+    vi.mocked(isOpsTerminalClosingSetMember).mockImplementation(
+      (row) => row.group_id === 'closing-group-1',
+    );
+    const orch = new PlanningOrchestrator(sm as any);
+
+    await orch.handleDisposition({
+      intent: resolvedIntent,
+      disposition: 'approve',
+    });
+    await flush();
+
+    expect(updateStatus).toHaveBeenCalledWith(
+      'task-1',
+      '✅ Done',
+      expect.anything(),
+    );
+    expect(setTaskPauseReason).not.toHaveBeenCalled();
+  });
+
+  it('records a pause reason naming the blocking intent id when a non-exempt member blocks closure', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    const approveIntent = makeIntent({
+      id: 'intent-1',
+      kind: 'journal.setState',
+      state: 'committed',
+      group_id: 'closing-group-1',
+    });
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      approveIntent,
+      makeIntent({
+        id: 'intent-2',
+        kind: 'task.create',
+        state: 'needs_revision',
+        group_id: 'closing-group-1',
+      }),
+    ]);
+    vi.mocked(isOpsTerminalClosingSetMember).mockImplementation(
+      (row) => row.group_id === 'closing-group-1',
+    );
+    const orch = new PlanningOrchestrator(sm as any);
+
+    await orch.handleDisposition({
+      intent: approveIntent,
+      disposition: 'approve',
+    });
+    await flush();
+
+    expect(updateStatus).not.toHaveBeenCalled();
+    expect(setTaskPauseReason).toHaveBeenCalledWith(
+      'task-1',
+      expect.any(String),
+      expect.stringContaining('intent-2 (needs_revision)'),
+    );
   });
 
   it('leaves the task status unchanged when a needs_revision (pushback) member sits inside the closing group', async () => {

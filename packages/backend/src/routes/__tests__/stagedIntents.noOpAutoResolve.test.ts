@@ -33,7 +33,12 @@ vi.mock('../../db/db', async () => {
 });
 
 import { db } from '../../db/db';
-import { insertSession, getStagedIntent, getSession } from '../../db/queries';
+import {
+  insertSession,
+  getStagedIntent,
+  getSession,
+  upsertOpsJournalEntry,
+} from '../../db/queries';
 import {
   stageIntent,
   routeStageTimeBlock,
@@ -215,6 +220,52 @@ describe('operator disposition of a standard/ops session standalone planning.noO
     const session = getSession('sess-code-2');
     expect(session?.status).toBe('done');
     expect(session?.terminal_completion_reason).toBe('no_op_resolved');
+  });
+
+  it('Approve on an ops task whose journal became blocked refuses, writes no Done, and leaves the intent staged', async () => {
+    const updateStatus = vi.fn().mockResolvedValue(undefined);
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      updateStatus,
+      appendImplementationNote: vi.fn(),
+    });
+
+    seedSession('sess-ops-blocked', {
+      task_id: 'task-ops-b',
+      session_type: 'ops',
+    });
+    const intent = stageIntent(
+      'planning.noOp',
+      { taskId: 'task-ops-b', reason: 'blocked on deploy' },
+      'proj-1',
+      null,
+      'sess-ops-blocked',
+    );
+    upsertOpsJournalEntry({
+      task_id: 'task-ops-b',
+      project: 'proj-1',
+      milestone: 'M1',
+      state: 'blocked',
+      disposition: null,
+      worked_in: null,
+      evidence: null,
+      finding_or_proposal: null,
+      falsification: null,
+      filed_followons: null,
+      needs_from_operator: null,
+      resolution: null,
+      updated_at: new Date(0).toISOString(),
+    } as any);
+
+    const res = await supertest(makeApp())
+      .post(`/api/staged-intents/${intent.id}/approve`)
+      .send({});
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/journal\.setState/);
+    expect(updateStatus).not.toHaveBeenCalled();
+    expect(getStagedIntent(intent.id)?.state).toBe('staged');
+    expect(getSession('sess-ops-blocked')?.status).not.toBe('done');
   });
 
   it('Reject leaves the session non-terminal, the task untouched, and enqueues the reason to feedback', async () => {
