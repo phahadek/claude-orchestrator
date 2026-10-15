@@ -38,7 +38,12 @@ import {
   stageIntent,
   autoCommitGateVerifyIntent,
   sweepGateVerifyAutoCommitBacklogForMilestone,
+  withdrawGateVerifyMirror,
 } from '../stagedIntents';
+import {
+  appendGateItemEvent,
+  configureGateVerifyIntentRetireSink,
+} from '../../gate/gateService';
 import { createMilestonesRouter } from '../milestones';
 import { PlanningOrchestrator } from '../../orchestration/PlanningOrchestrator';
 import { ProjectService } from '../../projects/ProjectService';
@@ -276,6 +281,142 @@ describe('gate.verify auto-commit — staging-time attempt', () => {
       .prepare('SELECT state FROM staged_intent WHERE id = ?')
       .get(staged.id) as { state: string };
     expect(row.state).toBe('staged');
+  });
+});
+
+describe('gate.verify auto-commit — with the real retire sink wired', () => {
+  beforeEach(() => {
+    configureGateVerifyIntentRetireSink({
+      retireGenuineIntent(intentId, _sessionId, reason) {
+        withdrawGateVerifyMirror(intentId, reason);
+      },
+    });
+  });
+
+  function auditRows(intentId: string) {
+    return (
+      db
+        .prepare(
+          `SELECT payload FROM audit_log WHERE event_type = 'staged_intent_disposition'`,
+        )
+        .all() as { payload: string }[]
+    )
+      .map((r) => JSON.parse(r.payload))
+      .filter((p) => p.intent_id === intentId || p.intentId === intentId);
+  }
+
+  for (const disposition of ['pass', 'fail', 'not-yet-triggerable'] as const) {
+    it(`auto-committed ${disposition} ends committed with autoCommitted provenance`, async () => {
+      const item = makeRunnableGateItem();
+      const sid = `verify-session-sink-${disposition}`;
+      seedVerifySession(sid, item.id);
+      upsertGateVerifyAutoCommitPolicy('M12', disposition, true, Date.now());
+
+      const sm = makeSessionManager();
+      const planningOrchestrator = new PlanningOrchestrator(sm as any);
+      const handleSpy = vi.spyOn(planningOrchestrator, 'handleDisposition');
+      createStagedIntentsRouter(planningOrchestrator, sm as any);
+
+      const staged = stageIntent(
+        'gate.verify',
+        { gateItemId: item.id, disposition, evidence: 'observed no trigger' },
+        'proj-auto-commit',
+        null,
+        sid,
+        `Gate item ${item.id}: reported ${disposition}`,
+        null,
+        null,
+        item.milestone,
+        null,
+      );
+      await autoCommitGateVerifyIntent(
+        staged as any,
+        sm as any,
+        planningOrchestrator,
+      );
+
+      const row = db
+        .prepare('SELECT state, annotation FROM staged_intent WHERE id = ?')
+        .get(staged.id) as { state: string; annotation: string | null };
+      expect(row.state).toBe('committed');
+      expect(JSON.parse(row.annotation ?? '{}')).toEqual({
+        autoCommitted: true,
+      });
+      expect(
+        auditRows(staged.id).filter((p) => p.disposition === 'auto_committed'),
+      ).toHaveLength(1);
+      expect(handleSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ disposition: 'approve' }),
+      );
+      if (disposition === 'fail') {
+        expect(createTaskMock).toHaveBeenCalledTimes(1);
+      }
+    });
+  }
+
+  it('an operator commit through the per-intent apply route ends committed, not withdrawn', async () => {
+    const item = makeRunnableGateItem();
+    seedVerifySession('verify-session-sink-op', item.id);
+
+    const sm = makeSessionManager();
+    const planningOrchestrator = new PlanningOrchestrator(sm as any);
+    const app = express();
+    app.use(express.json());
+    app.use('/api', createStagedIntentsRouter(planningOrchestrator, sm as any));
+
+    const staged = stageIntent(
+      'gate.verify',
+      { gateItemId: item.id, disposition: 'pass' },
+      'proj-auto-commit',
+      null,
+      'verify-session-sink-op',
+      `Gate item ${item.id}: reported pass`,
+      null,
+      null,
+      item.milestone,
+      null,
+    );
+
+    const res = await supertest(app).post(
+      `/api/staged-intents/${staged.id}/apply`,
+    );
+    expect(res.status).toBe(200);
+    const row = db
+      .prepare('SELECT state FROM staged_intent WHERE id = ?')
+      .get(staged.id) as { state: string };
+    expect(row.state).toBe('committed');
+  });
+
+  it('a direct pass on an item whose verifier intent is still staged still withdraws it', async () => {
+    const item = makeRunnableGateItem();
+    seedVerifySession('verify-session-sink-direct', item.id);
+
+    const sm = makeSessionManager();
+    const planningOrchestrator = new PlanningOrchestrator(sm as any);
+    createStagedIntentsRouter(planningOrchestrator, sm as any);
+
+    const staged = stageIntent(
+      'gate.verify',
+      { gateItemId: item.id, disposition: 'pass' },
+      'proj-auto-commit',
+      null,
+      'verify-session-sink-direct',
+      `Gate item ${item.id}: reported pass`,
+      null,
+      null,
+      item.milestone,
+      null,
+    );
+
+    appendGateItemEvent(item.id, { disposition: 'pass', operator: 'jane' });
+
+    const row = db
+      .prepare(
+        'SELECT state, disposition_reason FROM staged_intent WHERE id = ?',
+      )
+      .get(staged.id) as { state: string; disposition_reason: string | null };
+    expect(row.state).toBe('withdrawn');
+    expect(row.disposition_reason).toMatch(/direct disposition/);
   });
 });
 
