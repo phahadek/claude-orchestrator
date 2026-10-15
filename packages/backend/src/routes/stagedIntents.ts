@@ -228,6 +228,8 @@ import {
   isRunFailureBreadthAttributable,
   resolveBreadthOwnTree,
   getProjectRowById,
+  computeTestFailureBreadthFlag,
+  computeTestFlipRateFlag,
 } from '../db/queries';
 import { classifyTestRunOutcome } from '../orchestration/testRequestLane';
 import type {
@@ -238,6 +240,7 @@ import type {
 import {
   appendAwaitingDispositionInstruction,
   buildTestResultDigestFromOutcomes,
+  type UnattributedView,
 } from '../session/testResultDigest';
 import { getRunTestOutcomes } from '../orchestration/runTestOutcomes';
 import {
@@ -6648,28 +6651,48 @@ export async function triggerTestRequestExecution(
   });
 
   if (!intent.sessionId || !sessionManager) return;
-  const outcomesDigest = runId
-    ? buildTestResultDigestFromOutcomes(await getRunTestOutcomes(runId), {
-        ...(result.passed
-          ? {}
-          : {
-              runFailure: {
-                failedCommand: result.failedCommand ?? null,
-                outputTail: truncateForDelivery(
-                  result.output,
-                  TEST_REQUEST_DELIVERY_OUTPUT_CAP,
-                ),
-              },
-            }),
-      })
-    : null;
+  const runOutcomes = runId ? await getRunTestOutcomes(runId) : null;
+  const partialFilter =
+    filterResult && filterResult.outcome === 'filtered_partial'
+      ? filterResult
+      : null;
+  const unattributedFailing = partialFilter
+    ? partialFilter.remainingTests
+    : (runOutcomes?.failingTests ?? []);
+  const unattributedView: UnattributedView | undefined =
+    runId && !result.passed && unattributedFailing.length > 0
+      ? buildUnattributedView(runId, intent.projectId, unattributedFailing)
+      : undefined;
+  const outcomesDigest =
+    runId && runOutcomes
+      ? buildTestResultDigestFromOutcomes(runOutcomes, {
+          ...(unattributedView
+            ? { unattributed: { view: unattributedView, knownCount: 0 } }
+            : {}),
+          ...(result.passed
+            ? {}
+            : {
+                runFailure: {
+                  failedCommand: result.failedCommand ?? null,
+                  outputTail: truncateForDelivery(
+                    result.output,
+                    TEST_REQUEST_DELIVERY_OUTPUT_CAP,
+                  ),
+                },
+              }),
+        })
+      : null;
   const baseOutput = superseded
     ? `[test.request] This run was withdrawn before it executed — a newer request (or a PR merge/close/push) superseded it. Nothing to act on here; the tree this ran against is no longer current.`
     : executionFailed
       ? `[test.request] The test run could not be executed — the test runner process failed to start, so no test result exists. This is an infrastructure failure, not a test failure; it does not indicate your changes are broken. A further request against this same tree will be held for operator approval rather than auto-run again — re-staging will not change that.\n\n${truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP)}`
       : (filterResult &&
           filterResult.outcome !== 'unfiltered' &&
-          renderBaseAttributableFilterDigest(filterResult, guardBlocked)) ||
+          renderBaseAttributableFilterDigest(
+            filterResult,
+            guardBlocked,
+            unattributedView,
+          )) ||
         outcomesDigest ||
         truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP);
   const output = appendAwaitingDispositionInstruction(
@@ -6694,6 +6717,42 @@ export async function triggerTestRequestExecution(
       `[stagedIntents] resume failed for session ${intent.sessionId.slice(0, 8)} after test.request ${intent.id}: ${err}`,
     );
   }
+}
+
+function buildUnattributedView(
+  runId: string,
+  projectId: string,
+  failing: { test_id: string }[],
+): UnattributedView {
+  const breadthN = typedGetSetting('flip_rate_breadth_n');
+  const breadthWindowHours = typedGetSetting('flip_rate_breadth_window_hours');
+  const flipWindowW = typedGetSetting('flip_rate_window_n');
+  const flipK = typedGetSetting('flip_rate_threshold_k');
+  const massBreakageThreshold = typedGetSetting('mass_breakage_threshold');
+  const indicators: UnattributedView['indicators'] = new Map();
+  // Grouped rendering needs no per-test numbers, so skip the lookups above X.
+  if (failing.length <= massBreakageThreshold) {
+    const run = getTestRequestRunById(runId);
+    const ownTree = resolveBreadthOwnTree(projectId, {
+      sessionId: run?.session_id ?? null,
+      worktreePath: run?.worktree_path ?? null,
+    });
+    const asOfMs = Date.now();
+    for (const t of failing) {
+      indicators.set(t.test_id, {
+        breadth: computeTestFailureBreadthFlag(
+          t.test_id,
+          breadthWindowHours,
+          breadthN,
+          asOfMs,
+          ownTree,
+        ).distinctContentHashCount,
+        flips: computeTestFlipRateFlag(t.test_id, flipWindowW, flipK)
+          .transitionCount,
+      });
+    }
+  }
+  return { runId, breadthN, flipWindowW, massBreakageThreshold, indicators };
 }
 
 /**
