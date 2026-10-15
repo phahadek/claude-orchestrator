@@ -6,6 +6,7 @@ import {
   setLastReviewedSha,
   setPreReviewStage,
   setPauseReason,
+  clearPauseReasonEntry,
   getLatestTestRequestRun,
   deleteTestRequestRunsForContentHash,
   hasAnalyzeResultForSha,
@@ -67,7 +68,7 @@ import type {
   StructuredTestResult,
   TestRequestRunRow,
 } from '../db/types';
-import { parsePauseReason } from '../db/pauseReason';
+import { parsePauseReasonSet } from '../db/pauseReason';
 
 interface GateFailureDetail {
   failedCommand?: string;
@@ -1538,13 +1539,16 @@ export class PreReviewPipeline {
 
   private clearStalePauseOnSuccess(job: ReviewJob): void {
     const prRow = getPRByNumber(job.prNumber, job.repo);
-    const pauseStruct = parsePauseReason(prRow?.pause_reason ?? null);
-    if (!pauseStruct || !this.gateOwnedPauseReasons().has(pauseStruct.reason)) {
-      return;
+    const owned = this.gateOwnedPauseReasons();
+    const stale = parsePauseReasonSet(prRow?.pause_reason ?? null).filter(
+      (entry) => owned.has(entry.reason),
+    );
+    if (stale.length === 0) return;
+    for (const entry of stale) {
+      clearPauseReasonEntry(job.prNumber, job.repo, entry.reason);
     }
-    setPauseReason(job.prNumber, job.repo, null);
     logger.info(
-      `[PreReviewPipeline] PR #${job.prNumber}: cleared stale pause_reason=${pauseStruct.reason} after pipeline success`,
+      `[PreReviewPipeline] PR #${job.prNumber}: cleared stale pause_reason=${stale.map((e) => e.reason).join(',')} after pipeline success`,
     );
     this.sessionManager.emit('message', {
       type: 'pr_pause_cleared',

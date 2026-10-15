@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
+import {
+  pauseReasonFromCanonical,
+  serializePauseReasonSet,
+} from '../../db/pauseReason';
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
@@ -9,6 +13,7 @@ const mockSetPRReviewResult = vi.fn();
 const mockSetLastReviewedSha = vi.fn();
 const mockSetPreReviewStage = vi.fn();
 const mockSetPauseReason = vi.fn();
+const mockClearPauseReasonEntry = vi.fn();
 const mockGetLatestTestRequestRun = vi.fn().mockReturnValue(undefined);
 const mockDeleteTestRequestRunsForContentHash = vi.fn();
 const mockHasAnalyzeResultForSha = vi.fn().mockReturnValue(false);
@@ -28,6 +33,8 @@ vi.mock('../../db/queries', () => ({
   setLastReviewedSha: (...args: unknown[]) => mockSetLastReviewedSha(...args),
   setPreReviewStage: (...args: unknown[]) => mockSetPreReviewStage(...args),
   setPauseReason: (...args: unknown[]) => mockSetPauseReason(...args),
+  clearPauseReasonEntry: (...args: unknown[]) =>
+    mockClearPauseReasonEntry(...args),
   getLatestTestRequestRun: (...args: unknown[]) =>
     mockGetLatestTestRequestRun(...args),
   deleteTestRequestRunsForContentHash: (...args: unknown[]) =>
@@ -350,12 +357,68 @@ describe('PreReviewPipeline.run — clears stale gate-owned pause on success', (
     const result = await pipeline.run(makeJob(), makeProject());
 
     expect(result.passed).toBe(true);
-    expect(mockSetPauseReason).toHaveBeenCalledWith(PR_NUMBER, REPO, null);
+    expect(mockClearPauseReasonEntry).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'analyze_failing',
+    );
     expect(sm.emit).toHaveBeenCalledWith('message', {
       type: 'pr_pause_cleared',
       prNumber: PR_NUMBER,
       repo: REPO,
     });
+  });
+
+  it('removes a stale gate entry even when a newer same-severity non-gate entry would win resolution', async () => {
+    const raw = serializePauseReasonSet([
+      { ...pauseReasonFromCanonical('analyze_failing'), set_at: 1000 },
+      {
+        ...pauseReasonFromCanonical('base_attributable_test_excluded'),
+        set_at: 2000,
+      },
+    ]);
+    mockGetPRByNumber.mockReturnValue(makePRRow({ pause_reason: raw }));
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(true);
+    expect(mockClearPauseReasonEntry).toHaveBeenCalledTimes(1);
+    expect(mockClearPauseReasonEntry).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'analyze_failing',
+    );
+    expect(mockSetPauseReason).not.toHaveBeenCalled();
+    expect(sm.emit).toHaveBeenCalledWith('message', {
+      type: 'pr_pause_cleared',
+      prNumber: PR_NUMBER,
+      repo: REPO,
+    });
+  });
+
+  it('removes every gate-owned entry when several are present', async () => {
+    const raw = serializePauseReasonSet([
+      { ...pauseReasonFromCanonical('analyze_failing'), set_at: 1000 },
+      { ...pauseReasonFromCanonical('f2_verdict_missing'), set_at: 2000 },
+    ]);
+    mockGetPRByNumber.mockReturnValue(makePRRow({ pause_reason: raw }));
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    await pipeline.run(makeJob(), makeProject());
+
+    expect(mockClearPauseReasonEntry).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'analyze_failing',
+    );
+    expect(mockClearPauseReasonEntry).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'f2_verdict_missing',
+    );
   });
 
   it('clears pause_reason=autofix_git_infra_failure to null on success', async () => {
@@ -368,7 +431,11 @@ describe('PreReviewPipeline.run — clears stale gate-owned pause on success', (
     const result = await pipeline.run(makeJob(), makeProject());
 
     expect(result.passed).toBe(true);
-    expect(mockSetPauseReason).toHaveBeenCalledWith(PR_NUMBER, REPO, null);
+    expect(mockClearPauseReasonEntry).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'autofix_git_infra_failure',
+    );
   });
 
   it('preserves a non-gate pause (max_reviews) at success time', async () => {
@@ -382,6 +449,7 @@ describe('PreReviewPipeline.run — clears stale gate-owned pause on success', (
 
     expect(result.passed).toBe(true);
     expect(mockSetPauseReason).not.toHaveBeenCalled();
+    expect(mockClearPauseReasonEntry).not.toHaveBeenCalled();
     expect(sm.emit).not.toHaveBeenCalledWith(
       'message',
       expect.objectContaining({ type: 'pr_pause_cleared' }),
