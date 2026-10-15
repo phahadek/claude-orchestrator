@@ -20,6 +20,7 @@ interface TestResultEntry {
 type TestRunOutcome =
   | 'passed'
   | 'passed-scoped'
+  | 'passed-targeted'
   | 'failed-with-named-tests'
   | 'failed-with-no-report-acquired'
   | 'crashed-oom'
@@ -52,6 +53,7 @@ interface TestRunHistoryResponse {
 const OUTCOME_LABELS: Record<TestRunOutcome, string> = {
   passed: 'Passed',
   'passed-scoped': 'Passed (scoped)',
+  'passed-targeted': 'Passed (targeted)',
   'failed-with-named-tests': 'Failed',
   'failed-with-no-report-acquired': 'No report acquired',
   'crashed-oom': 'Crashed (OOM)',

@@ -230,6 +230,9 @@ export function testRequestRunSatisfiesGate(
   run: TestRequestRunRow | undefined,
 ): boolean {
   if (!run) return false;
+  // A targeted re-run only exercised an exact failing-id set; it is never
+  // full-suite proof, whatever its verdict or excused-failure state.
+  if (run.run_kind === 'targeted') return false;
   if (run.state === 'passed') return true;
   if (run.state !== 'failed') return false;
   const failing = getFailingTestIdsForRun(run.id);
