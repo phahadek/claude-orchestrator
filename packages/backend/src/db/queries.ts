@@ -3096,6 +3096,16 @@ export function evictTaskCacheRows(taskIds: string[]): number {
   return tx(taskIds);
 }
 
+/** Persisted task_cache ids in the `notion:` key space (excludes board:* and every other prefix). */
+export function listNotionTaskCacheIds(): string[] {
+  const rows = db
+    .prepare(
+      `SELECT task_id FROM task_cache WHERE substr(task_id, 1, 7) = 'notion:'`,
+    )
+    .all() as { task_id: string }[];
+  return rows.map((r) => r.task_id);
+}
+
 let _stmtGetBoardCacheRows: Database.Statement | null = null;
 
 /** Lazily-prepared board:* cache read — shared by updateTaskStatusInBoardCaches and getAllBoardCacheTasks. */
