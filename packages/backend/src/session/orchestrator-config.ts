@@ -89,7 +89,8 @@ export function getPrePrAnalyzeCommands(cfg: {
 }): string[] {
   return cfg.analyze
     .filter(
-      (c): c is AnalyzeCommandEntry => typeof c !== 'string' && c.pre_pr === true,
+      (c): c is AnalyzeCommandEntry =>
+        typeof c !== 'string' && c.pre_pr === true,
     )
     .map((c) => c.command);
 }

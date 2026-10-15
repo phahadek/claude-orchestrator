@@ -398,9 +398,7 @@ describe('buildOrchestratorClaudeMd', () => {
     expect(section).toContain('before your final `test_request`');
 
     const without = gate({ verify: ['npm run build'] });
-    expect(without).toBe(
-      gate({ verify: ['npm run build'], prePrAnalyze: [] }),
-    );
+    expect(without).toBe(gate({ verify: ['npm run build'], prePrAnalyze: [] }));
     expect(without).toContain('3. Stage only your implementation files');
     expect(without).not.toContain('before your final `test_request`');
   });
