@@ -214,6 +214,29 @@ describe('deriveSessionStatus', () => {
     });
   });
 
+  describe('ops sessions closed by gate-verify / deploy teardown', () => {
+    it.each([
+      'gate_item_verifier_consumed',
+      'deploy_agentic_verdict_reported',
+      'deploy_agentic_step_timeout',
+    ])('derives done from %s for an ops session', (reason) => {
+      const result = deriveSessionStatus(
+        baseInput({
+          sessionType: 'ops',
+          taskTypeCategory: 'ops_eligible',
+          hasOpenPR: false,
+          ledgerEntries: [
+            ledgerRow({ session_type: 'ops', signal_value: reason }),
+          ],
+        }),
+      );
+      expect(result).toEqual({
+        status: 'done',
+        terminalCompletionReason: reason,
+      });
+    });
+  });
+
   describe('terminal_completion_reason — consumer semantics', () => {
     // Mirrors PlanningOrchestrator.closeDeferredOpsTask's real check:
     //   !session.terminal_completion_reason ||
