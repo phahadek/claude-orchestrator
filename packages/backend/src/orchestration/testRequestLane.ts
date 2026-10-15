@@ -377,7 +377,7 @@ function failureReasonFor(
  * The host-wide concurrency cap: runtimeSettings.test_request_max_concurrent.
  * Every project shares this single budget — there is no per-project override.
  */
-function getGlobalTestRunLimit(): number {
+export function getGlobalTestRunLimit(): number {
   const maxConcurrent = typedGetSetting('test_request_max_concurrent');
   const ceilingMb = typedGetSetting('test_request_memory_ceiling_mb');
   if (ceilingMb === 0) return maxConcurrent;
