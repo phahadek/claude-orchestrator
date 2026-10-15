@@ -665,7 +665,7 @@ describe('PRMergeWatcher — idle→error session transition on PR close', () =>
     );
   });
 
-  it('does not call markSessionErrored when closed PR has no session_id',async () => {
+  it('does not call markSessionErrored when closed PR has no session_id', async () => {
     const pr = makePRRow({ session_id: null });
     const sessions = makeMockSessions();
 
