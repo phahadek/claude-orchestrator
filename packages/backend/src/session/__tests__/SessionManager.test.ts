@@ -89,6 +89,7 @@ vi.mock('../orchestrator-config', () => ({
     capability_pre_grants: {},
   }),
   resolvePreGrantCapabilities: vi.fn(() => []),
+  getPrePrAnalyzeCommands: vi.fn(() => []),
 }));
 vi.mock('../sessionRecovery', () => ({
   recoverSession: vi.fn().mockResolvedValue(undefined),
