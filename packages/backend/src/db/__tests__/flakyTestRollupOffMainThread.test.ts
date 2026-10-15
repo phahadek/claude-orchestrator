@@ -139,6 +139,20 @@ describe('replaceFlaggedFlakyTestsRollupOffMainThread', () => {
 
       expect(result.itemsProcessed).toBe(1);
 
+      expect(result.timings).toBeDefined();
+      for (const key of [
+        'spawnToOnlineMs',
+        'dbOpenMs',
+        'candidatesMs',
+        'ghostCheckMs',
+        'workerTotalMs',
+      ] as const) {
+        expect(result.timings![key]).toBeGreaterThanOrEqual(0);
+      }
+      expect(result.timings!.workerTotalMs).toBeGreaterThanOrEqual(
+        result.timings!.dbOpenMs,
+      );
+
       // The worker's connection is separate from `db` — the main-thread
       // handle must still see the rows it wrote afterward.
       const rows = db

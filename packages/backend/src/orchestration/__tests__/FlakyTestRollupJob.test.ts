@@ -17,6 +17,10 @@ const settingsMock = vi.hoisted(() => ({
   ),
 }));
 
+const loggerMock = vi.hoisted(() => ({
+  logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+vi.mock('../../logger.js', () => loggerMock);
 vi.mock('../../db/queries.js', () => queriesMock);
 vi.mock('../../config/settings.js', () => settingsMock);
 
@@ -91,6 +95,54 @@ describe('FlakyTestRollupJob', () => {
 
     pending.forEach((resolve) => resolve());
     await resultPromise;
+  });
+
+  it('warns with per-project phase timings when a zero-item tick exceeds 1000ms', async () => {
+    vi.useFakeTimers();
+    try {
+      queriesMock.replaceFlaggedFlakyTestsRollup.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            setTimeout(
+              () =>
+                resolve({
+                  itemsProcessed: 0,
+                  timings: {
+                    spawnToOnlineMs: 1500,
+                    dbOpenMs: 2,
+                    candidatesMs: 3,
+                    ghostCheckMs: 4,
+                    workerTotalMs: 10,
+                  },
+                }),
+              1200,
+            );
+          }),
+      );
+      const job = new FlakyTestRollupJob({
+        listProjects: () => [{ id: 'proj-slow' } as any],
+      });
+      const promise = job.runOnce();
+      await vi.advanceTimersByTimeAsync(1300);
+      const result = await promise;
+
+      expect(result.items_processed).toBe(0);
+      expect(loggerMock.logger.warn).toHaveBeenCalledTimes(1);
+      const line = loggerMock.logger.warn.mock.calls[0][0] as string;
+      expect(line).toContain('proj-slow');
+      expect(line).toContain('"spawnToOnlineMs":1500');
+      expect(line).toContain('"workerTotalMs":10');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not warn on a fast zero-item tick', async () => {
+    const job = new FlakyTestRollupJob({
+      listProjects: () => [{ id: 'proj-1' } as any],
+    });
+    await job.runOnce();
+    expect(loggerMock.logger.warn).not.toHaveBeenCalled();
   });
 
   it('continues refreshing remaining projects when one project fails', async () => {
