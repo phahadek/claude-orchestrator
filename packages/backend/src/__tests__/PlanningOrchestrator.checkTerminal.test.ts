@@ -260,17 +260,18 @@ describe('PlanningOrchestrator.checkTerminal', () => {
     it('does not terminalize while the committed intent has no linked PR', () => {
       seedSession('session-1', 'ops');
       const orchestrator = new PlanningOrchestrator(makeSessionManager());
-      const intent = stageIntent({ kind: 'ops.prIntent', state: 'committed' });
+      stageIntent({ kind: 'ops.prIntent', state: 'committed' });
+      stageIntent({ kind: 'journal.setState', state: 'committed' });
 
       expect(orchestrator.checkTerminal(SESSION_ID)).toBe(false);
       expect(getSession(SESSION_ID)?.status).toBe('running');
-      expect(intent.id).toBeTruthy();
     });
 
     it('terminalizes once a PR links to the intent', () => {
       seedSession('session-1', 'ops');
       const orchestrator = new PlanningOrchestrator(makeSessionManager());
       const intent = stageIntent({ kind: 'ops.prIntent', state: 'committed' });
+      stageIntent({ kind: 'journal.setState', state: 'committed' });
       expect(orchestrator.checkTerminal(SESSION_ID)).toBe(false);
 
       insertLinkedPR(intent.id);
