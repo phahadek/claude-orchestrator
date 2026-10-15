@@ -53,6 +53,7 @@ import {
   configureGateVerification,
   getGateVerificationOptions,
   dispatchGateItemVerification,
+  defaultFollowupFiler,
   reattachOutstandingGateVerifications,
   type DeployAdvanceTrigger,
   type GateItemVerifier,
@@ -753,6 +754,54 @@ describe('runGateReconcilerTick', () => {
       disposition: 'fail',
       filedFollowon: 'notion:followup-1',
     });
+  });
+
+  it('a fail with existingTaskId creates no task and attaches that id as the follow-on source', async () => {
+    const item = await makeRunnableItem({ classification: 'Read-Only' });
+    const followupFiler: FollowupFixTaskFiler = {
+      fileFollowupFixTask: vi.fn(async () => ({
+        taskId: 'notion:should-not-be-created',
+        taskTitle: 'nope',
+      })),
+    };
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: {
+        verify: async () => ({
+          disposition: 'fail' as const,
+          proposedFix: { existingTaskId: 'notion:existing-cause-task' },
+        }),
+      },
+      followupFiler,
+    });
+
+    expect(followupFiler.fileFollowupFixTask).not.toHaveBeenCalled();
+    const updated = getItem(item.id)!;
+    expect(updated.state).toBe('open');
+    expect(
+      updated.sources.filter(
+        (s) => s.sourceTaskId === 'notion:existing-cause-task',
+      ),
+    ).toHaveLength(1);
+    expect(updated.events.at(-1)).toMatchObject({
+      disposition: 'fail',
+      filedFollowon: 'notion:existing-cause-task',
+    });
+  });
+
+  it('a fail the default filer declines (no structured payload) is recorded with no follow-on and nothing filed', async () => {
+    const item = await makeRunnableItem({ classification: 'Read-Only' });
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify: async () => ({ disposition: 'fail' as const }) },
+      followupFiler: defaultFollowupFiler,
+    });
+
+    const updated = getItem(item.id)!;
+    expect(updated.state).toBe('open');
+    expect(updated.sources).toHaveLength(1);
+    expect(updated.events.at(-1)).toMatchObject({ disposition: 'fail' });
+    expect(updated.events.at(-1)?.filedFollowon).toBeUndefined();
   });
 
   it('verifier fail path ends with exactly one source row for the follow-up (filer title kept) and state open', async () => {

@@ -410,6 +410,7 @@ describe('gate.verify', () => {
           query: 'z',
           source: 'packages/backend/src/gate/gateStore.ts:12',
         },
+        proposedFix: { existingTaskId: 'notion:abc' },
       },
     });
     expect(resultOf(result as never)).toEqual({
@@ -427,7 +428,24 @@ describe('gate.verify', () => {
         source: 'packages/backend/src/gate/gateStore.ts:12',
       },
       reclassify: undefined,
+      proposedFix: { existingTaskId: 'notion:abc' },
     });
+    await close();
+  });
+
+  it('rejects a fail without proposedFix', async () => {
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session, 'ops');
+    const result = await client.callTool({
+      name: 'gate.verify',
+      arguments: {
+        gateItemId: 'item-1',
+        disposition: 'fail',
+        evidence: { expected: 'x', found: 'y', query: 'z' },
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(session.recordGateVerifyDisposition).not.toHaveBeenCalled();
     await close();
   });
 
@@ -511,7 +529,15 @@ describe('gate.verify', () => {
         },
         proposedFix: {
           title: 'Fix the widget creation audit write',
-          summary: 'widget_created never writes an audit_log row.',
+          cause: {
+            file: 'packages/backend/src/widgets.ts',
+            line: 10,
+            condition: 'widget_created returns before the audit write',
+          },
+          input: 'widget 42 created at 2026-10-14',
+          fix: 'write the audit_log row before returning',
+          filesAffected: ['packages/backend/src/widgets.ts'],
+          automatedCriteria: ['creating a widget writes an audit_log row'],
         },
       },
     });
@@ -531,7 +557,15 @@ describe('gate.verify', () => {
       reclassify: undefined,
       proposedFix: {
         title: 'Fix the widget creation audit write',
-        summary: 'widget_created never writes an audit_log row.',
+        cause: {
+          file: 'packages/backend/src/widgets.ts',
+          line: 10,
+          condition: 'widget_created returns before the audit write',
+        },
+        input: 'widget 42 created at 2026-10-14',
+        fix: 'write the audit_log row before returning',
+        filesAffected: ['packages/backend/src/widgets.ts'],
+        automatedCriteria: ['creating a widget writes an audit_log row'],
       },
     });
     await close();
@@ -552,7 +586,15 @@ describe('gate.verify', () => {
         },
         proposedFix: {
           title: 'Fix the widget creation audit write',
-          summary: 'widget_created never writes an audit_log row.',
+          cause: {
+            file: 'packages/backend/src/widgets.ts',
+            line: 10,
+            condition: 'widget_created returns before the audit write',
+          },
+          input: 'widget 42 created at 2026-10-14',
+          fix: 'write the audit_log row before returning',
+          filesAffected: ['packages/backend/src/widgets.ts'],
+          automatedCriteria: ['creating a widget writes an audit_log row'],
         },
       },
     });

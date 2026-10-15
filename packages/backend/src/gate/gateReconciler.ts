@@ -47,6 +47,7 @@ import {
   type AsyncDeployAncestrySource,
 } from './gateService';
 import type { GateItemClassification } from '../db/types';
+import type { GateVerifyProposedFix } from '../mcp/tools/schemas';
 
 /**
  * The live deploy-SHA source, per project — reported in by each project's
@@ -125,10 +126,7 @@ export interface GateVerificationResult {
    * present on a Human-Observation mirror's operator-supplied disposition
    * (no verify session runs on that path).
    */
-  proposedFix?: {
-    title: string;
-    summary: string;
-  };
+  proposedFix?: GateVerifyProposedFix;
   /**
    * Set when this result came from a session's own `gate.verify` report,
    * staged as a normal intent rather than written straight to
@@ -181,12 +179,12 @@ interface FollowupFixTask {
   taskTitle: string;
 }
 
-/** Files the follow-up fix task a failing verification attaches as a new gate_item_source. */
+/** Files the follow-up fix task a failing verification attaches as a new gate_item_source. Resolves null (files nothing) when the failure carries no located root cause. */
 export interface FollowupFixTaskFiler {
   fileFollowupFixTask(
     item: GateItem,
     failure: GateVerificationResult,
-  ): Promise<FollowupFixTask>;
+  ): Promise<FollowupFixTask | null>;
 }
 
 /**
@@ -246,9 +244,39 @@ function extractVerifierEvidence(
  * verifier already found. Rendered through renderTaskBodyMarkdown so the
  * body parses under the same section model the promotion gate uses.
  */
+type NewTaskFix = Extract<GateVerifyProposedFix, { cause: unknown }>;
+type ExistingTaskFix = Extract<
+  GateVerifyProposedFix,
+  { existingTaskId: string }
+>;
+
+export function isNewTaskFix(
+  fix: GateVerifyProposedFix | undefined,
+): fix is NewTaskFix {
+  return (
+    typeof fix === 'object' &&
+    fix !== null &&
+    'cause' in fix &&
+    typeof fix.cause === 'object' &&
+    fix.cause !== null
+  );
+}
+
+function isExistingTaskFix(
+  fix: GateVerifyProposedFix | undefined,
+): fix is ExistingTaskFix {
+  return (
+    typeof fix === 'object' &&
+    fix !== null &&
+    'existingTaskId' in fix &&
+    typeof fix.existingTaskId === 'string'
+  );
+}
+
 function buildFollowupTaskBody(
   item: GateItem,
   failure: GateVerificationResult,
+  fix: NewTaskFix,
 ): string {
   const evidence = extractVerifierEvidence(failure.evidence);
   const originatingSource = item.sources[0];
@@ -260,6 +288,13 @@ function buildFollowupTaskBody(
     },
     { type: 'heading_3', text: 'Gate item text' },
     { type: 'paragraph', text: item.text },
+    { type: 'heading_3', text: 'Root cause' },
+    {
+      type: 'bulleted_list_item',
+      text: `Branch: ${fix.cause.file}:${fix.cause.line} — ${fix.cause.condition}`,
+    },
+    { type: 'bulleted_list_item', text: `Input that takes it: ${fix.input}` },
+    { type: 'bulleted_list_item', text: `Fix that follows: ${fix.fix}` },
     { type: 'heading_3', text: 'Verifier evidence' },
   ];
 
@@ -298,12 +333,15 @@ function buildFollowupTaskBody(
   }
 
   const sections: TaskBodySections = {
-    summary:
-      failure.proposedFix?.summary ?? `Fix gate item ${item.id}: ${item.text}`,
+    summary: `${fix.cause.file}:${fix.cause.line} — ${fix.cause.condition} Fix: ${fix.fix}`,
     dependencies: [],
     context,
-    automatedCriteria: [`Gate item ${item.id} re-verifies as pass.`],
+    automatedCriteria: [
+      ...fix.automatedCriteria,
+      `Gate item ${item.id} re-verifies as pass.`,
+    ],
     manualCriteria: [],
+    filesAffected: fix.filesAffected,
     taskType: deriveFollowupTaskType(item),
   };
   return renderTaskBodyMarkdown(sections);
@@ -311,6 +349,8 @@ function buildFollowupTaskBody(
 
 export const defaultFollowupFiler: FollowupFixTaskFiler = {
   async fileFollowupFixTask(item, failure) {
+    const fix = failure.proposedFix;
+    if (!isNewTaskFix(fix)) return null;
     const databaseId = resolveMilestoneSourceId(item.project, item.milestone);
     const backend = getTaskBackend(item.project);
     if (!backend.createTask) {
@@ -318,13 +358,13 @@ export const defaultFollowupFiler: FollowupFixTaskFiler = {
         `[GateReconciler] task backend for project ${item.project} does not support createTask`,
       );
     }
-    const title = failure.proposedFix?.title ?? `Fix gate item: ${item.text}`;
+    const title = fix.title;
     const taskId = await backend.createTask({
       databaseId,
       title,
       type: deriveFollowupTaskType(item),
       priority: FOLLOWUP_TASK_PRIORITY,
-      body: buildFollowupTaskBody(item, failure),
+      body: buildFollowupTaskBody(item, failure, fix),
     });
     return { taskId, taskTitle: title };
   },
@@ -621,9 +661,37 @@ export async function routeVerificationResult(
         classification: item.classification,
         disposition: 'needs-setup',
       };
+    } else if (isExistingTaskFix(result.proposedFix)) {
+      const existingTaskId = result.proposedFix.existingTaskId;
+      const now = new Date().toISOString();
+      attachFailFollowonSource(item.id, existingTaskId, now);
+      appendGateItemEvent(item.id, {
+        disposition: 'fail',
+        evidence: failEvidence(item, result.evidence),
+        filedFollowon: existingTaskId,
+        deploySha: deploySha ?? undefined,
+        unattended,
+      });
+      gateStore.advanceState(item.id, 'open', 'fail', now);
     } else {
       const followup = await followupFiler.fileFollowupFixTask(item, result);
       const now = new Date().toISOString();
+      if (!followup) {
+        // No located root cause (operator-supplied fail on a mirror, or a
+        // legacy row): record the fail, file nothing.
+        appendGateItemEvent(item.id, {
+          disposition: 'fail',
+          evidence: failEvidence(item, result.evidence),
+          deploySha: deploySha ?? undefined,
+          unattended,
+        });
+        gateStore.advanceState(item.id, 'open', 'fail', now);
+        return {
+          itemId: item.id,
+          classification: item.classification,
+          disposition: result.disposition,
+        };
+      }
       // Attached first, with the filer's title, so appendGateItemEvent's own
       // attach of the same follow-on dedups instead of using the id fallback.
       attachFailFollowonSource(

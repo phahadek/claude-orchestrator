@@ -6,9 +6,34 @@
  * gate-verify adjudication layer".
  */
 
-import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  vi,
+} from 'vitest';
 import express from 'express';
 import supertest from 'supertest';
+import { execFileSync } from 'child_process';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+
+const STRUCTURED_FIX = {
+  title: 'Write the missing env var in the deploy script',
+  cause: {
+    file: 'scripts/deploy.sh',
+    line: 42,
+    condition: 'the env block is skipped when DRY_RUN is unset',
+  },
+  input: 'deploy run 7 on 2026-10-14 with DRY_RUN unset',
+  fix: 'write NEW_ENV_VAR whenever DRY_RUN is unset',
+  filesAffected: ['scripts/deploy.sh'],
+  automatedCriteria: ['deploy.sh writes NEW_ENV_VAR when DRY_RUN is unset'],
+};
 
 const { createTaskMock } = vi.hoisted(() => ({
   createTaskMock: vi.fn(async () => 'notion:new-followup-task'),
@@ -26,6 +51,7 @@ vi.mock('../../db/db.js', async () => {
 });
 
 import { db } from '../../db/db.js';
+import { upsertTaskCache } from '../../db/queries.js';
 import {
   insertItem,
   getItem,
@@ -299,6 +325,7 @@ describe('gate.verify — fail disposition files a follow-up task via resolveMil
         gateItemId: item.id,
         disposition: 'fail',
         evidence: { basis: 'operational', note: 'the env var is missing' },
+        proposedFix: STRUCTURED_FIX,
       },
     });
     expect(staged.status).toBe(201);
@@ -342,10 +369,7 @@ describe('gate.verify — fail disposition files a follow-up task via resolveMil
         gateItemId: item.id,
         disposition: 'fail',
         evidence: { basis: 'operational', note: 'the env var is missing' },
-        proposedFix: {
-          title: 'Write the missing env var in the deploy script',
-          summary: 'The deploy script never writes NEW_ENV_VAR to .env.',
-        },
+        proposedFix: STRUCTURED_FIX,
       },
     });
     expect(staged.status).toBe(201);
@@ -358,12 +382,13 @@ describe('gate.verify — fail disposition files a follow-up task via resolveMil
     expect(applied.status).toBe(200);
     expect(createTaskMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: 'Write the missing env var in the deploy script',
+        title: STRUCTURED_FIX.title,
+        body: expect.stringContaining('scripts/deploy.sh:42'),
       }),
     );
   });
 
-  it('falls back to the generic "Fix gate item" title/summary when no proposedFix is reported', async () => {
+  it('records the fail and files nothing when no proposedFix is reported', async () => {
     const item = makeGateItem({ milestone: 'M13' });
     const app = makeApp();
     const agent = supertest(app);
@@ -385,9 +410,103 @@ describe('gate.verify — fail disposition files a follow-up task via resolveMil
       .send({});
 
     expect(applied.status).toBe(200);
-    expect(createTaskMock).toHaveBeenCalledWith(
-      expect.objectContaining({ title: `Fix gate item: ${item.text}` }),
+    expect(createTaskMock).not.toHaveBeenCalled();
+    expect(getItem(item.id)?.events.at(-1)).toMatchObject({
+      disposition: 'fail',
+    });
+  });
+});
+
+describe('gate.verify — stage-time proposedFix validation', () => {
+  let repoDir: string;
+
+  beforeAll(() => {
+    repoDir = mkdtempSync(join(tmpdir(), 'gate-verify-repo-'));
+    execFileSync('git', ['init', '-q'], { cwd: repoDir });
+    mkdirSync(join(repoDir, 'scripts'));
+    writeFileSync(join(repoDir, 'scripts', 'deploy.sh'), 'echo hi\n');
+    execFileSync('git', ['add', 'scripts/deploy.sh'], { cwd: repoDir });
+    ProjectService.create({
+      id: 'proj-git',
+      name: 'Project Git',
+      projectDir: repoDir,
+    });
+    ProjectService.createMilestone({
+      id: 'proj-git:m1',
+      projectId: 'proj-git',
+      name: 'M1',
+      canonicalShortId: 'M1',
+      sourceId: 'db00d3a1-aaaa-bbbb-cccc-1234567890ac',
+    });
+  });
+
+  afterAll(() => {
+    rmSync(repoDir, { recursive: true, force: true });
+  });
+
+  function stageFail(item: { id: string }, proposedFix: unknown) {
+    return () =>
+      stageIntent(
+        'gate.verify',
+        { gateItemId: item.id, disposition: 'fail', proposedFix },
+        'proj-git',
+      );
+  }
+
+  const gitItem = () => makeGateItem({ project: 'proj-git', milestone: 'M1' });
+
+  it('accepts tracked cause.file / filesAffected, with a *(new)* file exempt', () => {
+    const item = gitItem();
+    expect(
+      stageFail(item, {
+        ...STRUCTURED_FIX,
+        filesAffected: ['scripts/deploy.sh', 'scripts/new.test.sh *(new)*'],
+      }),
+    ).not.toThrow();
+  });
+
+  it('rejects an untracked cause.file, naming the path', () => {
+    const item = gitItem();
+    expect(
+      stageFail(item, {
+        ...STRUCTURED_FIX,
+        cause: { ...STRUCTURED_FIX.cause, file: 'scripts/missing.sh' },
+      }),
+    ).toThrow(/scripts\/missing\.sh/);
+  });
+
+  it('rejects an untracked non-new filesAffected entry, naming the path', () => {
+    const item = gitItem();
+    expect(
+      stageFail(item, {
+        ...STRUCTURED_FIX,
+        filesAffected: ['scripts/deploy.sh', 'scripts/ghost.sh'],
+      }),
+    ).toThrow(/scripts\/ghost\.sh/);
+  });
+
+  it('rejects an existingTaskId that is truncated or not an open task on the board, and accepts a full open one', () => {
+    const item = gitItem();
+    upsertTaskCache(
+      'board:proj-git:m1',
+      JSON.stringify([
+        { id: 'notion:aaaa1111bbbb2222cccc3333dddd4444', status: '🟡 Ready' },
+        { id: 'notion:eeee1111ffff2222aaaa3333bbbb4444', status: '✅ Done' },
+      ]),
     );
+    expect(stageFail(item, { existingTaskId: 'notion:aaaa1111' })).toThrow(
+      /existingTaskId/,
+    );
+    expect(
+      stageFail(item, {
+        existingTaskId: 'notion:eeee1111ffff2222aaaa3333bbbb4444',
+      }),
+    ).toThrow(/existingTaskId/);
+    expect(
+      stageFail(item, {
+        existingTaskId: 'notion:aaaa1111bbbb2222cccc3333dddd4444',
+      }),
+    ).not.toThrow();
   });
 });
 

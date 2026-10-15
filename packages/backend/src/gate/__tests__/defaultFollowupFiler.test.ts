@@ -81,23 +81,79 @@ function makeItem(overrides: Partial<Parameters<typeof insertItem>[0]> = {}) {
   });
 }
 
+const fix = {
+  title: 'Env var write is missing from the deploy script',
+  cause: {
+    file: 'scripts/deploy.sh',
+    line: 42,
+    condition: 'the env block is skipped when DRY_RUN is unset',
+  },
+  input: 'deploy run 7 on 2026-10-14 with DRY_RUN unset',
+  fix: 'write NEW_ENV_VAR whenever DRY_RUN is unset',
+  filesAffected: ['scripts/deploy.sh', 'scripts/deploy.test.sh *(new)*'],
+  automatedCriteria: ['deploy.sh writes NEW_ENV_VAR when DRY_RUN is unset'],
+};
+
 describe('defaultFollowupFiler.fileFollowupFixTask', () => {
   it('resolves the database id via resolveMilestoneSourceId for a canonical-short-id milestone and passes it to createTask', async () => {
     const item = makeItem();
 
     const result = await defaultFollowupFiler.fileFollowupFixTask(item, {
       disposition: 'fail',
+      proposedFix: fix,
     });
 
     expect(createTaskMock).toHaveBeenCalledTimes(1);
     expect(createTaskMock).toHaveBeenCalledWith(
       expect.objectContaining({
         databaseId: M13_SOURCE_ID,
-        title: expect.stringContaining(item.text),
+        title: fix.title,
         type: '💻 Code',
       }),
     );
-    expect(result.taskId).toBe('notion:new-followup-task');
+    expect(result?.taskId).toBe('notion:new-followup-task');
+  });
+
+  it('renders the full standard body: Summary, Context locks, Acceptance criteria, Files / paths, Implementation notes — and no Fix gate item title', async () => {
+    const item = makeItem();
+
+    await defaultFollowupFiler.fileFollowupFixTask(item, {
+      disposition: 'fail',
+      proposedFix: fix,
+    });
+
+    const args = createTaskMock.mock.calls[0][0] as {
+      title: string;
+      body: string;
+    };
+    expect(args.title).not.toMatch(/^Fix gate item:/);
+    expect(args.body).toContain('Summary');
+    expect(args.body).toContain('scripts/deploy.sh:42');
+    expect(args.body).toContain(fix.cause.condition);
+    expect(args.body).toContain(fix.input);
+    expect(args.body).toContain(fix.fix);
+    expect(args.body).toContain(fix.automatedCriteria[0]);
+    expect(args.body).toContain(`Gate item ${item.id} re-verifies as pass.`);
+    expect(args.body).toContain('Files / paths affected');
+    expect(args.body).toContain('scripts/deploy.test.sh *(new)*');
+    expect(args.body).toContain('Implementation notes');
+  });
+
+  it('files nothing and returns null for a fail with no structured proposedFix', async () => {
+    const item = makeItem();
+
+    expect(
+      await defaultFollowupFiler.fileFollowupFixTask(item, {
+        disposition: 'fail',
+      }),
+    ).toBeNull();
+    expect(
+      await defaultFollowupFiler.fileFollowupFixTask(item, {
+        disposition: 'fail',
+        proposedFix: { existingTaskId: 'notion:abc' },
+      }),
+    ).toBeNull();
+    expect(createTaskMock).not.toHaveBeenCalled();
   });
 
   it('derives 📐 Design, not 💻 Code, for a Human-Observation gate item — a documentation assertion no headless Code session can satisfy', async () => {
@@ -108,6 +164,7 @@ describe('defaultFollowupFiler.fileFollowupFixTask', () => {
 
     await defaultFollowupFiler.fileFollowupFixTask(item, {
       disposition: 'fail',
+      proposedFix: fix,
     });
 
     expect(createTaskMock).toHaveBeenCalledWith(
@@ -120,6 +177,7 @@ describe('defaultFollowupFiler.fileFollowupFixTask', () => {
 
     await defaultFollowupFiler.fileFollowupFixTask(item, {
       disposition: 'fail',
+      proposedFix: fix,
     });
 
     expect(createTaskMock).toHaveBeenCalledWith(
@@ -127,46 +185,14 @@ describe('defaultFollowupFiler.fileFollowupFixTask', () => {
     );
   });
 
-  it('uses proposedFix.title/summary in place of the generic title/summary when the failure carries one', async () => {
-    const item = makeItem();
-
-    await defaultFollowupFiler.fileFollowupFixTask(item, {
-      disposition: 'fail',
-      proposedFix: {
-        title: 'Env var write is missing from the deploy script',
-        summary: 'The deploy script never writes NEW_ENV_VAR to .env.',
-      },
-    });
-
-    expect(createTaskMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        title: 'Env var write is missing from the deploy script',
-        body: expect.stringContaining(
-          'The deploy script never writes NEW_ENV_VAR to .env.',
-        ),
-      }),
-    );
-  });
-
-  it('falls back to the generic title/summary when the failure carries no proposedFix', async () => {
-    const item = makeItem();
-
-    await defaultFollowupFiler.fileFollowupFixTask(item, {
-      disposition: 'fail',
-    });
-
-    expect(createTaskMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        title: `Fix gate item: ${item.text}`,
-      }),
-    );
-  });
-
   it('throws UnknownMilestoneError — not project.boardId — for a milestone that does not resolve, and never calls createTask', async () => {
     const item = makeItem({ milestone: 'not-a-real-milestone' });
 
     await expect(
-      defaultFollowupFiler.fileFollowupFixTask(item, { disposition: 'fail' }),
+      defaultFollowupFiler.fileFollowupFixTask(item, {
+        disposition: 'fail',
+        proposedFix: fix,
+      }),
     ).rejects.toBeInstanceOf(UnknownMilestoneError);
     expect(createTaskMock).not.toHaveBeenCalled();
   });
@@ -175,7 +201,10 @@ describe('defaultFollowupFiler.fileFollowupFixTask', () => {
     const item = makeItem({ milestone: 'M14' });
 
     await expect(
-      defaultFollowupFiler.fileFollowupFixTask(item, { disposition: 'fail' }),
+      defaultFollowupFiler.fileFollowupFixTask(item, {
+        disposition: 'fail',
+        proposedFix: fix,
+      }),
     ).rejects.toBeInstanceOf(UnknownMilestoneError);
     expect(createTaskMock).not.toHaveBeenCalled();
   });

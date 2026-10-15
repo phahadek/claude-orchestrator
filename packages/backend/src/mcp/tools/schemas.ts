@@ -417,33 +417,58 @@ export const gateVerifyEvidenceSchema = z.object({
   source: gateVerifyEvidenceLineSchema.optional(),
 });
 
-/** Caps mirroring GATE_VERIFY_EVIDENCE_LINE_MAX's precedent — a capped title/summary, not a free-markdown body. */
+/** Caps mirroring GATE_VERIFY_EVIDENCE_LINE_MAX's precedent: capped fields, not a free-markdown body. */
 const GATE_VERIFY_PROPOSED_FIX_TITLE_MAX = 100;
-const GATE_VERIFY_PROPOSED_FIX_SUMMARY_MAX = 500;
+const GATE_VERIFY_PROPOSED_FIX_TEXT_MAX = 500;
+const GATE_VERIFY_PROPOSED_FIX_PATH_MAX = 240;
+
+const proposedFixTextSchema = z
+  .string()
+  .min(1)
+  .max(
+    GATE_VERIFY_PROPOSED_FIX_TEXT_MAX,
+    `must be ${GATE_VERIFY_PROPOSED_FIX_TEXT_MAX} characters or fewer`,
+  );
 
 /**
- * A failing gate-verify session's proposal for the follow-up fix task's
- * title/wording — the reconciler still deterministically assembles the
- * Context section (gate item text, verifier evidence, deploy SHA,
- * originating source) exactly as `buildFollowupTaskBody` does today; this
- * only replaces the generic `Fix gate item: ${item.text}` title/summary
- * boilerplate. `title` is a single capped line; `summary` is a short
- * scope paragraph, not a full markdown body.
+ * A failing gate-verify session's located root cause and proposed fix: the
+ * three locks of config/task-writing.md Root cause (the branch = `cause`
+ * file:line plus the condition that takes it, the `input` that takes it, and
+ * the `fix` that follows), plus the Files / paths affected and Automated
+ * tests the filed Code task needs. `filesAffected` entries are repo paths
+ * with an optional ` *(new)*` suffix.
  */
-export const gateVerifyProposedFixSchema = z.object({
+export const gateVerifyNewTaskFixSchema = z.object({
   title: z
     .string()
     .max(
       GATE_VERIFY_PROPOSED_FIX_TITLE_MAX,
       `must be a single line, ${GATE_VERIFY_PROPOSED_FIX_TITLE_MAX} characters or fewer`,
     ),
-  summary: z
-    .string()
-    .max(
-      GATE_VERIFY_PROPOSED_FIX_SUMMARY_MAX,
-      `must be ${GATE_VERIFY_PROPOSED_FIX_SUMMARY_MAX} characters or fewer`,
-    ),
+  cause: z.object({
+    file: z.string().min(1).max(GATE_VERIFY_PROPOSED_FIX_PATH_MAX),
+    line: z.number().int().positive(),
+    condition: proposedFixTextSchema,
+  }),
+  input: proposedFixTextSchema,
+  fix: proposedFixTextSchema,
+  filesAffected: z
+    .array(z.string().min(1).max(GATE_VERIFY_PROPOSED_FIX_PATH_MAX))
+    .min(1),
+  automatedCriteria: z.array(proposedFixTextSchema).min(1),
 });
+
+/** An open task on the item's milestone board whose body already names the same cause: attached instead of filing a duplicate. */
+export const gateVerifyExistingTaskFixSchema = z.object({
+  existingTaskId: z.string().min(1),
+});
+
+export const gateVerifyProposedFixSchema = z.union([
+  gateVerifyNewTaskFixSchema,
+  gateVerifyExistingTaskFixSchema,
+]);
+
+export type GateVerifyProposedFix = z.infer<typeof gateVerifyProposedFixSchema>;
 
 /**
  * The full gate.verify tool-call shape, used to enforce the two rules that
@@ -476,6 +501,14 @@ export const gateVerifyPayloadSchema = z
         code: 'custom',
         path: ['proposedFix'],
         message: 'proposedFix is only permitted when disposition is "fail".',
+      });
+    }
+    if (value.disposition === 'fail' && value.proposedFix === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['proposedFix'],
+        message:
+          'A fail requires proposedFix carrying the located root cause (cause/input/fix) or an existingTaskId. If you could not locate the cause, report needs-setup with evidence.found prefixed "cause not located:".',
       });
     }
   });
