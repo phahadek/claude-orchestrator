@@ -378,6 +378,23 @@ describe('result_reap signal', () => {
     ['docs', 'code'],
     ['ops', 'ops'],
   ];
+  it('derives done for a gate-verify ops session (task_id gate-item:*)', () => {
+    expect(
+      deriveSessionStatus(
+        baseInput({
+          sessionType: 'ops',
+          taskTypeCategory: 'ops',
+          ledgerEntries: [
+            reap({ session_type: 'ops', task_id: 'gate-item:abc' }),
+          ],
+        }),
+      ),
+    ).toEqual({
+      status: 'done',
+      terminalCompletionReason: 'stuck_session_no_pr_periodic',
+    });
+  });
+
   it.each(cases)('derives done for %s', (sessionType, taskTypeCategory) => {
     expect(
       deriveSessionStatus(
@@ -449,24 +466,35 @@ describe('result_reap signal', () => {
 });
 
 describe('DerivedSessionOutcome terminal-only guard', () => {
-  it('rejects non-terminal literals at compile time', () => {
-    type Allowed = TerminalSessionStatus | 'superseded';
-    const ok: Allowed = 'done' as DerivedSessionOutcome;
-    expect(ok).toBe('done');
+  it('ties DerivedSessionOutcome to TerminalSessionStatus at compile time', () => {
+    // Fails to compile if DerivedSessionOutcome gains any non-terminal literal.
+    const subset: true = true as Exclude<
+      DerivedSessionOutcome,
+      TerminalSessionStatus | 'superseded'
+    > extends never
+      ? true
+      : false;
+    // Fails to compile if a terminal status is dropped from the outcome set.
+    const superset: true = true as Exclude<
+      TerminalSessionStatus | 'superseded',
+      DerivedSessionOutcome
+    > extends never
+      ? true
+      : false;
     // @ts-expect-error a non-terminal literal is not a DerivedSessionOutcome
     const bad: DerivedSessionOutcome = 'idle';
-    expect(bad).toBe('idle');
+    expect([subset, superset, bad]).toEqual([true, true, 'idle']);
   });
 
-  it('runtime outcome set equals terminal statuses plus superseded', () => {
-    const outcomes: DerivedSessionOutcome[] = [
-      'done',
-      'error',
-      'killed',
-      'superseded',
-    ];
-    expect(new Set(outcomes)).toEqual(
-      new Set([...TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED]),
+  it('runtime outcome set equals the shared terminal-status set plus superseded', () => {
+    const outcomes = {
+      done: true,
+      error: true,
+      killed: true,
+      superseded: true,
+    } satisfies Record<DerivedSessionOutcome, true>;
+    expect(new Set(Object.keys(outcomes))).toEqual(
+      new Set(TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED),
     );
   });
 });
