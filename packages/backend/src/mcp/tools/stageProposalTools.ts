@@ -371,13 +371,16 @@ export function registerStageProposalTools(
         '`standDownReason` — a substantive attestation naming why no capability request could ' +
         'unblock the task (a design decision, a change ops must not make itself, an external ' +
         'dependency with no sanctioned request path); it is unread when the session did request ' +
-        'a capability.',
+        'a capability. A non-Investigation transition to "resolved" from any state other than ' +
+        '"applied-pending-confirm" requires either a `reconciliation` assertion or a non-empty ' +
+        '`noChangeReason`. A 🔎 Investigation may go "pending" -> "resolved" directly.',
       inputSchema: envelope({
         taskId: z.string(),
         state: opsStateSchema,
         fields: z.record(z.string(), z.unknown()).optional(),
         reconciliation: opsReconciliationAssertionSchema.optional(),
         standDownReason: z.string().optional(),
+        noChangeReason: z.string().optional(),
       }),
     },
     async (args) => stage('journal.setState', args.payload, ctx, args),

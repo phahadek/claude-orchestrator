@@ -37,7 +37,11 @@ vi.mock('../../projects/ProjectService', () => ({
 
 import { db } from '../../db/db';
 import { createStagedIntentsRouter, stageIntent } from '../stagedIntents';
-import { upsertOpsJournalEntry, insertSession } from '../../db/queries';
+import {
+  upsertOpsJournalEntry,
+  insertSession,
+  upsertTaskCache,
+} from '../../db/queries';
 import { isValidOpsTransition, type OpsState } from '../../ops/opsJournal';
 
 function buildApp() {
@@ -151,6 +155,7 @@ describe('POST /api/staged-intents — journal.setState stage-time transition ga
             ...(to === 'applied-pending-confirm'
               ? { reconciliation: { description: 'assertion', passed: true } }
               : {}),
+            ...(to === 'resolved' ? { noChangeReason: 'no change needed' } : {}),
           },
           projectId: 'proj-1',
           ...(to === 'resolved' || to === 'applied-pending-confirm'
@@ -161,6 +166,84 @@ describe('POST /api/staged-intents — journal.setState stage-time transition ga
       const expectedLegal = isValidOpsTransition(from, to);
       expect(res.status === 201).toBe(expectedLegal);
     }
+  });
+
+  describe('type-aware resolved transitions', () => {
+    function stageResolved(
+      taskId: string,
+      extra: Record<string, unknown> = {},
+    ) {
+      return supertest(buildApp())
+        .post('/api/staged-intents')
+        .send({
+          kind: 'journal.setState',
+          payload: { taskId, state: 'resolved', ...extra },
+          projectId: 'proj-1',
+          groupId: `group-${taskId}`,
+        });
+    }
+
+    function seedType(taskId: string, type: string) {
+      upsertTaskCache(taskId, JSON.stringify({ type }));
+    }
+
+    it('stages and applies an Investigation pending -> resolved', async () => {
+      seedEntry('task-inv-1', 'pending');
+      seedType('task-inv-1', '🔎 Investigation');
+      const res = await stageResolved('task-inv-1');
+      expect(res.status).toBe(201);
+      const commit = await supertest(buildApp())
+        .post('/api/staged-intents/group/group-task-inv-1/commit')
+        .send({});
+      expect(commit.status).toBe(200);
+      expect(
+        (
+          db
+            .prepare('SELECT state FROM ops_journal WHERE task_id = ?')
+            .get('task-inv-1') as { state: string }
+        ).state,
+      ).toBe('resolved');
+    });
+
+    it('rejects an Operational pending -> resolved at stage time', async () => {
+      seedEntry('task-op-1', 'pending');
+      seedType('task-op-1', '🔧 Operational');
+      const res = await stageResolved('task-op-1', { noChangeReason: 'x' });
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects an Operational candidate -> resolved without reconciliation or noChangeReason, naming both', async () => {
+      seedEntry('task-op-2', 'candidate');
+      seedType('task-op-2', '🔧 Operational');
+      const res = await stageResolved('task-op-2');
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('reconciliation');
+      expect(res.body.error).toContain('noChangeReason');
+    });
+
+    it('accepts an Operational candidate -> resolved with a noChangeReason or a reconciliation', async () => {
+      seedEntry('task-op-3', 'candidate');
+      seedType('task-op-3', '🔧 Operational');
+      expect(
+        (await stageResolved('task-op-3', { noChangeReason: 'already fine' }))
+          .status,
+      ).toBe(201);
+      seedEntry('task-op-4', 'candidate');
+      seedType('task-op-4', '🔧 Operational');
+      expect(
+        (
+          await stageResolved('task-op-4', {
+            reconciliation: { description: 'd', passed: true },
+          })
+        ).status,
+      ).toBe(201);
+    });
+
+    it('leaves an Operational applied-pending-confirm -> resolved unchanged', async () => {
+      seedEntry('task-op-5', 'applied-pending-confirm');
+      seedType('task-op-5', '🔧 Operational');
+      expect((await stageResolved('task-op-5')).status).toBe(201);
+    });
   });
 
   function activeJournalMirrors(taskId: string) {

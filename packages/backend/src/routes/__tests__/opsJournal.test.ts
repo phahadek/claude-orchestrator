@@ -26,7 +26,7 @@ vi.mock('../../projects/ProjectService', () => ({
 
 import { db } from '../../db/db.js';
 import { createOpsJournalRouter } from '../opsJournal.js';
-import { upsertOpsJournalEntry } from '../../db/queries.js';
+import { upsertOpsJournalEntry, upsertTaskCache } from '../../db/queries.js';
 
 function makeApp() {
   const app = express();
@@ -106,6 +106,7 @@ describe('POST /api/ops-journal/:taskId/state', () => {
       .post('/api/ops-journal/task-1/state')
       .send({
         state: 'resolved',
+        noChangeReason: 'investigation only',
         resolution: { outcome: 'root-caused', filedFollowons: ['task-99'] },
       });
 
@@ -117,15 +118,45 @@ describe('POST /api/ops-journal/:taskId/state', () => {
     });
   });
 
-  it('still rejects pending -> resolved', async () => {
+  it('rejects pending -> resolved for an Operational task', async () => {
     seedEntry('task-2', 'pending');
+    upsertTaskCache('task-2', JSON.stringify({ type: '🔧 Operational' }));
 
     const res = await request(makeApp())
       .post('/api/ops-journal/task-2/state')
-      .send({ state: 'resolved' });
+      .send({ state: 'resolved', noChangeReason: 'x' });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/invalid transition/);
+  });
+
+  it('accepts pending -> resolved for an Investigation task', async () => {
+    seedEntry('task-2b', 'pending');
+    upsertTaskCache('task-2b', JSON.stringify({ type: '🔎 Investigation' }));
+
+    const res = await request(makeApp())
+      .post('/api/ops-journal/task-2b/state')
+      .send({ state: 'resolved' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.state).toBe('resolved');
+  });
+
+  it('rejects an Operational candidate -> resolved without reconciliation or noChangeReason, accepts with either', async () => {
+    seedEntry('task-2c', 'candidate');
+    upsertTaskCache('task-2c', JSON.stringify({ type: '🔧 Operational' }));
+
+    const bad = await request(makeApp())
+      .post('/api/ops-journal/task-2c/state')
+      .send({ state: 'resolved' });
+    expect(bad.status).toBe(400);
+    expect(bad.body.error).toMatch(/reconciliation/);
+    expect(bad.body.error).toMatch(/noChangeReason/);
+
+    const ok = await request(makeApp())
+      .post('/api/ops-journal/task-2c/state')
+      .send({ state: 'resolved', noChangeReason: 'nothing to change' });
+    expect(ok.status).toBe(200);
   });
 
   it('mirrors a candidate -> staged-proposal write to exactly one decision, carrying the finding', async () => {
