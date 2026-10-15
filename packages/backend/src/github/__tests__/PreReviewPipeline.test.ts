@@ -1800,6 +1800,63 @@ describe('PreReviewPipeline — analyze gate (parity with autofix/verify)', () =
     );
   });
 
+  it('buildStages orders autofix, analyze, verify, tests', () => {
+    const pipeline = new PreReviewPipeline(makeSessionManager());
+    const ids = (
+      pipeline as unknown as { stages: { id: string }[] }
+    ).stages.map((s) => s.id);
+    expect(ids).toEqual(['autofix', 'analyze', 'verify', 'tests']);
+  });
+
+  it('admits no verify run to the test lane when analyze fails', async () => {
+    mockRunTestCommands.mockResolvedValue({
+      passed: false,
+      output: 'lint errors',
+    });
+    mockLaneResult({ passed: true, output: '' });
+    const pipeline = new PreReviewPipeline(makeSessionManager());
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(false);
+    expect(mockAdmitTestRequest).not.toHaveBeenCalled();
+    expect(mockRunVerifyAsGate).not.toHaveBeenCalled();
+  });
+
+  it('autofix no-diff retry short-circuits a PR previously blocked at analyze without re-running it', async () => {
+    mockGetPRByNumber.mockReturnValue(
+      makePRRow({
+        pre_review_stage: 'blocked_analyze',
+        pause_reason: 'analyze_failing',
+        review_result: JSON.stringify({
+          verdict: 'analyze_failed',
+          summary: 'analyze failed',
+          failedHeadSha: HEAD_SHA,
+        }),
+      }),
+    );
+    mockLoadAutofixCommands.mockReturnValue(['npm run fix']);
+    mockRunAutofix.mockResolvedValue({
+      success: true,
+      summary: 'autofix commands produced no diff',
+      commitSha: null,
+    });
+    mockGetHeadSha.mockResolvedValue(HEAD_SHA);
+    const pipeline = new PreReviewPipeline(makeSessionManager());
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(false);
+    expect(mockRunTestCommands).not.toHaveBeenCalled();
+    expect(mockAdmitTestRequest).not.toHaveBeenCalled();
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'autofix_noop_retry_skipped',
+        payload: expect.objectContaining({ stage: 'analyze' }),
+      }),
+    );
+  });
+
   it('passes analyze and emits pipeline_stage_entered/passed events for analyze', async () => {
     mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
     const sm = makeSessionManager();
