@@ -192,6 +192,8 @@ import {
   isGrantable,
   isDeclaredWriteAutoApprove,
   bashCapabilityConfersFileMutation,
+  bashCapabilityConfersPrivilegeEscalation,
+  bashCapabilityConfersNetworkMutation,
 } from '../session/orchestrator-config';
 import { runtimeSettings, getProjectById } from '../config';
 import { typedGetSetting } from '../config/settings';
@@ -1759,6 +1761,10 @@ export interface StagedIntent {
    * Undefined for every other kind and for a non-`Bash(...)` capability.
    */
   confersFileMutation?: boolean;
+  /** `session.requestCapability` only: advisory — the Bash command escalates privilege (sudo-class). */
+  confersPrivilegeEscalation?: boolean;
+  /** `session.requestCapability` only: advisory — the Bash command mutates something over the network. */
+  confersNetworkMutation?: boolean;
   /**
    * Mirrors commitGroupIntents' non-committability predicate (the group
    * commit route's 409 guard): true when this intent's group has any member
@@ -2055,6 +2061,14 @@ function rowToApi(
     confersFileMutation:
       typeof capability === 'string'
         ? bashCapabilityConfersFileMutation(capability)
+        : undefined,
+    confersPrivilegeEscalation:
+      typeof capability === 'string'
+        ? bashCapabilityConfersPrivilegeEscalation(capability)
+        : undefined,
+    confersNetworkMutation:
+      typeof capability === 'string'
+        ? bashCapabilityConfersNetworkMutation(capability)
         : undefined,
     ...(row.group_id
       ? (() => {
