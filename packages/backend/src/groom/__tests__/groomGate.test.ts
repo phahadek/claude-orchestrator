@@ -242,6 +242,37 @@ describe('checkGroomingPromotionGate', () => {
     expect(result.allowed).toBe(true);
   });
 
+  it.each([
+    [21, 'no_split', false],
+    [20, 'no_split', true],
+    [26, 'split_now', true],
+    [26, 'unsplittable', true],
+  ])(
+    'size_check files=%i decision=%s allowed=%s',
+    async (files, decision, allowed) => {
+      const result = await gate(
+        {
+          size_check: {
+            decision: decision as 'no_split' | 'split_now' | 'unsplittable',
+            files,
+            loc: 400,
+            loc_method: 'estimated',
+            ...(decision === 'unsplittable' ? { reason: 'Indivisible.' } : {}),
+          },
+          type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
+        },
+        'notion:t5d',
+      );
+      expect(result.allowed).toBe(allowed);
+      if (!allowed) {
+        expect(result.reasons.some((r) => r.includes('file threshold'))).toBe(
+          true,
+        );
+      }
+    },
+  );
+
   it('does not require files/loc for an n/a size_check decision (Design/Planning)', async () => {
     const result = await gate(
       {

@@ -1310,6 +1310,9 @@ describe('assemblePlanningProcedure', () => {
     expect(output).toContain(`${SIZE_TYPE_CHECK.locSplitThreshold}-LoC`);
     expect(output).toContain(`${SIZE_TYPE_CHECK.fileSplitThreshold}-file`);
     expect(output).toMatch(/exceeding either nominates a split/);
+    expect(output).toContain(
+      `"no_split" is valid only at or under the ${SIZE_TYPE_CHECK.fileSplitThreshold}-file threshold`,
+    );
   });
 
   it('offers the groom procedure a discard/defer proposal as an alternative to promoting to Ready', () => {
