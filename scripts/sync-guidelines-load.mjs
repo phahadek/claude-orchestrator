@@ -218,7 +218,11 @@ function buildItems() {
   items.push({
     id: 'hook:inject-code-session-rules.mjs',
     kind: 'hook',
-    repoRelPath: join('config-template', 'hooks', 'inject-code-session-rules.mjs'),
+    repoRelPath: join(
+      'config-template',
+      'hooks',
+      'inject-code-session-rules.mjs',
+    ),
     upstreamPath: join(
       repo,
       'config-template',
