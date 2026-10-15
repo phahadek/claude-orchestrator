@@ -90,7 +90,7 @@ postponed seeds. Nothing to carry on the seed side.)*
 3. **Re-home the carry set to the *next* milestone — a fresh copy, never a move.**
    Raw-DB moves are barred, so every carry is a fresh-copy insert into the next
    milestone; the original stays `deferred` / `pending` under the closing milestone
-   (immutable closed-milestone history) while the copy lands `open` for a **fresh gate
+   (immutable closed-milestone history) while a deferred copy lands `open` for a **fresh gate
    run**. Which verb mints the copy depends on whether the item has a source:
 
    - **Has a source (`source_task_id` is non-null).** Group the carry set by
@@ -122,16 +122,17 @@ postponed seeds. Nothing to carry on the seed side.)*
      ```
 
    Either way, `<nextM>` is the **display name** (e.g. `M12`), never the milestone UUID
-   — same id-space rule as the rest of the gate client. A carried `pending` item lands
-   as a fresh `open` item like any other carry — its backoff clock is **not** preserved
-   across the carry; it starts fresh once the new copy cycles through
-   `not-yet-triggerable` again in the next milestone's gate run. `carry-forward` is
+   — same id-space rule as the rest of the gate client. A carried `pending` item
+   stays `pending` in the copy, with its backoff schedule (`next_attempt_at`, attempt
+   count, dispositions) preserved, so the pending re-check owns it from the first tick
+   and it doesn't block the next milestone. A carried `deferred` item still lands as a
+   fresh `open` item for a fresh gate run. `carry-forward` is
    idempotent by (project, milestone, text) — re-running it for the same item and
    target milestone returns the copy already carried there rather than duplicating it,
    so a retried call is safe.
 
 4. **Verify the carry.** Re-read the next milestone's `gate_item` rows; confirm each
-   carried item is present (`open`/`runnable`) and that **no text duplicates** an item
+   carried item is present (`open`/`runnable`, or `pending` for a carried pending item) and that **no text duplicates** an item
    already there (guards against a double-carry). The originals must still read
    `deferred` / `pending` under the closing milestone.
 

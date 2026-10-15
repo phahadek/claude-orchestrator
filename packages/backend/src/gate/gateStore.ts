@@ -221,6 +221,14 @@ export interface NewGateItemInput {
   classification: GateItemClassification;
   sources: Omit<GateItemSource, 'addedAt'>[];
   updatedAt: string;
+  /** Start parked instead of open — only a pending carry-forward uses this. */
+  initialState?: {
+    state: 'pending';
+    currentDisposition?: string;
+    latestDisposition?: string;
+    nextAttemptAt: string;
+    pendingAttemptCount: number;
+  };
 }
 
 /**
@@ -239,11 +247,11 @@ export function insertItem(input: NewGateItemInput): GateItem {
     text: input.text,
     classification: input.classification,
     min_deployed_commit: alreadyMergedCommit,
-    state: 'open',
-    current_disposition: null,
-    latest_disposition: null,
-    next_attempt_at: null,
-    pending_attempt_count: 0,
+    state: input.initialState?.state ?? 'open',
+    current_disposition: input.initialState?.currentDisposition ?? null,
+    latest_disposition: input.initialState?.latestDisposition ?? null,
+    next_attempt_at: input.initialState?.nextAttemptAt ?? null,
+    pending_attempt_count: input.initialState?.pendingAttemptCount ?? 0,
     updated_at: input.updatedAt,
   });
   for (const source of input.sources) {
@@ -592,6 +600,16 @@ export function carryForwardItem(
       mergeCommit: s.mergeCommit,
     })),
     updatedAt,
+    initialState:
+      source.state === 'pending' && source.nextAttemptAt
+        ? {
+            state: 'pending',
+            currentDisposition: source.currentDisposition,
+            latestDisposition: source.latestDisposition,
+            nextAttemptAt: source.nextAttemptAt,
+            pendingAttemptCount: source.pendingAttemptCount,
+          }
+        : undefined,
   });
   recordEvent({
     event_type: 'gate_item_carried_forward',
@@ -601,6 +619,7 @@ export function carryForwardItem(
       fromGateItemId: gateItemId,
       toGateItemId: carried.id,
       milestone: targetMilestone,
+      carriedState: carried.state,
     },
   });
   return carried;

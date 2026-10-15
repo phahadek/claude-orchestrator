@@ -27,6 +27,7 @@ import {
   insertMilestone,
   insertGateItem,
 } from '../../db/queries.js';
+import { getGateReadiness } from '../../gate/gateService.js';
 import {
   startDeployRun,
   getDeployRun,
@@ -100,6 +101,8 @@ function insertGateItemFixture(input: {
   milestone: string;
   text: string;
   state: string;
+  nextAttemptAt?: string;
+  pendingAttemptCount?: number;
 }): void {
   insertGateItem({
     id: input.id,
@@ -111,8 +114,8 @@ function insertGateItemFixture(input: {
     state: input.state,
     current_disposition: null,
     latest_disposition: null,
-    next_attempt_at: null,
-    pending_attempt_count: 0,
+    next_attempt_at: input.nextAttemptAt ?? null,
+    pending_attempt_count: input.pendingAttemptCount ?? 0,
     updated_at: '2026-08-24T00:00:00.000Z',
   });
 }
@@ -300,6 +303,42 @@ describe('Step 2 — bulkCarryPendingGateItems (the carry-gate-items step)', () 
       { id: 'item-pending-1', state: 'pending' },
       { id: 'item-pending-2', state: 'pending' },
     ]);
+  });
+
+  it('carries pending items as pending copies with their schedule, none blocking next-milestone readiness', () => {
+    for (const n of [1, 2]) {
+      insertGateItemFixture({
+        id: `item-pending-${n}`,
+        milestone: 'M1',
+        text: `pending item ${n}`,
+        state: 'pending',
+        nextAttemptAt: '2026-08-22T03:19:10.000Z',
+        pendingAttemptCount: n,
+      });
+    }
+
+    bulkCarryPendingGateItems(PROJECT, CLOSING_MILESTONE, NEXT_MILESTONE);
+
+    const copies = db
+      .prepare(
+        `SELECT state, next_attempt_at, pending_attempt_count FROM gate_item WHERE project = ? AND milestone = 'M2' ORDER BY text`,
+      )
+      .all(PROJECT);
+    expect(copies).toEqual([
+      {
+        state: 'pending',
+        next_attempt_at: '2026-08-22T03:19:10.000Z',
+        pending_attempt_count: 1,
+      },
+      {
+        state: 'pending',
+        next_attempt_at: '2026-08-22T03:19:10.000Z',
+        pending_attempt_count: 2,
+      },
+    ]);
+    const readiness = getGateReadiness(PROJECT, 'M2');
+    expect(readiness.blocking).toHaveLength(0);
+    expect(readiness.parked).toHaveLength(2);
   });
 
   it('is a no-op when the closing milestone has no pending items', () => {

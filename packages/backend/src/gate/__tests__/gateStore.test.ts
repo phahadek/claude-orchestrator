@@ -605,6 +605,100 @@ describe('gateStore.carryForwardItem — item-level sourceless carry-forward', (
     );
     expect(targetItems).toHaveLength(1);
   });
+
+  function makePendingSource() {
+    const original = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      text: 'Confirm the sweep runs on its interval',
+      classification: 'Read-Only',
+      sources: [
+        {
+          sourceTaskId: 'notion:p1',
+          sourceTaskTitle: 'Add sweep',
+          mergeCommit: 'abc123',
+        },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+    appendEvent(original.id, {
+      disposition: 'not-yet-triggerable',
+      at: new Date(1).toISOString(),
+    });
+    advanceState(original.id, 'pending', undefined, new Date(1).toISOString());
+    schedulePendingAttempt(
+      original.id,
+      '2026-08-22T03:19:10.000Z',
+      2,
+      new Date(1).toISOString(),
+    );
+    return original;
+  }
+
+  it('carries a pending item as pending with its backoff schedule preserved, leaving the source untouched', () => {
+    const original = makePendingSource();
+    const before = JSON.stringify(getItem(original.id));
+    expect(getItem(original.id)).toMatchObject({
+      state: 'pending',
+      latestDisposition: 'not-yet-triggerable',
+      nextAttemptAt: '2026-08-22T03:19:10.000Z',
+      pendingAttemptCount: 2,
+    });
+
+    const carried = carryForwardItem(
+      original.id,
+      'M13',
+      new Date(2).toISOString(),
+    );
+
+    expect(carried).toMatchObject({
+      state: 'pending',
+      currentDisposition: getItem(original.id)?.currentDisposition,
+      latestDisposition: 'not-yet-triggerable',
+      nextAttemptAt: '2026-08-22T03:19:10.000Z',
+      pendingAttemptCount: 2,
+    });
+    expect(JSON.stringify(getItem(original.id))).toBe(before);
+  });
+
+  it('re-carrying a pending item returns the existing copy without inserting another', () => {
+    const original = makePendingSource();
+    const first = carryForwardItem(original.id, 'M13', new Date(2).toISOString());
+    const second = carryForwardItem(
+      original.id,
+      'M13',
+      new Date(3).toISOString(),
+    );
+    expect(second.id).toBe(first.id);
+    expect(
+      listByMilestone('polimarket-analyser', 'M13').filter(
+        (i) => i.text === original.text,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('still carries a deferred item as a fresh open item', () => {
+    const original = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      text: 'Deferred check',
+      classification: 'Read-Only',
+      sources: [{ sourceTaskId: 'notion:d1', sourceTaskTitle: 'Task' }],
+      updatedAt: new Date(0).toISOString(),
+    });
+    advanceState(original.id, 'deferred', 'deferred', new Date(1).toISOString());
+
+    const carried = carryForwardItem(
+      original.id,
+      'M13',
+      new Date(2).toISOString(),
+    );
+    expect(carried.state).toBe('open');
+    expect(carried.currentDisposition).toBeUndefined();
+    expect(carried.latestDisposition).toBeUndefined();
+    expect(carried.nextAttemptAt).toBeUndefined();
+    expect(carried.pendingAttemptCount).toBe(0);
+  });
 });
 
 describe('gate_accretion marker', () => {
