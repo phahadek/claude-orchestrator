@@ -225,6 +225,37 @@ describe('reattributionService', () => {
     },
   );
 
+  it('one sweep tick clears the marker of terminal and missing-session failed runs without spawning git', async () => {
+    for (const status of ['done', 'killed', 'error']) {
+      addSession(`sw-${status}`, status);
+      addWaitingRun(`rw-${status}`, `sw-${status}`);
+    }
+    db.pragma('foreign_keys = OFF');
+    addWaitingRun('rw-orphan', 'no-such-session');
+    db.pragma('foreign_keys = ON');
+    addWaitingRun('rw-live', 's1');
+    vi.mocked(getChangedFiles).mockClear();
+    filterMock.mockResolvedValue({
+      ...fullExcuse,
+      result: {
+        ...fullExcuse.result,
+        outcome: 'filtered_partial',
+        passed: false,
+      },
+    });
+
+    await sweepConfirmedWaiting(null);
+
+    for (const id of ['rw-done', 'rw-killed', 'rw-error', 'rw-orphan']) {
+      expect(getTestRequestRunById(id)?.awaiting_disposition_at).toBeNull();
+    }
+    expect(getChangedFiles).not.toHaveBeenCalled();
+    expect(filterMock).toHaveBeenCalledTimes(1);
+    expect(
+      getTestRequestRunById('rw-live')?.awaiting_disposition_at,
+    ).not.toBeNull();
+  });
+
   it('clears the marker without spawning when the worktree is gone', async () => {
     addSession('sg', 'running', path.join(WT, 'missing'));
     addWaitingRun('rg', 'sg');
