@@ -108,7 +108,7 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
   resume_failed:
     'Session could not be resumed at boot (missing worktree, or the resumed process failed immediately) — review and redispatch when ready.',
   review_rules_escalation:
-    'Reviewer escalated per project-specific review rules — see the review summary for details and resolve manually.',
+    'Reviewer escalated per project-specific review rules — see the review summary for details, then use "Send review to session" to forward the findings with your decision.',
   baseline_escalation_floor:
     'Sign-off required — the diff touches CI/workflow config, migrations, auth, or secrets (baseline escalation floor). Approve the PR to sign off.',
   migration_number_collision:
@@ -214,15 +214,33 @@ export function TaskCard({
   );
   const [verifyInFlight, setVerifyInFlight] = useState(false);
 
-  const handleRecover = async (e: React.MouseEvent) => {
+  const [decisionOpen, setDecisionOpen] = useState(false);
+  const [decisionText, setDecisionText] = useState('');
+
+  const handleRecover = async (e: React.SyntheticEvent) => {
     e.stopPropagation();
     if (recoveryInFlight || !project?.id) return;
+    if (task.recoveryDescriptor?.action === 'send_review' && !decisionOpen) {
+      setDecisionOpen(true);
+      return;
+    }
     setRecoveryInFlight(true);
     try {
+      const isSendReview = task.recoveryDescriptor?.action === 'send_review';
       await authedFetch(
         `/api/tasks/${encodeURIComponent(task.taskId)}/recover?projectId=${encodeURIComponent(project.id)}`,
-        { method: 'POST' },
+        isSendReview
+          ? {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ operatorNote: decisionText }),
+            }
+          : { method: 'POST' },
       );
+      if (isSendReview) {
+        setDecisionOpen(false);
+        setDecisionText('');
+      }
     } catch {
       // state will be updated via WS broadcast
     } finally {
@@ -451,6 +469,28 @@ export function TaskCard({
               ↩ {task.recoveryDescriptor.label}
             </button>
           )
+        )}
+        {!isNonCode && decisionOpen && (
+          <span onClick={(e) => e.stopPropagation()}>
+            <input
+              type="text"
+              value={decisionText}
+              placeholder="Operator decision (optional)"
+              aria-label={`Operator decision for ${task.taskName}`}
+              onChange={(e) => setDecisionText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void handleRecover(e);
+              }}
+            />
+            <button
+              className={styles.unblockButton}
+              disabled={recoveryInFlight}
+              onClick={(e) => void handleRecover(e)}
+              aria-label={`Submit decision for ${task.taskName}`}
+            >
+              Send
+            </button>
+          </span>
         )}
         {project?.id && (
           <button

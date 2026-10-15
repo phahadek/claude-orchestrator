@@ -87,6 +87,26 @@ interface ReviewOrchestratorLike {
   ): Promise<{ success: boolean; summary: string }>;
 }
 
+export function composeReviewFixMessage(
+  prNumber: number,
+  reviewResult: PRReviewResult | null,
+  depthVerdictRow: ReturnType<typeof getDepthReviewVerdict> | undefined | null,
+): string | null {
+  const depthDimensions = depthVerdictRow
+    ? (JSON.parse(depthVerdictRow.dimensions) as DepthReviewDimension[])
+    : [];
+  const failing = [
+    ...(reviewResult?.dimensions ?? []).filter((d) => !d.passed),
+    ...depthDimensions.filter((d) => !d.passed),
+  ];
+  if (failing.length === 0) return null;
+  const lines = failing.map((d) => `❌ ${d.name}: ${d.notes}`).join('\n');
+  const overall = [reviewResult?.summary, depthVerdictRow?.summary]
+    .filter((s): s is string => Boolean(s))
+    .join(' ');
+  return `PR #${prNumber} review findings — please address the following:\n\n${lines}\n\nOverall: ${overall}`;
+}
+
 export function createPrsRouter(
   github: GitHubClient,
   prReviewService: PRReviewService,
@@ -997,37 +1017,21 @@ export function createPrsRouter(
         ? (JSON.parse(prRow.review_result) as PRReviewResult)
         : null;
       const depthVerdictRow = getDepthReviewVerdict(prNumber, repo);
-      const depthDimensions = depthVerdictRow
-        ? (JSON.parse(depthVerdictRow.dimensions) as DepthReviewDimension[])
-        : null;
 
-      if (!reviewResult && !depthDimensions) {
+      if (!reviewResult && !depthVerdictRow) {
         res.status(422).json({ error: 'Run a review before sending a fix' });
         return;
       }
 
-      const failingDimensions = (reviewResult?.dimensions ?? []).filter(
-        (d) => !d.passed,
+      const fixMessage = composeReviewFixMessage(
+        prNumber,
+        reviewResult,
+        depthVerdictRow,
       );
-      const depthFailingDimensions = (depthDimensions ?? []).filter(
-        (d) => !d.passed,
-      );
-
-      if (
-        failingDimensions.length === 0 &&
-        depthFailingDimensions.length === 0
-      ) {
+      if (!fixMessage) {
         res.status(422).json({ error: 'No failing review findings to send' });
         return;
       }
-
-      const lines = [...failingDimensions, ...depthFailingDimensions]
-        .map((d) => `❌ ${d.name}: ${d.notes}`)
-        .join('\n');
-      const overall = [reviewResult?.summary, depthVerdictRow?.summary]
-        .filter((s): s is string => Boolean(s))
-        .join(' ');
-      const fixMessage = `PR #${prNumber} review findings — please address the following:\n\n${lines}\n\nOverall: ${overall}`;
       const result = await sessionManager.deliverOrSpawnFresh(
         prRow.session_id,
         fixMessage,

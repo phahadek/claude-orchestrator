@@ -1700,6 +1700,53 @@ describe('POST /api/tasks/:taskId/recover', () => {
     });
   });
 
+  describe('action: send_review', () => {
+    beforeEach(() => {
+      vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+        makeAggregate('task-1', '⚠️ Needs Attention', {
+          pr_pause_reason: 'review_rules_escalation',
+          code_session_id: 'sess-1',
+          code_session_status: 'idle',
+        }),
+      ]);
+      vi.mocked(queries.getPRByNotionTaskId).mockReturnValue({
+        pr_number: 99,
+        repo: 'owner/repo',
+        task_id: 'task-1',
+        session_id: 'sess-1',
+        review_result: JSON.stringify({
+          verdict: 'needs_changes',
+          summary: 'Invariant undecided.',
+          escalate: true,
+          escalationReason: 'Needs OQ7 decision',
+          dimensions: [{ name: 'Data invariant', passed: false, notes: 'Bad' }],
+        }),
+      } as never);
+    });
+
+    it('delivers findings, escalation reason and operator decision without clearing the pause', async () => {
+      const deliverOrSpawnFresh = vi.fn().mockResolvedValue('sess-1');
+      const app = buildAppWithServices({
+        sendOrResume: vi.fn(),
+        deliverOrSpawnFresh,
+      });
+
+      const res = await supertest(app)
+        .post('/api/tasks/task-1/recover?projectId=proj-1')
+        .send({ operatorNote: 'X' });
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ ok: true, action: 'send_review' });
+      expect(deliverOrSpawnFresh).toHaveBeenCalledTimes(1);
+      const [sid, msg] = deliverOrSpawnFresh.mock.calls[0];
+      expect(sid).toBe('sess-1');
+      expect(msg).toContain('Data invariant');
+      expect(msg).toContain('Needs OQ7 decision');
+      expect(msg).toContain('Operator decision: X');
+      expect(queries.clearTerminalPRFlags).not.toHaveBeenCalled();
+      expect(queries.clearPauseReasonEntry).not.toHaveBeenCalled();
+    });
+  });
+
   describe('action: resume', () => {
     beforeEach(() => {
       vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([

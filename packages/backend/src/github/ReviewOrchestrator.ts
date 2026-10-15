@@ -135,6 +135,10 @@ function floorSignOffLine(result: PRReviewResult): string {
   return `\n\nNote: this PR touches baseline-floor paths (${categories ?? 'high-blast-radius paths'}) and needs operator sign-off before merge. That hold is not your blocker — address the feedback above.`;
 }
 
+function escalationHoldLine(result: PRReviewResult): string {
+  return `\n\nNote: this review was escalated to the operator${result.escalationReason ? ` (reason: ${result.escalationReason})` : ''}. Do not change code to resolve the escalated item until the operator's decision arrives. You may still fix any other failing dimension above.`;
+}
+
 export class ReviewOrchestrator {
   private queue: QueuedJob[] = [];
   private running = 0;
@@ -1457,7 +1461,16 @@ export class ReviewOrchestrator {
         repo: `local/${job.branchName}`,
         message,
       });
-      if (!localFloorOnly) return;
+      if (!localFloorOnly) {
+        if (result.verdict === 'needs_changes') {
+          enqueueFeedbackItem(
+            job.sessionId,
+            'ai-reviewer',
+            formatReviewFeedback(result, 0) + escalationHoldLine(result),
+          );
+        }
+        return;
+      }
     }
 
     if (result.verdict === 'needs_changes') {
@@ -1796,6 +1809,25 @@ export class ReviewOrchestrator {
         message,
       });
       if (!floorOnly) {
+        if (result.verdict === 'needs_changes') {
+          const escRow = getPRByNumber(job.prNumber, job.repo);
+          if (escRow?.session_id) {
+            await this.sessionManager.enqueueFeedback(
+              escRow.session_id,
+              'ai-reviewer',
+              formatReviewFeedback(result, reviewIteration, {
+                conflicted: escRow.merge_state === 'dirty',
+                baseBranch: escRow.base_branch ?? undefined,
+              }) + escalationHoldLine(result),
+              { headSha: escRow.head_sha ?? undefined },
+            );
+          } else {
+            this.recordVerdictRoutingFailure(job, project.id, escRow?.task_id, {
+              verdict: result.verdict,
+              reason: 'session_id_null',
+            });
+          }
+        }
         this.consumePendingPushIfSet(job.prNumber, job.repo);
         return;
       }

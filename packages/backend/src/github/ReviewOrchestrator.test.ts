@@ -484,6 +484,74 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
     ).toBe(true);
   });
 
+  it('review_rules-escalated needs_changes still enqueues feedback to the session with an escalation-hold line', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'needs_changes',
+      dimensions: [],
+      summary: 'OQ7 invariant undecided.',
+      reviewedAt: new Date().toISOString(),
+      escalate: true,
+      escalationReason: 'Needs operator decision on OQ7.',
+    });
+
+    const messages: unknown[] = [];
+    sm.on('message', (m: unknown) => messages.push(m));
+
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'review_rules_escalation',
+    );
+    expect(
+      messages.some((m) => (m as { type: string }).type === 'review_escalated'),
+    ).toBe(true);
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledTimes(1);
+    const [sessionId, source, body] = vi.mocked(sm.enqueueFeedback).mock
+      .calls[0];
+    expect(sessionId).toBe('coding-session-id');
+    expect(source).toBe('ai-reviewer');
+    expect(body).toContain('OQ7 invariant undecided.');
+    expect(body).toContain('escalated to the operator');
+    expect(body).toContain('Needs operator decision on OQ7.');
+  });
+
+  it('review_rules-escalated approved result does not route feedback or clear the pause', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'ok',
+      reviewedAt: new Date().toISOString(),
+      escalate: true,
+      escalationReason: 'Needs operator.',
+    });
+    const depth = { reviewPR: vi.fn() };
+
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(depth as unknown as DepthReviewService);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(depth.reviewPR).not.toHaveBeenCalled();
+    expect(vi.mocked(sm.enqueueFeedback)).not.toHaveBeenCalled();
+    expect(vi.mocked(clearPauseReasonEntry)).not.toHaveBeenCalled();
+  });
+
   const floorReason =
     'Baseline escalation floor: diff touches CI/workflow config path(s): .github/workflows/ci.yml';
 
@@ -4902,6 +4970,40 @@ describe('ReviewOrchestrator — reviewLocalBranch: sendOrResume + audit logging
     expect(message).toContain('Missing.');
     expect(message).toContain('auth');
     expect(message).toContain('operator sign-off');
+  });
+
+  it('review_rules-escalated needs_changes sets the local pause and enqueues feedback with the hold line', async () => {
+    vi.mocked(getLocalBranchBySession).mockReturnValue(localBranchRow as any);
+    vi.mocked(getSession).mockReturnValue(localSessionRow as any);
+    vi.mocked(runVerifyAsGate).mockResolvedValue({ passed: true });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 30,
+      repo: 'local/feature/audit-test',
+      verdict: 'needs_changes',
+      dimensions: [
+        { name: 'Diff vs Context spec', passed: false, notes: 'Missing.' },
+      ],
+      summary: 'Needs work.',
+      reviewedAt: new Date().toISOString(),
+      escalate: true,
+      escalationReason: 'Operator must decide OQ7.',
+    });
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    emitLocalBranch(sm);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setLocalBranchPauseReason)).toHaveBeenCalledWith(
+      localBranchRow.id,
+      'review_rules_escalation',
+    );
+    expect(vi.mocked(enqueueFeedbackItem)).toHaveBeenCalledOnce();
+    const [, , message] = vi.mocked(enqueueFeedbackItem).mock.calls[0];
+    expect(message).toContain('Missing.');
+    expect(message).toContain('escalated to the operator');
+    expect(message).toContain('Operator must decide OQ7.');
   });
 
   it('does not record verdict_routing_failed when sendOrResume resolves in local branch path', async () => {
