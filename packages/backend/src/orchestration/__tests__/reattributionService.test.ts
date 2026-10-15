@@ -81,7 +81,7 @@ const fullExcuse = {
 
 beforeEach(() => {
   db.exec(
-    `DELETE FROM session_feedback_inbox; DELETE FROM test_request_runs; DELETE FROM sessions;`,
+    `DELETE FROM session_feedback_inbox; DELETE FROM test_run_results; DELETE FROM test_request_runs; DELETE FROM sessions;`,
   );
   filterMock.mockReset();
   filterMock.mockResolvedValue(fullExcuse);
