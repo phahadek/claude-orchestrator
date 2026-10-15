@@ -41,6 +41,7 @@ vi.mock('../../db/queries.js', () => ({
   getProjectRowById: vi
     .fn()
     .mockReturnValue({ id: 'proj-1', project_dir: '/tmp/proj-1' }),
+  getPriorOpsSessionsForTask: vi.fn().mockReturnValue([]),
 }));
 
 vi.mock('../../projects/milestoneResolver.js', () => ({
