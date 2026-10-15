@@ -110,7 +110,9 @@ describe('buildGateVerifyProcedure', () => {
     const procedure = buildGateVerifyProcedure(makeItem());
     expect(procedure).toMatch(/two questions, in order/);
     expect(procedure).toMatch(/dispatch, revoke, seed,\s+force, configure/);
-    expect(procedure).toMatch(/report `needs-setup`, and make `evidence.found`/);
+    expect(procedure).toMatch(
+      /report `needs-setup`, and make `evidence.found`/,
+    );
   });
 
   it('rejects sampled, unrecognized-eventType, or no-read evidence for not-yet-triggerable', () => {
@@ -140,7 +142,9 @@ describe('buildGateVerifyProcedure', () => {
     expect(procedure).toMatch(
       /only for what a\s+human must see with their own eyes: rendered UI, colour,\s+layout, wrapping, or a visual read of a running page/,
     );
-    expect(procedure).toMatch(/`needs-triage` is for item text that is\s+unanswerable as written/);
+    expect(procedure).toMatch(
+      /`needs-triage` is for item text that is\s+unanswerable as written/,
+    );
   });
 
   it('leaves the Human-Observation item branch unchanged', () => {
