@@ -1008,6 +1008,9 @@ function renderSkeleton(
           `-LoC-estimated threshold and the ${SIZE_TYPE_CHECK.fileSplitThreshold}-file ` +
           'threshold; exceeding either nominates a split (nominates, not forces — ' +
           '"unsplittable" with a recorded reason remains valid above either one). ' +
+          `"no_split" is valid only at or under the ${SIZE_TYPE_CHECK.fileSplitThreshold}-file ` +
+          'threshold: the gate rejects "no_split" when `files` exceeds it, however small ' +
+          'the LoC estimate. ' +
           'Every decision but "n/a" also carries the estimate it rests on: `files` ' +
           "from the digest's size_check seed, `loc` estimated from the code-map " +
           'digest, `loc_method` naming how (e.g. "estimated") — the gate rejects a ' +

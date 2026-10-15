@@ -56,6 +56,7 @@ import {
   TRIAGE_ELIGIBLE_TYPES,
   type TriageVerdict,
 } from '../planning/triage';
+import { SIZE_TYPE_CHECK } from '../planning/procedureCore';
 import { ProjectService } from '../projects/ProjectService';
 import type { SeedItemClassification } from '../db/types';
 import { extractPathToken } from './groomLoad';
@@ -1067,6 +1068,16 @@ export async function checkGroomingPromotionGate(
         `size_check is missing required field(s): ${missingNumericFields.join(', ')} — a numeric ` +
           'size decision (no_split/split_now/unsplittable) must also record the files/loc/loc_method ' +
           'estimate the decision rests on, not judge whether that estimate is correct.',
+      );
+    } else if (
+      entry.size_check?.decision === 'no_split' &&
+      typeof entry.size_check.files === 'number' &&
+      entry.size_check.files > SIZE_TYPE_CHECK.fileSplitThreshold
+    ) {
+      reasons.push(
+        `size_check records no_split with files=${entry.size_check.files}, over the ` +
+          `${SIZE_TYPE_CHECK.fileSplitThreshold}-file threshold — record split_now, or unsplittable ` +
+          'with a reason, instead.',
       );
     }
   }
