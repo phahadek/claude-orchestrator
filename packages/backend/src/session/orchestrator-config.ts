@@ -154,6 +154,14 @@ export interface OrchestratorConfig {
    */
   test_scoped: string[];
   /**
+   * Command template for the dedicated targeted-retest lane: re-runs an exact
+   * set of failing test ids. Each command MAY contain `{{test_ids}}`, replaced
+   * with the requested ids, each shell-quoted and space-joined (see
+   * expandTargetedCommand in testRequestLane.ts). Empty = the project has no
+   * targeted re-runs and any targeted request is refused.
+   */
+  test_targeted: string[];
+  /**
    * Glob list (minimatch, matched against `git diff --name-only
    * <baseBranch>...HEAD` paths via matchesPathDiff) that forces the full
    * `test:` command instead of `test_scoped` when the session's diff
@@ -329,6 +337,7 @@ const DEFAULTS: OrchestratorConfig = {
   test_report_format: undefined,
   test_report_glob: '',
   test_scoped: [],
+  test_targeted: [],
   test_full_run_paths: [],
   test_crash_signatures: [],
   test_environment_failure_signatures: [],
@@ -671,6 +680,9 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
       test_scoped: Array.isArray(parsed.test_scoped)
         ? parsed.test_scoped
         : DEFAULTS.test_scoped,
+      test_targeted: Array.isArray(parsed.test_targeted)
+        ? parsed.test_targeted
+        : DEFAULTS.test_targeted,
       test_full_run_paths: Array.isArray(parsed.test_full_run_paths)
         ? parsed.test_full_run_paths
         : DEFAULTS.test_full_run_paths,

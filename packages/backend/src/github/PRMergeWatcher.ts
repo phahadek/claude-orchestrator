@@ -946,9 +946,12 @@ export class PRMergeWatcher extends EventEmitter {
       // Explicitly scoped to 'full' — a settled row from a diff-scoped run
       // (test_scoped:) must never stand in for the full-suite verdict this
       // gate exists to enforce; see run_kind on test_request_runs.
-      const testResult = contentHash
+      const latestFull = contentHash
         ? getLatestTestRequestRun(project.id, contentHash, 'full')
         : undefined;
+      // Defensive: a targeted re-run is never full-suite proof.
+      const testResult =
+        latestFull?.run_kind === 'targeted' ? undefined : latestFull;
       if (!testResult && contentHash && worktreePath) {
         // No full-run verdict yet for this content hash. The poll only
         // reads settled verdicts — triggering a full-suite run belongs to

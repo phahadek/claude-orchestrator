@@ -30,7 +30,7 @@
  * never silently re-queued.
  */
 
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import { LaneRunWithdrawnError } from '../tasks/deferralClassifier';
 import {
@@ -68,6 +68,7 @@ import { computeWholeTreeContentHash } from '../session/analyzeGating';
 import {
   loadOrchestratorConfig,
   type ToolVersionCheck,
+  type OrchestratorConfig,
 } from '../session/orchestrator-config';
 import {
   withCheckoutTestRunLock,
@@ -382,10 +383,34 @@ export function getGlobalTestRunLimit(): number {
   const ceilingMb = typedGetSetting('test_request_memory_ceiling_mb');
   if (ceilingMb === 0) return maxConcurrent;
   const perRunMb = typedGetSetting('test_request_per_run_memory_mb');
-  return Math.min(maxConcurrent, Math.max(1, Math.floor(ceilingMb / perRunMb)));
+  const budget = Math.max(1, Math.floor(ceilingMb / perRunMb));
+  // Targeted runs actually executing are charged against the same memory
+  // ceiling, so the full-suite lane yields their slots (never below one).
+  const targetedInUse = targetedTestRunQueue?.inUse() ?? 0;
+  return Math.min(maxConcurrent, Math.max(1, budget - targetedInUse));
 }
 
+/**
+ * Capacity of the dedicated targeted-retest lane: test_targeted_max_concurrent
+ * (0 = lane disabled), capped by what the host memory ceiling can hold.
+ */
+function getTargetedLaneCapacity(): number {
+  const targetedMax = typedGetSetting('test_targeted_max_concurrent');
+  if (targetedMax === 0) return 0;
+  const ceilingMb = typedGetSetting('test_request_memory_ceiling_mb');
+  if (ceilingMb === 0) return targetedMax;
+  const perRunMb = typedGetSetting('test_request_per_run_memory_mb');
+  return Math.min(
+    targetedMax,
+    Math.max(1, Math.floor(ceilingMb / perRunMb) - 1),
+  );
+}
+
+/** Maximum failing-test ids one targeted re-run request may carry. */
+export const TARGETED_RETEST_MAX_IDS = 500;
+
 let globalTestRunSemaphore: PriorityLaneQueue | null = null;
+let targetedTestRunQueue: PriorityLaneQueue | null = null;
 
 /** Queued runs' task linkage, kept so the queue can re-rank them from fresh board/flag inputs at each slot release. */
 const queuedRunMeta = new Map<
@@ -579,6 +604,7 @@ function rerankQueuedRuns(
 /** Refreshes a project's queued-run ordering after an execution flag changed — display only, release-time re-rank still decides who runs. */
 export function rerankTestLaneProject(projectId: string): void {
   globalTestRunSemaphore?.rerankProject(projectId);
+  targetedTestRunQueue?.rerankProject(projectId);
 }
 
 /**
@@ -603,6 +629,100 @@ function getGlobalTestRunSemaphore(): PriorityLaneQueue {
     globalTestRunSemaphore.resize(limit);
   }
   return globalTestRunSemaphore;
+}
+
+/**
+ * The separate queue targeted re-runs acquire from: its own capacity, so a
+ * saturated full-suite queue never delays a targeted run and vice versa.
+ * Created lazily with capacity floored at 1 — a disabled lane (capacity 0) is
+ * refused at admission (admitTargetedRetest), never queued.
+ */
+function getTargetedTestRunQueue(): PriorityLaneQueue {
+  const limit = Math.max(1, getTargetedLaneCapacity());
+  if (!targetedTestRunQueue) {
+    targetedTestRunQueue = new PriorityLaneQueue(limit, {
+      rerank: rerankQueuedRuns,
+      eligible: isRunEligible,
+      onGrant: markRunExecuting,
+      skipCeilingMs: SESSION_NOT_IDLE_CEILING_MS,
+      onSkipExpired: withdrawSkippedRun,
+    });
+  } else if (targetedTestRunQueue.capacity() !== limit) {
+    targetedTestRunQueue.resize(limit);
+  }
+  return targetedTestRunQueue;
+}
+
+function getQueueForRunKind(runKind: TestRunKind): PriorityLaneQueue {
+  return runKind === 'targeted'
+    ? getTargetedTestRunQueue()
+    : getGlobalTestRunSemaphore();
+}
+
+/**
+ * Expands a `test_targeted` command template: `{{test_ids}}` becomes the
+ * requested ids, each single-quoted and space-joined (same quoting as
+ * expandAutofixCommand's `{{changed_files}}`). A template without the
+ * placeholder runs unchanged.
+ */
+export function expandTargetedCommand(cmd: string, testIds: string[]): string {
+  const quoted = testIds
+    .map((id) => `'${id.replace(/'/g, "'\\''")}'`)
+    .join(' ');
+  return cmd.replace(/\{\{test_ids\}\}/g, () => quoted);
+}
+
+export type TargetedRetestRefusal =
+  | 'no_test_ids'
+  | 'too_many_test_ids'
+  | 'lane_disabled'
+  | 'no_targeted_command';
+
+/** Per-project targeted-lane command resolution: no template configured means no targeted lane. */
+export function resolveTargetedCommands(
+  config: Pick<OrchestratorConfig, 'test_targeted'>,
+): string[] | null {
+  if (getTargetedLaneCapacity() === 0) return null;
+  return config.test_targeted?.length ? config.test_targeted : null;
+}
+
+/**
+ * Admits a targeted re-run of an exact set of failing test ids on the
+ * dedicated targeted queue. Refuses (never truncates) a request with no ids,
+ * more than TARGETED_RETEST_MAX_IDS ids, or for a project/host with no
+ * targeted lane. The id set is folded into the run's base_sha discriminator so
+ * two different id sets on one tree never coalesce or replay each other.
+ */
+export function admitTargetedRetest(
+  spec: Omit<TestRequestRunSpec, 'commands' | 'runKind' | 'baseSha'> & {
+    testIds: string[];
+    targetedCommands: string[];
+  },
+):
+  | { ok: true; admission: TestRequestAdmission }
+  | {
+      ok: false;
+      reason: TargetedRetestRefusal;
+    } {
+  const { testIds, targetedCommands, ...rest } = spec;
+  const ids = [...new Set(testIds)].sort();
+  if (ids.length === 0) return { ok: false, reason: 'no_test_ids' };
+  if (ids.length > TARGETED_RETEST_MAX_IDS)
+    return { ok: false, reason: 'too_many_test_ids' };
+  if (getTargetedLaneCapacity() === 0)
+    return { ok: false, reason: 'lane_disabled' };
+  if (targetedCommands.length === 0)
+    return { ok: false, reason: 'no_targeted_command' };
+  const digest = createHash('sha256').update(ids.join('\n')).digest('hex');
+  return {
+    ok: true,
+    admission: admitTestRequest({
+      ...rest,
+      commands: targetedCommands.map((c) => expandTargetedCommand(c, ids)),
+      runKind: 'targeted',
+      baseSha: `targeted:${digest}`,
+    }),
+  };
 }
 
 /**
@@ -635,6 +755,7 @@ function getForeignConcurrentRunCount(projectId: string): number {
  */
 export function __resetProjectSemaphoresForTest(): void {
   globalTestRunSemaphore = null;
+  targetedTestRunQueue = null;
   queuedRunMeta.clear();
   mergeHoldByRun.clear();
   executingByWorktree.clear();
@@ -659,7 +780,7 @@ function withdrawQueuedRun(
   supersededBy: string,
   prContext?: { prNumber: number; repo: string },
 ): boolean {
-  const semaphore = getGlobalTestRunSemaphore();
+  const semaphore = getQueueForRunKind(run.run_kind);
   if (!semaphore.withdraw(run.id, supersededBy)) return false;
   withdrawTestRequestRun(run.id, supersededBy);
   broadcastRunStatus({
@@ -1283,7 +1404,7 @@ export function admitTestRequest(
     spec.contentHash,
     runId,
   );
-  const semaphore = getGlobalTestRunSemaphore();
+  const semaphore = getQueueForRunKind(runKind);
   queuedRunMeta.set(runId, {
     taskId,
     requestedAt,
@@ -1727,7 +1848,7 @@ async function executeTestRequestRun(
   // packed snapshot is always the merged tree.
   const mergeNote = await runPreTestMerge(spec, runId);
 
-  const semaphore = getGlobalTestRunSemaphore();
+  const semaphore = getQueueForRunKind(spec.runKind ?? 'full');
   const startedAt = Date.now();
   // Host-wide peer occupancy right after acquiring, excluding this run
   // itself, so 0 genuinely means "ran alone" — matching the
@@ -2317,6 +2438,7 @@ export function hasNoPerTestReport(run: TestRequestRunRow): boolean {
 type TestRunOutcome =
   | 'passed'
   | 'passed-scoped'
+  | 'passed-targeted'
   | 'failed-with-named-tests'
   | 'failed-with-no-report-acquired'
   | 'crashed-oom'
@@ -2336,6 +2458,8 @@ const TEST_RUN_NEXT_ACTIONS: Record<TestRunOutcome, string> = {
   passed: 'No action needed — all tests passed.',
   'passed-scoped':
     'The tests scoped to this diff passed — this is not a full-suite confirmation.',
+  'passed-targeted':
+    'The re-run of the requested failing tests passed — this is not a full-suite confirmation.',
   'failed-with-named-tests':
     'Review the named failing tests below and fix them.',
   'failed-with-no-report-acquired':
@@ -2364,7 +2488,12 @@ export function classifyTestRunOutcome(
   } else if (run.state === 'running') {
     outcome = 'running';
   } else if (run.state === 'passed') {
-    outcome = run.run_kind === 'scoped' ? 'passed-scoped' : 'passed';
+    outcome =
+      run.run_kind === 'scoped'
+        ? 'passed-scoped'
+        : run.run_kind === 'targeted'
+          ? 'passed-targeted'
+          : 'passed';
   } else if (
     run.failure_reason === 'execution_failed' ||
     run.failure_reason === 'interrupted_queued' ||

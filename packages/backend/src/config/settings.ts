@@ -55,6 +55,8 @@ const SettingsSchema = z.object({
   session_pr_close_grace_minutes: z.coerce.number().int().min(0),
   flake_recovery_max_retries: z.coerce.number().int().min(0),
   test_request_max_concurrent: z.coerce.number().int().min(1),
+  // Capacity of the dedicated targeted-retest lane; 0 disables the lane.
+  test_targeted_max_concurrent: z.coerce.number().int().min(0),
   test_request_cycle_limit: z.coerce.number().int().min(1),
   // 0 disables the joint memory sizing of test-run concurrency.
   test_request_memory_ceiling_mb: z.coerce.number().int().min(0),
@@ -208,6 +210,7 @@ export const SETTING_DEFAULTS: Settings = {
   session_pr_close_grace_minutes: 5,
   flake_recovery_max_retries: 2,
   test_request_max_concurrent: 2,
+  test_targeted_max_concurrent: 1,
   test_request_cycle_limit: 5,
   test_request_memory_ceiling_mb: 0,
   test_request_per_run_memory_mb: 1024,

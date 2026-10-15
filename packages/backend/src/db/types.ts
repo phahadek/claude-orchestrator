@@ -1189,7 +1189,7 @@ export type TestRequestRunState = 'queued' | 'running' | 'passed' | 'failed';
  * and settled-run guard). Defaults to 'full' for every row and caller that
  * never states otherwise.
  */
-export type TestRunKind = 'full' | 'scoped' | 'verify';
+export type TestRunKind = 'full' | 'scoped' | 'verify' | 'targeted';
 
 /**
  * Failure sub-reason for a `failed` run — distinguishes a hard timeout, an
