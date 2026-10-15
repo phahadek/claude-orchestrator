@@ -80,8 +80,29 @@ function addFailedRun(testIds: string[]): string {
   db.prepare(
     `INSERT INTO test_request_runs
        (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, worktree_path, structured_result)
-     VALUES (?, 'proj-1', 'hash-parity', 'SA', 'failed', '', 0, ?, ?, ?, NULL)`,
-  ).run(id, NOW - MIN, NOW - MIN, WT);
+     VALUES (?, 'proj-1', 'hash-parity', 'SA', 'failed', '', 0, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    NOW - MIN,
+    NOW - MIN,
+    WT,
+    JSON.stringify({
+      format: 'junit-xml',
+      suites: [
+        {
+          name: 's',
+          tests: testIds.map((t) => ({
+            id: t,
+            name: t,
+            outcome: 'failed',
+            durationMs: 1,
+          })),
+        },
+      ],
+      totals: { passed: 0, failed: testIds.length, skipped: 0, errors: 0 },
+      durationMsTotal: 1,
+    }),
+  );
   const ins = db.prepare(
     `INSERT INTO test_run_results
        (test_request_run_id, project_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
