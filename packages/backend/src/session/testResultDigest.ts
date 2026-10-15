@@ -34,11 +34,11 @@ export interface UnattributedView {
 
 const MAX_GROUPS_SHOWN = 5;
 
-export const TRACE_PULL_POINTER = (runId: string | null): string =>
+const TRACE_PULL_POINTER = (runId: string | null): string =>
   `trace: testHealth.getTestTrace(${runId ? `runId=${runId}, ` : ''}testId)`;
 
 /** Module of a test id: the file part before "::", else everything before the last "/" segment's test name. */
-export function testIdModule(testId: string): string {
+function testIdModule(testId: string): string {
   const sep = testId.indexOf('::');
   if (sep > 0) return testId.slice(0, sep);
   const slash = testId.lastIndexOf('/');
