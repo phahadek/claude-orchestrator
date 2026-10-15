@@ -34,7 +34,6 @@ import {
   insertSession,
   markTestRequestRunAwaitingDisposition,
   setPauseReason,
-  upsertPullRequest,
 } from '../../db/queries';
 import { normalizeTaskId } from '../../tasks/taskId';
 import { filterVerifyFailureByBaseHealth } from '../baseAttributableFilter';
@@ -120,25 +119,20 @@ const entryPoints: Record<string, EntryPoint> = {
     return (await evaluateSubject(runId, null)) === 'woken';
   },
   'paused-PR re-attribution (PRMergeWatcher)': async () => {
-    upsertPullRequest({
-      pr_number: PR_NUMBER,
-      pr_url: `https://github.com/${REPO}/pull/${PR_NUMBER}`,
-      task_id: TASK_A,
-      session_id: 'SA',
-      repo: REPO,
-      title: 'feat: parity',
-      body: null,
-      head_branch: 'feature/parity',
-      base_branch: 'dev',
-      state: 'open',
-      draft: 0,
-      review_result: null,
-      review_at: null,
-      created_at: '2024-01-01T00:00:00Z',
-      updated_at: '2024-01-01T00:00:00Z',
-      synced_at: '2024-01-01T00:00:00Z',
-      head_sha: 'sha-1',
-    } as never);
+    // Raw insert: upsertPullRequest silently rejects repos absent from the real config.
+    db.prepare(
+      `INSERT INTO pull_requests
+         (pr_number, pr_url, task_id, session_id, repo, title, head_branch,
+          base_branch, state, draft, created_at, updated_at, synced_at, head_sha)
+       VALUES (?, ?, ?, 'SA', ?, 'feat: parity', 'feature/parity', 'dev',
+               'open', 0, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z',
+               '2024-01-01T00:00:00Z', 'sha-1')`,
+    ).run(
+      PR_NUMBER,
+      `https://github.com/${REPO}/pull/${PR_NUMBER}`,
+      TASK_A,
+      REPO,
+    );
     setPauseReason(PR_NUMBER, REPO, 'ci_failing');
     const watcher = new PRMergeWatcher(
       {} as never,
