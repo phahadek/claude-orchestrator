@@ -15947,3 +15947,108 @@ export function listInvestigateAuditEvents(
     )
     .all(projectId, ...eventTypes, limit) as InvestigateAuditEventRow[];
 }
+
+// ─── prior ops sessions on a task ──────────────────────────────────────────
+
+export interface PriorOpsSession {
+  sessionId: string;
+  terminalCompletionReason: string | null;
+  finalState: string | null;
+  findingOrProposal: string | null;
+  createdTasks: { title: string; taskId: string | null }[];
+}
+
+const SQL_NORMALIZED_SESSION_TASK_ID = `REPLACE(REPLACE(COALESCE(s.task_id, ''), 'notion:', ''), '-', '')`;
+
+function normalizeLooseTaskId(id: string): string {
+  return id.replace(/^notion:/, '').replace(/-/g, '');
+}
+
+function parseIntentPayload(raw: string): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === 'object'
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Earlier ops sessions on a task (newest first, capped), drawn from committed
+ * staged_intent rows rather than the churning ops_journal row. Gate-verify
+ * sessions (task_id gate-item:%) are excluded; task ids match on the
+ * normalized form because the staged-intent write path stores mixed forms.
+ */
+export function getPriorOpsSessionsForTask(
+  taskId: string,
+  limit = 3,
+): PriorOpsSession[] {
+  const normalized = normalizeLooseTaskId(taskId);
+  const sessions = db
+    .prepare(
+      `SELECT s.session_id, s.terminal_completion_reason FROM sessions s
+       WHERE s.session_type = 'ops'
+         AND COALESCE(s.task_id, '') NOT LIKE 'gate-item:%'
+         AND ${SQL_NORMALIZED_SESSION_TASK_ID} = @task_id
+       ORDER BY s.started_at DESC`,
+    )
+    .all({ task_id: normalized }) as {
+    session_id: string;
+    terminal_completion_reason: string | null;
+  }[];
+  const intentStmt = db.prepare(
+    `SELECT si.kind, si.payload, si.applied_task_id FROM staged_intent si
+     WHERE si.session_id = @session_id
+       AND si.state = 'committed'
+       AND si.kind IN ('journal.setState', 'task.create')
+     ORDER BY si.created_at ASC, si.rowid ASC`,
+  );
+  const out: PriorOpsSession[] = [];
+  for (const s of sessions) {
+    const intents = intentStmt.all({ session_id: s.session_id }) as {
+      kind: string;
+      payload: string;
+      applied_task_id: string | null;
+    }[];
+    let finalState: string | null = null;
+    let finding: string | null = null;
+    const createdTasks: PriorOpsSession['createdTasks'] = [];
+    for (const i of intents) {
+      const p = parseIntentPayload(i.payload);
+      if (i.kind === 'journal.setState') {
+        if (
+          typeof p.taskId === 'string' &&
+          normalizeLooseTaskId(p.taskId) !== normalized
+        ) {
+          continue;
+        }
+        finalState = typeof p.state === 'string' ? p.state : null;
+        const fields = p.fields as Record<string, unknown> | undefined;
+        finding =
+          typeof fields?.findingOrProposal === 'string'
+            ? fields.findingOrProposal
+            : null;
+      } else if (typeof p.title === 'string') {
+        createdTasks.push({ title: p.title, taskId: i.applied_task_id });
+      }
+    }
+    if (
+      !s.terminal_completion_reason &&
+      finalState === null &&
+      createdTasks.length === 0
+    ) {
+      continue;
+    }
+    out.push({
+      sessionId: s.session_id,
+      terminalCompletionReason: s.terminal_completion_reason,
+      finalState,
+      findingOrProposal: finding,
+      createdTasks,
+    });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
