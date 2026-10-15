@@ -1,7 +1,9 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { randomUUID } from 'crypto';
-import { execSync, execFileSync } from 'child_process';
+import { execSync } from 'child_process';
+import fs from 'fs';
+import path from 'path';
 import { runWithConcurrency } from '../utils/concurrency';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import {
@@ -49,7 +51,7 @@ import {
   type GroomingGateEntry,
 } from '../groom/groomGate';
 import type { TrackedFileSetCache } from '../groom/groomLoad';
-import { filesPathsEntryExistsInRepo } from '../groom/groomLoad';
+import { extractPathToken } from '../groom/groomLoad';
 import type { GateVerifyProposedFix } from '../mcp/tools/schemas';
 import { isInteractiveTaskType } from '../planning/triage';
 import {
@@ -2729,32 +2731,30 @@ class GateVerifyProposedFixError extends Error {
 
 const NEW_PATH_SUFFIX_RE = /\s*\*\(new\)\*\s*$/;
 
-/** An inherited GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE would make git ignore `cwd` and list some other repo. */
-function envWithoutGitRepoOverrides(): NodeJS.ProcessEnv {
-  const env = { ...process.env };
-  for (const key of Object.keys(env)) {
-    if (
-      key === 'GIT_DIR' ||
-      key === 'GIT_WORK_TREE' ||
-      key === 'GIT_INDEX_FILE' ||
-      key === 'GIT_COMMON_DIR'
-    ) {
-      delete env[key];
-    }
+/**
+ * Whether `relativePath` resolves to a real, existing file inside
+ * `repoRoot` — a synchronous, subprocess-free stand-in for "tracked in the
+ * project's repo" at stage time (no `stageIntent` caller can be made async
+ * without a much larger blast radius; this check only needs to catch a
+ * fabricated/hallucinated path, not distinguish a real-but-gitignored one).
+ * Rejects any path that escapes `repoRoot` (e.g. `../../etc/passwd`).
+ */
+function existsInRepoCheckout(repoRoot: string, relativePath: string): boolean {
+  const abs = path.resolve(repoRoot, relativePath);
+  const rel = path.relative(repoRoot, abs);
+  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return false;
+  try {
+    return fs.statSync(abs).isFile();
+  } catch {
+    return false;
   }
-  return env;
 }
 
-function listTrackedFilesSync(repoRoot: string): Set<string> | null {
+function isDirectorySync(dir: string): boolean {
   try {
-    const out = execFileSync('git', ['ls-files', '-z'], {
-      cwd: repoRoot,
-      env: envWithoutGitRepoOverrides(),
-      maxBuffer: 256 * 1024 * 1024,
-    }).toString();
-    return new Set(out.split('\0').filter(Boolean));
+    return fs.statSync(dir).isDirectory();
   } catch {
-    return null;
+    return false;
   }
 }
 
@@ -2801,16 +2801,17 @@ function validateGateVerifyProposedFix(
   }
 
   const repoRoot = getProjectById(projectId)?.projectDir;
-  if (!repoRoot) return;
-  const tracked = listTrackedFilesSync(repoRoot);
-  if (!tracked) return;
+  if (!repoRoot || !isDirectorySync(repoRoot)) return;
   const offending: string[] = [];
-  if (!tracked.has(proposedFix.cause.file.trim())) {
+  if (!existsInRepoCheckout(repoRoot, proposedFix.cause.file.trim())) {
     offending.push(proposedFix.cause.file);
   }
   for (const entry of proposedFix.filesAffected) {
     if (NEW_PATH_SUFFIX_RE.test(entry)) continue;
-    if (!filesPathsEntryExistsInRepo(entry, tracked)) offending.push(entry);
+    const token = extractPathToken(entry);
+    if (!token || !existsInRepoCheckout(repoRoot, token)) {
+      offending.push(entry);
+    }
   }
   if (offending.length > 0) {
     throw new GateVerifyProposedFixError(

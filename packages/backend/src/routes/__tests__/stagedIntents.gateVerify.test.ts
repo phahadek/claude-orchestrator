@@ -17,7 +17,6 @@ import {
 } from 'vitest';
 import express from 'express';
 import supertest from 'supertest';
-import { execFileSync } from 'child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -420,19 +419,14 @@ describe('gate.verify — fail disposition files a follow-up task via resolveMil
 describe('gate.verify — stage-time proposedFix validation', () => {
   let repoDir: string;
 
+  // A plain checkout directory, not a real git repo — the stage-time check
+  // is a filesystem existence check (existsInRepoCheckout in stagedIntents.ts),
+  // not a `git ls-files` shell-out, so no `git init`/`git add` is needed to
+  // make `scripts/deploy.sh` resolve as "tracked".
   beforeAll(() => {
     repoDir = mkdtempSync(join(tmpdir(), 'gate-verify-repo-'));
-    const { GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, ...cleanEnv } = process.env;
-    void GIT_DIR;
-    void GIT_WORK_TREE;
-    void GIT_INDEX_FILE;
-    execFileSync('git', ['init', '-q'], { cwd: repoDir, env: cleanEnv });
     mkdirSync(join(repoDir, 'scripts'));
     writeFileSync(join(repoDir, 'scripts', 'deploy.sh'), 'echo hi\n');
-    execFileSync('git', ['add', 'scripts/deploy.sh'], {
-      cwd: repoDir,
-      env: cleanEnv,
-    });
     ProjectService.create({
       id: 'proj-git',
       name: 'Project Git',
