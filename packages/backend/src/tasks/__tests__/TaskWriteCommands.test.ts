@@ -931,7 +931,7 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
 
   it('allows a Ready transition for a non-Code task carrying n/a size/type dispositions (fail-open)', async () => {
     mockGetTaskCache.mockReturnValue(
-      cacheRowWithStatus(STATUS_DISPLAY.Backlog),
+      cacheRowWithStatusAndType(STATUS_DISPLAY.Backlog, '📐 Design'),
     );
     const backend = makeBackend({
       fetchTaskPage: vi
