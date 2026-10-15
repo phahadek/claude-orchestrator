@@ -1223,6 +1223,16 @@ describe('procedureCore', () => {
       expect(rendered).toMatch(/DO NOT apply it yourself/);
     });
 
+    it('the ops directive says the closing group carries the whole remaining chain and no longer claims identical stage/apply checks', () => {
+      const rendered = renderHardRulesMarkdown();
+      expect(rendered).toContain(
+        'The closing group carries the whole remaining chain',
+      );
+      expect(rendered).not.toContain(
+        'enforced at both stage time and apply time (the same `isValidOpsTransition` check)',
+      );
+    });
+
     it('the transition the no-change terminal requires — staged-proposal to resolved — is legal per isValidOpsTransition', () => {
       expect(isValidOpsTransition('staged-proposal', 'resolved')).toBe(true);
     });
