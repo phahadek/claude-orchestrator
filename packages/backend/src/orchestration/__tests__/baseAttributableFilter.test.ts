@@ -25,13 +25,11 @@ const summaryState = vi.hoisted(() => ({ incomplete: 0 }));
 
 const {
   mockGetFailingTestIdsForRun,
-  mockListTestRequestRunsForSession,
   mockComputeTestFailureBreadthFlag,
   mockMarkTestResultExcused,
   mockResolveBreadthOwnTree,
 } = vi.hoisted(() => ({
   mockGetFailingTestIdsForRun: vi.fn(),
-  mockListTestRequestRunsForSession: vi.fn(() => []),
   mockComputeTestFailureBreadthFlag: vi.fn(),
   mockMarkTestResultExcused: vi.fn(),
   mockResolveBreadthOwnTree: vi.fn(() => ({
@@ -56,7 +54,6 @@ vi.mock('../../db/queries', () => ({
     total_count: 1,
     incomplete: summaryState.incomplete,
   }),
-  listTestRequestRunsForSession: mockListTestRequestRunsForSession,
   computeTestFailureBreadthFlag: mockComputeTestFailureBreadthFlag,
   resolveBreadthOwnTree: mockResolveBreadthOwnTree,
   getActiveTestOverrideTestIds: () => new Set<string>(),
@@ -146,8 +143,6 @@ function stubBreadthFlags(flaggedIds: Set<string>) {
 
 beforeEach(() => {
   mockGetFailingTestIdsForRun.mockReset();
-  mockListTestRequestRunsForSession.mockReset();
-  mockListTestRequestRunsForSession.mockReturnValue([]);
   mockComputeTestFailureBreadthFlag.mockReset();
   stubBreadthFlags(new Set());
   mockMarkTestResultExcused.mockReset();
@@ -268,7 +263,6 @@ describe('filterBaseAttributableFailures', () => {
       sessionId: 'sess-1',
       worktreePath: '/wt/own',
     });
-    expect(mockListTestRequestRunsForSession).not.toHaveBeenCalled();
     const asOf = mockComputeTestFailureBreadthFlag.mock.calls[0][3] as number;
     expect(asOf).toBeGreaterThanOrEqual(before);
   });
