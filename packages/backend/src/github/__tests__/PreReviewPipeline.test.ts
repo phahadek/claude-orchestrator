@@ -401,7 +401,7 @@ describe('PreReviewPipeline.run — clears stale gate-owned pause on success', (
   it('removes every gate-owned entry when several are present', async () => {
     const raw = serializePauseReasonSet([
       { ...pauseReasonFromCanonical('analyze_failing'), set_at: 1000 },
-      { ...pauseReasonFromCanonical('f2_verdict_missing'), set_at: 2000 },
+      { ...pauseReasonFromCanonical('ci_failing'), set_at: 2000 },
     ]);
     mockGetPRByNumber.mockReturnValue(makePRRow({ pause_reason: raw }));
     const sm = makeSessionManager();
@@ -417,7 +417,7 @@ describe('PreReviewPipeline.run — clears stale gate-owned pause on success', (
     expect(mockClearPauseReasonEntry).toHaveBeenCalledWith(
       PR_NUMBER,
       REPO,
-      'f2_verdict_missing',
+      'ci_failing',
     );
   });
 
