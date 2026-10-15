@@ -412,13 +412,18 @@ describe('gate.verify auto-commit — staging-time attempt', () => {
         .get() as { id: string };
       const app = express();
       app.use(express.json());
-      app.use('/api', createStagedIntentsRouter(planningOrchestrator, sm as any));
+      app.use(
+        '/api',
+        createStagedIntentsRouter(planningOrchestrator, sm as any),
+      );
       const res = await supertest(app)
         .post(`/api/staged-intents/${rc.id}/reject`)
         .send({ reason: 'keep as is' });
       expect(res.status).toBe(200);
       const cls = db
-        .prepare('SELECT classification, latest_disposition FROM gate_item WHERE id = ?')
+        .prepare(
+          'SELECT classification, latest_disposition FROM gate_item WHERE id = ?',
+        )
         .get(item.id) as { classification: string; latest_disposition: string };
       expect(cls.classification).toBe('Read-Only');
       expect(cls.latest_disposition).toBe('needs-setup');
@@ -448,7 +453,11 @@ describe('gate.verify auto-commit — staging-time attempt', () => {
         null,
       );
       expect(
-        await autoCommitGateVerifyIntent(staged as any, sm as any, planningOrchestrator),
+        await autoCommitGateVerifyIntent(
+          staged as any,
+          sm as any,
+          planningOrchestrator,
+        ),
       ).toBe(false);
       const row = db
         .prepare('SELECT state FROM staged_intent WHERE id = ?')
