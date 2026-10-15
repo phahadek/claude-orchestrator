@@ -357,7 +357,7 @@ export class StuckSessionMonitor {
             'stuck_session_no_pr_periodic',
             // Already confirmed via isAlive() above that no live process exists
             // for this session — safe to bypass the in-flight guard.
-            { skipInFlightGuard: true },
+            { skipInFlightGuard: true, recordSignal: 'result_reap' },
           );
         }
         let taskBackend;

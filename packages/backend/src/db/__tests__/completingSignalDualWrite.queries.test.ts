@@ -270,3 +270,51 @@ describe('archive sweep dual-write (routes/sessions.ts operator archive + Conclu
     expect(signals[0].signal_value).toBe('archived');
   });
 });
+
+describe('markSessionDone recordSignal: result_reap', () => {
+  const reapRows = (id: string) =>
+    listCompletingSignalsForSession(id).filter(
+      (r) => r.signal_class === 'result_reap',
+    );
+
+  it('writes exactly one result_reap row on a landed transition', () => {
+    insertSession({ session_id: 'r1', status: 'idle', session_type: 'review' });
+    markSessionDone('r1', 2000, null, 'stuck_session_no_pr_periodic', {
+      skipInFlightGuard: true,
+      recordSignal: 'result_reap',
+    });
+    const rows = reapRows('r1');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      session_type: 'review',
+      signal_value: 'stuck_session_no_pr_periodic',
+      recorded_at: 2000,
+    });
+    const s = db
+      .prepare(
+        'SELECT status, terminal_completion_reason FROM sessions WHERE session_id = ?',
+      )
+      .get('r1') as { status: string; terminal_completion_reason: string };
+    expect(s).toEqual({
+      status: 'done',
+      terminal_completion_reason: 'stuck_session_no_pr_periodic',
+    });
+  });
+
+  it('writes none when the row is already terminal or already done', () => {
+    insertSession({ session_id: 'r2', status: 'error' });
+    insertSession({ session_id: 'r3', status: 'done' });
+    for (const id of ['r2', 'r3']) {
+      markSessionDone(id, 2000, null, 'boot_orphan_result_event', {
+        recordSignal: 'result_reap',
+      });
+      expect(reapRows(id)).toHaveLength(0);
+    }
+  });
+
+  it('markSessionIdle writes no result_reap row', () => {
+    insertSession({ session_id: 'r4', status: 'running' });
+    markSessionIdle('r4', 2000, null, 'stuck_session_no_pr_awaiting_operator');
+    expect(reapRows('r4')).toHaveLength(0);
+  });
+});

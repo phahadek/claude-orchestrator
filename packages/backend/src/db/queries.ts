@@ -649,7 +649,7 @@ export function markSessionDone(
   endedAt: number,
   prUrl?: string | null,
   callSite?: string,
-  opts?: { skipInFlightGuard?: boolean },
+  opts?: { skipInFlightGuard?: boolean; recordSignal?: 'result_reap' },
 ): void {
   const current = getStmtGetSession().get({ session_id: sessionId }) as
     | { status: string; task_id: string | null; session_type: SessionType }
@@ -719,6 +719,16 @@ export function markSessionDone(
       'done',
       endedAt,
     );
+    if (opts?.recordSignal) {
+      insertCompletingSignal({
+        session_id: sessionId,
+        task_id: current.task_id ?? null,
+        session_type: current.session_type,
+        signal_class: opts.recordSignal,
+        signal_value: callSite ?? 'unknown',
+        recorded_at: endedAt,
+      });
+    }
   }
 }
 
