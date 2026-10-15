@@ -421,7 +421,10 @@ function checkRequiredHeadingSection(
     return [
       {
         tier: 'structural',
-        detail: `required "${headingLabel}" section is missing`,
+        detail:
+          `required "${headingLabel}" section is missing — create it by staging task.patchBodySection ` +
+          `with operation: "append", section: "${headingLabel}" (append creates the section), ` +
+          `under the Ready flip's groupId`,
         location: 'body',
       },
     ];

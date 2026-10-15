@@ -51,7 +51,10 @@ vi.mock('../../session/orchestrator-config', async () => {
   };
 });
 
+import { z } from 'zod';
+import { registerStageProposalTools } from '../../mcp/tools/stageProposalTools';
 import {
+  INTENT_KIND_EXAMPLE_PAYLOADS,
   assemblePlanningProcedure,
   deriveGroomDigestSlice,
   deriveDesignDigestSlice,
@@ -1867,6 +1870,87 @@ describe('assemblePlanningProcedure', () => {
     expect(lifecycleIdx).toBeGreaterThanOrEqual(0);
     expect(coreIdx).toBeGreaterThan(lifecycleIdx);
     expect(digestIdx).toBeGreaterThan(coreIdx);
+  });
+});
+
+describe('intent-kind example payloads', () => {
+  function registeredPayloadSchemas(): Record<string, z.ZodType> {
+    const schemas: Record<string, z.ZodType> = {};
+    const fakeServer = {
+      registerTool: (
+        kind: string,
+        meta: { inputSchema: Record<string, z.ZodType> },
+      ) => {
+        schemas[kind] = meta.inputSchema.payload;
+      },
+    };
+    registerStageProposalTools(fakeServer as never, {
+      sessionId: 's',
+      projectId: 'p1',
+    });
+    return schemas;
+  }
+
+  it('every example payload parses against its registered MCP input schema', () => {
+    const schemas = registeredPayloadSchemas();
+    for (const [kind, example] of Object.entries(
+      INTENT_KIND_EXAMPLE_PAYLOADS,
+    )) {
+      const schema = schemas[kind];
+      if (!schema) continue;
+      const result = schema.safeParse(
+        JSON.parse(example.replace('<current-version-number>', '1')),
+      );
+      expect(
+        result.success,
+        `${kind}: ${result.success ? '' : result.error.message}`,
+      ).toBe(true);
+    }
+  });
+
+  it('task.updateBody example carries a sections map, not a body string', () => {
+    const parsed = JSON.parse(INTENT_KIND_EXAMPLE_PAYLOADS['task.updateBody']);
+    expect(parsed).toHaveProperty('sections');
+    expect(parsed).not.toHaveProperty('body');
+  });
+
+  it('task.patchBodySection example is an append with content, and remove/replace are documented', () => {
+    const parsed = JSON.parse(
+      INTENT_KIND_EXAMPLE_PAYLOADS['task.patchBodySection'],
+    );
+    expect(parsed.operation).toBe('append');
+    expect(typeof parsed.content).toBe('string');
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+      },
+    });
+    expect(output).toContain('"replace"');
+    expect(output).toContain('"remove"');
+  });
+
+  it('the assembled groom procedure says a missing required section is created by a grouped append, not a no-op', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+      },
+    });
+    expect(output).toContain('Deliverables');
+    expect(output).toContain('Targets / surfaces affected');
+    expect(output).toMatch(/operation: "append"/);
+    expect(output).toMatch(
+      /DO NOT stage `planning\.noOp` because a required section is missing/,
+    );
   });
 });
 
