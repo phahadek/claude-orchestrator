@@ -25,7 +25,6 @@ import type { ProjectConfig } from '../config';
 import type { TestRequestRunRow, StructuredTestResult } from '../db/types';
 import {
   getTestRunSummary,
-  listTestRequestRunsForSession,
   computeTestFailureBreadthFlag,
   markTestResultExcused,
   resolveBreadthOwnTree,
@@ -81,30 +80,6 @@ const UNFILTERED = (passed: boolean): BaseAttributableFilterResult => ({
   remainingTests: [],
   baseRun: null,
 });
-
-/**
- * The flip-rate cutoff (a genuinely temporal guard; breadth excludes the
- * subject's own tree by identity instead) — the earliest started_at among `run`'s own session's test_request_runs, so a
- * PR's own repeated runs (all sharing that session) can never count toward
- * their own breadth. Falls back to `run.started_at` itself when the run
- * carries no session (nothing else to look up against).
- */
-export function firstRunCutoffMs(
-  project: ProjectConfig,
-  run: TestRequestRunRow,
-): number {
-  if (!run.session_id) return run.started_at;
-  const sessionRuns = listTestRequestRunsForSession(
-    project.id,
-    run.session_id,
-    1000,
-  );
-  if (sessionRuns.length === 0) return run.started_at;
-  return sessionRuns.reduce(
-    (min, r) => Math.min(min, r.started_at),
-    run.started_at,
-  );
-}
 
 /**
  * Classifies `run` (an already-completed, failed test.request run) against
@@ -171,20 +146,33 @@ function attributeFailingTests(
   const breadthWindowHours = typedGetSetting('flip_rate_breadth_window_hours');
   const asOfMs = Date.now();
 
-  const overrideIds = getActiveTestOverrideTestIds(projectId, ownTree);
+  const breadthFlaggedIds = new Set(
+    sessionFailing
+      .filter(
+        (t) =>
+          computeTestFailureBreadthFlag(
+            t.test_id,
+            breadthWindowHours,
+            breadthN,
+            asOfMs,
+            ownTree,
+          ).flagged,
+      )
+      .map((t) => t.test_id),
+  );
+  // Mass breakage is a base/infra signal: past the threshold, overrides are
+  // not consulted, so the run can never be excused to a pass.
+  const massBroken =
+    sessionFailing.length - breadthFlaggedIds.size >
+    typedGetSetting('mass_breakage_threshold');
+  const overrideIds = massBroken
+    ? new Set<string>()
+    : getActiveTestOverrideTestIds(projectId, ownTree);
   const overrideExcludedTests = sessionFailing.filter((t) =>
     overrideIds.has(t.test_id),
   );
   const excludedTests = sessionFailing.filter(
-    (t) =>
-      overrideIds.has(t.test_id) ||
-      computeTestFailureBreadthFlag(
-        t.test_id,
-        breadthWindowHours,
-        breadthN,
-        asOfMs,
-        ownTree,
-      ).flagged,
+    (t) => overrideIds.has(t.test_id) || breadthFlaggedIds.has(t.test_id),
   );
   const excludedIds = new Set(excludedTests.map((t) => t.test_id));
   const remainingTests = sessionFailing.filter(
