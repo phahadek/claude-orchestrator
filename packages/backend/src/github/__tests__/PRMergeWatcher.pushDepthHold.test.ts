@@ -60,7 +60,7 @@ describe('PRMergeWatcher.handlePushDetected — depth-review hold', () => {
       pr_number: PR_NUMBER,
       pr_url: `https://github.com/${REPO}/pull/${PR_NUMBER}`,
       task_id: null,
-      session_id: 'coder-session',
+      session_id: null,
       repo: REPO,
       title: 'PR',
       body: null,
@@ -74,7 +74,7 @@ describe('PRMergeWatcher.handlePushDetected — depth-review hold', () => {
       updated_at: NOW,
       synced_at: NOW,
       review_iteration: 0,
-      review_session_id: 'review-session',
+      review_session_id: null,
       head_sha: 'oldsha',
       last_reviewed_sha: null,
       node_id: null,
@@ -97,7 +97,11 @@ describe('PRMergeWatcher.handlePushDetected — depth-review hold', () => {
     const watcher = new PRMergeWatcher(github, sessions, undefined, vi.fn());
     watcher.setReviewOrchestrator(reviewOrchestrator);
 
-    await watcher.handlePushDetected(getPRByNumber(PR_NUMBER, REPO)!);
+    await watcher.handlePushDetected({
+      ...getPRByNumber(PR_NUMBER, REPO)!,
+      session_id: 'coder-session',
+      review_session_id: 'review-session',
+    });
 
     expect(reviewOrchestrator.enqueueReview).toHaveBeenCalledTimes(1);
     const after = getPRByNumber(PR_NUMBER, REPO)!;
