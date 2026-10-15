@@ -1272,9 +1272,7 @@ describe('sendOrResume() respawn-path delivery confirmation', () => {
         path: 'resume_fresh_worktree',
       });
       queries.markInboxItemsDelivered(
-        queries
-          .listUndeliveredInboxItems(CONFIRM_SESSION_ID)
-          .map((i) => i.id),
+        queries.listUndeliveredInboxItems(CONFIRM_SESSION_ID).map((i) => i.id),
       );
     });
   });
