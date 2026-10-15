@@ -53,7 +53,11 @@ function makeSessionManager() {
   });
 }
 
-function seedVerifySession(sessionId: string, gateItemId: string) {
+function seedVerifySession(
+  sessionId: string,
+  gateItemId: string,
+  metadata: string | null = null,
+) {
   insertSession({
     session_id: sessionId,
     task_id: `gate-item:${gateItemId}`,
@@ -69,7 +73,7 @@ function seedVerifySession(sessionId: string, gateItemId: string) {
     compaction_count: 0,
     context_occupancy_tokens: 0,
     task_name: null,
-    metadata: null,
+    metadata,
     review_result: null,
     pause_reason: null,
     last_error_detail: null,
@@ -167,6 +171,50 @@ describe('gate.verify auto-commit — staging-time attempt', () => {
     const sessionRow = getSession('verify-session-1');
     expect(sessionRow?.status).toBe('done');
   });
+
+  it.each([
+    ['pass', '{"gateVerifyUnattended":true}', 1],
+    ['needs-setup', '{"gateVerifyUnattended":true}', 1],
+    ['fail', '{"gateVerifyUnattended":true}', 1],
+    ['pass', '{"gateVerifyUnattended":false}', 0],
+    ['fail', null, 0],
+  ] as const)(
+    'records the dispatch origin on the gate_item_event: %s with metadata %s -> unattended=%i',
+    async (disposition, metadata, expected) => {
+      const item = makeRunnableGateItem();
+      seedVerifySession('verify-session-origin', item.id, metadata);
+      upsertGateVerifyAutoCommitPolicy('M12', disposition, true, Date.now());
+
+      const sm = makeSessionManager();
+      const planningOrchestrator = new PlanningOrchestrator(sm as any);
+      createStagedIntentsRouter(planningOrchestrator, sm as any);
+
+      const staged = stageIntent(
+        'gate.verify',
+        { gateItemId: item.id, disposition },
+        'proj-auto-commit',
+        null,
+        'verify-session-origin',
+        `Gate item ${item.id}: reported ${disposition}`,
+        null,
+        null,
+        item.milestone,
+        null,
+      );
+      await autoCommitGateVerifyIntent(
+        staged as any,
+        sm as any,
+        planningOrchestrator,
+      );
+
+      const row = db
+        .prepare(
+          'SELECT unattended FROM gate_item_event WHERE gate_item_id = ? AND disposition = ?',
+        )
+        .get(item.id, disposition) as { unattended: number } | undefined;
+      expect(row?.unattended).toBe(expected);
+    },
+  );
 
   it('never auto-commits a reclassify proposal, even when its disposition matches an armed policy', async () => {
     const item = makeRunnableGateItem();

@@ -5176,6 +5176,20 @@ function readinessAdvisoryAnnotation(
   return JSON.stringify({ advisory: true, violations: advisory });
 }
 
+/** Dispatch origin recorded on a gate-verify session at spawn; false when absent or unparseable. */
+function readGateVerifyUnattended(sessionId: string): boolean {
+  const metadata = getSession(sessionId)?.metadata;
+  if (!metadata) return false;
+  try {
+    return (
+      (JSON.parse(metadata) as { gateVerifyUnattended?: unknown })
+        .gateVerifyUnattended === true
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function applyIntent(
   intent: StagedIntent,
   override?: { reason: string },
@@ -5434,13 +5448,17 @@ async function applyIntent(
       // passOperator on a mirror: no verifier ever ran here, so tagging the
       // pass as the verifier's own would trip isVerifierBlockedFromPassing
       // and strand the item as advisory-only forever.
+      const unattended =
+        !isOperatorSuppliedOrigin && intent.sessionId
+          ? readGateVerifyUnattended(intent.sessionId)
+          : false;
       return routeVerificationResult(
         item,
         result,
         defaultFollowupFiler,
         null,
         {},
-        false,
+        unattended,
         isOperatorSuppliedOrigin ? undefined : 'gate-verifier',
       );
     }

@@ -4,6 +4,7 @@ import {
   getSession,
   hasActiveCapabilityRequestForSession,
   markSessionDone,
+  setSessionMetadata,
   setSessionTerminalCompletionReason,
   insertCompletingSignal,
   TERMINAL_SESSION_STATUSES,
@@ -390,7 +391,10 @@ export class SessionGateItemVerifier implements GateItemVerifier {
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   }
 
-  async verify(item: GateItem): Promise<GateVerificationResult> {
+  async verify(
+    item: GateItem,
+    opts?: { unattended: boolean },
+  ): Promise<GateVerificationResult> {
     const project = getProjectById(item.project);
     if (!project) {
       return {
@@ -421,6 +425,7 @@ export class SessionGateItemVerifier implements GateItemVerifier {
         taskKind: 'non_milestone',
         taskId: `gate-item:${item.id}`,
         injectedProcedureContent: buildGateVerifyProcedure(item),
+        gateVerifyUnattended: opts?.unattended ?? false,
       });
     } catch (err) {
       this.sessionManager.off('gate_verify_disposition', capture);
@@ -450,6 +455,7 @@ export class SessionGateItemVerifier implements GateItemVerifier {
    * into a void and the item never leaves its non-terminal state.
    */
   reattach(item: GateItem, sessionId: string): Promise<GateVerificationResult> {
+    setSessionMetadata(sessionId, { gateVerifyUnattended: true });
     return this.awaitDisposition(item, sessionId);
   }
 

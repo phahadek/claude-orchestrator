@@ -4,6 +4,7 @@ import { EventEmitter } from 'events';
 vi.mock('../../db/queries', () => ({
   getSession: vi.fn(),
   markSessionDone: vi.fn(),
+  setSessionMetadata: vi.fn(),
   setSessionTerminalCompletionReason: vi.fn(),
   insertCompletingSignal: vi.fn(),
   hasActiveCapabilityRequestForSession: vi.fn().mockReturnValue(false),
@@ -24,6 +25,7 @@ import { SessionGateItemVerifier } from '../gateItemVerifier';
 import {
   getSession,
   markSessionDone,
+  setSessionMetadata,
   setSessionTerminalCompletionReason,
   insertCompletingSignal,
   hasActiveCapabilityRequestForSession,
@@ -122,6 +124,38 @@ describe('SessionGateItemVerifier — leaves a reporting session live, archives 
     // the session reported.
     expect(sessionManager.enqueueFeedback).not.toHaveBeenCalled();
     expect(appendGateItemEvent).not.toHaveBeenCalled();
+  });
+
+  it('passes the dispatch origin to sessionManager.start (defaulting to operator) and records true on reattach', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
+    const verifier = new SessionGateItemVerifier(sessionManager as never);
+
+    for (const [opts, expected] of [
+      [{ unattended: true }, true],
+      [undefined, false],
+    ] as const) {
+      sessionManager.start.mockClear();
+      const p = verifier.verify(item, opts);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      sessionManager.emit('gate_verify_disposition', {
+        sessionId: 'sess-1',
+        disposition: { disposition: 'needs-setup' },
+      });
+      await p;
+      const [, , dispatchOpts] = vi.mocked(sessionManager.start).mock.calls[0];
+      expect(dispatchOpts).toMatchObject({ gateVerifyUnattended: expected });
+    }
+
+    const reattached = verifier.reattach(item, 'sess-9');
+    expect(setSessionMetadata).toHaveBeenCalledWith('sess-9', {
+      gateVerifyUnattended: true,
+    });
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-9',
+      disposition: { disposition: 'needs-setup' },
+    });
+    await reattached;
   });
 
   it('sets dispatchFailed:true and preserves reason/error evidence when sessionManager.start() rejects', async () => {
