@@ -1,26 +1,8 @@
 import type { TaskView } from '../types/taskView';
 import type { MilestoneConvergence } from '@claude-orchestrator/backend/src/convergence/convergenceService';
 
-/** States used by every phase except grooming — a task's progress through its own type-mapped phase. */
-type BurndownState = 'pending' | 'staged' | 'done';
-
-/**
- * Grooming's internal states, computed client-side from fields already on
- * TaskView (blocked / planningSession / hasAwaitingDispositionIntent) — see
- * docs/tasks resolution notes. Precedence is `blocked` > `inGrooming` >
- * `awaitingDisposition` > `untouched`: a blocked task needs attention
- * regardless of an in-flight groom session, and a live groom session still
- * wins over intents already staged from an earlier groom pass.
- * `awaitingDisposition` means the task's groom session has ended but it
- * still holds at least one intent in the decision-inbox visibility set
- * (see hasAwaitingDispositionIntentForTask on the backend) — i.e. work is
- * staged and waiting on the operator, not merely untouched.
- */
-type GroomingState =
-  | 'blocked'
-  | 'inGrooming'
-  | 'awaitingDisposition'
-  | 'untouched';
+/** A task's progress through its own type-mapped phase; Backlog tasks are 'grooming'. */
+export type BurndownState = 'grooming' | 'pending' | 'staged' | 'done';
 
 /** Gate's own state-machine vocabulary (see gateService.ts GATE_STATES), rendered in full so resolved items are visible alongside outstanding ones. */
 type GateState =
@@ -33,7 +15,7 @@ type GateState =
   | 'deferred'
   | 'discarded';
 
-export type SegmentState = BurndownState | GroomingState | GateState;
+export type SegmentState = BurndownState | GateState;
 
 /** Maps a gate item's raw state string (gateService.ts) to its SegmentState key. */
 export const GATE_STATE_KEY: Record<string, GateState> = {
@@ -49,22 +31,25 @@ export const GATE_STATE_KEY: Record<string, GateState> = {
 
 export const PHASE_ORDER = [
   'design',
-  'grooming',
   'code',
-  'investigation',
   'ops',
   'gate',
 ] as const;
 
 export type PhaseKey = (typeof PHASE_ORDER)[number];
 
+export const TASK_STATE_ORDER: readonly BurndownState[] = [
+  'grooming',
+  'pending',
+  'staged',
+  'done',
+];
+
 /** Per-phase ordered list of segment states to render, left to right. */
 export const PHASE_SEGMENT_ORDER: Record<PhaseKey, readonly SegmentState[]> = {
-  design: ['pending', 'staged', 'done'],
-  grooming: ['blocked', 'inGrooming', 'awaitingDisposition', 'untouched'],
-  code: ['pending', 'staged', 'done'],
-  investigation: ['pending', 'staged', 'done'],
-  ops: ['pending', 'staged', 'done'],
+  design: TASK_STATE_ORDER,
+  code: TASK_STATE_ORDER,
+  ops: TASK_STATE_ORDER,
   gate: [
     'open',
     'runnable',
@@ -91,21 +76,16 @@ export function isGatePhase(phase: string | null): boolean {
 
 export const PHASE_LABELS: Record<PhaseKey, string> = {
   design: 'Design',
-  grooming: 'Grooming',
   code: 'Code',
-  investigation: 'Investigation',
-  ops: 'Ops',
+  ops: 'Investigation & Ops',
   gate: 'Gate items',
 };
 
 export const SEGMENT_STATE_LABELS: Record<SegmentState, string> = {
+  grooming: 'Grooming',
   pending: 'Pending',
   staged: 'Staged',
   done: 'Done',
-  blocked: 'Blocked',
-  inGrooming: 'In grooming',
-  awaitingDisposition: 'Awaiting disposition',
-  untouched: 'Untouched',
   open: 'Open',
   runnable: 'Runnable',
   pendingApproval: 'Pending approval',
@@ -122,11 +102,22 @@ const TYPE_TO_PHASE: Record<string, PhaseKey> = {
   '💻 Code': 'code',
   '🧪 Testing': 'code',
   '🔧 Operational': 'ops',
-  '🔎 Investigation': 'investigation',
+  '🔎 Investigation': 'ops',
 };
 
-/** Statuses that count as "still short of Ready" — grouped into the Grooming phase regardless of type. */
-const PRE_READY_STATUSES = new Set(['backlog']);
+export type OpsKind = 'investigation' | 'operational';
+
+export const OPS_KINDS: readonly OpsKind[] = ['investigation', 'operational'];
+
+export const OPS_KIND_LABELS: Record<OpsKind, string> = {
+  investigation: 'Investigation',
+  operational: 'Ops',
+};
+
+const TYPE_TO_OPS_KIND: Record<string, OpsKind> = {
+  '🔎 Investigation': 'investigation',
+  '🔧 Operational': 'operational',
+};
 
 /** Statuses excluded entirely — closed out, not blocking the milestone. */
 const CLOSED_STATUSES = new Set(['deferred']);
@@ -134,6 +125,8 @@ const CLOSED_STATUSES = new Set(['deferred']);
 export interface PhaseSegmentData {
   phase: PhaseKey;
   counts: Partial<Record<SegmentState, number>>;
+  /** Per-type status breakdown; set only for 'ops'. */
+  byKind?: Partial<Record<OpsKind, Partial<Record<BurndownState, number>>>>;
   /**
    * A warning quantity distinct from the segment total — for task-backed
    * phases, the count of blocked tasks in this phase; for gate, the count of
@@ -150,27 +143,14 @@ function emptyCounts(): Partial<Record<SegmentState, number>> {
 /** The burndown phase a task belongs to, or null when it's closed out (deferred) or its type maps to none. */
 export function phaseForTask(task: TaskView): PhaseKey | null {
   if (CLOSED_STATUSES.has(task.displayStatus)) return null;
-  if (PRE_READY_STATUSES.has(task.displayStatus)) return 'grooming';
   return TYPE_TO_PHASE[task.taskType] ?? null;
 }
 
 function stateForTask(task: TaskView): BurndownState {
+  if (task.displayStatus === 'backlog') return 'grooming';
   if (task.displayStatus === 'done') return 'done';
   if (task.displayStatus === 'ready') return 'pending';
   return 'staged';
-}
-
-/** Grooming's internal state for a pre-Ready task — see GroomingState. */
-function groomingStateForTask(task: TaskView): GroomingState {
-  if (task.blocked) return 'blocked';
-  if (
-    task.planningSession?.sessionType === 'groom' &&
-    task.planningSession.endedAt === null
-  ) {
-    return 'inGrooming';
-  }
-  if (task.hasAwaitingDispositionIntent) return 'awaitingDisposition';
-  return 'untouched';
 }
 
 /**
@@ -192,10 +172,15 @@ export function computePhaseBurndown(
     const phase = phaseForTask(task);
     if (!phase) continue;
 
-    const state: SegmentState =
-      phase === 'grooming' ? groomingStateForTask(task) : stateForTask(task);
+    const state = stateForTask(task);
     const counts = result[phase].counts;
     counts[state] = (counts[state] ?? 0) + 1;
+    const kind = TYPE_TO_OPS_KIND[task.taskType];
+    if (phase === 'ops' && kind) {
+      const byKind = (result.ops.byKind ??= {});
+      const kindCounts = (byKind[kind] ??= {});
+      kindCounts[state] = (kindCounts[state] ?? 0) + 1;
+    }
     if (task.blocked) {
       result[phase].blockerCount += 1;
     }

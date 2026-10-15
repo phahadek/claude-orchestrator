@@ -109,8 +109,8 @@ describe('MilestoneBurndown', () => {
 
     expect(screen.getByTestId('phase-segment-code')).toBeDefined();
     expect(screen.getByTestId('phase-segment-design')).toBeDefined();
-    expect(screen.getByTestId('phase-segment-grooming')).toBeDefined();
-    expect(screen.getByTestId('phase-segment-investigation')).toBeDefined();
+    expect(screen.queryByTestId('phase-segment-grooming')).toBeNull();
+    expect(screen.queryByTestId('phase-segment-investigation')).toBeNull();
     expect(screen.getByTestId('phase-segment-ops')).toBeDefined();
     expect(screen.getByTestId('phase-segment-gate')).toBeDefined();
 
@@ -166,7 +166,7 @@ describe('MilestoneBurndown', () => {
     expect(codeRow.textContent).not.toContain('Staged:');
   });
 
-  it('renders more than one fill in the Grooming bar for a mixed pre-Ready population', () => {
+  it('renders the Grooming segment in the Code bar for Backlog Code tasks', () => {
     render(
       <MilestoneBurndown
         tasks={tasks}
@@ -176,34 +176,51 @@ describe('MilestoneBurndown', () => {
       />,
     );
 
-    const groomingRow = screen.getByTestId('phase-segment-grooming');
-    const fills = groomingRow.querySelectorAll('[class*="fill"]');
-    expect(fills.length).toBeGreaterThan(1);
+    const codeRow = screen.getByTestId('phase-segment-code');
+    expect(codeRow.textContent).toContain('Grooming: 2');
+    expect(codeRow.querySelector('[class*="fillGrooming"]')).toBeTruthy();
   });
 
-  it('renders a distinct fill class for the awaiting-disposition state and its label in the legend row', () => {
+  it('renders Investigation and Operational as one ops bar with a group per kind', () => {
+    const opsTasks = [
+      makeTask({
+        taskId: 'o1',
+        taskType: '🔧 Operational',
+        displayStatus: 'ready',
+      }),
+      makeTask({
+        taskId: 'i1',
+        taskType: '🔎 Investigation',
+        displayStatus: 'done',
+      }),
+      makeTask({
+        taskId: 'i2',
+        taskType: '🔎 Investigation',
+        displayStatus: 'ready',
+      }),
+    ];
     render(
       <MilestoneBurndown
-        tasks={tasks}
-        convergence={makeConvergence()}
+        tasks={opsTasks}
+        convergence={null}
         activePhase={null}
         onPhaseSelect={vi.fn()}
       />,
     );
 
-    const groomingRow = screen.getByTestId('phase-segment-grooming');
-    expect(groomingRow.textContent).toContain('Awaiting disposition: 1');
-
-    const inGroomingFill = groomingRow.querySelector(
-      '[class*="fillInGrooming"]',
+    expect(screen.queryByTestId('phase-segment-investigation')).toBeNull();
+    const opsRow = screen.getByTestId('phase-segment-ops');
+    expect(opsRow.textContent).toContain('Investigation & Ops');
+    const titles = Array.from(opsRow.querySelectorAll('[title]')).map((el) =>
+      el.getAttribute('title'),
     );
-    const untouchedFill = groomingRow.querySelector('[class*="fillUntouched"]');
-    const awaitingFill = groomingRow.querySelector(
-      '[class*="fillAwaitingDisposition"]',
-    );
-    expect(awaitingFill).toBeTruthy();
-    expect(awaitingFill?.className).not.toBe(inGroomingFill?.className);
-    expect(awaitingFill?.className).not.toBe(untouchedFill?.className);
+    expect(titles).toEqual([
+      'Investigation · Pending: 1',
+      'Investigation · Done: 1',
+      'Ops · Pending: 1',
+    ]);
+    expect(screen.getByTestId('phase-legend-ops-investigation')).toBeDefined();
+    expect(screen.getByTestId('phase-legend-ops-operational')).toBeDefined();
   });
 
   it('the gate bar renders a different number for its total and its warning', () => {
