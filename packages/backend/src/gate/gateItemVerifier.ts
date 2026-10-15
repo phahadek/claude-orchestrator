@@ -104,7 +104,7 @@ export function buildGateVerifyProcedure(item: GateItem): string {
       'the current value.',
     '',
     ...renderProjectRecordAccess('ops', item.project),
-    ...renderOpsCapabilities(item.project),
+    ...renderOpsCapabilities(item.project, `gate-item:${item.id}`),
     '### Procedure',
     '',
     "This item's associated PR(s) are already merged and deployed — that " +

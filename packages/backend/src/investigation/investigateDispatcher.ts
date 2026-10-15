@@ -40,6 +40,7 @@ import {
 export function buildInvestigateProcedure(
   reports: readonly InvestigationReportRow[],
   projectId: string,
+  taskId?: string,
 ): string {
   return [
     '## Session Lifecycle',
@@ -65,7 +66,7 @@ export function buildInvestigateProcedure(
       ...(r.image_path ? [`  - image: ${r.image_path}`] : []),
     ]),
     '',
-    ...renderOpsCapabilities(projectId),
+    ...renderOpsCapabilities(projectId, taskId),
     renderHardRulesMarkdown(),
     '## The investigate procedure — five stages',
     '',
@@ -223,7 +224,7 @@ export async function launchInvestigateBatch(
     taskKind: 'non_milestone',
     taskId,
     sessionType: 'ops',
-    injectedProcedureContent: buildInvestigateProcedure(reports, projectId),
+    injectedProcedureContent: buildInvestigateProcedure(reports, projectId, taskId),
   });
 
   setSessionMetadata(sessionId, { reportIds: [...reportIds] });
