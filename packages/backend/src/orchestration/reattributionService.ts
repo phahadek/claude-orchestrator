@@ -23,6 +23,7 @@ import {
   listAwaitingDispositionRuns,
   flipRunToPassedAndEnqueueWake,
   clearAwaitingDisposition,
+  clearAwaitingDispositionForDeadSessions,
   wakeRunWithoutExcuseAndEnqueue,
   resolveBreadthOwnTree,
   computeTestFailureBreadthFlag,
@@ -232,6 +233,9 @@ export async function sweepConfirmedWaiting(
   const batchSize = 500;
   let woken = 0;
   let evaluated = 0;
+  const cleared = clearAwaitingDispositionForDeadSessions();
+  if (cleared > 0)
+    logger.info(`[reattribution] drained ${cleared} dead-session runs`);
   for (;;) {
     const subjects = listAwaitingDispositionRuns({ limit: batchSize });
     evaluated += subjects.length;

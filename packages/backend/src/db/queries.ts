@@ -10067,6 +10067,22 @@ export function markTestRequestRunAwaitingDisposition(id: string): void {
   ).run(Date.now(), id);
 }
 
+/** Clears the marker on failed runs whose session row is missing or terminal; returns rows cleared. */
+export function clearAwaitingDispositionForDeadSessions(): number {
+  return db
+    .prepare(
+      `UPDATE test_request_runs SET awaiting_disposition_at = NULL
+       WHERE state = 'failed'
+         AND awaiting_disposition_at IS NOT NULL
+         AND (session_id IS NULL
+           OR NOT EXISTS (
+             SELECT 1 FROM sessions s
+             WHERE s.session_id = test_request_runs.session_id
+               AND s.status NOT IN (${BASE_TERMINAL_STATUS_SQL_LIST})))`,
+    )
+    .run().changes;
+}
+
 export function clearAwaitingDisposition(id: string): void {
   db.prepare(
     `UPDATE test_request_runs SET awaiting_disposition_at = NULL WHERE id = ?`,
