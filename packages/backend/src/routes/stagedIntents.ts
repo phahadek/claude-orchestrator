@@ -3443,11 +3443,7 @@ function assertOpsNoOpNotOverBlockedJournal(
   }
   const entry = getOpsJournalEntry(taskId);
   if (!entry) return;
-  const effective = effectiveOpsStateForStaging(
-    projectId,
-    taskId,
-    entry.state,
-  );
+  const effective = effectiveOpsStateForStaging(projectId, taskId, entry.state);
   const frozen = [entry.state, effective].find((s) =>
     FROZEN_OPS_STATES.includes(s),
   );
