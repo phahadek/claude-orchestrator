@@ -65,7 +65,13 @@ describe('getPriorOpsSessionsForTask', () => {
       state: 'resolved',
       fields: { findingOrProposal: 'the finding' },
     });
-    insertIntent('s1', 'task.create', { title: 'Fix it' }, 'committed', 'new-1');
+    insertIntent(
+      's1',
+      'task.create',
+      { title: 'Fix it' },
+      'committed',
+      'new-1',
+    );
     const res = getPriorOpsSessionsForTask(TASK);
     expect(res).toHaveLength(1);
     expect(res[0]).toMatchObject({
