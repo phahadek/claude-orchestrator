@@ -346,7 +346,7 @@ describe('PlanningOrchestrator — ops task completion', () => {
       makeIntent({
         id: 'intent-2',
         kind: 'task.create',
-        state: 'needs_revision',
+        state: 'rejected',
         group_id: 'closing-group-1',
       }),
     ]);
@@ -365,7 +365,7 @@ describe('PlanningOrchestrator — ops task completion', () => {
     expect(setTaskPauseReason).toHaveBeenCalledWith(
       'task-1',
       expect.any(String),
-      expect.stringContaining('intent-2'),
+      expect.stringContaining('intent-2 (rejected)'),
     );
   });
 
