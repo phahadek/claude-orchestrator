@@ -435,3 +435,62 @@ describe('a same-group replace patch that inserts a missing required section let
     expect(checked.annotation).toBeNull();
   });
 });
+
+describe('the triage required-heading fact is derived from the composed body', () => {
+  function operationalGate() {
+    return {
+      size_check: { decision: 'n/a' },
+      type_check: { decision: 'n/a' },
+      seam_check: { decision: 'n/a' },
+      type: '🔧 Operational',
+      triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: false },
+    };
+  }
+
+  function headingReasons(checked: Awaited<ReturnType<typeof stageReadyFlip>>) {
+    const annotation = checked.annotation;
+    const reasons =
+      annotation && 'reasons' in annotation ? annotation.reasons : [];
+    return reasons.filter((r) => r.includes('Targets / surfaces affected'));
+  }
+
+  it('blocks on the heading when neither the stored body nor any same-group patch carries it', async () => {
+    mockGetTaskBackend.mockReturnValue(
+      makeBackend('## Context\nBackground.\n'),
+    );
+
+    const checked = await stageReadyFlip(
+      'notion:triage-heading-absent',
+      'group-1',
+      operationalGate(),
+    );
+
+    expect(headingReasons(checked).length).toBeGreaterThan(0);
+  });
+
+  it('a same-group append that creates the required heading satisfies the derived fact, whatever the caller sent', async () => {
+    mockGetTaskBackend.mockReturnValue(
+      makeBackend('## Context\nBackground.\n'),
+    );
+
+    stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: 'notion:triage-heading-via-patch',
+        section: 'Targets / surfaces affected',
+        operation: 'append',
+        content: '- prod worker config',
+      },
+      'proj-1',
+      'group-1',
+    );
+
+    const checked = await stageReadyFlip(
+      'notion:triage-heading-via-patch',
+      'group-1',
+      operationalGate(),
+    );
+
+    expect(headingReasons(checked)).toEqual([]);
+  });
+});
