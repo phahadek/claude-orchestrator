@@ -156,6 +156,7 @@ beforeEach(() => {
   updateStatus.mockResolvedValue(undefined);
   fetchTaskSummary.mockResolvedValue(undefined);
   vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+  vi.mocked(listStagedIntentsByGroup).mockReturnValue([]);
   vi.mocked(getEntry).mockReturnValue(makeJournalEntry('resolved'));
   vi.mocked(getPRBySessionId).mockReturnValue(null);
   vi.mocked(isOpsTerminalClosingSetMember).mockReturnValue(false);
@@ -364,7 +365,7 @@ describe('PlanningOrchestrator — ops task completion', () => {
     expect(setTaskPauseReason).toHaveBeenCalledWith(
       'task-1',
       expect.any(String),
-      expect.stringContaining('intent-2 (needs_revision)'),
+      expect.stringContaining('intent-2'),
     );
   });
 

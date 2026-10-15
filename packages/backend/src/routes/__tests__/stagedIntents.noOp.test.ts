@@ -148,7 +148,7 @@ describe('planning.noOp decision-surface kind', () => {
         resolution: null,
         updated_at: new Date(0).toISOString(),
       } as any);
-      db.prepare('DELETE FROM session WHERE session_id = ?').run('ops-noop-1');
+      db.prepare('DELETE FROM sessions WHERE session_id = ?').run('ops-noop-1');
       insertSession({
         session_id: 'ops-noop-1',
         task_id: 'ops-task-1',
