@@ -6293,6 +6293,11 @@ export function isSourceTaskDone(sourceTaskId: string): boolean {
   return getTaskStatusFromCache(sourceTaskId) === '✅ Done';
 }
 
+/** True when a gate_item_source's task is ⏭️ Deferred — retracted/superseded, so it will never merge. */
+export function isSourceTaskDeferred(sourceTaskId: string): boolean {
+  return getTaskStatusFromCache(sourceTaskId) === '⏭️ Deferred';
+}
+
 // ─── pr_review_comments_routed ────────────────────────────────────────────────
 
 /**
