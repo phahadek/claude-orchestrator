@@ -6,6 +6,7 @@ import {
   flaggedTasksForPhase,
   isGatePhase,
   GATE_STATE_KEY,
+  PHASE_ORDER,
 } from '../phaseBurndown';
 import type { TaskView } from '../../types/taskView';
 import type { MilestoneConvergence } from '@claude-orchestrator/backend/src/convergence/convergenceService';
@@ -67,177 +68,26 @@ function makeConvergence(
 }
 
 describe('computePhaseBurndown', () => {
-  it('gives the Grooming bar more than one state for a mixed pre-Ready population, summing to its total', () => {
-    const tasks = [
-      makeTask({
-        taskId: 'blocked-1',
-        displayStatus: 'backlog',
-        blocked: true,
-      }),
-      makeTask({
-        taskId: 'in-grooming-1',
-        displayStatus: 'backlog',
-        blocked: false,
-        planningSession: {
-          sessionId: 's1',
-          status: 'running',
-          sessionType: 'groom',
-          startedAt: 1,
-          endedAt: null,
-          inputTokens: 0,
-          outputTokens: 0,
-        },
-      }),
-      makeTask({
-        taskId: 'awaiting-disposition-1',
-        displayStatus: 'backlog',
-        blocked: false,
-        hasAwaitingDispositionIntent: true,
-      }),
-      makeTask({
-        taskId: 'untouched-1',
-        displayStatus: 'backlog',
-        blocked: false,
-      }),
-    ];
-
-    const result = computePhaseBurndown(tasks, null);
-
-    expect(result.grooming.counts).toEqual({
-      blocked: 1,
-      inGrooming: 1,
-      awaitingDisposition: 1,
-      untouched: 1,
-    });
-    const states = Object.keys(result.grooming.counts).filter(
-      (k) => (result.grooming.counts as Record<string, number>)[k] > 0,
+  it('has no grooming or investigation phase', () => {
+    expect([...PHASE_ORDER]).toEqual(['design', 'code', 'ops', 'gate']);
+    const result = computePhaseBurndown([], null);
+    expect(Object.keys(result).sort()).toEqual(
+      ['code', 'design', 'gate', 'ops'].sort(),
     );
-    expect(states.length).toBeGreaterThan(1);
-    expect(
-      Object.values(result.grooming.counts).reduce(
-        (sum, n) => sum + (n ?? 0),
-        0,
-      ),
-    ).toBe(4);
   });
 
-  it('a task with staged intents awaiting disposition and no live groom session counts as awaitingDisposition, not untouched', () => {
+  it('counts Backlog tasks as grooming inside their own type bar', () => {
     const tasks = [
+      makeTask({ taskId: 'c1', taskType: '💻 Code', displayStatus: 'backlog' }),
       makeTask({
-        taskId: 'awaiting-1',
+        taskId: 'd1',
+        taskType: '📐 Design',
         displayStatus: 'backlog',
-        blocked: false,
-        planningSession: {
-          sessionId: 's1',
-          status: 'done',
-          sessionType: 'groom',
-          startedAt: 1,
-          endedAt: 2,
-          inputTokens: 0,
-          outputTokens: 0,
-        },
-        hasAwaitingDispositionIntent: true,
       }),
     ];
     const result = computePhaseBurndown(tasks, null);
-    expect(result.grooming.counts.awaitingDisposition).toBe(1);
-    expect(result.grooming.counts.untouched ?? 0).toBe(0);
-  });
-
-  it('a live groom session still counts as inGrooming even when the task also holds awaiting intents', () => {
-    const tasks = [
-      makeTask({
-        taskId: 'live-with-awaiting',
-        displayStatus: 'backlog',
-        blocked: false,
-        planningSession: {
-          sessionId: 's1',
-          status: 'running',
-          sessionType: 'groom',
-          startedAt: 1,
-          endedAt: null,
-          inputTokens: 0,
-          outputTokens: 0,
-        },
-        hasAwaitingDispositionIntent: true,
-      }),
-    ];
-    const result = computePhaseBurndown(tasks, null);
-    expect(result.grooming.counts.inGrooming).toBe(1);
-    expect(result.grooming.counts.awaitingDisposition ?? 0).toBe(0);
-  });
-
-  it('a blocked task still counts as blocked even when it also holds awaiting intents and a live groom session', () => {
-    const tasks = [
-      makeTask({
-        taskId: 'blocked-with-awaiting',
-        displayStatus: 'backlog',
-        blocked: true,
-        planningSession: {
-          sessionId: 's1',
-          status: 'running',
-          sessionType: 'groom',
-          startedAt: 1,
-          endedAt: null,
-          inputTokens: 0,
-          outputTokens: 0,
-        },
-        hasAwaitingDispositionIntent: true,
-      }),
-    ];
-    const result = computePhaseBurndown(tasks, null);
-    expect(result.grooming.counts.blocked).toBe(1);
-    expect(result.grooming.counts.awaitingDisposition ?? 0).toBe(0);
-    expect(result.grooming.counts.inGrooming ?? 0).toBe(0);
-  });
-
-  it('a task with only terminal intents (hasAwaitingDispositionIntent false) still counts as untouched', () => {
-    const tasks = [
-      makeTask({
-        taskId: 'terminal-only',
-        displayStatus: 'backlog',
-        blocked: false,
-        hasAwaitingDispositionIntent: false,
-      }),
-    ];
-    const result = computePhaseBurndown(tasks, null);
-    expect(result.grooming.counts.untouched).toBe(1);
-    expect(result.grooming.counts.awaitingDisposition ?? 0).toBe(0);
-  });
-
-  it('a task with no intents at all still counts as untouched', () => {
-    const tasks = [
-      makeTask({
-        taskId: 'no-intents',
-        displayStatus: 'backlog',
-        blocked: false,
-      }),
-    ];
-    const result = computePhaseBurndown(tasks, null);
-    expect(result.grooming.counts.untouched).toBe(1);
-    expect(result.grooming.counts.awaitingDisposition ?? 0).toBe(0);
-  });
-
-  it('a completed groom session (endedAt set) does not count as in grooming', () => {
-    const tasks = [
-      makeTask({
-        taskId: 'ended-groom',
-        displayStatus: 'backlog',
-        blocked: false,
-        planningSession: {
-          sessionId: 's1',
-          status: 'done',
-          sessionType: 'groom',
-          startedAt: 1,
-          endedAt: 2,
-          inputTokens: 0,
-          outputTokens: 0,
-        },
-      }),
-    ];
-    const result = computePhaseBurndown(tasks, null);
-    expect(result.grooming.counts.untouched).toBe(1);
-    expect(result.grooming.counts.inGrooming ?? 0).toBe(0);
+    expect(result.code.counts).toEqual({ grooming: 1 });
+    expect(result.design.counts).toEqual({ grooming: 1 });
   });
 
   it('buckets non-grooming tasks by phase and pending/staged/done state', () => {
@@ -269,6 +119,52 @@ describe('computePhaseBurndown', () => {
     expect(result.design.counts).toEqual({ pending: 1 });
     expect(result.code.counts).toEqual({ staged: 1, done: 1 });
     expect(phaseTotal(result.design.counts)).toBe(1);
+  });
+
+  it('merges Investigation and Operational into ops with a per-kind breakdown', () => {
+    const inv = makeTask({
+      taskId: 'i1',
+      taskType: '🔎 Investigation',
+      displayStatus: 'done',
+    });
+    const op1 = makeTask({
+      taskId: 'o1',
+      taskType: '🔧 Operational',
+      displayStatus: 'ready',
+    });
+    const op2 = makeTask({
+      taskId: 'o2',
+      taskType: '🔧 Operational',
+      displayStatus: 'backlog',
+    });
+    expect(phaseForTask(inv)).toBe('ops');
+    expect(phaseForTask(op1)).toBe('ops');
+
+    const result = computePhaseBurndown([inv, op1, op2], null);
+    expect(result.ops.byKind?.investigation).toEqual({ done: 1 });
+    expect(result.ops.byKind?.operational).toEqual({ pending: 1, grooming: 1 });
+    expect(result.ops.counts).toEqual({ done: 1, pending: 1, grooming: 1 });
+  });
+
+  it('counts a blocked Backlog Code task as a blocker and flags it', () => {
+    const task = makeTask({
+      taskId: 'b1',
+      taskType: '💻 Code',
+      displayStatus: 'backlog',
+      blocked: true,
+    });
+    const result = computePhaseBurndown([task], null);
+    expect(result.code.blockerCount).toBe(1);
+    expect(flaggedTasksForPhase('code', [task])).toEqual([task]);
+  });
+
+  it('puts a Backlog Docs task in no phase', () => {
+    const task = makeTask({ taskType: '📝 Docs', displayStatus: 'backlog' });
+    expect(phaseForTask(task)).toBeNull();
+    const result = computePhaseBurndown([task], null);
+    for (const phase of PHASE_ORDER) {
+      if (phase !== 'gate') expect(phaseTotal(result[phase].counts)).toBe(0);
+    }
   });
 
   it('derives the gate bar warning from a different quantity than its total', () => {

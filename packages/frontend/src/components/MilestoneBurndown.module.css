@@ -181,20 +181,36 @@
   background: #a6e3a1;
 }
 
-.fillBlocked {
-  background: #f38ba8;
-}
-
-.fillInGrooming {
+.fillGrooming {
   background: #89b4fa;
 }
 
-.fillAwaitingDisposition {
-  background: #f9e2af;
+.kindInvestigation {
+  --kind-hue: #74c7ec;
 }
 
-.fillUntouched {
-  background: #6c7086;
+.kindOperational {
+  --kind-hue: #cba6f7;
+}
+
+.kindFill {
+  background: var(--kind-hue);
+}
+
+.opacityGrooming {
+  opacity: 0.3;
+}
+
+.opacityPending {
+  opacity: 0.5;
+}
+
+.opacityStaged {
+  opacity: 0.75;
+}
+
+.opacityDone {
+  opacity: 1;
 }
 
 .fillGateOpen {
