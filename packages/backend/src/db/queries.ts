@@ -10471,30 +10471,6 @@ export function getLatestFinishedTestRequestRunForSession(
 }
 
 /**
- * Full run history for one (project_id, session_id) — the Tests tab's
- * run-history table. Newest first; `limit` bounds the page size since a
- * long-lived session can accumulate many test.request cycles.
- */
-export function listTestRequestRunsForSession(
-  projectId: string,
-  sessionId: string,
-  limit = 50,
-): TestRequestRunRow[] {
-  return db
-    .prepare<{ project_id: string; session_id: string; limit: number }>(
-      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
-       FROM test_request_runs
-       WHERE project_id = @project_id AND session_id = @session_id
-       ORDER BY started_at DESC, rowid DESC LIMIT @limit`,
-    )
-    .all({
-      project_id: projectId,
-      session_id: sessionId,
-      limit,
-    }) as TestRequestRunRow[];
-}
-
-/**
  * The PR pipeline (PreReviewPipeline) runs the merge-time full suite in the
  * coding session's own worktree but records it with session_id NULL and
  * run_origin='pr_pipeline' (see testRequestLane.ts) — so it is invisible to
@@ -10549,35 +10525,6 @@ export function getAuthoritativeTestRunForPr(
     }) as TestRequestRunRow | undefined;
   if (fullRun) return fullRun;
   return getLatestFinishedTestRequestRunForSession(projectId, sessionId);
-}
-
-/**
- * The most recent finished producer='pr_gate' row for a PR's worktree,
- * regardless of run_kind — a flaky.confirm(gate: 'ci'|'f2') call's known-id
- * source: which test ids actually failed on the run this confirmation
- * targets. Unlike getAuthoritativeTestRunForPr this is not restricted to
- * run_kind='full', since a pre-review verify run (run_kind='verify') also
- * persists test_run_results rows under producer='pr_gate' and a session can
- * be confirming against that failure too.
- */
-export function getLatestPrGateRunForWorktree(
-  projectId: string,
-  worktreePath: string,
-): TestRequestRunRow | undefined {
-  return db
-    .prepare<{ project_id: string; worktree_path: string }>(
-      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
-       FROM test_request_runs
-       WHERE project_id = @project_id
-         AND producer = 'pr_gate'
-         AND worktree_path = @worktree_path
-         AND state NOT IN ('running', 'queued')
-       ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
-    )
-    .get({
-      project_id: projectId,
-      worktree_path: worktreePath,
-    }) as TestRequestRunRow | undefined;
 }
 
 /**

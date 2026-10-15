@@ -226,13 +226,10 @@ export const ALLOWED_TOOLS = [
   // through orchestratorMcpToolName so it emits the underscore CLI form
   // the model actually calls.
   orchestratorMcpToolName('review.verdict'),
-  orchestratorMcpToolName('flaky.confirm'),
   // testHealth.getFlakyHistory — same read-only flaky-history lookup already
   // granted to groom/design/ops/investigate/depth-review sessions (see
   // PROJECT_READ_MCP_TOOLS below); a code session needs it too, to check
-  // prior flip-rate evidence for a test before deciding whether to
-  // call flaky.confirm pre-PR (see the Pre-PR Gate / flaky_confirm docs in
-  // orchestrator-claudemd.ts). Registered server-side unconditionally
+  // prior flip-rate evidence for a test. Registered server-side unconditionally
   // (buildMcpServer) but unlisted here would mean every call denied by the
   // CLI before it reaches the MCP server, same failure mode as every other
   // entry in this block.

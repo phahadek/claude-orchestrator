@@ -99,7 +99,7 @@ export function renderUnattributedFailures(
 }
 
 const AWAITING_DISPOSITION_INSTRUCTION =
-  "**Wait:** no failing test was excused — the failure corpus does not yet show these failures on enough other sessions' trees to attribute them elsewhere, and nothing has established that they are unrelated to your change; treat them as possibly yours. If other sessions later record the same failures, you will be woken at most once with a re-attribution. Do not re-run the unchanged tree or call flaky_confirm in the meantime.";
+  "**Wait:** no failing test was excused — the failure corpus does not yet show these failures on enough other sessions' trees to attribute them elsewhere, and nothing has established that they are unrelated to your change; treat them as possibly yours. If other sessions later record the same failures, you will be woken at most once with a re-attribution. Do not re-run the unchanged tree in the meantime.";
 
 /** Appends the wait instruction to a delivered digest only when the run row carries the awaiting-disposition marker. */
 export function appendAwaitingDispositionInstruction(
