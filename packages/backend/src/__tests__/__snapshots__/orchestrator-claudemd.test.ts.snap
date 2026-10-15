@@ -39,37 +39,26 @@ The supervisor's "Pause your work" message isn't a nudge in this sense: stopping
 
 ---
 
-## Investigate a Failing Test First
+## When a Test Fails
 
-A failing test is presumed caused by your diff until you name a concrete cause outside it. A failing test in a file your diff touches, or one that exercises a module your diff changed (directly or through a shared fixture), is presumed caused by the diff.
+A failing test (from \`test_request\`, CI, or the F2 gate) is presumed caused by your diff until you have evidence otherwise. Test commands are blocked at the permission layer — always run them via \`mcp__orchestrator__test_request\`, never directly (the result lands in your feedback inbox next turn). Do not push an empty commit to force a re-run: it re-drives nothing. Pick exactly one of three paths.
 
-1. Read at least one failing test, then trace its fixtures and imports into the code you changed. Do this before any other step.
-2. Many failures sharing one fixture is a signal to inspect that fixture's path through your change — not a sign of an environment failure.
-3. The \`test_request\` digest shows failing test names, not assertion text, so this is code-reading work: intersect the failing tests' fixtures and imports with your diff.
-4. Only a failure whose cause you have identified outside your diff goes to the flaky path below (\`flaky_confirm\`, \`mcp__orchestrator__testHealth_getFlakyHistory\`), and the \`reason\` must name that cause.
-5. Asking the operator about the environment is a last resort, after steps 1–3.
+### Path 1 — Investigate and fix (the default)
 
----
+1. Read the digest. Each unattributed failing test carries an indicator line, \`[breadth N/M, flips F/W]\`: how many other trees show the same failure, and how often it has flipped pass/fail recently. Above the mass-breakage threshold the digest groups failures by module instead of listing each one.
+2. Pull the trace with the digest's \`testHealth.getTestTrace(testId)\` pointer and read the assertion text and stack — the digest alone shows names, not why they failed.
+3. Fix the cause in your branch.
+4. Verify the fix with the **targeted-retest lane**: re-run only the failing test ids on the dedicated targeted queue instead of waiting on the full suite. Run the full \`test_request\` once, as the final check on the finished tree.
 
-## Flaky / Transient CI or F2 Gate Failures
+### Path 2 — Wait
 
-This section applies only once you have investigated per "Investigate a Failing Test First" above and named a concrete cause outside your diff.
+If the indicator shows attribution may still arrive (other trees have not yet recorded the failure) and no not-reproduced wake has fired, wait. A digest **Wait** instruction means you will be woken at most once — do not re-run the unchanged tree.
 
-When a CI check or the F2 orchestrator-run test gate fails on your PR, do not assume it's flaky and do not push an empty commit to force a re-run — that does not re-drive anything. Default to treating the failure as real and fixing it.
+### Path 3 — File the operator override and wait
 
-Test commands are blocked at the permission layer — always via \`mcp__orchestrator__test_request\`, never directly (result lands in your feedback inbox next turn). Do not re-run the suite to establish flakiness — the backend already holds a cross-SHA outcome corpus and adjudicates against it. Call \`mcp__orchestrator__flaky_confirm\` once with what you observed, instead of pushing a commit:
+Only once the not-reproduced wake has fired and you cannot fix the failure yourself: stage \`mcp__orchestrator__test_override\` (the \`test.override\` intent) with \`testIds\` and \`evidence\` (\`traceReads\`: the traces you read; \`targetedRunIds\`: your targeted retest runs; \`investigationNote\`), optionally \`linkedFixTaskId\`. Then stop and wait for the operator. An approved override excuses the named tests for this task's runs only, until the task is terminal, the linked fix task is Done, or a run of your own tree passes the test.
 
-- \`gate\`: \`"ci"\`, \`"f2"\`, or \`"analyze"\` — whichever gate failed.
-- \`reason\`: one line naming what you observed and why it's unrelated to your diff.
-- \`testId\` / \`testName\`: required for \`"ci"\`/\`"f2"\` — identifies the failing test so the backend can check it against the corpus and your diff.
-
-The backend refuses (naming why) unless the test clears the corpus and its file isn't in your diff. On success it re-runs the gate on the same commit and re-drives the merge loop on a pass — bounded, so exhaustion parks the PR for a human rather than looping.
-
-Once you have a named cause outside your diff, \`mcp__orchestrator__testHealth_getFlakyHistory\` (pass the failing test ids from your run) can corroborate your \`reason\`.
-
-Retrying \`test_request\` against an unchanged tree is futile either way: a settled run just replays via dedup, and a broken run (timeout, crash, OOM, failed spawn) stays held for operator approval instead — re-staging changes neither.
-
-If the \`test_request\` digest carries a **Wait** instruction, you will be woken at most once — do not re-run or call \`flaky_confirm\`.
+Retrying \`test_request\` against an unchanged tree is futile: a settled run replays via dedup, and a broken run (timeout, crash, OOM, failed spawn) stays held for operator approval — re-staging changes neither. Asking the operator about the environment is a last resort, after Path 1.
 
 ---
 
@@ -170,7 +159,7 @@ Run in order — all must pass before opening the PR:
 2. No local verify step configured — CI is the gate.
 3. Stage only your implementation files for commit.
 
-Tests are blocked at the permission layer, not part of this gate — run via \`test_request\`. A failed \`test_request\` here: first follow "Investigate a Failing Test First" above. Only if you have named a concrete cause outside your diff, call \`flaky_confirm\` with \`gate: "test_request"\` rather than retrying (see "Flaky / Transient CI or F2 Gate Failures" above).
+Tests are blocked at the permission layer, not part of this gate — run via \`test_request\`. A failed \`test_request\` here: follow the three paths in "When a Test Fails" above rather than retrying.
 
 ---
 
@@ -275,37 +264,26 @@ The supervisor's "Pause your work" message isn't a nudge in this sense: stopping
 
 ---
 
-## Investigate a Failing Test First
+## When a Test Fails
 
-A failing test is presumed caused by your diff until you name a concrete cause outside it. A failing test in a file your diff touches, or one that exercises a module your diff changed (directly or through a shared fixture), is presumed caused by the diff.
+A failing test (from \`test_request\`, CI, or the F2 gate) is presumed caused by your diff until you have evidence otherwise. Test commands are blocked at the permission layer — always run them via \`mcp__orchestrator__test_request\`, never directly (the result lands in your feedback inbox next turn). Do not push an empty commit to force a re-run: it re-drives nothing. Pick exactly one of three paths.
 
-1. Read at least one failing test, then trace its fixtures and imports into the code you changed. Do this before any other step.
-2. Many failures sharing one fixture is a signal to inspect that fixture's path through your change — not a sign of an environment failure.
-3. The \`test_request\` digest shows failing test names, not assertion text, so this is code-reading work: intersect the failing tests' fixtures and imports with your diff.
-4. Only a failure whose cause you have identified outside your diff goes to the flaky path below (\`flaky_confirm\`, \`mcp__orchestrator__testHealth_getFlakyHistory\`), and the \`reason\` must name that cause.
-5. Asking the operator about the environment is a last resort, after steps 1–3.
+### Path 1 — Investigate and fix (the default)
 
----
+1. Read the digest. Each unattributed failing test carries an indicator line, \`[breadth N/M, flips F/W]\`: how many other trees show the same failure, and how often it has flipped pass/fail recently. Above the mass-breakage threshold the digest groups failures by module instead of listing each one.
+2. Pull the trace with the digest's \`testHealth.getTestTrace(testId)\` pointer and read the assertion text and stack — the digest alone shows names, not why they failed.
+3. Fix the cause in your branch.
+4. Verify the fix with the **targeted-retest lane**: re-run only the failing test ids on the dedicated targeted queue instead of waiting on the full suite. Run the full \`test_request\` once, as the final check on the finished tree.
 
-## Flaky / Transient CI or F2 Gate Failures
+### Path 2 — Wait
 
-This section applies only once you have investigated per "Investigate a Failing Test First" above and named a concrete cause outside your diff.
+If the indicator shows attribution may still arrive (other trees have not yet recorded the failure) and no not-reproduced wake has fired, wait. A digest **Wait** instruction means you will be woken at most once — do not re-run the unchanged tree.
 
-When a CI check or the F2 orchestrator-run test gate fails on your PR, do not assume it's flaky and do not push an empty commit to force a re-run — that does not re-drive anything. Default to treating the failure as real and fixing it.
+### Path 3 — File the operator override and wait
 
-Test commands are blocked at the permission layer — always via \`mcp__orchestrator__test_request\`, never directly (result lands in your feedback inbox next turn). Do not re-run the suite to establish flakiness — the backend already holds a cross-SHA outcome corpus and adjudicates against it. Call \`mcp__orchestrator__flaky_confirm\` once with what you observed, instead of pushing a commit:
+Only once the not-reproduced wake has fired and you cannot fix the failure yourself: stage \`mcp__orchestrator__test_override\` (the \`test.override\` intent) with \`testIds\` and \`evidence\` (\`traceReads\`: the traces you read; \`targetedRunIds\`: your targeted retest runs; \`investigationNote\`), optionally \`linkedFixTaskId\`. Then stop and wait for the operator. An approved override excuses the named tests for this task's runs only, until the task is terminal, the linked fix task is Done, or a run of your own tree passes the test.
 
-- \`gate\`: \`"ci"\`, \`"f2"\`, or \`"analyze"\` — whichever gate failed.
-- \`reason\`: one line naming what you observed and why it's unrelated to your diff.
-- \`testId\` / \`testName\`: required for \`"ci"\`/\`"f2"\` — identifies the failing test so the backend can check it against the corpus and your diff.
-
-The backend refuses (naming why) unless the test clears the corpus and its file isn't in your diff. On success it re-runs the gate on the same commit and re-drives the merge loop on a pass — bounded, so exhaustion parks the PR for a human rather than looping.
-
-Once you have a named cause outside your diff, \`mcp__orchestrator__testHealth_getFlakyHistory\` (pass the failing test ids from your run) can corroborate your \`reason\`.
-
-Retrying \`test_request\` against an unchanged tree is futile either way: a settled run just replays via dedup, and a broken run (timeout, crash, OOM, failed spawn) stays held for operator approval instead — re-staging changes neither.
-
-If the \`test_request\` digest carries a **Wait** instruction, you will be woken at most once — do not re-run or call \`flaky_confirm\`.
+Retrying \`test_request\` against an unchanged tree is futile: a settled run replays via dedup, and a broken run (timeout, crash, OOM, failed spawn) stays held for operator approval — re-staging changes neither. Asking the operator about the environment is a last resort, after Path 1.
 
 ---
 
@@ -406,7 +384,7 @@ Run in order — all must pass before opening the PR:
 2. No local verify step configured — CI is the gate.
 3. Stage only your implementation files for commit.
 
-Tests are blocked at the permission layer, not part of this gate — run via \`test_request\`. A failed \`test_request\` here: first follow "Investigate a Failing Test First" above. Only if you have named a concrete cause outside your diff, call \`flaky_confirm\` with \`gate: "test_request"\` rather than retrying (see "Flaky / Transient CI or F2 Gate Failures" above).
+Tests are blocked at the permission layer, not part of this gate — run via \`test_request\`. A failed \`test_request\` here: follow the three paths in "When a Test Fails" above rather than retrying.
 
 ---
 
@@ -513,37 +491,26 @@ The supervisor's "Pause your work" message isn't a nudge in this sense: stopping
 
 ---
 
-## Investigate a Failing Test First
+## When a Test Fails
 
-A failing test is presumed caused by your diff until you name a concrete cause outside it. A failing test in a file your diff touches, or one that exercises a module your diff changed (directly or through a shared fixture), is presumed caused by the diff.
+A failing test (from \`test_request\`, CI, or the F2 gate) is presumed caused by your diff until you have evidence otherwise. Test commands are blocked at the permission layer — always run them via \`mcp__orchestrator__test_request\`, never directly (the result lands in your feedback inbox next turn). Do not push an empty commit to force a re-run: it re-drives nothing. Pick exactly one of three paths.
 
-1. Read at least one failing test, then trace its fixtures and imports into the code you changed. Do this before any other step.
-2. Many failures sharing one fixture is a signal to inspect that fixture's path through your change — not a sign of an environment failure.
-3. The \`test_request\` digest shows failing test names, not assertion text, so this is code-reading work: intersect the failing tests' fixtures and imports with your diff.
-4. Only a failure whose cause you have identified outside your diff goes to the flaky path below (\`flaky_confirm\`, \`mcp__orchestrator__testHealth_getFlakyHistory\`), and the \`reason\` must name that cause.
-5. Asking the operator about the environment is a last resort, after steps 1–3.
+### Path 1 — Investigate and fix (the default)
 
----
+1. Read the digest. Each unattributed failing test carries an indicator line, \`[breadth N/M, flips F/W]\`: how many other trees show the same failure, and how often it has flipped pass/fail recently. Above the mass-breakage threshold the digest groups failures by module instead of listing each one.
+2. Pull the trace with the digest's \`testHealth.getTestTrace(testId)\` pointer and read the assertion text and stack — the digest alone shows names, not why they failed.
+3. Fix the cause in your branch.
+4. Verify the fix with the **targeted-retest lane**: re-run only the failing test ids on the dedicated targeted queue instead of waiting on the full suite. Run the full \`test_request\` once, as the final check on the finished tree.
 
-## Flaky / Transient CI or F2 Gate Failures
+### Path 2 — Wait
 
-This section applies only once you have investigated per "Investigate a Failing Test First" above and named a concrete cause outside your diff.
+If the indicator shows attribution may still arrive (other trees have not yet recorded the failure) and no not-reproduced wake has fired, wait. A digest **Wait** instruction means you will be woken at most once — do not re-run the unchanged tree.
 
-When a CI check or the F2 orchestrator-run test gate fails on your PR, do not assume it's flaky and do not push an empty commit to force a re-run — that does not re-drive anything. Default to treating the failure as real and fixing it.
+### Path 3 — File the operator override and wait
 
-Test commands are blocked at the permission layer — always via \`mcp__orchestrator__test_request\`, never directly (result lands in your feedback inbox next turn). Do not re-run the suite to establish flakiness — the backend already holds a cross-SHA outcome corpus and adjudicates against it. Call \`mcp__orchestrator__flaky_confirm\` once with what you observed, instead of pushing a commit:
+Only once the not-reproduced wake has fired and you cannot fix the failure yourself: stage \`mcp__orchestrator__test_override\` (the \`test.override\` intent) with \`testIds\` and \`evidence\` (\`traceReads\`: the traces you read; \`targetedRunIds\`: your targeted retest runs; \`investigationNote\`), optionally \`linkedFixTaskId\`. Then stop and wait for the operator. An approved override excuses the named tests for this task's runs only, until the task is terminal, the linked fix task is Done, or a run of your own tree passes the test.
 
-- \`gate\`: \`"ci"\`, \`"f2"\`, or \`"analyze"\` — whichever gate failed.
-- \`reason\`: one line naming what you observed and why it's unrelated to your diff.
-- \`testId\` / \`testName\`: required for \`"ci"\`/\`"f2"\` — identifies the failing test so the backend can check it against the corpus and your diff.
-
-The backend refuses (naming why) unless the test clears the corpus and its file isn't in your diff. On success it re-runs the gate on the same commit and re-drives the merge loop on a pass — bounded, so exhaustion parks the PR for a human rather than looping.
-
-Once you have a named cause outside your diff, \`mcp__orchestrator__testHealth_getFlakyHistory\` (pass the failing test ids from your run) can corroborate your \`reason\`.
-
-Retrying \`test_request\` against an unchanged tree is futile either way: a settled run just replays via dedup, and a broken run (timeout, crash, OOM, failed spawn) stays held for operator approval instead — re-staging changes neither.
-
-If the \`test_request\` digest carries a **Wait** instruction, you will be woken at most once — do not re-run or call \`flaky_confirm\`.
+Retrying \`test_request\` against an unchanged tree is futile: a settled run replays via dedup, and a broken run (timeout, crash, OOM, failed spawn) stays held for operator approval — re-staging changes neither. Asking the operator about the environment is a last resort, after Path 1.
 
 ---
 
@@ -644,7 +611,7 @@ Run in order — all must pass before opening the PR:
 2. No local verify step configured — CI is the gate.
 3. Stage only your implementation files for commit.
 
-Tests are blocked at the permission layer, not part of this gate — run via \`test_request\`. A failed \`test_request\` here: first follow "Investigate a Failing Test First" above. Only if you have named a concrete cause outside your diff, call \`flaky_confirm\` with \`gate: "test_request"\` rather than retrying (see "Flaky / Transient CI or F2 Gate Failures" above).
+Tests are blocked at the permission layer, not part of this gate — run via \`test_request\`. A failed \`test_request\` here: follow the three paths in "When a Test Fails" above rather than retrying.
 
 ---
 
@@ -749,37 +716,26 @@ The supervisor's "Pause your work" message isn't a nudge in this sense: stopping
 
 ---
 
-## Investigate a Failing Test First
+## When a Test Fails
 
-A failing test is presumed caused by your diff until you name a concrete cause outside it. A failing test in a file your diff touches, or one that exercises a module your diff changed (directly or through a shared fixture), is presumed caused by the diff.
+A failing test (from \`test_request\`, CI, or the F2 gate) is presumed caused by your diff until you have evidence otherwise. Test commands are blocked at the permission layer — always run them via \`mcp__orchestrator__test_request\`, never directly (the result lands in your feedback inbox next turn). Do not push an empty commit to force a re-run: it re-drives nothing. Pick exactly one of three paths.
 
-1. Read at least one failing test, then trace its fixtures and imports into the code you changed. Do this before any other step.
-2. Many failures sharing one fixture is a signal to inspect that fixture's path through your change — not a sign of an environment failure.
-3. The \`test_request\` digest shows failing test names, not assertion text, so this is code-reading work: intersect the failing tests' fixtures and imports with your diff.
-4. Only a failure whose cause you have identified outside your diff goes to the flaky path below (\`flaky_confirm\`, \`mcp__orchestrator__testHealth_getFlakyHistory\`), and the \`reason\` must name that cause.
-5. Asking the operator about the environment is a last resort, after steps 1–3.
+### Path 1 — Investigate and fix (the default)
 
----
+1. Read the digest. Each unattributed failing test carries an indicator line, \`[breadth N/M, flips F/W]\`: how many other trees show the same failure, and how often it has flipped pass/fail recently. Above the mass-breakage threshold the digest groups failures by module instead of listing each one.
+2. Pull the trace with the digest's \`testHealth.getTestTrace(testId)\` pointer and read the assertion text and stack — the digest alone shows names, not why they failed.
+3. Fix the cause in your branch.
+4. Verify the fix with the **targeted-retest lane**: re-run only the failing test ids on the dedicated targeted queue instead of waiting on the full suite. Run the full \`test_request\` once, as the final check on the finished tree.
 
-## Flaky / Transient CI or F2 Gate Failures
+### Path 2 — Wait
 
-This section applies only once you have investigated per "Investigate a Failing Test First" above and named a concrete cause outside your diff.
+If the indicator shows attribution may still arrive (other trees have not yet recorded the failure) and no not-reproduced wake has fired, wait. A digest **Wait** instruction means you will be woken at most once — do not re-run the unchanged tree.
 
-When a CI check or the F2 orchestrator-run test gate fails on your PR, do not assume it's flaky and do not push an empty commit to force a re-run — that does not re-drive anything. Default to treating the failure as real and fixing it.
+### Path 3 — File the operator override and wait
 
-Test commands are blocked at the permission layer — always via \`mcp__orchestrator__test_request\`, never directly (result lands in your feedback inbox next turn). Do not re-run the suite to establish flakiness — the backend already holds a cross-SHA outcome corpus and adjudicates against it. Call \`mcp__orchestrator__flaky_confirm\` once with what you observed, instead of pushing a commit:
+Only once the not-reproduced wake has fired and you cannot fix the failure yourself: stage \`mcp__orchestrator__test_override\` (the \`test.override\` intent) with \`testIds\` and \`evidence\` (\`traceReads\`: the traces you read; \`targetedRunIds\`: your targeted retest runs; \`investigationNote\`), optionally \`linkedFixTaskId\`. Then stop and wait for the operator. An approved override excuses the named tests for this task's runs only, until the task is terminal, the linked fix task is Done, or a run of your own tree passes the test.
 
-- \`gate\`: \`"ci"\`, \`"f2"\`, or \`"analyze"\` — whichever gate failed.
-- \`reason\`: one line naming what you observed and why it's unrelated to your diff.
-- \`testId\` / \`testName\`: required for \`"ci"\`/\`"f2"\` — identifies the failing test so the backend can check it against the corpus and your diff.
-
-The backend refuses (naming why) unless the test clears the corpus and its file isn't in your diff. On success it re-runs the gate on the same commit and re-drives the merge loop on a pass — bounded, so exhaustion parks the PR for a human rather than looping.
-
-Once you have a named cause outside your diff, \`mcp__orchestrator__testHealth_getFlakyHistory\` (pass the failing test ids from your run) can corroborate your \`reason\`.
-
-Retrying \`test_request\` against an unchanged tree is futile either way: a settled run just replays via dedup, and a broken run (timeout, crash, OOM, failed spawn) stays held for operator approval instead — re-staging changes neither.
-
-If the \`test_request\` digest carries a **Wait** instruction, you will be woken at most once — do not re-run or call \`flaky_confirm\`.
+Retrying \`test_request\` against an unchanged tree is futile: a settled run replays via dedup, and a broken run (timeout, crash, OOM, failed spawn) stays held for operator approval — re-staging changes neither. Asking the operator about the environment is a last resort, after Path 1.
 
 ---
 
@@ -880,7 +836,7 @@ Run in order — all must pass before opening the PR:
 2. No local verify step configured — CI is the gate.
 3. Stage only your implementation files for commit.
 
-Tests are blocked at the permission layer, not part of this gate — run via \`test_request\`. A failed \`test_request\` here: first follow "Investigate a Failing Test First" above. Only if you have named a concrete cause outside your diff, call \`flaky_confirm\` with \`gate: "test_request"\` rather than retrying (see "Flaky / Transient CI or F2 Gate Failures" above).
+Tests are blocked at the permission layer, not part of this gate — run via \`test_request\`. A failed \`test_request\` here: follow the three paths in "When a Test Fails" above rather than retrying.
 
 ---
 
