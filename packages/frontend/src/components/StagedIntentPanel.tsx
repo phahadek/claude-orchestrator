@@ -664,6 +664,29 @@ function CapabilityRequestHeadline({ intent }: { intent: StagedIntent }) {
           Edit/Write request covers.
         </p>
       )}
+      {intent.confersPrivilegeEscalation && (
+        <p
+          className={styles.fileMutationWarning}
+          data-testid="staged-intent-capability-privilege-escalation-warning"
+        >
+          This grants privilege escalation — the command runs with elevated
+          rights (sudo-class).
+        </p>
+      )}
+      {intent.confersNetworkMutation && (
+        <p
+          className={styles.fileMutationWarning}
+          data-testid="staged-intent-capability-network-mutation-warning"
+        >
+          This grants network mutation — the command can change state on a
+          remote service or database.
+        </p>
+      )}
+      {payload.capability.startsWith('Bash(') && (
+        <p data-testid="staged-intent-capability-orchestrator-host">
+          Runs on the orchestrator host, not on any managed project's host.
+        </p>
+      )}
       <p>Plan: {payload.plan}</p>
       <p>Evidence: {payload.evidence}</p>
     </div>

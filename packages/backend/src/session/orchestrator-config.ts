@@ -1148,6 +1148,117 @@ export function bashCapabilityConfersFileMutation(capability: string): boolean {
   return FILE_MUTATING_BASH_COMMANDS.includes(command);
 }
 
+const PRIVILEGE_ESCALATION_COMMANDS = [
+  'sudo',
+  'su',
+  'doas',
+  'pkexec',
+  'runuser',
+];
+
+const MUTATING_HTTP_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'];
+const HTTP_CLIENT_COMMANDS = ['curl', 'wget', 'http', 'httpie'];
+const DB_CLIENT_COMMANDS = ['psql', 'pg_dump', 'pg_restore'];
+
+function bashCapabilityTokens(capability: string): string[] | null {
+  if (!capability.startsWith('Bash(')) return null;
+  const inner = capability.slice('Bash('.length).replace(/\)$/, '').trim();
+  const tokens = inner.split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return null;
+  tokens[0] = tokens[0].split(':', 1)[0];
+  return tokens;
+}
+
+/**
+ * True when a requested `Bash(...)` capability's command escalates privilege
+ * (sudo and kin). Advisory display only — never feeds `isGrantable`.
+ */
+export function bashCapabilityConfersPrivilegeEscalation(
+  capability: string,
+): boolean {
+  const tokens = bashCapabilityTokens(capability);
+  return !!tokens && PRIVILEGE_ESCALATION_COMMANDS.includes(tokens[0]);
+}
+
+function httpClientMutates(command: string, args: string[]): boolean {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    const lower = arg.toLowerCase();
+    if (command === 'curl') {
+      if (/^-[A-Za-z]*[dF]/.test(arg) && !arg.startsWith('--')) return true;
+      if (
+        lower === '--json' ||
+        lower.startsWith('--json=') ||
+        lower.startsWith('--data') ||
+        lower === '--form' ||
+        lower.startsWith('--form=') ||
+        lower.startsWith('--form-string')
+      ) {
+        return true;
+      }
+    }
+    if (command === 'wget') {
+      if (
+        lower.startsWith('--post-data') ||
+        lower.startsWith('--post-file') ||
+        lower.startsWith('--body-data') ||
+        lower.startsWith('--body-file')
+      ) {
+        return true;
+      }
+    }
+    if (command === 'http' || command === 'httpie') {
+      if (['--form', '-f', '--json', '-j'].includes(lower)) return true;
+      if (MUTATING_HTTP_METHODS.includes(arg.toUpperCase())) return true;
+    }
+    let method: string | undefined;
+    if (lower === '-x' || lower === '--request' || lower === '--method') {
+      method = args[i + 1];
+    } else if (lower.startsWith('--request=')) {
+      method = arg.slice('--request='.length);
+    } else if (lower.startsWith('--method=')) {
+      method = arg.slice('--method='.length);
+    } else if (command === 'curl' && arg.startsWith('-X') && arg.length > 2) {
+      method = arg.slice(2);
+    }
+    if (
+      method &&
+      MUTATING_HTTP_METHODS.includes(method.replace(/['"]/g, '').toUpperCase())
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function dbClientNamesRemote(args: string[]): boolean {
+  return args.some(
+    (arg) =>
+      /^-[hp]/.test(arg) ||
+      /^--(host|port)(=|$)/.test(arg) ||
+      /^postgres(ql)?:\/\//.test(arg),
+  );
+}
+
+/**
+ * True when a requested `Bash(...)` capability mutates something over the
+ * network: an HTTP client with a mutating method or body flag, or a Postgres
+ * client naming a host or port. Advisory display only — never feeds
+ * `isGrantable`.
+ */
+export function bashCapabilityConfersNetworkMutation(
+  capability: string,
+): boolean {
+  const tokens = bashCapabilityTokens(capability);
+  if (!tokens) return false;
+  const [command, ...args] = tokens;
+  if (HTTP_CLIENT_COMMANDS.includes(command)) {
+    return httpClientMutates(command, args);
+  }
+  if (DB_CLIENT_COMMANDS.includes(command)) return dbClientNamesRemote(args);
+  return false;
+}
+
 /**
  * The full allowlist a spawned session is granted. For code/review sessions
  * this is the base ALLOWED_TOOLS plus the per-project extras from
