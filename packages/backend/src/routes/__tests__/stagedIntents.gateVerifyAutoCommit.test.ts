@@ -418,7 +418,7 @@ describe('gate.verify auto-commit — staging-time attempt', () => {
       );
       const res = await supertest(app)
         .post(`/api/staged-intents/${rc.id}/reject`)
-        .send({ reason: 'keep as is' });
+        .send({ outcome: 'decline', reason: 'keep as is' });
       expect(res.status).toBe(200);
       const cls = db
         .prepare(
