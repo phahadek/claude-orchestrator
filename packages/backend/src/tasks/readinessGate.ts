@@ -396,6 +396,24 @@ function checkGroomingResidue(body: string): ReadinessViolation[] {
   return violations;
 }
 
+/** True when the body carries the named heading — the same matcher checkRequiredHeadingSection uses for its "missing" violation. */
+export function hasRequiredHeading(
+  body: string,
+  headingLabel: string,
+): boolean {
+  return computeSectionMask(
+    stripNonProse(body),
+    normalizeHeadingText(headingLabel),
+  ).found;
+}
+
+/** The required-heading label a type's readiness floor checks, when it has one (🔧 Operational / 🔎 Investigation). */
+export function requiredHeadingForType(
+  type: string | undefined,
+): string | undefined {
+  return type != null ? TYPE_FLOOR_FACTS[type]?.requiredHeading : undefined;
+}
+
 /**
  * Structural check: the named heading exists and is non-empty. A per-type
  * floor fact — replaces the generic "## Open Questions" Tier-1 check for a

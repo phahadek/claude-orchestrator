@@ -887,7 +887,9 @@ describe('group commit — whole-group precheck (all-or-nothing)', () => {
     // 📐 Design: precheck passes, commits with no readiness_override.
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
-      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue('## Open Questions\n- q?\n\n## Summary\nClean.'),
       updateStatus: vi.fn(),
       setDependsOn: vi.fn(),
       updateBody: vi.fn(),

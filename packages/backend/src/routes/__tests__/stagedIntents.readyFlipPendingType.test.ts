@@ -159,7 +159,9 @@ describe('Ready-flip gate resolves a group-pending task.setType', () => {
   it('promotes using the pending type, not the committed cached type, at stage time and at both commit-time gate checks', async () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
-      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue('## Open Questions\n- q?\n\n## Summary\nClean.'),
       updateStatus: vi.fn(),
       setDependsOn: vi.fn(),
       updateBody: vi.fn(),
