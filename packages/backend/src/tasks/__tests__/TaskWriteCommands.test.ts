@@ -602,7 +602,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
       fetchTaskPage: vi
         .fn()
         .mockResolvedValue(
-          'Files affected: confirm the exact module at grooming.',
+          '## Open Questions\n- q?\n\nFiles affected: confirm the exact module at grooming.',
         ),
     });
     const commands = new BackendTaskWriteCommands(backend, 'proj-1');
@@ -639,7 +639,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
       fetchTaskPage: vi
         .fn()
         .mockResolvedValue(
-          '## Open Questions\n- Which retry policy should we use?\n',
+          '## Targets / surfaces affected\n- x\n\n## Open Questions\n- Which retry policy should we use?\n',
         ),
     });
     const commands = new BackendTaskWriteCommands(backend);
@@ -812,7 +812,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
         fetchTaskPage: vi
           .fn()
           .mockResolvedValue(
-            'Files affected: confirm the exact module at grooming.',
+            '## Open Questions\n- q?\n\nFiles affected: confirm the exact module at grooming.',
           ),
       });
       const commands = new BackendTaskWriteCommands(backend, 'proj-1');
@@ -931,10 +931,12 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
 
   it('allows a Ready transition for a non-Code task carrying n/a size/type dispositions (fail-open)', async () => {
     mockGetTaskCache.mockReturnValue(
-      cacheRowWithStatus(STATUS_DISPLAY.Backlog),
+      cacheRowWithStatusAndType(STATUS_DISPLAY.Backlog, '📐 Design'),
     );
     const backend = makeBackend({
-      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll good.'),
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue('## Open Questions\n- q?\n\n## Summary\nAll good.'),
     });
     const commands = new BackendTaskWriteCommands(backend);
 
@@ -1103,7 +1105,9 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
     mockGetAccretionMarker.mockReturnValue(undefined);
     mockGetSeedAccretionMarker.mockReturnValue(undefined);
     const backend = makeBackend({
-      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll good.'),
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue('## Open Questions\n- q?\n\n## Summary\nAll good.'),
     });
     const commands = new BackendTaskWriteCommands(backend);
 
