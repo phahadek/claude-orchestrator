@@ -163,6 +163,28 @@ describe('POST /api/planning/launch', () => {
     expect(call.tasks[0].id).toBe('bare-uuid-1');
   });
 
+  it('carries skipped[] in the 202 body and forwards force to the launcher', async () => {
+    const skipped = [{ taskId: 'bare-uuid-1', reason: 'already concluded' }];
+    const launchSelected = vi
+      .fn()
+      .mockResolvedValue({ launched: [], deferred: [], skipped, failed: [] });
+    const launcher = { launchSelected } as unknown as OpsSessionLauncher;
+
+    const res = await request(makeApp(launcher))
+      .post('/api/planning/launch')
+      .send({
+        workflow: 'ops',
+        projectId: 'p1',
+        milestone: 'm1',
+        taskIds: ['notion:bare-uuid-1'],
+        force: true,
+      });
+
+    expect(res.status).toBe(202);
+    expect(res.body.skipped).toEqual(skipped);
+    expect(launchSelected.mock.calls[0][0].force).toBe(true);
+  });
+
   it('rejects an unsupported workflow', async () => {
     const launcher = {
       launchSelected: vi.fn(),

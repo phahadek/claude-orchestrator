@@ -115,6 +115,15 @@ export const BASH_MAX_OUTPUT_LENGTH = Number(
 export const BASH_DEFAULT_TIMEOUT_MS = Number(
   process.env.BASH_DEFAULT_TIMEOUT_MS ?? 300000,
 );
+// Operator Ops(N) launch throttles (OpsSessionLauncher): max concurrently live
+// launcher-started ops sessions, and min gap between successive ops launches.
+export const OPS_LAUNCH_MAX_CONCURRENT = Number(
+  process.env.OPS_LAUNCH_MAX_CONCURRENT ?? 5,
+);
+export const OPS_LAUNCH_STAGGER_MS = Number(
+  process.env.OPS_LAUNCH_STAGGER_MS ?? 5000,
+);
+
 process.env.BASH_MAX_OUTPUT_LENGTH = String(BASH_MAX_OUTPUT_LENGTH);
 process.env.BASH_DEFAULT_TIMEOUT_MS = String(BASH_DEFAULT_TIMEOUT_MS);
 

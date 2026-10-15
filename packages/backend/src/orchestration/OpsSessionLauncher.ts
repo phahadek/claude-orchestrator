@@ -12,7 +12,14 @@ import { loadGroomContext } from '../groom/groomLoad';
 import { GroomTaskSourceUnsupportedError } from '../planning/errors';
 import { loadDesignContext } from '../design/designLoad';
 import { loadDocsContext } from '../docs/docsLoad';
-import { getPriorOpsSessionsForTask, getProjectRowById } from '../db/queries';
+import {
+  getPriorOpsSessionsForTask,
+  getProjectRowById,
+  getLatestOpsSessionByTaskId,
+  listStagedIntentsBySession,
+  listLiveSessionRows,
+} from '../db/queries';
+import { OPS_LAUNCH_MAX_CONCURRENT, OPS_LAUNCH_STAGGER_MS } from '../config';
 import { resolveMilestoneForProject } from '../projects/milestoneResolver';
 import {
   isPlanningSession,
@@ -122,11 +129,15 @@ export interface OpsLaunchParams {
   /** Per-launch model/effort override, forwarded to SessionManager.start(). */
   model?: string;
   effort?: string;
+  /** Bypasses the concluded-session guard (ops sessions only). */
+  force?: boolean;
 }
 
 export interface OpsLaunchResult {
   launched: string[];
   deferred: string[];
+  /** Tasks not launched because their last ops session already concluded (resolved/blocked). */
+  skipped?: { taskId: string; reason: string }[];
   failed: { taskId: string; reason: string }[];
 }
 
@@ -159,6 +170,8 @@ interface DeferredOpsTask {
  */
 export class OpsSessionLauncher {
   private readonly deferred = new Map<string, DeferredOpsTask>();
+  private readonly liveOpsSessionIds = new Set<string>();
+  private lastOpsLaunchAt = 0;
 
   constructor(
     private readonly sessionManager: SessionManager,
@@ -171,10 +184,24 @@ export class OpsSessionLauncher {
     const launched: string[] = [];
     const deferredIds: string[] = [];
     const failed: { taskId: string; reason: string }[] = [];
+    const skipped: { taskId: string; reason: string }[] = [];
     const sessionType = params.sessionType ?? 'standard';
 
     for (const task of params.tasks) {
-      if (task.blockingDepIds.length > 0) {
+      if (sessionType === 'ops' && !params.force) {
+        const reason = this.concludedReason(task.id);
+        if (reason) {
+          skipped.push({ taskId: task.id, reason });
+          logger.info(
+            `[OpsSessionLauncher] skipping ops task ${task.id} — ${reason}`,
+          );
+          continue;
+        }
+      }
+      if (
+        task.blockingDepIds.length > 0 ||
+        (sessionType === 'ops' && this.opsAtCapacity())
+      ) {
         this.deferred.set(task.id, {
           projectId: params.projectId,
           projectContextUrl: params.projectContextUrl,
@@ -187,10 +214,11 @@ export class OpsSessionLauncher {
         });
         deferredIds.push(task.id);
         logger.info(
-          `[OpsSessionLauncher] deferring ops task ${task.id} — waiting on ${task.blockingDepIds.join(', ')}`,
+          `[OpsSessionLauncher] deferring ops task ${task.id} — ${task.blockingDepIds.length > 0 ? `waiting on ${task.blockingDepIds.join(', ')}` : 'ops launch capacity reached'}`,
         );
         continue;
       }
+      if (sessionType === 'ops') await this.staggerOpsLaunch();
       const outcome = await this.launchOne(
         params.projectId,
         params.projectContextUrl,
@@ -208,7 +236,44 @@ export class OpsSessionLauncher {
       }
     }
 
-    return { launched, deferred: deferredIds, failed };
+    return { launched, deferred: deferredIds, skipped, failed };
+  }
+
+  /** Reason when the task's latest ops session is done and its last committed journal.setState targeted resolved/blocked. */
+  private concludedReason(taskId: string): string | null {
+    const session = getLatestOpsSessionByTaskId(taskId);
+    if (!session || session.status !== 'done') return null;
+    const intents = listStagedIntentsBySession(session.session_id).filter(
+      (i) => i.kind === 'journal.setState' && i.state === 'committed',
+    );
+    const last = intents[intents.length - 1];
+    if (!last) return null;
+    try {
+      const state = (JSON.parse(last.payload) as { state?: unknown }).state;
+      if (state === 'resolved' || state === 'blocked') {
+        return `last ops session ${session.session_id.slice(0, 8)} already concluded as ${state}`;
+      }
+    } catch {
+      // malformed payload — treat as not concluded
+    }
+    return null;
+  }
+
+  private opsAtCapacity(): boolean {
+    if (this.liveOpsSessionIds.size === 0) return false;
+    const live = new Set(listLiveSessionRows().map((r) => r.session_id));
+    for (const id of this.liveOpsSessionIds) {
+      if (!live.has(id)) this.liveOpsSessionIds.delete(id);
+    }
+    return this.liveOpsSessionIds.size >= OPS_LAUNCH_MAX_CONCURRENT;
+  }
+
+  private async staggerOpsLaunch(): Promise<void> {
+    const wait = this.lastOpsLaunchAt + OPS_LAUNCH_STAGGER_MS - Date.now();
+    if (this.lastOpsLaunchAt > 0 && wait > 0) {
+      await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+    this.lastOpsLaunchAt = Date.now();
   }
 
   hasDeferred(taskId: string): boolean {
@@ -253,7 +318,13 @@ export class OpsSessionLauncher {
       for (const [taskId, entry] of [...this.deferred]) {
         if (entry.milestoneId !== milestoneId) continue;
         if (!readyIds.has(taskId)) continue;
-        this.deferred.delete(taskId);
+        if (entry.sessionType === 'ops') {
+          if (this.opsAtCapacity()) continue;
+          this.deferred.delete(taskId);
+          await this.staggerOpsLaunch();
+        } else {
+          this.deferred.delete(taskId);
+        }
         await this.launchOne(
           entry.projectId,
           entry.projectContextUrl,
@@ -498,6 +569,7 @@ export class OpsSessionLauncher {
           );
         });
       }
+      if (sessionType === 'ops') this.liveOpsSessionIds.add(sessionId);
       return { status: 'launched', taskId: task.id, sessionId };
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
