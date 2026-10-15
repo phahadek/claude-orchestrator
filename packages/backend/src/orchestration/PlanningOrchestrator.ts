@@ -84,12 +84,57 @@ const DESIGN_COMPLETING_REASONS = new Set([
  * the closing decision itself was refused, or is still revisable and the
  * session may yet supersede it.
  */
-function opsSessionHasBlockedClosingGroupMember(sessionId: string): boolean {
-  return listStagedIntentsBySession(sessionId).some(
+function opsSessionBlockedClosingGroupMembers(
+  sessionId: string,
+): StagedIntentRow[] {
+  return listStagedIntentsBySession(sessionId).filter(
     (i) =>
       (i.state === 'rejected' || i.state === 'needs_revision') &&
-      isOpsTerminalClosingSetMember(i),
+      isOpsTerminalClosingSetMember(i) &&
+      !isDeclinedExtraOfResolvedGroup(i),
   );
+}
+
+const DECLINABLE_EXTRA_KINDS = new Set([
+  'task.create',
+  'task.updateBody',
+  'task.patchBodySection',
+]);
+
+/**
+ * A rejected task.create / body write whose group's journal.setState ->
+ * resolved already committed is a refused extra: the operator approved the
+ * closing decision itself, so the decline must not strand the task.
+ */
+function isDeclinedExtraOfResolvedGroup(i: StagedIntentRow): boolean {
+  if (i.state !== 'rejected' || !i.group_id) return false;
+  if (!DECLINABLE_EXTRA_KINDS.has(i.kind)) return false;
+  return listStagedIntentsByGroup(i.group_id).some((s) => {
+    if (s.kind !== 'journal.setState' || s.state !== 'committed') return false;
+    try {
+      return (JSON.parse(s.payload) as { state?: string }).state === 'resolved';
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** Returns true (after writing a visible pause reason) when closure is blocked. */
+function surfaceBlockedClosingMembers(
+  sessionId: string,
+  taskId: string,
+): boolean {
+  const blocked = opsSessionBlockedClosingGroupMembers(sessionId);
+  if (blocked.length === 0) return false;
+  setTaskPauseReason(
+    taskId,
+    'planning_terminal_blocked_members',
+    `Ops session ${sessionId} resolved its journal but cannot close the task: ` +
+      `blocked closing-set intent(s) ${blocked
+        .map((i) => `${i.id} (${i.state})`)
+        .join(', ')}.`,
+  );
+  return true;
 }
 
 /**
@@ -1003,7 +1048,7 @@ export class PlanningOrchestrator {
     const journalEntry = getEntry(taskId);
     if (!journalEntry || journalEntry.state !== 'resolved') return;
 
-    if (opsSessionHasBlockedClosingGroupMember(sessionId)) return;
+    if (surfaceBlockedClosingMembers(sessionId, taskId)) return;
 
     getTaskBackend(projectId)
       .updateStatus(taskId, DESIGN_DONE_STATUS, {
@@ -1665,7 +1710,7 @@ export function formatDispositionMessage(
  * Guards mirror completeOpsTask's: excludes gate-verify sessions (no Notion
  * task to close), requires the session's durable terminal_completion_reason
  * to be one of DESIGN_COMPLETING_REASONS, and bails via
- * opsSessionHasBlockedClosingGroupMember if a rejected/needs_revision intent
+ * opsSessionBlockedClosingGroupMembers if a rejected/needs_revision intent
  * sits inside one of the session's ops-terminal closing groups — an
  * unrelated decline elsewhere in the session's history does not block.
  * Additionally checks the task's current status before writing, so it no-ops
@@ -1686,7 +1731,7 @@ export async function closeDeferredOpsTask(session: Session): Promise<void> {
     return;
   }
 
-  if (opsSessionHasBlockedClosingGroupMember(session.session_id)) return;
+  if (surfaceBlockedClosingMembers(session.session_id, taskId)) return;
 
   const backend = getTaskBackend(projectId);
   const summary = await backend.fetchTaskSummary(taskId);

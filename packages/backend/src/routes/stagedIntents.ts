@@ -3423,6 +3423,42 @@ function assertOpsBlockedClosureRequestedCapability(
   );
 }
 
+const FROZEN_OPS_STATES: readonly OpsState[] = ['blocked', 'incident-frozen'];
+
+class OpsNoOpOverBlockedJournalError extends Error {
+  constructor(taskId: string, state: OpsState) {
+    super(
+      `[stagedIntents] planning.noOp rejected: task ${taskId}'s ops journal is "${state}", so a no-op ` +
+        'would close it as already satisfied. Stage journal.setState instead — it keeps the journal at ' +
+        '"blocked" with the waiting reason.',
+    );
+    this.name = 'OpsNoOpOverBlockedJournalError';
+  }
+}
+
+function assertOpsNoOpNotOverBlockedJournal(
+  payload: unknown,
+  projectId: string,
+  sessionId: string | null | undefined,
+): void {
+  const taskId = (payload as { taskId?: unknown } | null)?.taskId;
+  if (typeof taskId !== 'string' || !sessionId) return;
+  const session = getSession(sessionId);
+  if (
+    session?.session_type !== 'ops' ||
+    isInvestigateSession(session.task_id)
+  ) {
+    return;
+  }
+  const entry = getOpsJournalEntry(taskId);
+  if (!entry) return;
+  const effective = effectiveOpsStateForStaging(projectId, taskId, entry.state);
+  const frozen = [entry.state, effective].find((s) =>
+    FROZEN_OPS_STATES.includes(s),
+  );
+  if (frozen) throw new OpsNoOpOverBlockedJournalError(taskId, frozen);
+}
+
 /**
  * Parses/normalizes one raw task-reference id to the single canonical form
  * every staged-intent write path persists (staged_intent.task_id,
@@ -4556,6 +4592,7 @@ export function stageIntent(
   }
   if (kind === 'planning.noOp') {
     validateNoOpPayload(payload);
+    assertOpsNoOpNotOverBlockedJournal(payload, projectId, sessionId);
   }
   if (kind === 'review.dispute') {
     validateReviewDisputePayload(payload, groupId, decisionProposal);
@@ -8107,6 +8144,16 @@ function isOperatorNoOpCandidate(intent: {
   return isOperatorConcludedSession(session.session_type, session.task_id);
 }
 
+function unresolvedOpsJournalStateForNoOp(
+  intent: StagedIntent,
+  taskId: string,
+): OpsState | undefined {
+  if (!intent.sessionId) return undefined;
+  if (getSession(intent.sessionId)?.session_type !== 'ops') return undefined;
+  const journal = getOpsJournalEntry(taskId);
+  return journal && journal.state !== 'resolved' ? journal.state : undefined;
+}
+
 /**
  * Applies an operator-approved standalone planning.noOp: commits the intent,
  * writes the bound task Done with the staging session's evidence, and
@@ -8120,6 +8167,9 @@ async function applyOperatorApprovedNoOp(
   taskId: string,
   reason: string,
 ): Promise<StagedIntent> {
+  const unresolved = unresolvedOpsJournalStateForNoOp(intent, taskId);
+  if (unresolved) throw new OpsNoOpOverBlockedJournalError(taskId, unresolved);
+
   const committed = transitionStagedIntent(intent.id, 'committed', {
     annotation: null,
   });
@@ -10194,6 +10244,19 @@ export function createStagedIntentsRouter(
         if (!payload?.taskId || !payload.reason) {
           res.status(409).json({
             error: `staged intent "${intent.id}" is missing taskId/reason and cannot be approved`,
+          });
+          return;
+        }
+        const unresolved = unresolvedOpsJournalStateForNoOp(
+          intent,
+          payload.taskId,
+        );
+        if (unresolved) {
+          res.status(409).json({
+            error: new OpsNoOpOverBlockedJournalError(
+              payload.taskId,
+              unresolved,
+            ).message,
           });
           return;
         }
