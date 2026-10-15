@@ -37,11 +37,32 @@ vi.mock('../../docs/docsLoad.js', () => ({
   loadDocsContext: vi.fn(),
 }));
 
+const { mockLatestOps, mockListIntents, mockListLive, opsCfg } = vi.hoisted(
+  () => ({
+    mockLatestOps: vi.fn(),
+    mockListIntents: vi.fn(),
+    mockListLive: vi.fn(),
+    opsCfg: { cap: 5, stagger: 0 },
+  }),
+);
+
+vi.mock('../../config.js', () => ({
+  get OPS_LAUNCH_MAX_CONCURRENT() {
+    return opsCfg.cap;
+  },
+  get OPS_LAUNCH_STAGGER_MS() {
+    return opsCfg.stagger;
+  },
+}));
+
 vi.mock('../../db/queries.js', () => ({
   getProjectRowById: vi
     .fn()
     .mockReturnValue({ id: 'proj-1', project_dir: '/tmp/proj-1' }),
   getPriorOpsSessionsForTask: vi.fn().mockReturnValue([]),
+  getLatestOpsSessionByTaskId: mockLatestOps,
+  listStagedIntentsBySession: mockListIntents,
+  listLiveSessionRows: mockListLive,
 }));
 
 vi.mock('../../projects/milestoneResolver.js', () => ({
@@ -138,6 +159,11 @@ describe('OpsSessionLauncher', () => {
   beforeEach(() => {
     start = vi.fn().mockResolvedValue('session-id');
     sessionManager = { start };
+    opsCfg.cap = 5;
+    opsCfg.stagger = 0;
+    mockLatestOps.mockReset().mockReturnValue(undefined);
+    mockListIntents.mockReset().mockReturnValue([]);
+    mockListLive.mockReset().mockReturnValue([]);
     setOpsSessionLauncherRefreshFn(null as never);
   });
 
@@ -954,5 +980,201 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
     expect(start).toHaveBeenCalledTimes(1);
     const [, , options] = start.mock.calls[0];
     expect(options.injectedProcedureContent).toBeUndefined();
+  });
+
+  describe('ops launch guards', () => {
+    const base = {
+      projectId: 'proj-1',
+      projectContextUrl: 'https://www.notion.so/context',
+      milestoneId: 'milestone-1',
+      sessionType: 'ops' as const,
+    };
+
+    function concludeWith(state: string) {
+      mockLatestOps.mockReturnValue({ session_id: 'sess-old', status: 'done' });
+      mockListIntents.mockReturnValue([
+        {
+          kind: 'journal.setState',
+          state: 'committed',
+          payload: JSON.stringify({ taskId: 'task-1', state: 'pending' }),
+        },
+        {
+          kind: 'journal.setState',
+          state: 'committed',
+          payload: JSON.stringify({ taskId: 'task-1', state }),
+        },
+        {
+          kind: 'journal.setState',
+          state: 'rejected',
+          payload: JSON.stringify({ taskId: 'task-1', state: 'pending' }),
+        },
+      ]);
+    }
+
+    it.each(['resolved', 'blocked'])(
+      'skips a task whose last ops session is done and committed %s',
+      async (state) => {
+        concludeWith(state);
+        const launcher = new OpsSessionLauncher(sessionManager as never);
+        const task = makeTask({ id: 'task-1' });
+
+        const result = await launcher.launchSelected({
+          ...base,
+          opsContext: makeOpsContext([task]),
+          tasks: [task],
+        });
+
+        expect(start).not.toHaveBeenCalled();
+        expect(result.launched).toEqual([]);
+        expect(result.skipped).toHaveLength(1);
+        expect(result.skipped?.[0].taskId).toBe('task-1');
+        expect(launcher.hasDeferred('task-1')).toBe(false);
+      },
+    );
+
+    it.each(['resolved', 'blocked'])(
+      'launches a %s task when force is true',
+      async (state) => {
+        concludeWith(state);
+        const launcher = new OpsSessionLauncher(sessionManager as never);
+        const task = makeTask({ id: 'task-1' });
+
+        const result = await launcher.launchSelected({
+          ...base,
+          force: true,
+          opsContext: makeOpsContext([task]),
+          tasks: [task],
+        });
+
+        expect(result.launched).toEqual(['task-1']);
+        expect(result.skipped).toEqual([]);
+      },
+    );
+
+    it('does not skip when the last session is not done or last committed state is pending', async () => {
+      mockLatestOps.mockReturnValue({
+        session_id: 'sess-old',
+        status: 'running',
+      });
+      const launcher = new OpsSessionLauncher(sessionManager as never);
+      const task = makeTask({ id: 'task-1' });
+      const r1 = await launcher.launchSelected({
+        ...base,
+        opsContext: makeOpsContext([task]),
+        tasks: [task],
+      });
+      expect(r1.launched).toEqual(['task-1']);
+
+      concludeWith('pending');
+      const r2 = await launcher.launchSelected({
+        ...base,
+        opsContext: makeOpsContext([task]),
+        tasks: [task],
+      });
+      expect(r2.skipped).toEqual([]);
+    });
+
+    it('caps concurrent ops sessions, defers the rest, and launches them as live sessions end', async () => {
+      const { loadOpsContext } = await import('../../ops/opsLoad.js');
+      let n = 0;
+      start.mockImplementation(async () => `s-${++n}`);
+      const tasks = Array.from({ length: 11 }, (_, i) =>
+        makeTask({ id: `task-${i}` }),
+      );
+      const launcher = new OpsSessionLauncher(sessionManager as never, {
+        loadOpsContext: loadOpsContext as never,
+      });
+      (loadOpsContext as ReturnType<typeof vi.fn>).mockResolvedValue(
+        makeOpsContext(tasks),
+      );
+      // every launched session stays live until we say otherwise
+      let liveIds = new Set<string>();
+      mockListLive.mockImplementation(() =>
+        [...liveIds].map((id) => ({ session_id: id })),
+      );
+      start.mockImplementation(async () => {
+        const id = `s-${++n}`;
+        liveIds.add(id);
+        return id;
+      });
+
+      const result = await launcher.launchSelected({
+        ...base,
+        opsContext: makeOpsContext(tasks),
+        tasks,
+      });
+
+      expect(result.launched).toHaveLength(5);
+      expect(result.deferred).toHaveLength(6);
+
+      await launcher.pollOnce();
+      expect(start).toHaveBeenCalledTimes(5);
+
+      liveIds = new Set([...liveIds].slice(2)); // two sessions end
+      await launcher.pollOnce();
+      expect(start).toHaveBeenCalledTimes(7);
+    });
+
+    it('does not exceed the cap when two launchSelected calls overlap', async () => {
+      opsCfg.cap = 1;
+      const liveIds = new Set<string>();
+      mockListLive.mockImplementation(() =>
+        [...liveIds].map((id) => ({ session_id: id })),
+      );
+      let n = 0;
+      start.mockImplementation(async () => {
+        await new Promise((r) => setTimeout(r, 5));
+        const id = `s-${++n}`;
+        liveIds.add(id);
+        return id;
+      });
+      const launcher = new OpsSessionLauncher(sessionManager as never);
+      const a = makeTask({ id: 'task-a' });
+      const b = makeTask({ id: 'task-b' });
+
+      const [ra, rb] = await Promise.all([
+        launcher.launchSelected({
+          ...base,
+          opsContext: makeOpsContext([a]),
+          tasks: [a],
+        }),
+        launcher.launchSelected({
+          ...base,
+          opsContext: makeOpsContext([b]),
+          tasks: [b],
+        }),
+      ]);
+
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(ra.launched.length + rb.launched.length).toBe(1);
+      expect(ra.deferred.length + rb.deferred.length).toBe(1);
+    });
+
+    it('spaces successive ops launches by the stagger interval', async () => {
+      vi.useFakeTimers();
+      try {
+        opsCfg.stagger = 5000;
+        const launcher = new OpsSessionLauncher(sessionManager as never);
+        const tasks = [makeTask({ id: 'task-1' }), makeTask({ id: 'task-2' })];
+        const times: number[] = [];
+        start.mockImplementation(async () => {
+          times.push(Date.now());
+          return 'sid';
+        });
+
+        const p = launcher.launchSelected({
+          ...base,
+          opsContext: makeOpsContext(tasks),
+          tasks,
+        });
+        await vi.advanceTimersByTimeAsync(10_000);
+        await p;
+
+        expect(times).toHaveLength(2);
+        expect(times[1] - times[0]).toBeGreaterThanOrEqual(5000);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });

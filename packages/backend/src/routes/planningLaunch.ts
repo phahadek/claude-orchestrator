@@ -61,6 +61,8 @@ export interface DispatchPlanningFlowOptions {
   effort?: string;
   /** Pre-loaded ops context — lets a caller that already loaded it once (the route) skip a second load. */
   opsContext?: OpsLoadResult;
+  /** Bypass the ops concluded-session guard. */
+  force?: boolean;
 }
 
 /**
@@ -108,6 +110,7 @@ export async function dispatchPlanningFlow(
       tasks,
       model: opts.model,
       effort: opts.effort,
+      force: opts.force,
     });
   }
 
@@ -156,6 +159,7 @@ export function createPlanningLaunchRouter(
         taskIds?: unknown;
         model?: unknown;
         effort?: unknown;
+        force?: unknown;
       };
       const workflow = typeof body.workflow === 'string' ? body.workflow : null;
       const milestoneId =
@@ -169,6 +173,7 @@ export function createPlanningLaunchRouter(
           : null;
       const model = typeof body.model === 'string' ? body.model : undefined;
       const effort = typeof body.effort === 'string' ? body.effort : undefined;
+      const force = body.force === true;
 
       if (!workflow || !milestoneId || !taskIds || taskIds.length === 0) {
         res.status(400).json({
@@ -228,7 +233,7 @@ export function createPlanningLaunchRouter(
           project,
           workflow,
           taskIds,
-          { model, effort },
+          { model, effort, force },
         );
         if (result.launched.length > 0) {
           const payload: PlanningDispatchLaunchedPayload = {
