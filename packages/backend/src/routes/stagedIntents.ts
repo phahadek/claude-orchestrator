@@ -4978,6 +4978,7 @@ export function withdrawGateVerifyMirror(
   intentId: string,
   reason: string,
 ): void {
+  if (gateVerifyIntentsBeingApplied.has(intentId)) return;
   const row = getStagedIntentRow(intentId);
   if (!row || !GATE_VERIFY_MIRROR_WITHDRAWABLE_STATES.includes(row.state))
     return;
@@ -5174,6 +5175,20 @@ function readinessAdvisoryAnnotation(
     ?.readinessAdvisory;
   if (!advisory || advisory.length === 0) return null;
   return JSON.stringify({ advisory: true, violations: advisory });
+}
+
+/** Dispatch origin recorded on a gate-verify session at spawn; false when absent or unparseable. */
+function readGateVerifyUnattended(sessionId: string): boolean {
+  const metadata = getSession(sessionId)?.metadata;
+  if (!metadata) return false;
+  try {
+    return (
+      (JSON.parse(metadata) as { gateVerifyUnattended?: unknown })
+        .gateVerifyUnattended === true
+    );
+  } catch {
+    return false;
+  }
 }
 
 async function applyIntent(
@@ -5434,13 +5449,17 @@ async function applyIntent(
       // passOperator on a mirror: no verifier ever ran here, so tagging the
       // pass as the verifier's own would trip isVerifierBlockedFromPassing
       // and strand the item as advisory-only forever.
+      const unattended =
+        !isOperatorSuppliedOrigin && intent.sessionId
+          ? readGateVerifyUnattended(intent.sessionId)
+          : false;
       return routeVerificationResult(
         item,
         result,
         defaultFollowupFiler,
         null,
         {},
-        false,
+        unattended,
         isOperatorSuppliedOrigin ? undefined : 'gate-verifier',
       );
     }
@@ -5659,6 +5678,22 @@ export async function autoCommitGateVerifyIntent(
   return promise;
 }
 
+/** gate.verify intents currently inside applyIntent; the retire sink must not withdraw the intent that is itself being applied. */
+const gateVerifyIntentsBeingApplied = new Set<string>();
+
+async function applyIntentShielded(
+  ...args: Parameters<typeof applyIntent>
+): ReturnType<typeof applyIntent> {
+  const intent = args[0];
+  if (intent.kind !== 'gate.verify') return applyIntent(...args);
+  gateVerifyIntentsBeingApplied.add(intent.id);
+  try {
+    return await applyIntent(...args);
+  } finally {
+    gateVerifyIntentsBeingApplied.delete(intent.id);
+  }
+}
+
 async function commitGateVerifyAutoCommit(
   fresh: StagedIntentRow,
   sessionManager: SessionManager | undefined,
@@ -5666,7 +5701,13 @@ async function commitGateVerifyAutoCommit(
 ): Promise<boolean> {
   const apiIntent = rowToApi(fresh);
   try {
-    await applyIntent(apiIntent, undefined, 'human', undefined, sessionManager);
+    await applyIntentShielded(
+      apiIntent,
+      undefined,
+      'human',
+      undefined,
+      sessionManager,
+    );
   } catch (err) {
     if (err instanceof SessionIncompleteError) return false;
     logger.error(
@@ -8829,7 +8870,7 @@ async function applyGroupMember(
         dependsOn: payload.dependsOn.map(resolveSymbolic),
       };
     }
-    const result = await applyIntent(
+    const result = await applyIntentShielded(
       intent,
       opts.override ? { reason: opts.reason } : undefined,
       opts.actorType,
@@ -9797,7 +9838,7 @@ export function createStagedIntentsRouter(
           : undefined;
 
       try {
-        const result = await applyIntent(
+        const result = await applyIntentShielded(
           intent,
           override ? { reason } : undefined,
           actorType,

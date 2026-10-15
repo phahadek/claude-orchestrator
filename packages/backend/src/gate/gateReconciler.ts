@@ -150,7 +150,10 @@ export interface GateVerificationResult {
  * are skipped (with a warning) until a verifier is injected.
  */
 export interface GateItemVerifier {
-  verify(item: GateItem): Promise<GateVerificationResult>;
+  verify(
+    item: GateItem,
+    opts?: { unattended: boolean },
+  ): Promise<GateVerificationResult>;
 }
 
 /**
@@ -691,7 +694,7 @@ async function runReservedVerification(
 
   let result: GateVerificationResult;
   try {
-    result = await verifier.verify(item);
+    result = await verifier.verify(item, { unattended });
   } catch (err) {
     inFlightVerifications.delete(item.id);
     const attempts = (crashCounts.get(item.id) ?? 0) + 1;

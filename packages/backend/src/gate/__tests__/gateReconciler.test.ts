@@ -578,6 +578,7 @@ describe('runGateReconcilerTick', () => {
     expect(verifier.verify).toHaveBeenCalledTimes(1);
     expect(verifier.verify).toHaveBeenCalledWith(
       expect.objectContaining({ id: readOnly.id }),
+      expect.anything(),
     );
     expect(getItem(humanObservation.id)?.state).toBe('pending');
     expect(getItem(readOnly.id)?.state).toBe('pass');
@@ -686,6 +687,7 @@ describe('runGateReconcilerTick', () => {
     expect(verify).toHaveBeenCalledTimes(1);
     expect(verify).toHaveBeenCalledWith(
       expect.objectContaining({ id: runnable.id }),
+      expect.anything(),
     );
     expect(getItem(runnable.id)?.state).toBe('pass');
     expect(getItem(parked.id)?.state).toBe('pending');

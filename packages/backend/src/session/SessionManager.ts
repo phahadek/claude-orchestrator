@@ -126,6 +126,7 @@ import {
   getGrantedCapabilities,
   seedGrantedCapabilities,
   setSessionDeclaredWrites,
+  setSessionMetadata,
   setSessionDocsTargetSurface,
   getSessionDocsTargetSurface,
   setSessionMilestoneId,
@@ -610,6 +611,8 @@ export interface StartOptions {
    * checkout. Ignored for every sessionType other than 'docs'.
    */
   docsTargetSurface?: string;
+  /** Gate-verify dispatch origin (true = reconciler auto-run), persisted to sessions.metadata.gateVerifyUnattended at spawn. */
+  gateVerifyUnattended?: boolean;
 }
 
 /** How long to suppress lastMessage-only task_updated broadcasts per task (ms). */
@@ -2048,6 +2051,11 @@ export class SessionManager extends EventEmitter {
     // already-dispatched session's auto-approve eligibility.
     if (options?.declaredWrites) {
       setSessionDeclaredWrites(sessionId, options.declaredWrites);
+    }
+    if (options?.gateVerifyUnattended !== undefined) {
+      setSessionMetadata(sessionId, {
+        gateVerifyUnattended: options.gateVerifyUnattended,
+      });
     }
     // Captured once, here at spawn, same rationale as declaredWrites above —
     // classifyWorktreeTeardownRefusal needs this after spawn (at teardown
