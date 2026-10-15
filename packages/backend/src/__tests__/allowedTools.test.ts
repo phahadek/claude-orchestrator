@@ -45,6 +45,7 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
   'gate.verify',
   'ops.prIntent',
   'test.request',
+  'test.override',
   'review.dispute',
   'report.file',
   'completeness.disposition',

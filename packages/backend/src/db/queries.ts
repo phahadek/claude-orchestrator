@@ -11674,6 +11674,8 @@ let _stmtSessionsForBreadthTask: Database.Statement | null = null;
 export interface BreadthOwnTree {
   sessionIds: string[];
   worktreePaths: string[];
+  /** Normalized ids of the task(s) the subject's sessions belong to — the scope of any operator test override. */
+  taskNorms?: string[];
 }
 
 /** Every session of the subject's task (same project), plus the given ids. */
@@ -11742,7 +11744,100 @@ export function resolveBreadthOwnTree(
   return {
     sessionIds: [...sessionIds],
     worktreePaths: [...worktreePaths],
+    taskNorms: [...taskNorms],
   };
+}
+
+function isTerminalTaskStatusInCache(taskId: string): boolean {
+  const row = getTaskCache(normalizeTaskId(taskId));
+  if (!row) return false;
+  try {
+    const status = (JSON.parse(row.raw_json) as { status?: string }).status;
+    return !!status && /done|deferred/i.test(status);
+  } catch {
+    return false;
+  }
+}
+
+let _stmtOwnTreePassedTest: Database.Statement | null = null;
+
+/**
+ * The test ids an approved (committed) test.override currently excuses for
+ * the subject's own tree. Scoped strictly to the override's owning task —
+ * an override never applies to a tree whose task set doesn't contain it.
+ * Each override stops excusing, evaluated at read time, at the first of:
+ * its owning task reaching a terminal state, its linked fix task reaching
+ * Done, or a run of the task's own tree passing the test after approval.
+ */
+export function getActiveTestOverrideTestIds(
+  projectId: string,
+  ownTree: BreadthOwnTree,
+): Set<string> {
+  const active = new Set<string>();
+  const taskNorms = new Set(ownTree.taskNorms ?? []);
+  if (taskNorms.size === 0) return active;
+
+  const rows = db
+    .prepare(
+      `SELECT payload, updated_at FROM staged_intent
+       WHERE project_id = ? AND kind = 'test.override' AND state = 'committed'`,
+    )
+    .all(projectId) as Array<{ payload: string; updated_at: number }>;
+
+  _stmtOwnTreePassedTest ??= db.prepare<{
+    test_id: string;
+    since_ms: number;
+    own_sessions: string;
+    own_worktrees: string;
+  }>(`
+    SELECT 1 FROM test_run_results t
+    JOIN test_request_runs r ON r.id = t.test_request_run_id
+    WHERE t.test_id = @test_id
+      AND t.outcome = 'passed'
+      AND t.created_at >= @since_ms
+      AND (r.session_id IN (SELECT value FROM json_each(@own_sessions))
+           OR r.worktree_path IN (SELECT value FROM json_each(@own_worktrees)))
+    LIMIT 1
+  `);
+
+  for (const row of rows) {
+    let p: {
+      taskId?: string;
+      testIds?: string[];
+      linkedFixTaskId?: string;
+    };
+    try {
+      p = JSON.parse(row.payload);
+    } catch {
+      continue;
+    }
+    if (!p.taskId || !Array.isArray(p.testIds)) continue;
+    if (!taskNorms.has(normalizeBoardId(p.taskId))) continue;
+    if (isTerminalTaskStatusInCache(p.taskId)) continue;
+    if (p.linkedFixTaskId) {
+      const fixRow = getTaskCache(normalizeTaskId(p.linkedFixTaskId));
+      let fixStatus: string | undefined;
+      try {
+        fixStatus = fixRow
+          ? (JSON.parse(fixRow.raw_json) as { status?: string }).status
+          : undefined;
+      } catch {
+        fixStatus = undefined;
+      }
+      if (fixStatus && /done/i.test(fixStatus)) continue;
+    }
+    for (const testId of p.testIds) {
+      if (active.has(testId)) continue;
+      const passed = _stmtOwnTreePassedTest.get({
+        test_id: testId,
+        since_ms: row.updated_at,
+        own_sessions: JSON.stringify(ownTree.sessionIds),
+        own_worktrees: JSON.stringify(ownTree.worktreePaths),
+      });
+      if (!passed) active.add(testId);
+    }
+  }
+  return active;
 }
 
 /**

@@ -29,6 +29,7 @@ import {
   computeTestFailureBreadthFlag,
   markTestResultExcused,
   resolveBreadthOwnTree,
+  getActiveTestOverrideTestIds,
   type BreadthOwnTree,
 } from '../db/queries';
 import { typedGetSetting } from '../config/settings';
@@ -56,6 +57,8 @@ export interface BaseAttributableFilterResult {
   excludedTests: FailingTest[];
   /** Failing tests excluded because they're flagged in flagged_flaky_tests_rollup for this project. */
   flakyExcludedTests: FailingTest[];
+  /** Subset of excludedTests excused by an approved, still-active operator test override rather than the breadth corpus. */
+  overrideExcludedTests?: FailingTest[];
   /** Failing tests that remain after filtering — what's actually reported as a failure, if any. */
   remainingTests: FailingTest[];
   /**
@@ -125,6 +128,7 @@ export async function filterBaseAttributableFailures(
   }
 
   return attributeFailingTests(
+    project.id,
     sessionFailing,
     ownTreeOfRun(project, run),
     run.id,
@@ -153,6 +157,7 @@ function ownTreeOfRun(
  * every excluded test's (runId, test_id) row — see markTestResultExcused.
  */
 function attributeFailingTests(
+  projectId: string,
   sessionFailing: FailingTest[],
   ownTree: BreadthOwnTree,
   runId: string | null = null,
@@ -161,8 +166,13 @@ function attributeFailingTests(
   const breadthWindowHours = typedGetSetting('flip_rate_breadth_window_hours');
   const asOfMs = Date.now();
 
+  const overrideIds = getActiveTestOverrideTestIds(projectId, ownTree);
+  const overrideExcludedTests = sessionFailing.filter((t) =>
+    overrideIds.has(t.test_id),
+  );
   const excludedTests = sessionFailing.filter(
     (t) =>
+      overrideIds.has(t.test_id) ||
       computeTestFailureBreadthFlag(
         t.test_id,
         breadthWindowHours,
@@ -192,6 +202,7 @@ function attributeFailingTests(
       passed: true,
       excludedTests,
       flakyExcludedTests,
+      overrideExcludedTests,
       remainingTests: [],
       baseRun: null,
     };
@@ -202,6 +213,7 @@ function attributeFailingTests(
     passed: false,
     excludedTests,
     flakyExcludedTests,
+    overrideExcludedTests,
     remainingTests,
     baseRun: null,
   };
@@ -248,6 +260,7 @@ export async function filterVerifyFailureByBaseHealth(
   );
 
   const result = attributeFailingTests(
+    project.id,
     sessionFailing,
     resolveBreadthOwnTree(project.id, subject),
     runId ?? null,
@@ -267,8 +280,15 @@ function writeExcusedMarkers(
   runId: string,
   result: BaseAttributableFilterResult,
 ): void {
+  const overrideIds = new Set(
+    (result.overrideExcludedTests ?? []).map((t) => t.test_id),
+  );
   for (const t of result.excludedTests) {
-    markTestResultExcused(runId, t.test_id, 'breadth_corpus');
+    markTestResultExcused(
+      runId,
+      t.test_id,
+      overrideIds.has(t.test_id) ? 'operator_override' : 'breadth_corpus',
+    );
   }
   for (const t of result.flakyExcludedTests) {
     markTestResultExcused(runId, t.test_id, 'flaky_rollup');

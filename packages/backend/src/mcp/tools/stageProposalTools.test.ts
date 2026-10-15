@@ -112,6 +112,7 @@ describe('stage-proposal MCP tools — registration', () => {
         'task.setStatus',
         'task.setType',
         'task.updateBody',
+        'test.override',
         'test.request',
       ].sort(),
     );

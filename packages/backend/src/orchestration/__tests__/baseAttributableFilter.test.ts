@@ -59,6 +59,7 @@ vi.mock('../../db/queries', () => ({
   listTestRequestRunsForSession: mockListTestRequestRunsForSession,
   computeTestFailureBreadthFlag: mockComputeTestFailureBreadthFlag,
   resolveBreadthOwnTree: mockResolveBreadthOwnTree,
+  getActiveTestOverrideTestIds: () => new Set<string>(),
   markTestResultExcused: mockMarkTestResultExcused,
 }));
 
