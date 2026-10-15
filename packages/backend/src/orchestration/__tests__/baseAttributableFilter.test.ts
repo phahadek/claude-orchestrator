@@ -64,6 +64,7 @@ const { mockTypedGetSetting } = vi.hoisted(() => ({
   mockTypedGetSetting: vi.fn((key: string) => {
     if (key === 'flip_rate_breadth_n') return 3;
     if (key === 'flip_rate_breadth_window_hours') return 24;
+    if (key === 'mass_breakage_threshold') return 20;
     throw new Error(`unexpected setting ${key}`);
   }),
 }));
