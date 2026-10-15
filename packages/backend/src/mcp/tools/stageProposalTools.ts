@@ -459,6 +459,26 @@ export function registerStageProposalTools(
   );
 
   registerTool(
+    'test.override',
+    {
+      title: 'Claim failing tests are not yours, with evidence',
+      description:
+        "Stages a test.override intent — this session's claim that the named failing tests are not attributable to its own diff, for an operator to approve. Requires payload.testIds and payload.evidence (traceReads: the failing traces you read; targetedRunIds: ids of targeted test runs you made; investigationNote). Optionally link a fix task via payload.linkedFixTaskId. An approved override excuses the named tests for THIS task's runs only, and stops excusing at the first of: this task reaching a terminal state, the linked fix task reaching Done, or a run of this task's own tree passing the test. Cannot belong to a group.",
+      inputSchema: envelope({
+        taskId: z.string(),
+        testIds: z.array(z.string()),
+        linkedFixTaskId: z.string().optional(),
+        evidence: z.object({
+          traceReads: z.string(),
+          targetedRunIds: z.array(z.string()),
+          investigationNote: z.string(),
+        }),
+      }),
+    },
+    async (args) => stage('test.override', args.payload, ctx, args),
+  );
+
+  registerTool(
     'report.file',
     {
       title:

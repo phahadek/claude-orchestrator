@@ -64,6 +64,7 @@ import type {
   CompletenessDispositionQuestion,
   CompletenessProbedGapClass,
   ReviewDisputePayload,
+  TestOverridePayload,
   OpsPrIntentPayload,
   ReportFilePayload,
 } from '../db/types';
@@ -2869,6 +2870,72 @@ function validateTestRequestPayload(
   }
 }
 
+class TestOverrideValidationError extends Error {
+  constructor(reason: string) {
+    super(`[stagedIntents] test.override rejected: ${reason}`);
+    this.name = 'TestOverrideValidationError';
+  }
+}
+
+/**
+ * A code session's claim that failing tests are not its own. Task-scoped:
+ * the payload's taskId must be the filing session's own task, so an override
+ * can never be filed against another task's runs.
+ */
+function validateTestOverridePayload(
+  payload: unknown,
+  groupId: string | null | undefined,
+  sessionId: string | null | undefined,
+): asserts payload is TestOverridePayload {
+  if (groupId) {
+    throw new TestOverrideValidationError(
+      'a test.override cannot belong to a group — it applies via a direct ' +
+        'approve-terminal transition, not a group commit',
+    );
+  }
+  const p = payload as Partial<TestOverridePayload> | null;
+  if (!p || typeof p.taskId !== 'string' || !p.taskId.trim()) {
+    throw new TestOverrideValidationError('payload.taskId is required');
+  }
+  if (
+    !Array.isArray(p.testIds) ||
+    p.testIds.length === 0 ||
+    p.testIds.some((t) => typeof t !== 'string' || !t.trim())
+  ) {
+    throw new TestOverrideValidationError(
+      'payload.testIds must be a non-empty array of test ids',
+    );
+  }
+  const e = p.evidence;
+  if (
+    !e ||
+    typeof e.traceReads !== 'string' ||
+    !e.traceReads.trim() ||
+    !Array.isArray(e.targetedRunIds) ||
+    e.targetedRunIds.length === 0 ||
+    typeof e.investigationNote !== 'string' ||
+    !e.investigationNote.trim()
+  ) {
+    throw new TestOverrideValidationError(
+      'payload.evidence requires traceReads, a non-empty targetedRunIds, and investigationNote',
+    );
+  }
+  if (p.linkedFixTaskId !== undefined && !p.linkedFixTaskId.trim()) {
+    throw new TestOverrideValidationError(
+      'payload.linkedFixTaskId, when given, must be non-empty',
+    );
+  }
+  const session = sessionId ? getSession(sessionId) : undefined;
+  if (
+    !session?.task_id ||
+    normalizeBoardId(session.task_id) !== normalizeBoardId(p.taskId)
+  ) {
+    throw new TestOverrideValidationError(
+      "payload.taskId must be the filing session's own task",
+    );
+  }
+}
+
 class ReviewDisputeValidationError extends Error {
   constructor(reason: string) {
     super(`[stagedIntents] review.dispute rejected: ${reason}`);
@@ -3503,6 +3570,7 @@ export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
   'review.dispute',
   'ops.prIntent',
   'test.request',
+  'test.override',
   'report.file',
 ]);
 
@@ -4343,6 +4411,9 @@ export function stageIntent(
   }
   if (kind === 'test.request') {
     validateTestRequestPayload(payload, groupId, projectId);
+  }
+  if (kind === 'test.override') {
+    validateTestOverridePayload(payload, groupId, sessionId);
   }
   if (kind === 'gate.verify') {
     validateGateVerifyPayload(payload);
@@ -5473,6 +5544,7 @@ async function applyIntent(
       return { id: committed.id, state: committed.state };
     }
     case 'test.request':
+    case 'test.override':
     case 'ops.prIntent':
       throw new NotOperatorAppliableError(intent.kind);
     default:
@@ -9929,7 +10001,7 @@ export function createStagedIntentsRouter(
       // Nothing is written to the task backend or GitHub here — committing
       // only records the operator's sign-off on the declared scope/reason
       // for PRReviewService's Ops rubric to resolve later.
-      if (intent.kind === 'ops.prIntent') {
+      if (intent.kind === 'ops.prIntent' || intent.kind === 'test.override') {
         const committed = transitionStagedIntent(intent.id, 'committed', {
           annotation: null,
         });

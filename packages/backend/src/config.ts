@@ -254,6 +254,10 @@ export const ALLOWED_TOOLS = [
   // trigger. Named through orchestratorMcpToolName so it emits the
   // underscore CLI form the model actually calls.
   orchestratorMcpToolName('review.dispute'),
+  // test.override is a code session's route to claim failing tests aren't its
+  // own, for operator approval. Same failure mode as test.request above
+  // without this entry: registered server-side but denied by the CLI.
+  orchestratorMcpToolName('test.override'),
   // report.file is a dispatched code/review session's route to file an
   // inert investigation report about a defect it must not fix itself (see
   // CODE_INTENT_KINDS, planningIntentKinds.ts). Same failure mode as

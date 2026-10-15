@@ -869,6 +869,7 @@ export const TERMINAL_ON_APPROVE_INTENT_KINDS = new Set([
   'completeness.disposition',
   'review.dispute',
   'test.request',
+  'test.override',
   'ops.prIntent',
 ]);
 
@@ -966,6 +967,25 @@ export interface ReviewDisputePayload {
   prNumber: number;
   repo: string;
   rationale: string;
+}
+
+/**
+ * Payload for the test.override staged-intent kind — a code session's claim
+ * that the named failing tests are not its own, with the evidence for an
+ * operator to judge. Once approved (committed), it excuses `testIds` for runs
+ * of `taskId`'s own tree only — see getActiveTestOverrideTestIds in
+ * db/queries.ts for the three expiry conditions.
+ */
+export interface TestOverridePayload {
+  taskId: string;
+  testIds: string[];
+  /** Optional fix task whose reaching Done ends the override. */
+  linkedFixTaskId?: string;
+  evidence: {
+    traceReads: string;
+    targetedRunIds: string[];
+    investigationNote: string;
+  };
 }
 
 /**
@@ -1455,7 +1475,8 @@ export type TestExcusalSource =
   | 'flaky_confirm'
   | 'breadth_corpus'
   | 'flaky_rollup'
-  | 'push_reattribution';
+  | 'push_reattribution'
+  | 'operator_override';
 
 export interface NewTestRunResultRow {
   test_id: string;

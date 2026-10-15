@@ -109,6 +109,7 @@ export const PLANNING_INTENT_KINDS: Record<
 export const CODE_INTENT_KINDS: readonly string[] = [
   'review.dispute',
   'test.request',
+  'test.override',
   'report.file',
   'planning.noOp',
 ];
