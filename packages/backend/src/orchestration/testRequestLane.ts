@@ -384,12 +384,10 @@ function getGlobalTestRunLimit(): number {
   if (ceilingMb === 0) return maxConcurrent;
   const perRunMb = typedGetSetting('test_request_per_run_memory_mb');
   const budget = Math.max(1, Math.floor(ceilingMb / perRunMb));
-  // The targeted lane's slots are charged against the same memory ceiling, so
-  // the full-suite lane yields them (never below one slot).
-  return Math.min(
-    maxConcurrent,
-    Math.max(1, budget - getTargetedLaneCapacity()),
-  );
+  // Targeted runs actually executing are charged against the same memory
+  // ceiling, so the full-suite lane yields their slots (never below one).
+  const targetedInUse = targetedTestRunQueue?.inUse() ?? 0;
+  return Math.min(maxConcurrent, Math.max(1, budget - targetedInUse));
 }
 
 /**
