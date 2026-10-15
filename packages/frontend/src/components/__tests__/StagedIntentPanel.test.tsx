@@ -1425,6 +1425,69 @@ describe('StagedIntentPanel', () => {
     });
   });
 
+  describe('session.requestCapability privilege/network advisories', () => {
+    const renderCap = (capability: string, flags: Partial<StagedIntent> = {}) =>
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'session.requestCapability',
+            payload: { capability, plan: 'p', evidence: 'e' },
+            ...flags,
+          })}
+        />,
+      );
+
+    it('renders the privilege-escalation advisory and host line', () => {
+      renderCap('Bash(sudo -u postgres cat /x)', {
+        confersPrivilegeEscalation: true,
+      });
+      expect(
+        screen.getByTestId(
+          'staged-intent-capability-privilege-escalation-warning',
+        ),
+      ).toBeTruthy();
+      expect(
+        screen.queryByTestId(
+          'staged-intent-capability-network-mutation-warning',
+        ),
+      ).toBeNull();
+      expect(
+        screen.getByTestId('staged-intent-capability-orchestrator-host')
+          .textContent,
+      ).toBe(
+        "Runs on the orchestrator host, not on any managed project's host.",
+      );
+    });
+
+    it('renders the network-mutation advisory', () => {
+      renderCap('Bash(curl -X POST http://x)', {
+        confersNetworkMutation: true,
+      });
+      expect(
+        screen.getByTestId('staged-intent-capability-network-mutation-warning'),
+      ).toBeTruthy();
+      expect(
+        screen.queryByTestId(
+          'staged-intent-capability-privilege-escalation-warning',
+        ),
+      ).toBeNull();
+    });
+
+    it('renders the host line on a Bash card with no advisories', () => {
+      renderCap('Bash(pm-host:*)');
+      expect(
+        screen.getByTestId('staged-intent-capability-orchestrator-host'),
+      ).toBeTruthy();
+    });
+
+    it('omits the host line on a non-Bash capability', () => {
+      renderCap('mcp__github__get_pull_request');
+      expect(
+        screen.queryByTestId('staged-intent-capability-orchestrator-host'),
+      ).toBeNull();
+    });
+  });
+
   describe('test.request operator override', () => {
     function makeTestRequestIntent(overrides: Partial<StagedIntent> = {}) {
       return makeIntent({
