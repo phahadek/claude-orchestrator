@@ -1976,7 +1976,10 @@ async function executeTestRequestRun(
     const crashSignatures = laneConfig.test_crash_signatures ?? [];
     const environmentSignatures =
       laneConfig.test_environment_failure_signatures ?? [];
-    const acquisitionAttempted = !!testReportGlob;
+    // Verify commands (tsc, build) never emit a test report, so a missing
+    // report on a passed verify is not a squat signal and must stay replayable.
+    const acquisitionAttempted =
+      !!testReportGlob && (spec.runKind ?? 'full') !== 'verify';
     // Delete any report file left over from a previous run before this run's
     // commands execute — otherwise a command that fails/crashes before its
     // runner's teardown leaves a stale report on disk that would otherwise
