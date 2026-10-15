@@ -117,7 +117,9 @@ export function deriveRequiredHeadingFact(
   body: string,
 ): boolean {
   const label = requiredHeadingForType(type);
-  return label ? hasRequiredHeading(body, label) : hasOpenQuestionsHeading(body);
+  return label
+    ? hasRequiredHeading(body, label)
+    : hasOpenQuestionsHeading(body);
 }
 
 export interface TriageFloorInput {

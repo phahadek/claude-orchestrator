@@ -209,9 +209,7 @@ describe('the assembled groom procedure documents groomingGate.triage', () => {
   it('carries a worked groomingGate example for a triage-eligible Type', () => {
     const output = assembleGroomOutput();
     expect(output).toMatch(/triage-eligible 📐 Design task, triaged clean/);
-    expect(output).toMatch(
-      /"triage":\{"proposedVerdict":"clean"\}/,
-    );
+    expect(output).toMatch(/"triage":\{"proposedVerdict":"clean"\}/);
   });
 
   it('derives the documented Type list from TRIAGE_ELIGIBLE_TYPES rather than a hard-coded prose list', async () => {

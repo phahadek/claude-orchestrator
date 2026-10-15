@@ -67,10 +67,12 @@ describe('hasOpenQuestionsHeading', () => {
 
 describe('deriveRequiredHeadingFact', () => {
   it('uses Open Questions for Design/Planning', () => {
-    expect(deriveRequiredHeadingFact('📐 Design', '## Open Questions\n- q')).toBe(
-      true,
+    expect(
+      deriveRequiredHeadingFact('📐 Design', '## Open Questions\n- q'),
+    ).toBe(true);
+    expect(deriveRequiredHeadingFact('📋 Planning', '## Summary\nx')).toBe(
+      false,
     );
-    expect(deriveRequiredHeadingFact('📋 Planning', '## Summary\nx')).toBe(false);
   });
 
   it('uses the readiness required heading for Operational/Investigation', () => {
@@ -80,12 +82,12 @@ describe('deriveRequiredHeadingFact', () => {
         '## Targets / surfaces affected\n- x',
       ),
     ).toBe(true);
-    expect(deriveRequiredHeadingFact('🔧 Operational', '## Open Questions\n- q')).toBe(
-      false,
-    );
-    expect(deriveRequiredHeadingFact('🔎 Investigation', '## Deliverables\n- d')).toBe(
-      true,
-    );
+    expect(
+      deriveRequiredHeadingFact('🔧 Operational', '## Open Questions\n- q'),
+    ).toBe(false);
+    expect(
+      deriveRequiredHeadingFact('🔎 Investigation', '## Deliverables\n- d'),
+    ).toBe(true);
   });
 });
 

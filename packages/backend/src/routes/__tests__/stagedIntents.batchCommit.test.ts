@@ -116,7 +116,11 @@ describe('POST /api/staged-intents/batch/commit', () => {
       // 📐 Design is exempt from the Open Questions readiness tier — use
       // grooming residue instead so the readiness gate still fires, forcing
       // the triage-clean override path this test exists to cover.
-      fetchTaskPage: vi.fn().mockResolvedValue('## Open Questions\n- q?\n\nConfirm scope at grooming.\n'),
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue(
+          '## Open Questions\n- q?\n\nConfirm scope at grooming.\n',
+        ),
       updateStatus,
       setDependsOn: vi.fn().mockResolvedValue(undefined),
     });
@@ -264,7 +268,9 @@ describe('POST /api/staged-intents/batch/commit', () => {
         type: 'notion',
         fetchTaskPage: vi
           .fn()
-          .mockResolvedValue('## Open Questions\n- q?\n\nConfirm scope at grooming.\n'),
+          .mockResolvedValue(
+            '## Open Questions\n- q?\n\nConfirm scope at grooming.\n',
+          ),
         updateStatus,
         setDependsOn: vi.fn().mockResolvedValue(undefined),
         createTask: vi.fn().mockResolvedValue('notion:new-code-task'),
@@ -304,7 +310,9 @@ describe('POST /api/staged-intents/batch/commit', () => {
         type: 'notion',
         fetchTaskPage: vi
           .fn()
-          .mockResolvedValue('## Open Questions\n- q?\n\nConfirm scope at grooming.\n'),
+          .mockResolvedValue(
+            '## Open Questions\n- q?\n\nConfirm scope at grooming.\n',
+          ),
         updateStatus,
         setDependsOn: vi.fn().mockResolvedValue(undefined),
         createTask: vi.fn().mockResolvedValue('notion:new-ops-task'),
@@ -552,7 +560,11 @@ describe('precheckGroupCommit routes its block to the originating session', () =
       // Grooming-instruction residue trips the (type-agnostic) readiness
       // gate even though this task type is exempt from the Open Questions
       // tier — see the comment on the first test in this file.
-      fetchTaskPage: vi.fn().mockResolvedValue('## Open Questions\n- q?\n\nConfirm scope at grooming.\n'),
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue(
+          '## Open Questions\n- q?\n\nConfirm scope at grooming.\n',
+        ),
       updateStatus: vi.fn().mockResolvedValue(undefined),
       setDependsOn: vi.fn().mockResolvedValue(undefined),
     });
