@@ -1121,7 +1121,7 @@ export const runtimeSettings: RuntimeSettings = {
   investigation_reconciler_interval_ms: Number(
     process.env.INVESTIGATION_RECONCILER_INTERVAL_MS ?? 60_000,
   ),
-  tier3_classifier_model: 'claude-haiku-4-5-20251001',
+  tier3_classifier_model: 'claude-haiku-5-5',
   capability_auto_approve_enabled:
     process.env.CAPABILITY_AUTO_APPROVE_ENABLED !== 'false',
   capability_auto_approve_allowlist: [],

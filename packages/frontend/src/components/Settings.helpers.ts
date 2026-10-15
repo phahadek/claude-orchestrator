@@ -48,12 +48,30 @@ export const MIN_POLL_INTERVAL_MS = 5000;
 
 export const MODEL_OPTIONS = [
   { label: '(CLI default)', value: '' },
-  { label: 'claude-opus-4-6', value: 'claude-opus-4-6' },
+  { label: 'claude-opus-5-5', value: 'claude-opus-5-5' },
   { label: 'claude-sonnet-5-5', value: 'claude-sonnet-5-5' },
-  { label: 'claude-sonnet-5', value: 'claude-sonnet-5' },
-  { label: 'claude-sonnet-4-6', value: 'claude-sonnet-4-6' },
-  { label: 'claude-haiku-4-5', value: 'claude-haiku-4-5' },
+  { label: 'claude-haiku-5-5', value: 'claude-haiku-5-5' },
 ];
+
+export const LARGE_TASK_MODEL_OPTIONS = [
+  { label: '(off)', value: '' },
+  { label: 'claude-opus-5-5[1m]', value: 'claude-opus-5-5[1m]' },
+  { label: 'claude-sonnet-5-5[1m]', value: 'claude-sonnet-5-5[1m]' },
+];
+
+export const TIER3_CLASSIFIER_MODEL_OPTIONS = [
+  { label: '(CLI default)', value: '' },
+  { label: 'claude-haiku-5-5', value: 'claude-haiku-5-5' },
+  { label: 'claude-sonnet-5-5', value: 'claude-sonnet-5-5' },
+];
+
+export function withLegacyOption(
+  options: { label: string; value: string }[],
+  current: string | undefined,
+): { label: string; value: string }[] {
+  if (!current || options.some((o) => o.value === current)) return options;
+  return [...options, { label: `(unsupported) ${current}`, value: current }];
+}
 
 export const EFFORT_OPTIONS = [
   { label: 'Default', value: '' },

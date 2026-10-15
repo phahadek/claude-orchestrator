@@ -8,30 +8,16 @@ import {
   validateField,
   MIN_POLL_INTERVAL_MS,
   MODEL_OPTIONS,
+  LARGE_TASK_MODEL_OPTIONS,
+  TIER3_CLASSIFIER_MODEL_OPTIONS,
   EFFORT_OPTIONS,
+  withLegacyOption,
 } from './Settings.helpers';
 import styles from './Settings.module.css';
 
 const NOTIFICATIONS_ENABLED_KEY = 'notificationsEnabled';
 
 type Tab = 'general' | 'projects' | 'devices' | 'system_health';
-
-const LARGE_TASK_MODEL_OPTIONS = [
-  { label: '(off)', value: '' },
-  { label: 'claude-opus-4-8[1m]', value: 'claude-opus-4-8[1m]' },
-  { label: 'claude-opus-4-7[1m]', value: 'claude-opus-4-7[1m]' },
-  { label: 'claude-opus-4-6[1m]', value: 'claude-opus-4-6[1m]' },
-  { label: 'claude-sonnet-5-5[1m]', value: 'claude-sonnet-5-5[1m]' },
-  { label: 'claude-sonnet-5[1m]', value: 'claude-sonnet-5[1m]' },
-  { label: 'claude-sonnet-4-6[1m]', value: 'claude-sonnet-4-6[1m]' },
-];
-
-const TIER3_CLASSIFIER_MODEL_OPTIONS = [
-  { label: '(CLI default)', value: '' },
-  { label: 'claude-haiku-4-5-20251001', value: 'claude-haiku-4-5-20251001' },
-  { label: 'claude-haiku-4-5', value: 'claude-haiku-4-5' },
-  { label: 'claude-sonnet-4-6', value: 'claude-sonnet-4-6' },
-];
 
 interface Props {
   initialTab?: Tab;
@@ -409,7 +395,10 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                       void handleChange('code_session_model', e.target.value)
                     }
                   >
-                    {MODEL_OPTIONS.map((o) => (
+                    {withLegacyOption(
+                      MODEL_OPTIONS,
+                      settings?.code_session_model,
+                    ).map((o) => (
                       <option key={o.value} value={o.value}>
                         {o.label}
                       </option>
@@ -438,7 +427,10 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                       void handleChange('review_session_model', e.target.value)
                     }
                   >
-                    {MODEL_OPTIONS.map((o) => (
+                    {withLegacyOption(
+                      MODEL_OPTIONS,
+                      settings?.review_session_model,
+                    ).map((o) => (
                       <option key={o.value} value={o.value}>
                         {o.label}
                       </option>
@@ -470,7 +462,10 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                       )
                     }
                   >
-                    {MODEL_OPTIONS.map((o) => (
+                    {withLegacyOption(
+                      MODEL_OPTIONS,
+                      settings?.planning_session_model,
+                    ).map((o) => (
                       <option key={o.value} value={o.value}>
                         {o.label}
                       </option>
@@ -502,7 +497,10 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                       void handleChange('ops_session_model', e.target.value)
                     }
                   >
-                    {MODEL_OPTIONS.map((o) => (
+                    {withLegacyOption(
+                      MODEL_OPTIONS,
+                      settings?.ops_session_model,
+                    ).map((o) => (
                       <option key={o.value} value={o.value}>
                         {o.label}
                       </option>
@@ -540,7 +538,10 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                       )
                     }
                   >
-                    {MODEL_OPTIONS.map((o) => (
+                    {withLegacyOption(
+                      MODEL_OPTIONS,
+                      settings?.gate_verify_session_model,
+                    ).map((o) => (
                       <option key={o.value} value={o.value}>
                         {o.label}
                       </option>
@@ -578,7 +579,10 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                       void handleChange('groom_session_model', e.target.value)
                     }
                   >
-                    {MODEL_OPTIONS.map((o) => (
+                    {withLegacyOption(
+                      MODEL_OPTIONS,
+                      settings?.groom_session_model,
+                    ).map((o) => (
                       <option key={o.value} value={o.value}>
                         {o.label}
                       </option>
@@ -613,7 +617,10 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                       void handleChange('design_session_model', e.target.value)
                     }
                   >
-                    {MODEL_OPTIONS.map((o) => (
+                    {withLegacyOption(
+                      MODEL_OPTIONS,
+                      settings?.design_session_model,
+                    ).map((o) => (
                       <option key={o.value} value={o.value}>
                         {o.label}
                       </option>
@@ -648,7 +655,10 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                       void handleChange('docs_session_model', e.target.value)
                     }
                   >
-                    {MODEL_OPTIONS.map((o) => (
+                    {withLegacyOption(
+                      MODEL_OPTIONS,
+                      settings?.docs_session_model,
+                    ).map((o) => (
                       <option key={o.value} value={o.value}>
                         {o.label}
                       </option>
@@ -683,7 +693,10 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                       void handleChange('large_task_model', e.target.value)
                     }
                   >
-                    {LARGE_TASK_MODEL_OPTIONS.map((o) => (
+                    {withLegacyOption(
+                      LARGE_TASK_MODEL_OPTIONS,
+                      settings?.large_task_model,
+                    ).map((o) => (
                       <option key={o.value} value={o.value}>
                         {o.label}
                       </option>
@@ -722,7 +735,10 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                       )
                     }
                   >
-                    {TIER3_CLASSIFIER_MODEL_OPTIONS.map((o) => (
+                    {withLegacyOption(
+                      TIER3_CLASSIFIER_MODEL_OPTIONS,
+                      settings?.tier3_classifier_model,
+                    ).map((o) => (
                       <option key={o.value} value={o.value}>
                         {o.label}
                       </option>
