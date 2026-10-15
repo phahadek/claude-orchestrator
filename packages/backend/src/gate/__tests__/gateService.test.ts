@@ -1486,6 +1486,32 @@ describe('nextPendingGateItems', () => {
     ).toEqual([item.id]);
   });
 
+  it('omits a backoff-elapsed needs-setup pending item only when excludeAwaitingSetup is set', () => {
+    const item = makeItem({ classification: 'Read-Only' });
+    appendGateItemEvent(item.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'still waiting',
+    });
+    appendGateItemEvent(item.id, { disposition: 'needs-setup' });
+    schedulePendingAttempt(
+      item.id,
+      new Date(Date.now() - 1000).toISOString(),
+      1,
+      new Date().toISOString(),
+    );
+    expect(getGateItem(item.id)?.state).toBe('pending');
+    expect(getGateItem(item.id)?.latestDisposition).toBe('needs-setup');
+
+    expect(
+      nextPendingGateItems(item.project, item.milestone, {
+        excludeAwaitingSetup: true,
+      }),
+    ).toHaveLength(0);
+    expect(
+      nextPendingGateItems(item.project, item.milestone).map((i) => i.id),
+    ).toEqual([item.id]);
+  });
+
   it('never returns a non-pending item', () => {
     const item = makeItem({ classification: 'Read-Only' });
     expect(nextPendingGateItems(item.project, item.milestone)).toHaveLength(0);
