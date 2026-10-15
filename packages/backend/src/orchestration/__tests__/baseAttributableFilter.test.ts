@@ -76,7 +76,6 @@ vi.mock('../../config/settings', () => ({
   typedGetSetting: mockTypedGetSetting,
 }));
 
-
 // The filter reads failing tests through the real run-outcome accessor, which
 // awaits this run's own in-flight ingestion dispatch (tracked via
 // trackRunIngestion) before reading test_run_results.
@@ -660,7 +659,9 @@ describe('masking-guard layer is retired (static)', () => {
     ];
     for (const f of files) {
       const src = fs.readFileSync(path.join(root, f), 'utf8');
-      const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+      const code = src
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/.*$/gm, '');
       expect(code, f).not.toContain('applyF2GateMaskingGuards');
       expect(code, f).not.toContain('isTestIdTouchedByChangedFiles');
     }

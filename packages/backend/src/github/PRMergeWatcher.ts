@@ -21,10 +21,7 @@ import type { Scheduler } from '../orchestration/Scheduler';
 import { typedGetSetting } from '../config/settings';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import type { OrchestratorConfig } from '../session/orchestrator-config';
-import {
-  loadAutofixCommands,
-  runAutofix,
-} from '../session/autofix-runner';
+import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { computeWholeTreeContentHash } from '../session/analyzeGating';
 import {
   evaluateF2LaneFlakyDisposition,

@@ -221,7 +221,9 @@ describe('evaluateF2LaneFlakyDisposition', () => {
       path.resolve(__dirname, '../testRequestLane.ts'),
       'utf8',
     );
-    const body = src.slice(src.indexOf('export function evaluateF2LaneFlakyDisposition'));
+    const body = src.slice(
+      src.indexOf('export function evaluateF2LaneFlakyDisposition'),
+    );
     const fnSrc = body.slice(0, body.indexOf('\n}\n'));
     expect(fnSrc).not.toContain('isTestIdTouchedByChangedFiles');
     expect(fnSrc).not.toContain('changedFiles');
