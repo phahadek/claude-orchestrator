@@ -1172,6 +1172,7 @@ export async function runGateReconcilerTick(
       const pendingBatch = nextPendingGateItems(project, milestone, {
         limit,
         classifications: AUTO_RUN_TIERS,
+        excludeAwaitingSetup: true,
       });
       for (const item of pendingBatch) {
         await yieldToEventLoop();
