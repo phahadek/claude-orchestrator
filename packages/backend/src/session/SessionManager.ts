@@ -32,6 +32,7 @@ import {
   isGrantable,
   isToolShapedCapability,
   resolvePreGrantCapabilities,
+  getPrePrAnalyzeCommands,
 } from './orchestrator-config';
 import { WorktreeSetupError } from './WorktreeSetupError';
 import { CliSessionRunner, PreSpawnConfigError } from './CliSessionRunner';
@@ -2687,6 +2688,7 @@ export class SessionManager extends EventEmitter {
           projectDir,
           worktreePath,
           verify: orchConfig.verify.length > 0 ? orchConfig.verify : undefined,
+          prePrAnalyze: getPrePrAnalyzeCommands(orchConfig),
           bashRules:
             orchConfig.bash_rules.length > 0
               ? orchConfig.bash_rules
@@ -3323,6 +3325,7 @@ export class SessionManager extends EventEmitter {
         projectDir,
         worktreePath,
         verify: orchConfig.verify.length > 0 ? orchConfig.verify : undefined,
+        prePrAnalyze: getPrePrAnalyzeCommands(orchConfig),
         bashRules:
           orchConfig.bash_rules.length > 0 ? orchConfig.bash_rules : undefined,
         sessionRules:

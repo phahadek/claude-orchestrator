@@ -43,6 +43,7 @@ vi.mock('../branchModel', () => ({
 }));
 vi.mock('../orchestrator-config', () => ({
   resolvePreGrantCapabilities: vi.fn(() => []),
+  getPrePrAnalyzeCommands: vi.fn(() => []),
   loadOrchestratorConfig: vi
     .fn()
     .mockReturnValue({ mcp_servers: undefined, allowed_tools: [] }),
