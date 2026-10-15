@@ -764,6 +764,123 @@ describe('TaskCacheRefresher', () => {
 
       expect(getTaskCache('notion:surviving')).toBeDefined();
     });
+
+    describe('pass-level sweep of rows persisted before first refresh', () => {
+      function setup(
+        projects: ProjectConfig[],
+        fetchFor: (projectId: string) => Promise<{ task: { id: string } }[]>,
+      ) {
+        vi.mocked(getAllProjects).mockReturnValue(projects);
+        vi.mocked(ProjectService.listMilestones).mockImplementation(
+          (projectId: string) => [
+            makeMilestone(`m-${projectId}`, `src-${projectId}`),
+          ],
+        );
+        vi.mocked(getTaskBackend).mockImplementation((projectId: string) =>
+          makeBackend({
+            fetchReadyTasks: vi
+              .fn()
+              .mockImplementation(() => fetchFor(projectId)),
+          }),
+        );
+        return new TaskCacheRefresher(undefined, {
+          listProjects: getAllProjects,
+          resolveBackend: getTaskBackend,
+        });
+      }
+
+      it('evicts a persisted row absent from the first successful fetch', async () => {
+        upsertTaskCache('notion:pre-existing-stale', JSON.stringify({ v: 1 }));
+        upsertTaskCache('notion:live', JSON.stringify({ v: 1 }));
+        const refresher = setup([makeProject({ id: 'p1' })], async () => [
+          { task: { id: 'notion:live' } },
+        ]);
+
+        await refresher.refreshOnce();
+
+        expect(getTaskCache('notion:pre-existing-stale')).toBeUndefined();
+        expect(getTaskCache('notion:live')).toBeDefined();
+      });
+
+      it('does not sweep when the pass had a fetch failure', async () => {
+        upsertTaskCache('notion:pre-existing-stale', JSON.stringify({ v: 1 }));
+        const refresher = setup([makeProject({ id: 'p1' })], async () => {
+          throw new Error('source unavailable');
+        });
+
+        await refresher.refreshOnce();
+
+        expect(getTaskCache('notion:pre-existing-stale')).toBeDefined();
+      });
+
+      it('does not sweep when any project failed to resolve its backend', async () => {
+        upsertTaskCache('notion:pre-existing-stale', JSON.stringify({ v: 1 }));
+        const refresher = setup(
+          [makeProject({ id: 'p1' }), makeProject({ id: 'p2' })],
+          async () => [],
+        );
+        vi.mocked(getTaskBackend).mockImplementation((projectId: string) => {
+          if (projectId === 'p2') throw new Error('no backend');
+          return makeBackend({
+            fetchReadyTasks: vi.fn().mockResolvedValue([]),
+          });
+        });
+
+        await refresher.refreshOnce();
+
+        expect(getTaskCache('notion:pre-existing-stale')).toBeDefined();
+      });
+
+      it('does not sweep when a jira project is skipped by backoff', async () => {
+        upsertTaskCache('notion:pre-existing-stale', JSON.stringify({ v: 1 }));
+        const jira = makeProject({ id: 'pj', taskSource: 'jira' });
+        const refresher = setup(
+          [makeProject({ id: 'p1' }), jira],
+          async () => [],
+        );
+        (
+          refresher as unknown as { jiraNextAllowed: Map<string, number> }
+        ).jiraNextAllowed.set('pj', Date.now() + 60_000);
+
+        await refresher.refreshOnce();
+
+        expect(getTaskCache('notion:pre-existing-stale')).toBeDefined();
+      });
+
+      it('never sweeps non-notion keys and keeps rows fetched by any project', async () => {
+        upsertTaskCache('board:some-board', JSON.stringify({ v: 1 }));
+        upsertTaskCache('github:org/repo#1', JSON.stringify({ v: 1 }));
+        upsertTaskCache('notion:p2-live', JSON.stringify({ v: 1 }));
+        const refresher = setup(
+          [makeProject({ id: 'p1' }), makeProject({ id: 'p2' })],
+          async () => [],
+        );
+        vi.mocked(getTaskBackend).mockImplementation((projectId: string) =>
+          makeBackend({
+            fetchReadyTasks: vi
+              .fn()
+              .mockResolvedValue(
+                projectId === 'p2' ? [{ task: { id: 'notion:p2-live' } }] : [],
+              ),
+          }),
+        );
+
+        await refresher.refreshOnce();
+
+        expect(getTaskCache('board:some-board')).toBeDefined();
+        expect(getTaskCache('github:org/repo#1')).toBeDefined();
+        expect(getTaskCache('notion:p2-live')).toBeDefined();
+      });
+
+      it('does not sweep on a single-project refresh', async () => {
+        upsertTaskCache('notion:pre-existing-stale', JSON.stringify({ v: 1 }));
+        const refresher = setup([makeProject({ id: 'p1' })], async () => []);
+
+        await refresher.refreshProjectById('p1');
+
+        expect(getTaskCache('notion:pre-existing-stale')).toBeDefined();
+      });
+    });
   });
 
   describe('wrapped milestone skipping', () => {

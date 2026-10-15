@@ -9,7 +9,11 @@ import { JiraApiError } from '../tasks/JiraClient';
 import { MilestoneNotFoundError } from '../tasks/LocalTaskBackend';
 import { ProjectService } from '../projects/ProjectService';
 import { runWithConcurrency, yieldToEventLoop } from '../utils/concurrency';
-import { getTaskCache, evictTaskCacheRows } from '../db/queries';
+import {
+  getTaskCache,
+  evictTaskCacheRows,
+  listNotionTaskCacheIds,
+} from '../db/queries';
 import type { Scheduler } from './Scheduler';
 
 const MIN_REFRESH_INTERVAL_MS = 10_000;
@@ -143,23 +147,26 @@ export class TaskCacheRefresher {
     const start = Date.now();
     const listProjects = this.options.listProjects ?? getAllProjects;
     const now = Date.now();
-    const projects = listProjects()
-      .filter((p) => CACHEABLE_TASK_SOURCES.has(p.taskSource))
-      .filter((p) => {
-        if (p.taskSource !== 'jira') return true;
-        return now >= (this.jiraNextAllowed.get(p.id) ?? 0);
-      });
+    const cacheableProjects = listProjects().filter((p) =>
+      CACHEABLE_TASK_SOURCES.has(p.taskSource),
+    );
+    const projects = cacheableProjects.filter((p) => {
+      if (p.taskSource !== 'jira') return true;
+      return now >= (this.jiraNextAllowed.get(p.id) ?? 0);
+    });
     logger.info(
       `[TaskCacheRefresher] refresh start projects=${projects.length}`,
     );
     let itemsProcessed: number;
+    const passOutcomes = new Map<string, Set<string>>();
     try {
       const changedCounts = await runWithConcurrency(
         projects,
         PROJECT_CONCURRENCY,
-        (project) => this.refreshProject(project),
+        (project) => this.refreshProject(project, undefined, passOutcomes),
       );
       itemsProcessed = changedCounts.reduce((sum, n) => sum + n, 0);
+      this.sweepVanishedNotionRows(cacheableProjects, passOutcomes);
     } finally {
       this._refreshingOnce = false;
       logger.info(
@@ -167,6 +174,33 @@ export class TaskCacheRefresher {
       );
     }
     return itemsProcessed;
+  }
+
+  /**
+   * Pass-level sweep for rows that vanished before this process's first
+   * refresh (the in-memory per-project snapshot can't see those). task_cache
+   * has no project key, so it only runs when EVERY configured project
+   * completed this pass failure-free, and evicts `notion:` rows absent from
+   * the union of all projects' fetched ids.
+   */
+  private sweepVanishedNotionRows(
+    configured: ProjectConfig[],
+    passOutcomes: Map<string, Set<string>>,
+  ): void {
+    if (configured.length === 0) return;
+    if (!configured.every((p) => passOutcomes.has(p.id))) return;
+    const union = new Set<string>();
+    for (const ids of passOutcomes.values()) {
+      for (const id of ids) union.add(id);
+    }
+    const stale = listNotionTaskCacheIds().filter((id) => !union.has(id));
+    if (stale.length === 0) return;
+    const evicted = evictTaskCacheRows(stale);
+    if (evicted > 0) {
+      logger.info(
+        `[TaskCacheRefresher] evicted ${evicted} stale task_cache row(s) in pass-level sweep (source page no longer in any project's fetched set)`,
+      );
+    }
   }
 
   async refreshProjectById(
@@ -182,6 +216,7 @@ export class TaskCacheRefresher {
   private async refreshProject(
     project: ProjectConfig,
     skipCache?: boolean,
+    passOutcomes?: Map<string, Set<string>>,
   ): Promise<number> {
     const resolveBackend = this.options.resolveBackend ?? getTaskBackend;
     let backend: TaskBackend;
@@ -384,6 +419,7 @@ export class TaskCacheRefresher {
         }
       }
       this.projectFetchedTaskIds.set(project.id, fetchedTaskIds);
+      if (passOutcomes) passOutcomes.set(project.id, fetchedTaskIds);
     }
 
     return changedRows;
