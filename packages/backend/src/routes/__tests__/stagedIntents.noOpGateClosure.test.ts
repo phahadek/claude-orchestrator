@@ -140,13 +140,19 @@ describe('planning.noOp satisfiedByCommit — stage-time check', () => {
         'proj-1',
         's1',
       ),
-    ).rejects.toThrow(/commit unknown to the project checkout — fetch and re-stage/);
+    ).rejects.toThrow(
+      /commit unknown to the project checkout — fetch and re-stage/,
+    );
   });
 
   it('accepts a payload without the field without probing git', async () => {
     seedSession('s1');
     await expect(
-      assertNoOpSatisfiedByCommit({ taskId: TASK, reason: 'r' }, 'proj-1', 's1'),
+      assertNoOpSatisfiedByCommit(
+        { taskId: TASK, reason: 'r' },
+        'proj-1',
+        's1',
+      ),
     ).resolves.toBeUndefined();
     expect(mockProbe).not.toHaveBeenCalled();
   });
