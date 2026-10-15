@@ -172,6 +172,118 @@ describe('test.override excusal', () => {
     expect(resultB.outcome).toBe('unfiltered');
   });
 
+  describe('mass-breakage guard', () => {
+    const manyIds = (n: number) =>
+      Array.from({ length: n }, (_, i) => `tests.many.t${i}`);
+
+    function addManyFailingRun(
+      sessionId: string,
+      worktree: string,
+      ids: string[],
+    ) {
+      seq += 1;
+      const id = `run-${seq}`;
+      db.prepare(
+        `INSERT INTO test_request_runs
+           (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, worktree_path, structured_result)
+         VALUES (@id, 'proj-1', @hash, @session_id, 'failed', '', 0, @at, @at, @worktree, @sr)`,
+      ).run({
+        id,
+        hash: `hash-${seq}`,
+        session_id: sessionId,
+        at: NOW - MIN,
+        worktree,
+        sr: JSON.stringify({
+          format: 'junit-xml',
+          suites: [
+            {
+              name: 's',
+              tests: ids.map((t) => ({
+                id: t,
+                name: t,
+                outcome: 'failed',
+                durationMs: 1,
+              })),
+            },
+          ],
+          totals: { passed: 0, failed: ids.length, skipped: 0, errors: 0 },
+          durationMsTotal: 1,
+        }),
+      });
+      const ins = db.prepare(
+        `INSERT INTO test_run_results
+           (test_request_run_id, project_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
+         VALUES (?, 'proj-1', ?, 'n', 'failed', 1, 0, 0, ?)`,
+      );
+      for (const t of ids) ins.run(id, t, NOW - MIN);
+      return id;
+    }
+
+    function addOverrideFor(taskId: string, ids: string[]) {
+      seq += 1;
+      db.prepare(
+        `INSERT INTO staged_intent
+           (id, kind, payload, payload_hash, task_id, project_id, state, created_at, updated_at)
+         VALUES (?, 'test.override', ?, ?, ?, 'proj-1', 'committed', ?, ?)`,
+      ).run(
+        `ov-${seq}`,
+        JSON.stringify({ taskId, testIds: ids }),
+        `h-${seq}`,
+        taskId,
+        NOW - 30 * MIN,
+        NOW - 30 * MIN,
+      );
+    }
+
+    it('flips when overrides cover every failure and the count is within the threshold', async () => {
+      const ids = manyIds(20);
+      addOverrideFor(TASK_A, ids);
+      const run = addManyFailingRun('SA', '/wt/A', ids);
+      const { result } = await filterBaseAttributableFailuresForF2Gate(
+        PROJECT,
+        getTestRequestRunById(run)!,
+        null,
+      );
+      expect(result.outcome).toBe('filtered_pass');
+    });
+
+    it('never flips a mass-broken run even when overrides cover every failure', async () => {
+      const ids = manyIds(21);
+      addOverrideFor(TASK_A, ids);
+      const run = addManyFailingRun('SA', '/wt/A', ids);
+      const { result } = await filterBaseAttributableFailuresForF2Gate(
+        PROJECT,
+        getTestRequestRunById(run)!,
+        null,
+      );
+      expect(result.outcome).not.toBe('filtered_pass');
+      expect(result.passed).toBe(false);
+      expect(result.overrideExcludedTests ?? []).toEqual([]);
+    });
+
+    it("does not excuse another task's or an expired override on replay", async () => {
+      const ids = manyIds(3);
+      addOverrideFor(TASK_B, ids);
+      const runA = addManyFailingRun('SA', '/wt/A', ids);
+      const { result } = await filterBaseAttributableFailuresForF2Gate(
+        PROJECT,
+        getTestRequestRunById(runA)!,
+        null,
+      );
+      expect(result.outcome).toBe('unfiltered');
+
+      addOverrideFor(TASK_A, ids);
+      setTaskStatus(TASK_A, '✅ Done');
+      const runA2 = addManyFailingRun('SA', '/wt/A', ids);
+      const { result: expired } = await filterBaseAttributableFailuresForF2Gate(
+        PROJECT,
+        getTestRequestRunById(runA2)!,
+        null,
+      );
+      expect(expired.outcome).toBe('unfiltered');
+    });
+  });
+
   it('is not active before it is approved (staged rows excuse nothing)', () => {
     addOverride(TASK_A);
     db.prepare(`UPDATE staged_intent SET state = 'staged'`).run();
