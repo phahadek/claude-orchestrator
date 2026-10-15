@@ -10630,7 +10630,7 @@ export function listTestRequestRunsForProject(
               r.requested_at, r.started_at, r.finished_at, r.failure_reason,
               r.structured_result, r.concurrent_run_count, r.oom_killed,
               r.test_report_acquisition_attempted, r.run_origin, r.producer,
-              r.run_kind, r.base_sha,
+              r.run_kind, r.base_sha, r.merged_dev_sha, r.conflict_outcome,
               s.passed_count, s.failed_count, s.skipped_count, s.error_count,
               s.other_count, s.total_count
        FROM test_request_runs r
