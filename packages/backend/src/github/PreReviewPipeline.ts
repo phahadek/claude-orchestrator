@@ -143,8 +143,8 @@ export class PreReviewPipeline {
   private buildStages(): StageDescriptor[] {
     return [
       this.buildAutofixStage(),
-      this.buildVerifyStage(),
       this.buildAnalyzeStage(),
+      this.buildVerifyStage(),
       this.buildTestsStage(),
     ];
   }
