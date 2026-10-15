@@ -2,10 +2,10 @@
  * Tests for the AgentSession.recordXDisposition methods that back the MCP
  * verdict-delivery tool surface (mcp/tools/verdictTools.ts). Each method must
  * emit the exact same internal event the retired stdout parser used to emit
- * (dispositions_parsed / verified_flaky_disposition / gate_verify_disposition,
- * see AgentSession.dispositions.test.ts / .verifiedFlaky.test.ts /
- * .gateVerify.test.ts for the parser-driven equivalents). recordReviewDisposition
- * and recordVerifiedFlakyDisposition must be idempotent per (session, item): a
+ * (dispositions_parsed / gate_verify_disposition,
+ * see AgentSession.dispositions.test.ts / .gateVerify.test.ts for the
+ * parser-driven equivalents). recordReviewDisposition
+ * must be idempotent per (session, item): a
  * same-content repeat call is a dedup no-op, a changed-content repeat call is
  * last-write-wins. recordGateVerifyDisposition is deliberately not deduplicated
  * at this layer — it stages a gate.verify intent (see routes/stagedIntents.ts),
@@ -395,75 +395,6 @@ describe('AgentSession.recordReviewVerdict', () => {
         summary: 'second',
       }),
     ).not.toThrow();
-
-    expect(emitted).toHaveLength(2);
-  });
-});
-
-// ── recordVerifiedFlakyDisposition ───────────────────────────────────────────
-
-describe('AgentSession.recordVerifiedFlakyDisposition', () => {
-  it('emits verified_flaky_disposition with the same shape the retired parser produced', () => {
-    vi.mocked(getPRBySessionId).mockReturnValue({
-      pr_number: 7,
-      repo: 'owner/repo',
-    } as never);
-    const session = makeSession();
-    const emitted: unknown[] = [];
-    session.on('verified_flaky_disposition', (p) => emitted.push(p));
-
-    session.recordVerifiedFlakyDisposition({
-      gate: 'ci',
-      reason: 'ran in isolation, passed clean',
-    });
-
-    expect(emitted).toEqual([
-      {
-        sessionId: 'test-session-id',
-        prNumber: 7,
-        repo: 'owner/repo',
-        headSha: 'abc1234567890',
-        disposition: { gate: 'ci', reason: 'ran in isolation, passed clean' },
-      },
-    ]);
-  });
-
-  it('is a no-op when there is no PR for the session', () => {
-    const session = makeSession();
-    const emitted: unknown[] = [];
-    session.on('verified_flaky_disposition', (p) => emitted.push(p));
-
-    session.recordVerifiedFlakyDisposition({ gate: 'f2', reason: 'x' });
-
-    expect(emitted).toHaveLength(0);
-  });
-
-  it('is idempotent: an identical repeat call does not double-emit', () => {
-    vi.mocked(getPRBySessionId).mockReturnValue({
-      pr_number: 7,
-      repo: 'owner/repo',
-    } as never);
-    const session = makeSession();
-    const emitted: unknown[] = [];
-    session.on('verified_flaky_disposition', (p) => emitted.push(p));
-
-    session.recordVerifiedFlakyDisposition({ gate: 'ci', reason: 'same' });
-    session.recordVerifiedFlakyDisposition({ gate: 'ci', reason: 'same' });
-
-    expect(emitted).toHaveLength(1);
-  });
-
-  it('last-write-wins: a changed disposition re-emits', () => {
-    vi.mocked(getPRBySessionId).mockReturnValue({
-      pr_number: 7,
-      repo: 'owner/repo',
-    } as never);
-    const session = makeSession();
-    const emitted: unknown[] = [];
-    session.on('verified_flaky_disposition', (p) => emitted.push(p));
-
-    session.recordVerifiedFlakyDisposition({ gate: 'ci', reason: 'first' });
-    session.recordVerifiedFlakyDisposition({ gate: 'f2', reason: 'second' });
 
     expect(emitted).toHaveLength(2);
   });

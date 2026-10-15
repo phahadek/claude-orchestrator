@@ -105,8 +105,7 @@ type RegistryEntry = {
 // each expresses its predicate today. All 7 now speak the capability model:
 //   1. classifyStalledPR's early return (github/pollUtils.ts) — capability
 //      predicate via findAutomaticGateRecoveryEntry(pauseEntries, 'analyze').
-//   2. handleVerifiedFlakyDisposition's recovery-entry check
-//      (mcp/tools/verdictTools.ts) — capability predicate via
+//   2. PRMergeWatcher's recovery-entry check — capability predicate via
 //      findAutomaticGateRecoveryEntry(pauseEntries, gateSource).
 //   3. RECOVERY_ACTION_MAP / deriveRecoveryDescriptor (below, this file) —
 //      capability-shaped but deliberately NOT re-expressed as a

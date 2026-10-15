@@ -202,25 +202,6 @@ export interface DispositionsParsedPayload {
 }
 
 /**
- * A session's disposition that a CI or F2 gate failure is flaky/transient —
- * emitted only after the session has run the failing test in isolation, run
- * the full suite once more to confirm it passes, and confirmed the failure is
- * unrelated to its diff. Parsed the same way as review-thread dispositions.
- */
-export interface VerifiedFlakyDisposition {
-  gate: 'ci' | 'f2' | 'analyze';
-  reason: string;
-}
-
-export interface VerifiedFlakyDispositionPayload {
-  sessionId: string;
-  prNumber: number;
-  repo: string;
-  headSha: string | null;
-  disposition: VerifiedFlakyDisposition;
-}
-
-/**
  * A review session's PR conformance verdict delivered via the review.verdict
  * MCP tool — the schema-validated replacement for the stdout-scraped JSON
  * block PRReviewService.tryParseVerdict repairs/parses. Mirrors

@@ -11958,54 +11958,6 @@ export function isRunFailureBreadthAttributable(
   );
 }
 
-export interface TestFlakinessCorpusVerdict {
-  testId: string;
-  eligible: boolean;
-  reason?: string;
-}
-
-/**
- * The flaky.confirm-facing sibling of evaluateF2LaneFlakyDisposition
- * (testRequestLane.ts): adjudicates ONE session-reported test id against the
- * same cross-SHA corpus (flip-rate alternation + cross-tree breadth), scoped
- * to samples predating `beforeMs`, so a session no longer has to re-run the
- * suite itself to establish flakiness — see mcp/tools/verdictTools.ts's
- * flaky.confirm handler, the sole caller. Touched-file masking is the
- * caller's own responsibility (session/test-runner.ts's
- * isTestIdTouchedByChangedFiles) — this only evaluates corpus breadth.
- */
-export function evaluateTestFlakinessCorpus(
-  testId: string,
-  beforeMs: number,
-  flipRateWindowN: number,
-  flipRateThresholdK: number,
-  breadthN: number,
-  breadthWindowHours: number,
-  ownTree: BreadthOwnTree,
-): TestFlakinessCorpusVerdict {
-  const flipFlag = computeTestFlipRateFlag(
-    testId,
-    flipRateWindowN,
-    flipRateThresholdK,
-    beforeMs,
-  );
-  const breadthFlag = computeTestFailureBreadthFlag(
-    testId,
-    breadthWindowHours,
-    breadthN,
-    Date.now(),
-    ownTree,
-  );
-  if (flipFlag.flagged || breadthFlag.flagged) {
-    return { testId, eligible: true };
-  }
-  return {
-    testId,
-    eligible: false,
-    reason: `has not cleared the cross-SHA flakiness bar yet (${flipFlag.transitionCount}/${flipRateThresholdK} flip-rate transitions over ${flipFlag.sampleCount} samples, failed across ${breadthFlag.distinctContentHashCount}/${breadthN} distinct other trees)`,
-  };
-}
-
 let _stmtFailingTestIdsForRun: Database.Statement | null = null;
 
 /**
@@ -14917,7 +14869,7 @@ export function getFlowRejectionRate(
 
 // ─── flake-recovery misclassification signal ──────────────────────────────
 
-/** The gates a flake-recovery re-run can target — see PRMergeWatcher.handleVerifiedFlakyDisposition. */
+/** The gates a flake-recovery re-run can target — see PRMergeWatcher. */
 type FlakeRecoveryGate = 'ci' | 'f2';
 
 const FLAKE_RECOVERY_EVENT_TO_GATE: Record<string, FlakeRecoveryGate> = {

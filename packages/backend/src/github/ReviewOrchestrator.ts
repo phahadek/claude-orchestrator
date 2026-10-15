@@ -55,7 +55,7 @@ import { parsePauseReasonSet } from '../db/pauseReason';
 import type { SessionManager } from '../session/SessionManager';
 import type { GitHubClient } from './GitHubClient';
 import { parseDiffFiles } from './GitHubClient';
-import type { ReviewJob, FlakeRecoveryOutcome } from './types';
+import type { ReviewJob } from './types';
 import type { DiffSource } from './DiffSource';
 import { GitHubDiffSource, LocalDiffSource } from './DiffSource';
 import { formatReviewFeedback, formatCIFailureFeedback } from './reviewUtils';
@@ -933,32 +933,6 @@ export class ReviewOrchestrator {
     project: ProjectConfig,
   ): Promise<{ triggered: true; contentHash: string } | null> {
     return this.preReviewPipeline.rerunFlakyTests(
-      prNumber,
-      repo,
-      headSha,
-      worktreePath,
-      project,
-    );
-  }
-
-  /**
-   * Actuate a verified-flaky disposition on the analyze gate — delegates to
-   * PreReviewPipeline.rerunFlakyAnalyze. Exposed here so PRMergeWatcher (which
-   * holds a ReviewOrchestrator reference, not a PreReviewPipeline one) can
-   * drive same-SHA analyze re-runs.
-   */
-  async rerunFlakyAnalyze(
-    prNumber: number,
-    repo: string,
-    headSha: string,
-    worktreePath: string,
-    project: ProjectConfig,
-  ): Promise<{
-    outcome: FlakeRecoveryOutcome;
-    passed: boolean;
-    output: string;
-  } | null> {
-    return this.preReviewPipeline.rerunFlakyAnalyze(
       prNumber,
       repo,
       headSha,

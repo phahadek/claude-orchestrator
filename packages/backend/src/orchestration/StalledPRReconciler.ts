@@ -551,7 +551,6 @@ export class StalledPRReconciler {
 
     if (kind === 'analyze_failing') {
       // The bounded, session-verified flake-recovery mechanism
-      // (flaky.confirm gate:'analyze' -> PRMergeWatcher.handleVerifiedFlakyDisposition)
       // owns analyze_failing recovery now. Only fall back to this blunt
       // full-pipeline retry once that mechanism's own retry budget is
       // exhausted — otherwise this sweep would short-circuit the bounded

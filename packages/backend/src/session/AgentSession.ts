@@ -110,8 +110,6 @@ import { resolveStartingPoint } from './branchModel';
 import type {
   ParsedDispositionItem,
   DispositionsParsedPayload,
-  VerifiedFlakyDisposition,
-  VerifiedFlakyDispositionPayload,
   ReviewVerdictItem,
   ReviewVerdictRecordedPayload,
 } from '../github/types';
@@ -602,9 +600,8 @@ export class AgentSession extends EventEmitter {
   private readonly processedPRBodyMessageIds = new Set<string>();
   /** Last-recorded verdict per key, serialized — MCP verdict tools dedup a
    *  same-content repeat call against these before emitting (see recordReviewDisposition,
-   *  recordVerifiedFlakyDisposition below). */
+   *  below). */
   private readonly recordedDispositions = new Map<number, string>();
-  private recordedVerifiedFlaky: string | null = null;
   private recordedReviewVerdict: string | null = null;
   /** tool_use_ids already warned for worktree escape (deduplicate across streaming chunks). */
   private readonly warnedEscapeToolUseIds = new Set<string>();
@@ -3761,8 +3758,8 @@ The full task spec and all rules are in your system prompt. Begin implementing d
    * setReviewSessionId when the review session is launched) — never as
    * session_id, which holds the implementation session that opened the PR.
    * So this resolves via getPRByReviewSessionId, not getPRBySessionId (unlike
-   * the sibling recordReviewDisposition/recordVerifiedFlakyDisposition below,
-   * which are invoked by a standard/implementation session and correctly use
+   * the sibling recordReviewDisposition below,
+   * which is invoked by a standard/implementation session and correctly uses
    * session_id). If no PR resolves — e.g. review_session_id not yet
    * persisted at call time — a schema-validated verdict would otherwise be
    * silently dropped, so a review_verdict_pr_unresolved audit event is
@@ -3796,36 +3793,6 @@ The full task spec and all rules are in your system prompt. Begin implementing d
   }
 
   /**
-   * Record a verified-flaky disposition delivered via the flaky.confirm MCP
-   * tool and emit the same `verified_flaky_disposition` event the retired
-   * stdout parser (parseVerifiedFlakyDisposition) used to emit, so
-   * PRMergeWatcher is unaffected. Idempotent per session: an identical
-   * repeat call is a dedup no-op; a changed disposition is last-write-wins.
-   *
-   * Confirmed session_id is the right lookup here: flaky.confirm is called
-   * by the implementation session responding to its own CI/gate failure
-   * (see the "Flaky / Transient CI or F2 Gate Failures" CLAUDE.md section),
-   * not by a review session — session_id holds that caller's own id.
-   */
-  recordVerifiedFlakyDisposition(disposition: VerifiedFlakyDisposition): void {
-    const pr = getPRBySessionId(this.sessionId);
-    if (!pr) return;
-    const serialized = JSON.stringify(disposition);
-    if (this.recordedVerifiedFlaky === serialized) {
-      return;
-    }
-    this.recordedVerifiedFlaky = serialized;
-    const payload: VerifiedFlakyDispositionPayload = {
-      sessionId: this.sessionId,
-      prNumber: pr.pr_number,
-      repo: pr.repo,
-      headSha: this.currentHeadSha(),
-      disposition,
-    };
-    this.emit('verified_flaky_disposition', payload);
-  }
-
-  /**
    * Record a gate-verify disposition delivered via the gate.verify MCP tool:
    * stages it as a normal `gate.verify` intent (see stagedIntents.ts) — the
    * operator disposes it on the regular decision surface, with normal turns
@@ -3838,7 +3805,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
    * gating) — a read-only gate-verify session has no PR of its own.
    * Staging itself dedups on the gate item (see stageIntent/extractTaskId's
    * `gate-item:<id>` key), so no separate dedup is needed here — unlike
-   * recordReviewDisposition/recordVerifiedFlakyDisposition above, a repeat
+   * recordReviewDisposition above, a repeat
    * call with a changed disposition after a rejection must be allowed to
    * re-stage (superseding the prior staged/approved row), and an identical
    * repeat call is a no-op that returns the existing row.

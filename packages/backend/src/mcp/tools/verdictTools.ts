@@ -56,10 +56,10 @@ function invalid(message: string): {
 /**
  * Registers the verdict-delivery MCP tool surface — one tool per
  * stdout-scraped disposition block the retired parsers (parseDispositionBlock
- * / parseVerifiedFlakyDisposition / parseGateVerifyDisposition, see
+ * / parseGateVerifyDisposition, see
  * AgentSession.ts) used to extract from assistant text. Each tool delegates
  * to the matching AgentSession.recordXDisposition method, which emits the
- * exact same internal event (dispositions_parsed / verified_flaky_disposition
+ * exact same internal event (dispositions_parsed
  * / gate_verify_disposition) those parsers emitted, so ReviewOrchestrator,
  * PRMergeWatcher, and GateItemVerifier are unaffected by this new transport.
  * Idempotency (per session, per item) is enforced inside those AgentSession
