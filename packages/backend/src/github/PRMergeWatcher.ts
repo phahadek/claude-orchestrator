@@ -72,6 +72,7 @@ import {
   getLatestTestRequestRun,
   markSessionDone,
   updateSessionStatus,
+  setSessionTerminalCompletionReason,
   recordPrAnchoredCompletingSignal,
   clearTerminalPRFlags,
   setHeadBranch,
@@ -624,6 +625,7 @@ export class PRMergeWatcher extends EventEmitter {
       if (pr.review_session_id) {
         const now = Date.now();
         updateSessionStatus(pr.review_session_id, 'error', now);
+        setSessionTerminalCompletionReason(pr.review_session_id, 'pr_closed');
         recordPrAnchoredCompletingSignal(
           pr.review_session_id,
           'pr_closed_without_merge',
