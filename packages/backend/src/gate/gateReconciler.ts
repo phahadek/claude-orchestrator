@@ -873,7 +873,7 @@ export async function reattachOutstandingGateVerifications(): Promise<void> {
  * retired here, alongside `'mirror'`/`'consent'`, by the same level-triggered
  * scan — see isUnresolvedSourceStillLive below.
  */
-type GateItemMirrorOrigin = GateVerifyMirrorOrigin;
+type GateItemMirrorOrigin = Exclude<GateVerifyMirrorOrigin, 'reclassify'>;
 
 export interface GateItemMirrorSink {
   /**
