@@ -631,7 +631,7 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
     expect(vi.mocked(sm.enqueueFeedback)).not.toHaveBeenCalled();
   });
 
-  it('review_rules-only escalation keeps escalate-and-return: no feedback, no depth review', async () => {
+  it('review_rules-only escalation keeps the pause and returns: hold-line feedback, no depth review', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
 
     const sm = makeMockSessionManager();
@@ -658,7 +658,7 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
       'owner/repo',
       'review_rules_escalation',
     );
-    expect(vi.mocked(sm.enqueueFeedback)).not.toHaveBeenCalled();
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledTimes(1);
     expect(dispatch).not.toHaveBeenCalled();
   });
 
@@ -774,7 +774,7 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
     );
   });
 
-  it('floor combined with a review_rules escalation keeps escalate-and-return', async () => {
+  it('floor combined with a review_rules escalation routes feedback with the hold line', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
 
     const sm = makeMockSessionManager();
@@ -795,7 +795,10 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
-    expect(vi.mocked(sm.enqueueFeedback)).not.toHaveBeenCalled();
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sm.enqueueFeedback).mock.calls[0][2]).toContain(
+      'escalated to the operator',
+    );
   });
 
   it('does not send feedback when verdict is approved', async () => {

@@ -18,6 +18,8 @@ vi.mock('../db/queries.js', () =>
     deleteTaskCacheRow: vi.fn(),
     getPRByNotionTaskId: vi.fn().mockReturnValue(null),
     clearTerminalPRFlags: vi.fn(),
+    getDepthReviewVerdict: vi.fn().mockReturnValue(undefined),
+    clearPauseReasonEntry: vi.fn(),
     getTaskRepoAssignment: vi.fn().mockReturnValue(null),
   }),
 );
