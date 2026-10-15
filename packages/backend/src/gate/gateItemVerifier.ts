@@ -159,10 +159,29 @@ export function buildGateVerifyProcedure(item: GateItem): string {
       'for a not-yet-occurred scenario is wrong: it removes the item from ' +
       'every future automated pull (nothing re-checks it), where ' +
       '`not-yet-triggerable` instead parks it for an automatic scheduled ' +
-      'retry. When in doubt — "will re-checking this later, with no human ' +
-      'intervention, plausibly settle it?" — answer yes means ' +
-      '`not-yet-triggerable`; answer no (a human must act first) means ' +
-      '`needs-setup`.',
+      'retry. Decide with two questions, in order. (1) Can the scenario ' +
+      'occur at all without someone staging it? If it only happens when ' +
+      'an operator does something — tell words: dispatch, revoke, seed, ' +
+      'force, configure, commit-and-dispatch, set a ceiling on a scratch ' +
+      'project — nothing will ever trigger it by itself, so re-checking ' +
+      'is futile: report `needs-setup`, and make `evidence.found` name ' +
+      'the exact step the operator must perform. (2) Only if it can ' +
+      'occur on its own: will re-checking this later, with no human ' +
+      'intervention, plausibly settle it? Yes means `not-yet-triggerable`; ' +
+      'no means `needs-setup`.',
+    '',
+    '**A `not-yet-triggerable` absence claim must rest on a read that ' +
+      'covered its whole window**, and `evidence.query` must state that ' +
+      'coverage. Admissible: an `auditLog.query` with a recognized ' +
+      '`eventType` (`eventTypeRecognized` true) whose `entries.length` ' +
+      'equals `matchedCount`; a whole-table aggregate through the ' +
+      "project's ad hoc read command (`SELECT … COUNT(*) … WHERE ts >= " +
+      '<claim asOf>`); or a `sessionEvents.query` count. Not admissible: ' +
+      'an unfiltered newest-200 sample (`auditLog.query` returns only the ' +
+      'newest 200 matching rows), an `eventType` with ' +
+      '`eventTypeRecognized=false` (a guessed name), or no read at all. If ' +
+      'no admissible read is reachable, report plain `needs-setup` ' +
+      '(bounded-effort abstention), never `not-yet-triggerable`.',
     '',
     'This is a bounded best-effort read: settle within your time/turn ' +
       'budget, or abstain. You hold no general write authority — no ' +
@@ -296,35 +315,28 @@ export function buildGateVerifyProcedure(item: GateItem): string {
             '(Read-Only/Prod-Mutating) so this session was ' +
             'dispatched to headlessly verify something it structurally ' +
             'cannot observe — propose the correct classification instead ' +
-            'of forcing a pass/fail, or abstaining to a bare needs-setup ' +
-            'that leaves the same mis-routing to recur next time. You may ' +
-            'only propose `Human-Observation` (this is that case) or ' +
-            '`needs-triage` (you cannot tell what tier actually fits and a ' +
-            'human should decide) — never an auto-run tier. Include it as ' +
-            'a `reclassify` field alongside your disposition (typically ' +
-            '`needs-setup`, since you are also abstaining on this run); ' +
-            'the backend applies it and re-routes the item once an ' +
-            'operator approves your report, it does not change what you ' +
+            'of forcing a pass/fail. `Human-Observation` is only for what a ' +
+            'human must see with their own eyes: rendered UI, colour, ' +
+            'layout, wrapping, or a visual read of a running page. Include ' +
+            'it as a `reclassify` field alongside your disposition ' +
+            '(typically `needs-setup`, since you are also abstaining on ' +
+            'this run); the backend applies it and re-routes the item once ' +
+            'an operator approves your report, it does not change what you ' +
             'report for `disposition`.',
           '',
-          'This same routing applies, not just to a visibly wrong tier tag, ' +
-            'but whenever your investigation establishes that no ' +
-            'operational trace of the described behavior can exist by ' +
-            'construction — e.g. you traced the code path that would ' +
-            'produce it and confirmed it never records one, by design, not ' +
-            'merely that you could not find one within this run. That is a ' +
-            'distinct outcome from a bounded-effort abstention: "I ran out ' +
-            'of turn/time budget" or "I lack a capability to read the ' +
-            'record" stays a plain `needs-setup` with no reclassify — the ' +
-            'item may still be settleable another way. But "this item ' +
-            'cannot be settled from the operational record, period, ' +
-            'because the record is structurally never produced" means the ' +
-            'item is mis-routed the same way a wrongly-tagged UI item is, ' +
-            'and the correct response is a `reclassify` proposal ' +
-            '(`Human-Observation` or `needs-triage`) alongside your ' +
-            '`needs-setup` — never a bare `needs-setup` that leaves the ' +
-            'item sitting in an auto-run tier for the next verifier to ' +
-            'hit the same wall.',
+          '`reclassify` to `needs-triage` is for item text that is ' +
+            'unanswerable as written: it names a retired job, has no ' +
+            'referent, or relies on a baseline that no longer exists.',
+          '',
+          'Do NOT reclassify just because no operational trace exists by ' +
+            'construction — a live HTTP response, request latency, server ' +
+            'log lines, a host-side command, or a transcript you can read ' +
+            'yourself are not visual. Report a plain `needs-setup` with ' +
+            'no `reclassify`, and make `evidence.found` name exactly what ' +
+            'the operator must observe or run. A plain `needs-setup` ' +
+            'auto-commits and stays blocking; a reclassify forces a manual ' +
+            'operator decision (and, for `Human-Observation`, a second one ' +
+            'for the mirrored item).',
           '',
         ]),
     `Report your finding by calling the \`${orchestratorMcpToolName('gate.verify')}\` tool ` +
@@ -333,11 +345,9 @@ export function buildGateVerifyProcedure(item: GateItem): string {
       'for a human operator: they may approve it as-is, or push back with ' +
       'feedback asking for more/different evidence, in which case you will ' +
       'be resumed for a normal turn to revise and report again — there is no ' +
-      'limit on how many times this can happen. `reclassify` is required ' +
-      'whenever you concluded the item cannot be settled from the ' +
-      'operational record by construction (see above) — omit it only for a ' +
-      'genuine pass/fail or a bounded-effort abstention that does not rest ' +
-      'on structural unverifiability:',
+      'limit on how many times this can happen. `reclassify` is optional ' +
+      'and narrow (see above) — omit it for a pass/fail, for any ' +
+      '`needs-setup` abstention, and for any `not-yet-triggerable`:',
     '',
     '```json',
     `{"gateItemId": "${item.id}", "disposition": "pass"|"fail"|"needs-setup"|"not-yet-triggerable", "evidence": {"expected": "...", "found": "...", "query": "..."}, "reclassify": {"to": "Human-Observation"|"needs-triage", "reason": "..."}}`,

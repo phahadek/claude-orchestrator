@@ -106,6 +106,61 @@ describe('buildGateVerifyProcedure', () => {
     expect(procedure).toMatch(/hasn't happened yet|has not happened yet/i);
   });
 
+  it('states the two-question abstain test with operator-staged tell words mapping to needs-setup', () => {
+    const procedure = buildGateVerifyProcedure(makeItem());
+    expect(procedure).toMatch(/two questions, in order/);
+    expect(procedure).toMatch(/dispatch, revoke, seed,\s+force, configure/);
+    expect(procedure).toMatch(/report `needs-setup`, and make `evidence.found`/);
+  });
+
+  it('rejects sampled, unrecognized-eventType, or no-read evidence for not-yet-triggerable', () => {
+    const procedure = buildGateVerifyProcedure(makeItem());
+    expect(procedure).toMatch(/covered its whole window/);
+    expect(procedure).toMatch(/unfiltered newest-200 sample/);
+    expect(procedure).toMatch(/eventTypeRecognized=false/);
+    expect(procedure).toMatch(/or no read at all/);
+    expect(procedure).toMatch(
+      /report plain `needs-setup`\s+\(bounded-effort abstention\), never `not-yet-triggerable`/,
+    );
+  });
+
+  it('no longer mandates a reclassify for unrecordable scenarios', () => {
+    const procedure = buildGateVerifyProcedure(makeItem());
+    expect(procedure).not.toContain(
+      'reclassify is required whenever you concluded the item cannot be settled from the operational record by construction',
+    );
+    expect(procedure).not.toMatch(/never a bare\s+`?needs-setup/);
+    expect(procedure).toMatch(
+      /Do NOT reclassify just because no operational trace exists by\s+construction/,
+    );
+  });
+
+  it('restricts Human-Observation reclassify to visual judgment and keeps needs-triage for unanswerable text', () => {
+    const procedure = buildGateVerifyProcedure(makeItem());
+    expect(procedure).toMatch(
+      /only for what a\s+human must see with their own eyes: rendered UI, colour,\s+layout, wrapping, or a visual read of a running page/,
+    );
+    expect(procedure).toMatch(/`needs-triage` is for item text that is\s+unanswerable as written/);
+  });
+
+  it('leaves the Human-Observation item branch unchanged', () => {
+    const procedure = buildGateVerifyProcedure(
+      makeItem({ classification: 'Human-Observation' }),
+    );
+    expect(procedure).toContain(
+      'This item is classified **Human-Observation**: it describes ' +
+        'UI/visual/interactive behavior (e.g. a rendered component, a ' +
+        'visual layout, an interactive flow) that only a human observing ' +
+        'the running app can judge. You cannot pass this item — reading ' +
+        'component source to infer what renders is not verification. ' +
+        'Always report `needs-setup`, even if you find strong ' +
+        'operational evidence; attach whatever you found as advisory ' +
+        'evidence for the human who will make the actual pass/fail call ' +
+        'through the /gate flow.',
+    );
+    expect(procedure).not.toMatch(/Do NOT reclassify just because/);
+  });
+
   it('falls back to a generic ad hoc read paragraph naming no script when the project declares no ad_hoc_read_command', () => {
     const procedure = buildGateVerifyProcedure(makeItem());
     expect(procedure).not.toContain('adhoc-query');
