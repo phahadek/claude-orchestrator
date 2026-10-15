@@ -1714,6 +1714,25 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'section removal.',
   },
   {
+    id: 'create-missing-required-section',
+    title: 'A missing type-required heading is created, never punted',
+    appliesTo: ['groom'],
+    summary:
+      'DO create a type-required heading that the structured `task.updateBody` ' +
+      'sections cannot express ("Deliverables", "Targets / surfaces affected") ' +
+      'by staging a `task.patchBodySection` with `operation: "append"`, ' +
+      '`section: "<heading>"` and the section text as `content` — append ' +
+      'auto-creates the section when it is absent — under the same `groupId` ' +
+      "as the Ready path's `task.setStatus`. The readiness preview composes " +
+      'that staged append, so the "required section is missing" violation ' +
+      'clears. DO NOT put the heading inside Context as a `heading_3` block ' +
+      'via `task.updateBody`; the gate rejects it. DO NOT stage ' +
+      '`planning.noOp` because a required section is missing, and DO NOT ' +
+      'claim the structured body tools cannot create it or ask the operator ' +
+      'to add it by hand — a missing required section is a groom write, not ' +
+      'grounds for a no-op.',
+  },
+  {
     id: 'file-follow-on-tasks',
     title: 'File follow-on tasks',
     appliesTo: ['groom', 'design', 'ops'],

@@ -351,7 +351,7 @@ export function deriveOpsDigestSlice(
  */
 const INTENT_KIND_EXAMPLE_PAYLOADS: Record<string, string> = {
   'task.setStatus': '{"taskId":"<task-id>","status":"Ready"}',
-  'task.setProperties': '{"taskId":"<task-id>","properties":{"priority":"P1"}}',
+  'task.setProperties': '{"taskId":"<task-id>","patch":{"priority":"🔴 High"}}',
   'task.setType': '{"taskId":"<task-id>","type":"💻 Code"}',
   'task.setDependsOn': '{"taskId":"<task-id>","dependsOn":["<other-task-id>"]}',
   'gate.accrete':
@@ -363,12 +363,15 @@ const INTENT_KIND_EXAMPLE_PAYLOADS: Record<string, string> = {
     '"milestone":"<milestone-id>","decision":"seeds",' +
     '"seeds":[{"spec":"<config-seed spec>"}]}',
   'task.create':
-    '{"title":"<title>","type":"💻 Code","milestone":"<milestone-id>",' +
+    '{"title":"<title>","type":"💻 Code","priority":"🟡 Medium","milestone":"<milestone-id>",' +
     '"body":"<task body markdown>"}',
-  'task.updateBody': '{"taskId":"<task-id>","body":"<full markdown>"}',
+  'task.updateBody':
+    '{"taskId":"<task-id>","sections":{"summary":"<summary>",' +
+    '"dependencies":[],"context":[{"type":"paragraph","text":"<context>"}],' +
+    '"automatedCriteria":["<criterion>"],"manualCriteria":[]}}',
   'task.patchBodySection':
     '{"taskId":"<task-id>","section":"<section heading text>",' +
-    '"operation":"remove"}',
+    '"operation":"append","content":"<markdown to add>"}',
   'arch.updateUnit':
     '{"unitId":"<arch-unit-id>","baseVersion":<current-version-number>,' +
     '"title":"<updated title>","body":"<updated markdown body>"}',
@@ -393,13 +396,24 @@ const INTENT_KIND_EXAMPLE_PAYLOADS: Record<string, string> = {
     '"reason":"<one-line why nothing needs to change right now>"}',
 };
 
+const INTENT_KIND_EXAMPLE_NOTES: Record<string, string> = {
+  'task.patchBodySection':
+    ' — `operation` is exactly one of `"append"` (needs `content`; creates the ' +
+    'section when it is absent), `"replace"` (needs `find` and `replaceWith`; ' +
+    'the section and the exact `find` text must already exist), or `"remove"` ' +
+    '(no other fields). No other operation value exists.',
+};
+
+export { INTENT_KIND_EXAMPLE_PAYLOADS };
+
 /** Render one `mcp__orchestrator__<kind>` (CLI-sanitized) tool-call example per allowed kind. */
 function renderIntentKindInvocations(kinds: readonly string[]): string[] {
   return kinds.map((kind) => {
     const toolName = orchestratorMcpToolName(kind);
     const payload = INTENT_KIND_EXAMPLE_PAYLOADS[kind];
+    const note = INTENT_KIND_EXAMPLE_NOTES[kind] ?? '';
     return payload
-      ? `- \`${toolName}\` with \`{"payload": ${payload}}\``
+      ? `- \`${toolName}\` with \`{"payload": ${payload}}\`${note}`
       : `- \`${toolName}\` with \`{"payload": <json-payload>}\``;
   });
 }

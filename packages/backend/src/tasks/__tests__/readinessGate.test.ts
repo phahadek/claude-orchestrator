@@ -256,7 +256,15 @@ describe('checkReadiness — 🔧 Operational floor facts', () => {
     const violations = checkReadiness(body, '🔧 Operational');
     expect(
       violations.some(
-        (v) => v.tier === 'structural' && v.detail.includes('Targets'),
+        (v) =>
+          v.tier === 'structural' &&
+          v.detail.includes(
+            'required "Targets / surfaces affected" section is missing',
+          ) &&
+          v.detail.includes('task.patchBodySection') &&
+          v.detail.includes('operation: "append"') &&
+          v.detail.includes('section: "Targets / surfaces affected"') &&
+          v.detail.includes("Ready flip's groupId"),
       ),
     ).toBe(true);
   });
@@ -339,7 +347,13 @@ describe('checkReadiness — 🔎 Investigation floor facts', () => {
     const violations = checkReadiness(body, '🔎 Investigation');
     expect(
       violations.some(
-        (v) => v.tier === 'structural' && v.detail.includes('Deliverables'),
+        (v) =>
+          v.tier === 'structural' &&
+          v.detail.includes('required "Deliverables" section is missing') &&
+          v.detail.includes('task.patchBodySection') &&
+          v.detail.includes('operation: "append"') &&
+          v.detail.includes('section: "Deliverables"') &&
+          v.detail.includes("Ready flip's groupId"),
       ),
     ).toBe(true);
   });
