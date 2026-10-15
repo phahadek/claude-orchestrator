@@ -97,7 +97,9 @@ describe('sendInitialStateBurst', () => {
       Extract<ServerMessage, { type: 'session_started' }>
     >;
     expect(started.find((m) => m.sessionId === 'gv')?.isGateVerify).toBe(true);
-    expect(started.find((m) => m.sessionId === 'std')?.isGateVerify).toBeFalsy();
+    expect(
+      started.find((m) => m.sessionId === 'std')?.isGateVerify,
+    ).toBeFalsy();
   });
 
   it('also tags session_status for non-terminal sessions', () => {

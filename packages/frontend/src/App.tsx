@@ -97,7 +97,7 @@ const NON_MILESTONE_BOARD_ID = '__non_milestone__';
 const MAX_VISIBLE_TOASTS = 3;
 const SUMMARY_TOAST_ID = 'completion-summary';
 
-const TERMINAL_STATUSES =new Set(['done', 'error', 'killed']);
+const TERMINAL_STATUSES = new Set(['done', 'error', 'killed']);
 
 const loopbackErrorStyles: Record<string, React.CSSProperties> = {
   overlay: {
