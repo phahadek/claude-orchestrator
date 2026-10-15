@@ -2,10 +2,18 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import express from 'express';
 import supertest from 'supertest';
 
-const { mockGetTaskBackend, mockProbe } = vi.hoisted(() => ({
-  mockGetTaskBackend: vi.fn(),
-  mockProbe: vi.fn(),
-}));
+const { mockGetTaskBackend, mockProbe, mockGetProjectById } = vi.hoisted(
+  () => ({
+    mockGetTaskBackend: vi.fn(),
+    mockProbe: vi.fn(),
+    mockGetProjectById: vi.fn(),
+  }),
+);
+
+vi.mock('../../config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../config')>();
+  return { ...actual, getProjectById: mockGetProjectById };
+});
 
 vi.mock('../../tasks/TaskBackend', () => ({
   getTaskBackend: mockGetTaskBackend,
@@ -85,6 +93,11 @@ function sourceRow(itemId: string) {
 
 beforeEach(() => {
   mockProbe.mockReset();
+  mockGetProjectById.mockReset();
+  mockGetProjectById.mockReturnValue({
+    projectDir: '/repo/proj-1',
+    baseBranch: 'dev',
+  });
   mockGetTaskBackend.mockReset();
   mockGetTaskBackend.mockReturnValue({
     type: 'notion',
@@ -112,11 +125,7 @@ describe('planning.noOp satisfiedByCommit — stage-time check', () => {
         's1',
       ),
     ).resolves.toBeUndefined();
-    expect(mockProbe).toHaveBeenCalledWith(
-      undefined,
-      SHA,
-      expect.stringMatching(/^origin\//),
-    );
+    expect(mockProbe).toHaveBeenCalledWith('/repo/proj-1', SHA, 'origin/dev');
   });
 
   it('rejects a non-ancestor', async () => {
@@ -128,7 +137,7 @@ describe('planning.noOp satisfiedByCommit — stage-time check', () => {
         'proj-1',
         's1',
       ),
-    ).rejects.toThrow(/commit is not on origin\//);
+    ).rejects.toThrow(/commit is not on origin\/dev/);
   });
 
   it('rejects an unknown object with the fetch message', async () => {
