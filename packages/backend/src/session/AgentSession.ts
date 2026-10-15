@@ -3424,6 +3424,12 @@ The full task spec and all rules are in your system prompt. Begin implementing d
    * immediately enters escalation spawn mode (large model + proactive nudge timer)
    * rather than waiting for an overflow event that may never arrive.
    */
+  /** Respawn directly on an already-escalated model (and its effort) without any nudge. */
+  restoreEscalation(model: string): void {
+    this._escalationModel = model;
+    this._escalationDisableAutoCompact = false;
+  }
+
   setProactiveEscalation(model: string, nudgeText: string): void {
     this._escalationModel = model;
     this._escalationDisableAutoCompact = false;

@@ -10950,6 +10950,30 @@ export function insertTestRunResults(
   insertAll(tests);
 }
 
+/**
+ * Deletes test_run_results rows (any outcome) with created_at < cutoffMs in
+ * batches of at most batchSize, looping until a batch comes back short, then
+ * reclaims freed pages. Returns the total number of rows deleted.
+ */
+export function pruneTestRunResultsOlderThan(
+  cutoffMs: number,
+  batchSize: number,
+): number {
+  const stmt = db.prepare(
+    `DELETE FROM test_run_results WHERE id IN (
+       SELECT id FROM test_run_results WHERE created_at < ? LIMIT ?
+     )`,
+  );
+  let total = 0;
+  while (true) {
+    const { changes } = stmt.run(cutoffMs, batchSize);
+    total += changes;
+    if (changes < batchSize) break;
+  }
+  if (total > 0) db.pragma('incremental_vacuum');
+  return total;
+}
+
 // ─── test_run_summaries ─────────────────────────────────────────────────────
 
 /**
