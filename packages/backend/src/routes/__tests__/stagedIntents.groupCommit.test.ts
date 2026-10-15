@@ -3928,7 +3928,7 @@ describe('group commit — ops_journal chain across loose and grouped journal.se
 
   beforeEach(() => {
     db.prepare('DELETE FROM ops_journal').run();
-    db.prepare('DELETE FROM session WHERE session_id = ?').run(SESSION);
+    db.prepare('DELETE FROM sessions WHERE session_id = ?').run(SESSION);
     insertSession({
       session_id: SESSION,
       task_id: 't-j',
