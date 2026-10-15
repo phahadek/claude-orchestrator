@@ -2,6 +2,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { config } from '../config';
 import { requireSessionStageAuth } from '../auth/SessionStageAuth';
+import { asyncHandler } from './asyncHandler';
 import {
   fetchWithNotionRetry,
   type NotionRetryOptions,
@@ -65,7 +66,7 @@ export function createNotionReadProxyRouter(
   router.use(
     NOTION_READ_PROXY_PATH,
     requireSessionStageAuth,
-    async (req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response) => {
       const upstreamPath = req.path;
       if (!isNotionReadAllowed(req.method, upstreamPath)) {
         res.status(403).json({
@@ -110,7 +111,7 @@ export function createNotionReadProxyRouter(
           code: 'notion_upstream_unreachable',
         });
       }
-    },
+    }),
   );
 
   return router;
