@@ -45,11 +45,7 @@ export const REATTRIBUTION_FEEDBACK_SOURCE = 'reattribution';
 /** Dedicated inbox source for the one-shot no-excuse wake. */
 export const ATTRIBUTION_WAIT_WAKE_SOURCE = 'attribution_wait_wake';
 
-type AttributionWaitOutcome =
-  | 'woken'
-  | 'waiting'
-  | 'lost_race'
-  | 'skipped';
+type AttributionWaitOutcome = 'woken' | 'waiting' | 'lost_race' | 'skipped';
 
 const REATTRIBUTION_SWEEP_INTERVAL_MS = 5 * 60_000;
 
