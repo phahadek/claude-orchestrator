@@ -273,7 +273,12 @@ describe('gate.verify auto-commit — staging-time attempt', () => {
       const item = makeRunnableGateItem();
       seedVerifySession('verify-session-rc', item.id);
       if (armed) {
-        upsertGateVerifyAutoCommitPolicy('M12', 'needs-setup', true, Date.now());
+        upsertGateVerifyAutoCommitPolicy(
+          'M12',
+          'needs-setup',
+          true,
+          Date.now(),
+        );
       }
       const sm = makeSessionManager();
       const planningOrchestrator = new PlanningOrchestrator(sm as any);
@@ -352,17 +357,26 @@ describe('gate.verify auto-commit — staging-time attempt', () => {
           `SELECT * FROM staged_intent WHERE json_extract(payload, '$.origin') = 'reclassify'`,
         )
         .get() as any;
-      expect(await autoCommitGateVerifyIntent(rc, sm as any, planningOrchestrator)).toBe(false);
+      expect(
+        await autoCommitGateVerifyIntent(rc, sm as any, planningOrchestrator),
+      ).toBe(false);
 
       const eventsBefore = (
         db
-          .prepare('SELECT COUNT(*) AS n FROM gate_item_event WHERE gate_item_id = ?')
+          .prepare(
+            'SELECT COUNT(*) AS n FROM gate_item_event WHERE gate_item_id = ?',
+          )
           .get(item.id) as { n: number }
       ).n;
       const app = express();
       app.use(express.json());
-      app.use('/api', createStagedIntentsRouter(planningOrchestrator, sm as any));
-      const res = await supertest(app).post(`/api/staged-intents/${rc.id}/apply`);
+      app.use(
+        '/api',
+        createStagedIntentsRouter(planningOrchestrator, sm as any),
+      );
+      const res = await supertest(app).post(
+        `/api/staged-intents/${rc.id}/apply`,
+      );
       expect(res.status).toBe(200);
       const cls = db
         .prepare('SELECT classification FROM gate_item WHERE id = ?')
@@ -387,7 +401,11 @@ describe('gate.verify auto-commit — staging-time attempt', () => {
       const { staged, sm, planningOrchestrator } =
         await stageReclassifyNeedsSetup(false);
       expect(
-        await autoCommitGateVerifyIntent(staged as any, sm as any, planningOrchestrator),
+        await autoCommitGateVerifyIntent(
+          staged as any,
+          sm as any,
+          planningOrchestrator,
+        ),
       ).toBe(false);
     });
   });
