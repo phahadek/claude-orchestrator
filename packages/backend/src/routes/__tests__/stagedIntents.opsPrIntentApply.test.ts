@@ -79,8 +79,11 @@ function stageOpsPrIntent() {
   return stageIntent('ops.prIntent', VALID_PAYLOAD, 'proj-1', null, SESSION_ID);
 }
 
+let lastSessionManager: SessionManager & EventEmitter;
+
 function makeApp() {
   const sessionManager = makeSessionManager();
+  lastSessionManager = sessionManager;
   const app = express();
   app.use(express.json());
   app.use('/api', createStagedIntentsRouter(undefined, sessionManager));
@@ -178,6 +181,57 @@ describe('ops.prIntent approve route — existing-behaviour regression guard', (
     expect(res.body.state).toBe('committed');
     const row = getStagedIntent(staged.id);
     expect(row?.state).toBe('committed');
+  });
+
+  it('enqueues exactly one ops-pr-intent-approved feedback item to the staging session', async () => {
+    insertOpsSession('task-1');
+    const staged = stageOpsPrIntent();
+    const agent = makeApp();
+
+    const res = await agent.post(`/api/staged-intents/${staged.id}/approve`);
+
+    expect(res.status).toBe(200);
+    const enqueue = lastSessionManager.enqueueFeedback as ReturnType<
+      typeof vi.fn
+    >;
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(enqueue.mock.calls[0][0]).toBe(SESSION_ID);
+    expect(enqueue.mock.calls[0][1]).toBe('ops-pr-intent-approved');
+  });
+
+  it('enqueues no feedback when a test.override is approved', async () => {
+    insertOpsSession('task-1');
+    const now = Date.now();
+    insertStagedIntent({
+      id: 'override-1',
+      kind: 'test.override',
+      payload: '{}',
+      payload_hash: 'hash-override',
+      task_id: null,
+      project_id: 'proj-1',
+      session_id: SESSION_ID,
+      group_id: null,
+      milestone: null,
+      state: 'staged',
+      supersedes: null,
+      annotation: null,
+      decision_proposal: null,
+      investigation: null,
+      groom_proposal: null,
+      advisory: null,
+      disposition_reason: null,
+      answer: null,
+      applied_task_id: null,
+      created_at: now,
+      updated_at: now,
+    });
+    const agent = makeApp();
+
+    const res = await agent.post(`/api/staged-intents/override-1/approve`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.state).toBe('committed');
+    expect(lastSessionManager.enqueueFeedback).not.toHaveBeenCalled();
   });
 });
 
