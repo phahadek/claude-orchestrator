@@ -755,7 +755,12 @@ function isBackoffPending(item: GateItem, now: string): boolean {
 export function nextPendingGateItems(
   project: string,
   milestone: string,
-  options: { limit?: number; classifications?: GateItemClassification[] } = {},
+  options: {
+    limit?: number;
+    classifications?: GateItemClassification[];
+    /** Dispatch call sites set this: needs-setup never reschedules next_attempt_at, so it would re-dispatch every tick. */
+    excludeAwaitingSetup?: boolean;
+  } = {},
 ): GateItem[] {
   const limit = options.limit ?? DEFAULT_BATCH_LIMIT;
   const now = new Date().toISOString();
@@ -767,6 +772,7 @@ export function nextPendingGateItems(
     .filter((item) => item.state === 'pending')
     .filter((item) => allowed.has(item.classification))
     .filter((item) => !isBackoffPending(item, now))
+    .filter((item) => !options.excludeAwaitingSetup || !isAwaitingSetup(item))
     .slice(0, limit);
 }
 
