@@ -10024,6 +10024,33 @@ export function listAwaitingDispositionRuns(
     .all(...(ids ?? []), limit) as TestRequestRunRow[];
 }
 
+/**
+ * One-shot wake of a waiting run that gets no excuse: clears the
+ * awaiting-disposition marker (compare-and-set on the still-failed, still
+ * waiting row) and enqueues the wake's inbox row in the same transaction.
+ * The run stays failed. Returns false when another observer already woke it.
+ */
+export function wakeRunWithoutExcuseAndEnqueue(
+  runId: string,
+  sessionId: string,
+  source: string,
+  payload: string,
+  dedupeKey: string,
+): boolean {
+  const tx = db.transaction((): boolean => {
+    const res = db
+      .prepare(
+        `UPDATE test_request_runs SET awaiting_disposition_at = NULL
+         WHERE id = ? AND state = 'failed' AND awaiting_disposition_at IS NOT NULL`,
+      )
+      .run(runId);
+    if (res.changes === 0) return false;
+    enqueueFeedbackItem(sessionId, source, payload, dedupeKey);
+    return true;
+  });
+  return tx();
+}
+
 export function markTestRequestRunAwaitingDisposition(id: string): void {
   db.prepare(
     `UPDATE test_request_runs SET awaiting_disposition_at = ? WHERE id = ?`,
@@ -11902,6 +11929,55 @@ export function computeTestFailureBreadthFlag(
     distinctContentHashCount,
     flagged: distinctContentHashCount >= breadthN,
   };
+}
+
+let _stmtOtherTreePasses: Database.Statement | null = null;
+
+/**
+ * Distinct other-tree origins (same origin derivation as
+ * computeTestFailureBreadthFlag) with a passing result for `testId` created
+ * strictly after `sinceMs`, excluding the subject's own tree.
+ */
+export function countDistinctOtherOriginPassesSince(
+  testId: string,
+  sinceMs: number,
+  ownTree: BreadthOwnTree,
+): number {
+  _stmtOtherTreePasses ??= db.prepare<{
+    test_id: string;
+    since_ms: number;
+    own_sessions: string;
+    own_worktrees: string;
+  }>(`
+    SELECT COUNT(DISTINCT o.origin) AS n
+    FROM test_run_results t
+    JOIN (
+      SELECT r.*, COALESCE(r.breadth_origin, CASE
+          WHEN r.session_id IS NOT NULL THEN 'session:' || r.session_id
+          ELSE COALESCE(
+            (SELECT 'session:' || MIN(s.session_id) FROM sessions s
+               WHERE s.project_id = r.project_id AND s.worktree_path = r.worktree_path
+               HAVING COUNT(*) = 1),
+            'tree:' || r.content_hash)
+        END) AS origin
+      FROM test_request_runs r
+    ) o ON o.id = t.test_request_run_id
+    WHERE t.test_id = @test_id
+      AND t.outcome = 'passed'
+      AND t.created_at > @since_ms
+      AND o.worktree_path IS NOT NULL
+      AND o.worktree_path NOT IN (SELECT value FROM json_each(@own_worktrees))
+      AND (o.session_id IS NULL
+           OR o.session_id NOT IN (SELECT value FROM json_each(@own_sessions)))
+      AND o.origin NOT IN (SELECT 'session:' || value FROM json_each(@own_sessions))
+  `);
+  const row = _stmtOtherTreePasses.get({
+    test_id: testId,
+    since_ms: sinceMs,
+    own_sessions: JSON.stringify(ownTree.sessionIds),
+    own_worktrees: JSON.stringify(ownTree.worktreePaths),
+  }) as { n: number };
+  return row.n;
 }
 
 /**

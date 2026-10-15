@@ -28,12 +28,14 @@ import {
   listUndeliveredInboxItems,
   getTestRequestRunById,
   listAwaitingDispositionRuns,
+  enqueueFeedbackItem,
 } from '../../db/queries';
 import { getChangedFiles } from '../../session/autofix-runner';
 import {
   evaluateSubject,
   sweepConfirmedWaiting,
   REATTRIBUTION_FEEDBACK_SOURCE,
+  ATTRIBUTION_WAIT_WAKE_SOURCE,
 } from '../reattributionService';
 
 const NOW = Date.now();
@@ -79,7 +81,7 @@ const fullExcuse = {
 
 beforeEach(() => {
   db.exec(
-    `DELETE FROM session_feedback_inbox; DELETE FROM test_request_runs; DELETE FROM sessions;`,
+    `DELETE FROM session_feedback_inbox; DELETE FROM test_run_results; DELETE FROM test_request_runs; DELETE FROM sessions;`,
   );
   filterMock.mockReset();
   filterMock.mockResolvedValue(fullExcuse);
@@ -250,5 +252,114 @@ describe('reattributionService', () => {
     await sweepConfirmedWaiting(null);
     expect(filterMock).toHaveBeenCalledTimes(1);
     expect(listAwaitingDispositionRuns().map((r) => r.id)).toEqual(['live']);
+  });
+});
+
+describe('attribution wait wake', () => {
+  const partial = {
+    ...fullExcuse,
+    result: {
+      ...fullExcuse.result,
+      outcome: 'filtered_partial',
+      passed: false,
+    },
+  };
+
+  function addResult(
+    runId: string,
+    testId: string,
+    outcome: string,
+    createdAt: number,
+  ): void {
+    db.prepare(
+      `INSERT INTO test_run_results
+         (test_request_run_id, project_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
+       VALUES (?, 'proj-1', ?, ?, ?, 1, 0, 0, ?)`,
+    ).run(runId, testId, testId, outcome, createdAt);
+  }
+
+  function addOtherPass(sessionId: string, testId: string): void {
+    addSession(sessionId, 'running', `/other/${sessionId}`);
+    const runId = `pass-${sessionId}-${testId}`;
+    insertTestRequestRun(runId, 'proj-1', `h-${runId}`, sessionId, NOW);
+    db.prepare(
+      `UPDATE test_request_runs SET state = 'passed', worktree_path = ? WHERE id = ?`,
+    ).run(`/other/${sessionId}`, runId);
+    addResult(runId, testId, 'passed', Date.now() + 10);
+  }
+
+  function setup(): void {
+    addWaitingRun('r1', 's1');
+    addResult('r1', 'tw', 'failed', NOW);
+    filterMock.mockResolvedValue(partial);
+  }
+
+  const wakes = () =>
+    listUndeliveredInboxItems('s1').filter(
+      (i) => i.source === ATTRIBUTION_WAIT_WAKE_SOURCE,
+    );
+
+  const expireDeadline = () =>
+    db
+      .prepare(
+        `UPDATE test_request_runs SET awaiting_disposition_at = ? WHERE id = 'r1'`,
+      )
+      .run(Date.now() - 121 * 60_000);
+
+  it('wakes once on other-tree evidence before the deadline', async () => {
+    setup();
+    for (const s of ['o1', 'o2', 'o3']) addOtherPass(s, 'tw');
+    const deliver = vi.fn(async () => {});
+    const sink = { deliverReattributionWake: deliver };
+    await evaluateSubject('r1', sink);
+    await evaluateSubject('r1', sink);
+    await sweepConfirmedWaiting(sink);
+    const rows = wakes();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].dedupe_key).toBe('attribution_wait_wake:r1');
+    const payload = JSON.parse(rows[0].payload);
+    expect(payload.trigger).toBe('other_tree_evidence');
+    expect(payload.tests[0]).toMatchObject({
+      test_id: 'tw',
+      distinctOtherSessionPasses: 3,
+    });
+    expect(payload.output).toMatch(/fix/);
+    expect(payload.output).toMatch(/override/);
+    expect(getTestRequestRunById('r1')?.state).toBe('failed');
+    expect(getTestRequestRunById('r1')?.awaiting_disposition_at).toBeNull();
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it('wakes on deadline with no evidence, and never again', async () => {
+    setup();
+    expireDeadline();
+    await evaluateSubject('r1', null);
+    await sweepConfirmedWaiting(null);
+    const rows = wakes();
+    expect(rows).toHaveLength(1);
+    expect(JSON.parse(rows[0].payload).trigger).toBe('deadline');
+  });
+
+  it('does not wake with fewer than N passes on one test inside the deadline', async () => {
+    setup();
+    addResult('r1', 'tw2', 'failed', NOW);
+    for (const s of ['o1', 'o2', 'o3']) addOtherPass(s, 'tw');
+    addOtherPass('o4', 'tw2');
+    await evaluateSubject('r1', null);
+    expect(wakes()).toHaveLength(0);
+    expect(getTestRequestRunById('r1')?.awaiting_disposition_at).not.toBeNull();
+  });
+
+  it('does not collide with an existing reattribution row', async () => {
+    setup();
+    expireDeadline();
+    enqueueFeedbackItem(
+      's1',
+      REATTRIBUTION_FEEDBACK_SOURCE,
+      '{}',
+      'reattribution:r1',
+    );
+    await evaluateSubject('r1', null);
+    expect(wakes()).toHaveLength(1);
   });
 });

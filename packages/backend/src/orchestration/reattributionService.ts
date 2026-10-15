@@ -23,6 +23,11 @@ import {
   listAwaitingDispositionRuns,
   flipRunToPassedAndEnqueueWake,
   clearAwaitingDisposition,
+  wakeRunWithoutExcuseAndEnqueue,
+  resolveBreadthOwnTree,
+  computeTestFailureBreadthFlag,
+  countDistinctOtherOriginPassesSince,
+  computeTestFlipRateFlag,
   TERMINAL_SESSION_STATUSES,
 } from '../db/queries';
 import type { TestRequestRunRow } from '../db/types';
@@ -32,9 +37,15 @@ import {
   type TestRequestLaneIngestedEvent,
 } from './testRequestLane';
 import type { Scheduler } from './Scheduler';
+import { typedGetSetting } from '../config/settings';
 
 /** Dedicated inbox source — deliberately not 'test_request'. */
 export const REATTRIBUTION_FEEDBACK_SOURCE = 'reattribution';
+
+/** Dedicated inbox source for the one-shot no-excuse wake. */
+export const ATTRIBUTION_WAIT_WAKE_SOURCE = 'attribution_wait_wake';
+
+type AttributionWaitOutcome = 'woken' | 'waiting' | 'lost_race' | 'skipped';
 
 const REATTRIBUTION_SWEEP_INTERVAL_MS = 5 * 60_000;
 
@@ -77,7 +88,10 @@ export async function evaluateSubject(
     session.task_id ?? null,
   );
   // The per-test excused markers are written by the unified filter itself.
-  if (gated.result.outcome !== 'filtered_pass') return 'not_excused';
+  if (gated.result.outcome !== 'filtered_pass') {
+    await evaluateAttributionWait(runId, sink);
+    return 'not_excused';
+  }
 
   const payload = JSON.stringify({
     runId,
@@ -102,6 +116,96 @@ export async function evaluateSubject(
       // The row is durable; the inbox retry sweep / boot reconcile redelivers.
       logger.warn(
         `[reattribution] wake delivery failed for run ${runId}: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
+  return 'woken';
+}
+
+async function evaluateAttributionWait(
+  runId: string,
+  sink: ReattributionWakeSink | null,
+): Promise<AttributionWaitOutcome> {
+  const run = getTestRequestRunById(runId);
+  if (
+    !run ||
+    run.state !== 'failed' ||
+    !run.session_id ||
+    run.awaiting_disposition_at == null
+  ) {
+    return 'skipped';
+  }
+  const waitingSince = run.awaiting_disposition_at;
+  const breadthN = typedGetSetting('flip_rate_breadth_n');
+  const breadthWindowHours = typedGetSetting('flip_rate_breadth_window_hours');
+  const flipWindowN = typedGetSetting('flip_rate_window_n');
+  const flipK = typedGetSetting('flip_rate_threshold_k');
+  const deadlineMinutes = typedGetSetting('attribution_wait_deadline_minutes');
+  const now = Date.now();
+  const ownTree = resolveBreadthOwnTree(run.project_id, {
+    sessionId: run.session_id,
+    worktreePath: run.worktree_path,
+  });
+
+  const tests = getFailingTestIdsForRun(runId)
+    .map((t) => ({
+      test_id: t.test_id,
+      breadth: computeTestFailureBreadthFlag(
+        t.test_id,
+        breadthWindowHours,
+        breadthN,
+        now,
+        ownTree,
+      ),
+    }))
+    .filter((t) => !t.breadth.flagged)
+    .map((t) => ({
+      test_id: t.test_id,
+      distinctOtherSessionPasses: countDistinctOtherOriginPassesSince(
+        t.test_id,
+        waitingSince,
+        ownTree,
+      ),
+      distinctHashFailures: t.breadth.distinctContentHashCount,
+      flipRate: computeTestFlipRateFlag(t.test_id, flipWindowN, flipK)
+        .transitionCount,
+    }));
+
+  let trigger: 'other_tree_evidence' | 'deadline' | null = null;
+  if (
+    tests.length > 0 &&
+    tests.every((t) => t.distinctOtherSessionPasses >= breadthN)
+  ) {
+    trigger = 'other_tree_evidence';
+  } else if (now - waitingSince >= deadlineMinutes * 60_000) {
+    trigger = 'deadline';
+  }
+  if (!trigger) return 'waiting';
+
+  const why =
+    trigger === 'other_tree_evidence'
+      ? `at least ${breadthN} other sessions have passed every failing test not yet attributed to other trees, so the failure appears specific to your tree`
+      : `no other-tree evidence arrived within the ${deadlineMinutes}-minute attribution wait deadline`;
+  const payload = JSON.stringify({
+    runId,
+    trigger,
+    tests,
+    output: `[test.request] Attribution wait ended (trigger: ${trigger}): ${why}. Your earlier run is still failed. Two ways forward: (1) fix the failing test(s) and re-run, or (2) file the operator override intent if the failure is not yours to fix.`,
+  });
+  const won = wakeRunWithoutExcuseAndEnqueue(
+    runId,
+    run.session_id,
+    ATTRIBUTION_WAIT_WAKE_SOURCE,
+    payload,
+    `attribution_wait_wake:${runId}`,
+  );
+  if (!won) return 'lost_race';
+  if (sink) {
+    try {
+      await sink.deliverReattributionWake(run.session_id);
+    } catch (err) {
+      logger.warn(
+        `[reattribution] attribution-wait wake delivery failed for run ${runId}: ${err instanceof Error ? err.message : err}`,
       );
     }
   }
