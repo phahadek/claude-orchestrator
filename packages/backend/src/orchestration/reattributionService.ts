@@ -45,7 +45,7 @@ export const REATTRIBUTION_FEEDBACK_SOURCE = 'reattribution';
 /** Dedicated inbox source for the one-shot no-excuse wake. */
 export const ATTRIBUTION_WAIT_WAKE_SOURCE = 'attribution_wait_wake';
 
-export type AttributionWaitOutcome =
+type AttributionWaitOutcome =
   | 'woken'
   | 'waiting'
   | 'lost_race'
@@ -126,7 +126,7 @@ export async function evaluateSubject(
   return 'woken';
 }
 
-export async function evaluateAttributionWait(
+async function evaluateAttributionWait(
   runId: string,
   sink: ReattributionWakeSink | null,
 ): Promise<AttributionWaitOutcome> {
