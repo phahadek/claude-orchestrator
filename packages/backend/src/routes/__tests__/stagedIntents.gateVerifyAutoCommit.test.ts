@@ -31,7 +31,11 @@ vi.mock('../../db/db', async () => {
 });
 
 import { db } from '../../db/db';
-import { insertSession, getSession } from '../../db/queries';
+import {
+  insertSession,
+  getSession,
+  setSessionMetadata,
+} from '../../db/queries';
 import { insertItem } from '../../gate/gateStore';
 import {
   createStagedIntentsRouter,
@@ -73,13 +77,14 @@ function seedVerifySession(
     compaction_count: 0,
     context_occupancy_tokens: 0,
     task_name: null,
-    metadata,
+    metadata: null,
     review_result: null,
     pause_reason: null,
     last_error_detail: null,
     events_pruned_at: null,
     granted_capabilities: '[]',
   });
+  if (metadata) setSessionMetadata(sessionId, JSON.parse(metadata));
 }
 
 function makeRunnableGateItem(
