@@ -3836,7 +3836,7 @@ export class SessionManager extends EventEmitter {
             row.last_ts,
             row.pr_url ?? null,
             'boot_orphan_result_event',
-            { skipInFlightGuard: true },
+            { skipInFlightGuard: true, recordSignal: 'result_reap' },
           );
         }
         let taskBackend;

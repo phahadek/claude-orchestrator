@@ -90,6 +90,10 @@ const STAGED_INTENT_TERMINAL_DESCRIPTOR: CompletingSignalDescriptor = {
     planning_approved: 'done',
     planning_no_pending_dispositions: 'done',
     [PLANNING_OPERATOR_END_REASON]: 'done',
+    planning_idle_sweep_terminal: 'done',
+    gate_item_verifier_consumed: 'done',
+    deploy_agentic_verdict_reported: 'done',
+    deploy_agentic_step_timeout: 'done',
   },
 };
 

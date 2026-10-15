@@ -649,7 +649,7 @@ export function markSessionDone(
   endedAt: number,
   prUrl?: string | null,
   callSite?: string,
-  opts?: { skipInFlightGuard?: boolean },
+  opts?: { skipInFlightGuard?: boolean; recordSignal?: 'result_reap' },
 ): void {
   const current = getStmtGetSession().get({ session_id: sessionId }) as
     | { status: string; task_id: string | null; session_type: SessionType }
@@ -719,6 +719,16 @@ export function markSessionDone(
       'done',
       endedAt,
     );
+    if (opts?.recordSignal) {
+      insertCompletingSignal({
+        session_id: sessionId,
+        task_id: current.task_id ?? null,
+        session_type: current.session_type,
+        signal_class: opts.recordSignal,
+        signal_value: callSite ?? 'unknown',
+        recorded_at: endedAt,
+      });
+    }
   }
 }
 
@@ -10065,6 +10075,22 @@ export function markTestRequestRunAwaitingDisposition(id: string): void {
   db.prepare(
     `UPDATE test_request_runs SET awaiting_disposition_at = ? WHERE id = ?`,
   ).run(Date.now(), id);
+}
+
+/** Clears the marker on failed runs whose session row is missing or terminal; returns rows cleared. */
+export function clearAwaitingDispositionForDeadSessions(): number {
+  return db
+    .prepare(
+      `UPDATE test_request_runs SET awaiting_disposition_at = NULL
+       WHERE state = 'failed'
+         AND awaiting_disposition_at IS NOT NULL
+         AND (session_id IS NULL
+           OR NOT EXISTS (
+             SELECT 1 FROM sessions s
+             WHERE s.session_id = test_request_runs.session_id
+               AND s.status NOT IN (${BASE_TERMINAL_STATUS_SQL_LIST})))`,
+    )
+    .run().changes;
 }
 
 export function clearAwaitingDisposition(id: string): void {
