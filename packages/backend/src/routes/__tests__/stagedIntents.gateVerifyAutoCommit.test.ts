@@ -380,7 +380,27 @@ describe('gate.verify auto-commit — with the real retire sink wired', () => {
 
       const staged = stageIntent(
         'gate.verify',
-        { gateItemId: item.id, disposition, evidence: 'observed no trigger' },
+        {
+          gateItemId: item.id,
+          disposition,
+          evidence: 'observed no trigger',
+          ...(disposition === 'fail'
+            ? {
+                proposedFix: {
+                  title: 'Fix the missing trigger',
+                  cause: {
+                    file: 'packages/backend/src/endpoint.ts',
+                    line: 7,
+                    condition: 'the trigger path never fires',
+                  },
+                  input: 'request 99 on 2026-10-14',
+                  fix: 'fire the trigger on the success path',
+                  filesAffected: ['packages/backend/src/endpoint.ts'],
+                  automatedCriteria: ['a successful call fires the trigger'],
+                },
+              }
+            : {}),
+        },
         'proj-auto-commit',
         null,
         sid,
