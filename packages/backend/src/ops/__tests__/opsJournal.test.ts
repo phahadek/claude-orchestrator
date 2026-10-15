@@ -140,9 +140,9 @@ describe('isValidOpsTransition', () => {
   });
 
   it('allows pending -> resolved only for a 🔎 Investigation', () => {
-    expect(isValidOpsTransition('pending', 'resolved', '🔎 Investigation')).toBe(
-      true,
-    );
+    expect(
+      isValidOpsTransition('pending', 'resolved', '🔎 Investigation'),
+    ).toBe(true);
     expect(isValidOpsTransition('pending', 'resolved', '🔧 Operational')).toBe(
       false,
     );
@@ -162,10 +162,18 @@ describe('isValidOpsTransition', () => {
       'incident-frozen',
     ] as const) {
       expect(
-        opsResolveRequiresReconciliationOrReason(from, 'resolved', '🔧 Operational'),
+        opsResolveRequiresReconciliationOrReason(
+          from,
+          'resolved',
+          '🔧 Operational',
+        ),
       ).toBe(true);
       expect(
-        opsResolveRequiresReconciliationOrReason(from, 'resolved', '🔎 Investigation'),
+        opsResolveRequiresReconciliationOrReason(
+          from,
+          'resolved',
+          '🔎 Investigation',
+        ),
       ).toBe(false);
     }
     expect(

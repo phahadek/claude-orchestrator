@@ -156,7 +156,9 @@ describe('POST /api/staged-intents — journal.setState stage-time transition ga
             ...(to === 'applied-pending-confirm'
               ? { reconciliation: { description: 'assertion', passed: true } }
               : {}),
-            ...(to === 'resolved' ? { noChangeReason: 'no change needed' } : {}),
+            ...(to === 'resolved'
+              ? { noChangeReason: 'no change needed' }
+              : {}),
           },
           projectId: 'proj-1',
           ...(to === 'resolved' || to === 'applied-pending-confirm'

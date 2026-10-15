@@ -406,9 +406,9 @@ describe('an illegal transition is still rejected by isValidOpsTransition — th
     expect(isValidOpsTransition('pending', 'resolved', '🔧 Operational')).toBe(
       false,
     );
-    expect(isValidOpsTransition('pending', 'resolved', '🔎 Investigation')).toBe(
-      true,
-    );
+    expect(
+      isValidOpsTransition('pending', 'resolved', '🔎 Investigation'),
+    ).toBe(true);
 
     const app = buildApp();
     const agent = supertest(app);

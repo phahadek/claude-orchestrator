@@ -1070,7 +1070,9 @@ describe('procedureCore', () => {
       expect(rendered).toMatch(
         /🔎 Investigation, which alone may go `pending` → `resolved` directly/,
       );
-      expect(rendered).toMatch(/`reconciliation` assertion or a non-empty `noChangeReason`/);
+      expect(rendered).toMatch(
+        /`reconciliation` assertion or a non-empty `noChangeReason`/,
+      );
     });
 
     it('is included in the assembled dispatched ops procedure', () => {

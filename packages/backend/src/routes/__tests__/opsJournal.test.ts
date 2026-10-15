@@ -121,7 +121,10 @@ describe('POST /api/ops-journal/:taskId/state', () => {
 
   it('rejects pending -> resolved for an Operational task', async () => {
     seedEntry('task-2', 'pending');
-    upsertTaskCache(normalizeTaskId('task-2'),JSON.stringify({ type: '🔧 Operational' }));
+    upsertTaskCache(
+      normalizeTaskId('task-2'),
+      JSON.stringify({ type: '🔧 Operational' }),
+    );
 
     const res = await request(makeApp())
       .post('/api/ops-journal/task-2/state')
@@ -133,7 +136,10 @@ describe('POST /api/ops-journal/:taskId/state', () => {
 
   it('accepts pending -> resolved for an Investigation task', async () => {
     seedEntry('task-2b', 'pending');
-    upsertTaskCache(normalizeTaskId('task-2b'),JSON.stringify({ type: '🔎 Investigation' }));
+    upsertTaskCache(
+      normalizeTaskId('task-2b'),
+      JSON.stringify({ type: '🔎 Investigation' }),
+    );
 
     const res = await request(makeApp())
       .post('/api/ops-journal/task-2b/state')
@@ -145,7 +151,10 @@ describe('POST /api/ops-journal/:taskId/state', () => {
 
   it('rejects an Operational candidate -> resolved without reconciliation or noChangeReason, accepts with either', async () => {
     seedEntry('task-2c', 'candidate');
-    upsertTaskCache(normalizeTaskId('task-2c'),JSON.stringify({ type: '🔧 Operational' }));
+    upsertTaskCache(
+      normalizeTaskId('task-2c'),
+      JSON.stringify({ type: '🔧 Operational' }),
+    );
 
     const bad = await request(makeApp())
       .post('/api/ops-journal/task-2c/state')
