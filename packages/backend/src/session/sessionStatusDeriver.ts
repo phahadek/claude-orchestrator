@@ -94,7 +94,6 @@ import { resolveCompletingSignal } from './completingSignalRegistry';
  * properly typed outcome).
  */
 export type DerivedSessionOutcome = 'done' | 'error' | 'killed' | 'superseded';
-
 export interface DerivedSessionStatus {
   status: DerivedSessionOutcome;
   /**
@@ -168,6 +167,11 @@ function latestMatchingSignal(
  * every session type, including ones (review, depth_review, a pre-PR
  * 'standard' session) the registry has no descriptor for. Resolving it here
  * avoids resolveCompletingSignal throwing for those triples.
+ *
+ * A 'result_reap' entry (the no-PR result-reap done write) is checked after
+ * those two and before the registry lookup: type-agnostic, resolves to 'done'
+ * with the call-site reason as terminalCompletionReason. Idle is the absence
+ * of a terminal signal and derives null.
  */
 export function deriveSessionStatus(
   input: SessionStatusDeriverInput,
@@ -187,6 +191,17 @@ export function deriveSessionStatus(
     return {
       status: 'error',
       terminalCompletionReason: resumeExhaustedEntry.signal_value,
+    };
+  }
+
+  const resultReapEntry = latestMatchingSignal(
+    input.ledgerEntries,
+    'result_reap',
+  );
+  if (resultReapEntry) {
+    return {
+      status: 'done',
+      terminalCompletionReason: resultReapEntry.signal_value,
     };
   }
 

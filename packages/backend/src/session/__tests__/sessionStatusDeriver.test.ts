@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   deriveSessionStatus,
   SUPERSEDED_BY_NEWER_SESSION_REASON,
@@ -9,7 +9,16 @@ import {
   DESIGN_COMPLETING_REASONS,
   PLANNING_OPERATOR_END_REASON,
 } from '../completingSignalRegistry';
-import type { CompletingSignalLedgerRow } from '../../db/types';
+import type {
+  CompletingSignalLedgerRow,
+  TerminalSessionStatus,
+} from '../../db/types';
+import { TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED } from '../../db/queries';
+
+vi.mock('../../db/db', async () => {
+  const { setupTestDb } = await import('../../../test/helpers/setupTestDb');
+  return { db: setupTestDb() };
+});
 
 function ledgerRow(
   overrides: Partial<CompletingSignalLedgerRow> = {},
@@ -343,6 +352,121 @@ describe('deriveSessionStatus', () => {
     const notAllowed: DerivedSessionOutcome = 'retrying';
     expect(impossible).not.toContain(
       notAllowed as unknown as DerivedSessionOutcome,
+    );
+  });
+});
+
+describe('result_reap signal', () => {
+  const reap = (o: Partial<CompletingSignalLedgerRow> = {}) =>
+    ledgerRow({
+      signal_class: 'result_reap',
+      signal_value: 'stuck_session_no_pr_periodic',
+      ...o,
+    });
+
+  const cases: Array<
+    [
+      SessionStatusDeriverInput['sessionType'],
+      SessionStatusDeriverInput['taskTypeCategory'],
+    ]
+  > = [
+    ['review', 'code'],
+    ['depth_review', 'code'],
+    ['design', 'design_or_planning'],
+    ['groom', 'design_or_planning'],
+    ['split', 'design_or_planning'],
+    ['docs', 'code'],
+    ['ops', 'ops'],
+  ];
+  it.each(cases)('derives done for %s', (sessionType, taskTypeCategory) => {
+    expect(
+      deriveSessionStatus(
+        baseInput({ sessionType, taskTypeCategory, ledgerEntries: [reap()] }),
+      ),
+    ).toEqual({
+      status: 'done',
+      terminalCompletionReason: 'stuck_session_no_pr_periodic',
+    });
+  });
+
+  it('is outranked by lineage-superseded and resume_exhausted', () => {
+    expect(
+      deriveSessionStatus(
+        baseInput({ hasNewerSessionForTask: true, ledgerEntries: [reap()] }),
+      )?.status,
+    ).toBe('superseded');
+    expect(
+      deriveSessionStatus(
+        baseInput({
+          ledgerEntries: [
+            reap(),
+            ledgerRow({
+              id: 2,
+              signal_class: 'resume_exhausted',
+              signal_value: 'resume_exhausted',
+            }),
+          ],
+        }),
+      )?.status,
+    ).toBe('error');
+  });
+
+  it('outranks staged_intent and external_pr_event rows', () => {
+    expect(
+      deriveSessionStatus(
+        baseInput({
+          ledgerEntries: [
+            ledgerRow({ id: 2, signal_value: 'planning_rejected' }),
+            ledgerRow({
+              id: 3,
+              signal_class: 'external_pr_event',
+              signal_value: 'pr_closed',
+            }),
+            reap(),
+          ],
+        }),
+      ),
+    ).toEqual({
+      status: 'done',
+      terminalCompletionReason: 'stuck_session_no_pr_periodic',
+    });
+  });
+
+  it('derives null for an idle session (legacy_status_write only)', () => {
+    expect(
+      deriveSessionStatus(
+        baseInput({
+          ledgerEntries: [
+            ledgerRow({
+              signal_class: 'legacy_status_write',
+              signal_value: 'idle',
+            }),
+          ],
+        }),
+      ),
+    ).toBeNull();
+  });
+});
+
+describe('DerivedSessionOutcome terminal-only guard', () => {
+  it('rejects non-terminal literals at compile time', () => {
+    type Allowed = TerminalSessionStatus | 'superseded';
+    const ok: Allowed = 'done' as DerivedSessionOutcome;
+    expect(ok).toBe('done');
+    // @ts-expect-error a non-terminal literal is not a DerivedSessionOutcome
+    const bad: DerivedSessionOutcome = 'idle';
+    expect(bad).toBe('idle');
+  });
+
+  it('runtime outcome set equals terminal statuses plus superseded', () => {
+    const outcomes: DerivedSessionOutcome[] = [
+      'done',
+      'error',
+      'killed',
+      'superseded',
+    ];
+    expect(new Set(outcomes)).toEqual(
+      new Set([...TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED]),
     );
   });
 });

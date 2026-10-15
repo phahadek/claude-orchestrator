@@ -586,7 +586,7 @@ describe('resumeOrphanSessions() — parked planning session with staged intents
       1_000_000,
       null,
       'boot_orphan_result_event',
-      { skipInFlightGuard: true },
+      { skipInFlightGuard: true, recordSignal: 'result_reap' },
     );
     expect(queries.markSessionIdle).not.toHaveBeenCalled();
   });
@@ -610,7 +610,7 @@ describe('resumeOrphanSessions() — parked planning session with staged intents
         1_000_000,
         null,
         'boot_orphan_result_event',
-        { skipInFlightGuard: true },
+        { skipInFlightGuard: true, recordSignal: 'result_reap' },
       );
       expect(queries.markSessionIdle).not.toHaveBeenCalled();
     },
