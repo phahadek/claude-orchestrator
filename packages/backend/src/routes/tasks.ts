@@ -20,6 +20,7 @@ import {
   getMilestoneById,
   hasAwaitingDispositionIntentForTask,
   getTaskPauseReason,
+  getDepthReviewVerdict,
   TERMINAL_SESSION_STATUSES,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
@@ -50,6 +51,7 @@ import {
 import { rerankTestLaneProject } from '../orchestration/testRequestLane';
 import yaml from 'js-yaml';
 import { asyncHandler } from './asyncHandler';
+import { composeReviewFixMessage } from './reviewFixMessage';
 export type { TaskView } from '../ws/types';
 
 export interface TasksActiveResponse {
@@ -1326,6 +1328,51 @@ export function createTasksRouter(
           }
 
           emitTaskUpdated(taskId);
+        } else if (action === 'send_review') {
+          const prRow = getPRByNotionTaskId(taskId);
+          const sessionId = row?.code_session_id ?? prRow?.session_id ?? null;
+          if (!prRow || !sessionId || !sessionManager) {
+            res.status(422).json({
+              error: 'No PR or code session found for this task',
+            });
+            return;
+          }
+          const reviewResult = prRow.review_result
+            ? (JSON.parse(prRow.review_result) as PRReviewResult)
+            : null;
+          const base = composeReviewFixMessage(
+            prRow.pr_number,
+            reviewResult,
+            getDepthReviewVerdict(prRow.pr_number, prRow.repo),
+          );
+          if (!base) {
+            res.status(422).json({ error: 'No review findings to send' });
+            return;
+          }
+          const operatorNote =
+            typeof req.body?.operatorNote === 'string'
+              ? req.body.operatorNote.trim()
+              : '';
+          const escalationReason = reviewResult?.escalationReason;
+          const msg =
+            base +
+            (escalationReason
+              ? `\n\nEscalation reason: ${escalationReason}`
+              : '') +
+            (operatorNote ? `\n\nOperator decision: ${operatorNote}` : '');
+          const result = await sessionManager.deliverOrSpawnFresh(
+            sessionId,
+            msg,
+          );
+          if (result && typeof result === 'object' && 'outcome' in result) {
+            res.status(422).json({
+              error:
+                result.outcome === 'missing_head_branch'
+                  ? "Session ended and this task's PR has no head_branch — cannot relaunch on an unknown branch."
+                  : 'Session record is missing — cannot relaunch.',
+            });
+            return;
+          }
         }
       } catch (err) {
         res.status(500).json({

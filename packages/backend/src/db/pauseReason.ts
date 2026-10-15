@@ -531,7 +531,7 @@ export const PAUSE_REASON_REGISTRY: Record<
 
 // ── Recovery descriptor ──────────────────────────────────────────────────────
 
-type RecoveryAction = 'redispatch' | 'rerun' | 'resume';
+type RecoveryAction = 'redispatch' | 'rerun' | 'resume' | 'send_review';
 
 export interface RecoveryDescriptor {
   available: boolean;
@@ -618,7 +618,7 @@ const RECOVERY_ACTION_MAP: Record<
   notion_done_update_stuck: 'none', // PR is already merged; a redispatch would incorrectly reset an already-completed task
   rate_limit: 'none', // recoverable+automatic: auto-clears the moment the rate_limit_event status flips to 'resumed'
   workflow_scope_denied: 'none', // fix is retyping the task as Tooling for an interactive session — a routing change outside this session
-  review_rules_escalation: 'none', // resolve manually; no dedicated auto-discharge route
+  review_rules_escalation: 'send_review', // forwards review findings + operator decision to the session; the next push re-reviews
   // Deliberate, reviewed 'none': set identically to review_rules_escalation
   // with no dedicated clear route beyond the standard human-operated recover
   // flow. Mirrors the other non-automatable, human-adjudicated escalation
@@ -646,6 +646,7 @@ const RECOVERY_LABELS: Record<RecoveryAction, string> = {
   redispatch: 'Redispatch',
   rerun: 'Rerun',
   resume: 'Resume',
+  send_review: 'Send review to session',
 };
 
 /**

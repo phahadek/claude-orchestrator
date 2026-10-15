@@ -320,7 +320,6 @@ describe('deriveRecoveryDescriptor', () => {
     'notion_done_update_stuck',
     'rate_limit',
     'workflow_scope_denied',
-    'review_rules_escalation',
     'baseline_escalation_floor',
     'depth_review_escalation',
     'depth_review_pending',
@@ -345,6 +344,20 @@ describe('deriveRecoveryDescriptor', () => {
 // ── deriveTaskRecoveryDescriptor ────────────────────────────────────────────
 
 describe('deriveTaskRecoveryDescriptor', () => {
+  it('a PR paused on review_rules_escalation resolves to send_review', () => {
+    const d = deriveTaskRecoveryDescriptor({
+      taskReason: null,
+      prReason: 'review_rules_escalation',
+      hasPR: true,
+      sessionTerminal: false,
+    });
+    expect(d).toEqual({
+      available: true,
+      action: 'send_review',
+      label: 'Send review to session',
+    });
+  });
+
   it('a task-level reason with no PR resolves to its mapped action', () => {
     const d = deriveTaskRecoveryDescriptor({
       taskReason: 'launch_failed',

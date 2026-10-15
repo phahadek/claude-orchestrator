@@ -761,6 +761,56 @@ describe('TaskCard', () => {
     fetchSpy.mockRestore();
   });
 
+  it('send_review recovery opens a decision input and POSTs { operatorNote }', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true }),
+    } as Response);
+
+    render(
+      <TaskCard
+        task={makeTask({
+          taskId: 'task-esc',
+          displayStatus: 'needs_attention',
+          taskType: '💻 Code',
+          recoveryDescriptor: {
+            available: true,
+            action: 'send_review',
+            label: 'Send review to session',
+          },
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject({ id: 'proj-1' })}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole('button', { name: /send review to session/i }),
+      );
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText(/operator decision/i), {
+      target: { value: 'Use option B' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /submit decision/i }));
+    });
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/api/tasks/task-esc/recover'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ operatorNote: 'Use option B' }),
+      }),
+    );
+
+    fetchSpy.mockRestore();
+  });
+
   it('send_message is not blocked for needs_attention card — send prop remains callable', () => {
     const send = vi.fn();
     render(
