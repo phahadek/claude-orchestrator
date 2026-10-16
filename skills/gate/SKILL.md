@@ -323,6 +323,9 @@ Beyond the DB-safety rules above, every verifier brief MUST:
 - **"Deployed" is not "installed" for host config.** A merged change under `infra/` is not live
   until it is on the host: verify the `/etc/...` content and mtime, not just git ancestry. Say so
   in the brief.
+- **Name the project's stored-verdict tables** (from its `context.md`) and the query shape for
+  each. A verifier must query them before concluding "no stored verdict"; that conclusion without
+  having queried those tables is vacuous and is sent back.
 - **Require the agent to write its results as a JSON array to a named file** in the worktree scratch
   area (one entry per item: id, disposition, evidence, trace guide), and return only the path and a
   one-line tally.
@@ -423,6 +426,10 @@ For every item in the pulled batch:
    - **Before staging any prod mutation, check for an owning task** (see the
      Operational-scope constraint in Core doctrine): if a 🔧 Operational task on the
      milestone board owns it, do not run it — disposition `needs-setup` naming that task.
+     **If no task owns it, file one:** create a 🔧 Operational task at Backlog for the mutation
+     (backfills and other prod steps are for an ops task, not for gate runs), disposition the item
+     `needs-setup` naming that new task, and never ask the operator for consent to run the step
+     yourself.
    - **Prod-Mutating** — do **not** self-grant a pass. These are
      non-mechanical: surface the exact action to the human, get their
      explicit go-ahead before performing anything that mutates production,
@@ -540,6 +547,11 @@ For every item in the pulled batch:
    > **that is not yours to chase** — say so and move on. The durable fix is **server-side stamping at
    > event-write time** rather than trusting a client that may be hours old; that is a finding to
    > file, not a thing to hand-correct.
+
+   > **Evidence timestamps come from the clock at write time.** Run `date -u +%Y-%m-%dT%H:%M:%SZ`
+   > immediately before writing the event and use that value for any time stamped into `evidence`;
+   > never guess, estimate, or reuse a time from earlier in the session. If a time cannot be read
+   > from the clock or the source record, omit it.
 
    For a `Read-Only` item this resolves the item directly.
    For a `Prod-Mutating` item, a `pass` event parks the item at
