@@ -494,9 +494,7 @@ describe('catchUpMergeCommits — escalation ceiling excludes structurally/tempo
     await driveAttempts(1);
     expect(stageMock).toHaveBeenCalledTimes(1);
     expect(stageMock.mock.calls[0][0].id).toBe(item.id);
-    expect(stageMock.mock.calls[0][1]).toContain(
-      'not on any tracked board',
-    );
+    expect(stageMock.mock.calls[0][1]).toContain('not on any tracked board');
 
     // The sink is a mock, so simulate the live mirror the real sink stages.
     vi.spyOn(queries, 'findActiveGateVerifyMirrorForItem').mockReturnValue({
