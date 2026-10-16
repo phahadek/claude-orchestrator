@@ -6275,6 +6275,11 @@ export function isSourceTaskDone(sourceTaskId: string): boolean {
   return getTaskStatusFromCache(sourceTaskId) === '✅ Done';
 }
 
+/** True when a gate_item_source's task has no task_cache row — archived, re-filed, or never a task id. */
+export function isSourceTaskUntracked(sourceTaskId: string): boolean {
+  return getTaskCache(sourceTaskId) === undefined;
+}
+
 /** True when a gate_item_source's task is ⏭️ Deferred — retracted/superseded, so it will never merge. */
 export function isSourceTaskDeferred(sourceTaskId: string): boolean {
   return getTaskStatusFromCache(sourceTaskId) === '⏭️ Deferred';

@@ -476,6 +476,56 @@ describe('catchUpMergeCommits — escalation ceiling excludes structurally/tempo
     expect(stageMock).toHaveBeenCalledTimes(1);
   });
 
+  it('escalates a source with no task cache row once the ceiling is reached, with not-on-any-tracked-board evidence, and stays idempotent', async () => {
+    const item = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M19',
+      text: 'Source archived or not a task id',
+      classification: 'needs-triage',
+      sources: [
+        { sourceTaskId: 'notion:untracked-src', sourceTaskTitle: 'Gone' },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+
+    await driveAttempts(7);
+    expect(stageMock).not.toHaveBeenCalled();
+
+    await driveAttempts(1);
+    expect(stageMock).toHaveBeenCalledTimes(1);
+    expect(stageMock.mock.calls[0][0].id).toBe(item.id);
+    expect(stageMock.mock.calls[0][1]).toContain(
+      'not on any tracked board',
+    );
+
+    // The sink is a mock, so simulate the live mirror the real sink stages.
+    vi.spyOn(queries, 'findActiveGateVerifyMirrorForItem').mockReturnValue({
+      id: 'mirror',
+    } as never);
+    await driveAttempts(2);
+    expect(stageMock).toHaveBeenCalledTimes(1);
+    vi.restoreAllMocks();
+  });
+
+  it('never escalates a cached 🗂️ Ready source with no merge commit', async () => {
+    insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M19',
+      text: 'Ready but unmerged',
+      classification: 'needs-triage',
+      sources: [{ sourceTaskId: 'notion:ready-src', sourceTaskTitle: 'Ready' }],
+      updatedAt: new Date(0).toISOString(),
+    });
+    upsertTaskCache(
+      'notion:ready-src',
+      JSON.stringify({ type: '💻 Code', status: '🗂️ Ready' }),
+    );
+
+    await driveAttempts(10);
+
+    expect(stageMock).not.toHaveBeenCalled();
+  });
+
   it('never stages a mirror for a Done 💻 Code source with no PR and a committed planning.noOp intent naming it — a confirmed deliberate no-PR closure', async () => {
     insertItem({
       project: 'polimarket-analyser',
