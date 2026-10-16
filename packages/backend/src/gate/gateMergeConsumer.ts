@@ -3,6 +3,7 @@ import {
   findActiveGateVerifyMirrorForItem,
   isStructurallyUnresolvableSource,
   isSourceTaskDone,
+  isSourceTaskUntracked,
 } from '../db/queries';
 import { hasGateItemRehomedEvent } from '../audit/AuditLog';
 import { logger } from '../logger';
@@ -104,6 +105,13 @@ function escalationEvidence(sourceTaskId: string): string {
       "— supply the successor task's merge commit manually or reclassify"
     );
   }
+  if (isSourceTaskUntracked(sourceTaskId)) {
+    return (
+      'source task is not on any tracked board (archived, re-filed or not a ' +
+      "task id) — supply the source's merge commit manually or reclassify " +
+      'the item'
+    );
+  }
   return (
     `merge commit could not be resolved after ${ESCALATION_ATTEMPT_THRESHOLD} ` +
     'attempts — check for a dropped webhook or a merge outside the tracked ' +
@@ -199,7 +207,8 @@ export async function catchUpMergeCommits(): Promise<CatchUpMergeCommitsResult> 
         // the escalation ceiling until it reaches a terminal (Done) state.
         if (
           attempts >= ESCALATION_ATTEMPT_THRESHOLD &&
-          isSourceTaskDone(sourceTaskId)
+          (isSourceTaskDone(sourceTaskId) ||
+            isSourceTaskUntracked(sourceTaskId))
         ) {
           escalateUnresolvedSource(sourceTaskId);
         }

@@ -117,6 +117,7 @@ describe('GateReadinessPanel — Select All / Clear', () => {
 
     await waitFor(() => {
       expect(screen.queryByText('item b')).toBeNull();
+      expect(screen.queryByText('item a')).not.toBeNull();
     });
 
     fireEvent.click(screen.getByTestId('gate-select-all-button'));
