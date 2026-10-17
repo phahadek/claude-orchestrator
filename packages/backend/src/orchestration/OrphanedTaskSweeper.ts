@@ -379,8 +379,9 @@ export class OrphanedTaskSweeper {
     backend: TaskBackend,
   ): Promise<void> {
     // A committed planning.noOp still stands for this task — a session
-    // already declared its work satisfied elsewhere and drove it to Done
-    // (see routes/stagedIntents.ts's maybeAutoResolveCodeNoOp). Never revert
+    // already declared its work satisfied elsewhere and the operator's
+    // Approve drove it to Done (see routes/stagedIntents.ts's
+    // applyOperatorApprovedNoOp). Never revert
     // that decision back to Ready; it retires automatically the moment the
     // task is next edited (see isNoOpSuppressed in db/queries.ts).
     if (isNoOpSuppressed(taskId)) return;

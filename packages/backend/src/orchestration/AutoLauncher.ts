@@ -726,8 +726,9 @@ export class AutoLauncher {
     // processProject so we have access to the backend.
     if (getMergedPRForTask(task.id) != null) return false;
     // Skip if a committed planning.noOp still stands — a session already
-    // declared this task's work satisfied elsewhere and drove it to Done
-    // (see routes/stagedIntents.ts's maybeAutoResolveCodeNoOp). Retires
+    // declared this task's work satisfied elsewhere and the operator's
+    // Approve drove it to Done (see routes/stagedIntents.ts's
+    // applyOperatorApprovedNoOp). Retires
     // automatically the moment the task is next edited (isNoOpSuppressed).
     if (isNoOpSuppressed(task.id)) return false;
     return true;
