@@ -102,9 +102,9 @@ export const PLANNING_INTENT_KINDS: Record<
  * planning.noOp is a code session's terminal declaration that a dispatched
  * task's work is already satisfied elsewhere (a re-dispatch of an
  * already-settled task) — see routes/stagedIntents.ts's
- * maybeAutoResolveCodeNoOp, which auto-commits it and closes the task on
- * stage rather than waiting on an operator Acknowledge the way a
- * groom/design no-op does.
+ * applyOperatorApprovedNoOp, which closes the task only when the operator
+ * Approves the standalone (ungrouped) no-op; a grouped no-op from a
+ * code/ops session is rejected at stage time.
  */
 export const CODE_INTENT_KINDS: readonly string[] = [
   'review.dispute',
@@ -142,7 +142,7 @@ export const CODE_INTENT_KINDS: readonly string[] = [
  * the SESSION_TASK_BINDING_KINDS check every other task-targeting kind
  * gets), and it auto-resolves the named report directly (via
  * `updateReportState`), the investigate analog of
- * routes/stagedIntents.ts's `maybeAutoResolveCodeNoOp` for a code session —
+ * routes/stagedIntents.ts's `applyOperatorApprovedNoOp` for a code session —
  * see the sibling auto-resolve function for investigate sessions there.
  * Consumed by config.ts to derive `INVESTIGATE_ALLOWED_TOOLS`'s staged-intent
  * MCP entries, same precedent as `PLANNING_INTENT_KINDS`/`CODE_INTENT_KINDS`
