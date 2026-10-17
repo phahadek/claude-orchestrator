@@ -23,6 +23,86 @@ function runScript(args, env) {
   });
 }
 
+async function startCapturingServer() {
+  const captured = { bodies: [] };
+  if (server) await new Promise((r) => server.close(r));
+  server =http.createServer((req, res) => {
+    let data = '';
+    req.on('data', (c) => (data += c));
+    req.on('end', () => {
+      captured.bodies.push(data ? JSON.parse(data) : {});
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end('{}');
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const { port } = server.address();
+  captured.env = {
+    ORCHESTRATOR_BACKEND_HOST: '127.0.0.1',
+    ORCHESTRATOR_BACKEND_PORT: String(port),
+    ORCHESTRATOR_DEVICE_TOKEN: 'test-token',
+  };
+  return captured;
+}
+
+describe('ops-client.mjs — set-state resolve assertions', () => {
+  it('sends noChangeReason from --no-change-reason', async () => {
+    const cap = await startCapturingServer();
+    await runScript(
+      ['set-state', '--task', 't', '--state', 'resolved', '--no-change-reason', 'x'],
+      cap.env,
+    );
+    assert.deepEqual(cap.bodies, [{ state: 'resolved', noChangeReason: 'x' }]);
+  });
+
+  it('sends the parsed object from --reconciliation', async () => {
+    const cap = await startCapturingServer();
+    await runScript(
+      [
+        'set-state',
+        '--task',
+        't',
+        '--state',
+        'resolved',
+        '--reconciliation',
+        '{"description":"d","passed":true}',
+      ],
+      cap.env,
+    );
+    assert.deepEqual(cap.bodies, [
+      { state: 'resolved', reconciliation: { description: 'd', passed: true } },
+    ]);
+  });
+
+  for (const bad of [
+    'not json',
+    '{"passed":true}',
+    '{"description":"d","passed":"yes"}',
+    '[]',
+  ]) {
+    it(`rejects --reconciliation ${bad} before any request`, async () => {
+      const cap = await startCapturingServer();
+      await assert.rejects(
+        runScript(
+          ['set-state', '--task', 't', '--state', 'resolved', '--reconciliation', bad],
+          cap.env,
+        ),
+        (e) => e.code === 1 && /--reconciliation/.test(e.stderr),
+      );
+      assert.equal(cap.bodies.length, 0);
+    });
+  }
+
+  it('leaves the body unchanged when neither flag is given', async () => {
+    const cap = await startCapturingServer();
+    await runScript(
+      ['set-state', '--task', 't', '--state', 'resolved', '--disposition', 'pass'],
+      cap.env,
+    );
+    assert.deepEqual(cap.bodies, [{ state: 'resolved', disposition: 'pass' }]);
+  });
+});
+
 describe('ops-client.mjs — set-state output formatting', () => {
   it('prints the "<taskId> -> <state>" confirmation to stderr and the route JSON to stdout', async () => {
     const row = { taskId: 't1', state: 'resolved', disposition: null };
