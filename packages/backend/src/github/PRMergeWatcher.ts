@@ -1835,9 +1835,8 @@ export class PRMergeWatcher extends EventEmitter {
             // push and this read — wait for it to catch up before trusting it.
             for (let lag = 0; lag < 5 && headSha === prRow.head_sha; lag++) {
               await new Promise<void>((resolve) => setTimeout(resolve, 2000));
-              headSha = (
-                await this.github.fetchPR(prRow.repo, prRow.pr_number)
-              ).headSha;
+              headSha = (await this.github.fetchPR(prRow.repo, prRow.pr_number))
+                .headSha;
             }
             if (headSha === prRow.head_sha) {
               logger.warn(

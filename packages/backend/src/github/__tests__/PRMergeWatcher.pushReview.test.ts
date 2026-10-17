@@ -377,11 +377,7 @@ describe('PRMergeWatcher.handlePushDetected — routes through ReviewOrchestrato
       await run({ expectedHeadSha: NEW_SHA });
 
       expect(github.fetchPR).toHaveBeenCalledTimes(1);
-      expect(setHeadSha).toHaveBeenCalledWith(
-        PR_NUMBER,
-        REPO,
-        'third00000000',
-      );
+      expect(setHeadSha).toHaveBeenCalledWith(PR_NUMBER, REPO, 'third00000000');
       expect(reviewOrchestrator.enqueueReview).toHaveBeenCalledWith(
         expect.objectContaining({ headSha: 'third00000000' }),
       );
