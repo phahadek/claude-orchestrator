@@ -3164,6 +3164,8 @@ The full task spec and all rules are in your system prompt. Begin implementing d
    * with prNumber and repo included.
    */
   private async handlePushDetected(): Promise<void> {
+    // SHA known to be on origin (already there, or just pushed); null when unknown.
+    let confirmedHeadSha: string | null = null;
     // Auto-push any local commits ahead of origin before signalling.
     if (this.worktreePath) {
       try {
@@ -3183,6 +3185,9 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             .split(/\s+/)[0]
             ?.trim() || '';
 
+        if (localHead && localHead === remoteHead) {
+          confirmedHeadSha = localHead;
+        }
         if (localHead && localHead !== remoteHead) {
           const aheadBehind = execSync(
             `git rev-list --left-right --count origin/${branch}...HEAD`,
@@ -3197,6 +3202,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
               `auto-pushing ${ahead} local commit(s) on ${branch} (origin was at ${remoteHead.slice(0, 7)}, local at ${localHead.slice(0, 7)})`,
             );
             execSync(`git push origin ${branch}`, { cwd: this.worktreePath });
+            confirmedHeadSha = localHead;
             this.broadcast({
               type: 'session_auto_pushed',
               sessionId: this.sessionId,
@@ -3251,7 +3257,10 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       }
     }
 
-    this.emit('push_detected', { sessionId: this.sessionId });
+    this.emit('push_detected', {
+      sessionId: this.sessionId,
+      headSha: confirmedHeadSha,
+    });
     const pr = getPRBySessionId(this.sessionId);
 
     // Persist the HEAD SHA at emission time so the turn-end gate can skip
