@@ -90,7 +90,32 @@ describe('getLaneHealthRollup', () => {
       regressedTests: [],
       flakyTests: { count: 0, tests: [] },
       cycleLimitCrossings: 0,
+      lastDigestUpdateAt: null,
+      latestCompletedFullRunAt: null,
     });
+  });
+
+  it('exposes the last digest update (normalised to ms) next to the latest completed full-run time', () => {
+    insertRun({
+      projectId: 'proj-stale',
+      state: 'passed',
+      requestedAt: 1,
+      startedAt: 2,
+      finishedAt: 5000,
+    });
+    recordTestPerfDigestSample(
+      't-1',
+      'proj-stale',
+      't-1',
+      'passed',
+      1,
+      3,
+      false,
+      1_700_000_000_000 * 1000,
+    );
+    const rollup = getLaneHealthRollup('proj-stale');
+    expect(rollup.latestCompletedFullRunAt).toBe(5000);
+    expect(rollup.lastDigestUpdateAt).toBe(1_700_000_000_000);
   });
 
   it('includes run_kind=verify rows in totalRuns/passRate alongside full/scoped — the rollup is unfiltered by run_kind', () => {

@@ -5014,16 +5014,60 @@ describe('ingestTestRunResultsTx — skips baseline/flip-rate recompute for non-
   it.each([
     [
       'a concurrent peer',
-      { concurrentRunCount: 1, oomKilled: false, foreignConcurrentRunCount: 0 },
-    ],
-    [
-      'an OOM kill',
-      { concurrentRunCount: 0, oomKilled: true, foreignConcurrentRunCount: 0 },
+      { concurrentRunCount: 1, foreignConcurrentRunCount: 0 },
     ],
     [
       'a foreign concurrent run',
-      { concurrentRunCount: 0, oomKilled: false, foreignConcurrentRunCount: 1 },
+      { concurrentRunCount: 0, foreignConcurrentRunCount: 1 },
     ],
+  ])(
+    'appends an outcome sample but leaves durations and the baseline untouched for %s',
+    (_label, opts) => {
+      const testId = 'concurrent-outcome-only';
+      seedBaselineRow(testId);
+      const before = getTestPerfBaseline(testId)!;
+
+      insertTestRequestRun('conc-run', 'proj-1', 'conc-hash', null, Date.now());
+      const onDigestSample = vi.fn();
+      ingestTestRunResultsTx(
+        'conc-run',
+        'proj-1',
+        [
+          {
+            test_id: testId,
+            name: testId,
+            outcome: 'failed',
+            duration_ms: 999,
+          },
+        ],
+        opts.concurrentRunCount,
+        false,
+        false,
+        opts.foreignConcurrentRunCount,
+        'conc-hash',
+        onDigestSample,
+      );
+
+      expect(onDigestSample).toHaveBeenCalledTimes(1);
+      const sample = onDigestSample.mock.calls[0][1];
+      expect(sample.durationAdmitted).toBe(false);
+      expect(sample.durations).toEqual([42]);
+      expect(sample.outcomes.map((o: { o: string }) => o.o)).toEqual([
+        'P',
+        'F',
+      ]);
+      const after = getTestPerfBaseline(testId)!;
+      expect(after.median_duration_ms).toBe(before.median_duration_ms);
+      expect(after.sample_count).toBe(before.sample_count);
+    },
+  );
+
+  it.each([
+    [
+      'an OOM kill',
+      { concurrentRunCount: 0, oomKilled: true, timedOut: false },
+    ],
+    ['a timeout', { concurrentRunCount: 2, oomKilled: false, timedOut: true }],
   ])(
     'issues zero test_perf_baselines statements and leaves the existing row byte-identical for %s',
     (_label, opts) => {
@@ -5054,9 +5098,10 @@ describe('ingestTestRunResultsTx — skips baseline/flip-rate recompute for non-
         opts.concurrentRunCount,
         opts.oomKilled,
         false,
-        opts.foreignConcurrentRunCount,
+        0,
         'non-solo-hash',
         onDigestSample,
+        opts.timedOut,
       );
       spy.restore();
 
@@ -5138,10 +5183,10 @@ describe('ingestTestRunResults — flip-rate recompute reads test_perf_baselines
 // ── test_perf_baselines digest — fixed-width outcome/duration rings ────────
 
 describe('test_perf_baselines digest', () => {
-  it('excludes samples with concurrent_run_count != 0 or oom_killed = 1 from both the outcome sequence and the duration ring', () => {
+  it('excludes oom_killed samples from both rings, and concurrent samples from the duration ring only', () => {
     const testId = 'digest-excludes-invalid';
     insertOutcomeSample(testId, 'passed', 100, { concurrentRunCount: 0 });
-    insertOutcomeSample(testId, 'failed', 200, { concurrentRunCount: 1 }); // excluded — concurrent peer
+    insertOutcomeSample(testId, 'failed', 200, { concurrentRunCount: 1 }); // outcome only — concurrent peer
     insertOutcomeSample(testId, 'failed', 300, {
       concurrentRunCount: 0,
       oomKilled: true,
@@ -5150,8 +5195,8 @@ describe('test_perf_baselines digest', () => {
 
     expect(listRecentValidTestDurations(testId, 10)).toEqual([400, 100]);
     const flag = computeTestFlipRateFlag(testId, 10, 1);
-    expect(flag.sampleCount).toBe(2);
-    expect(flag.transitionCount).toBe(0); // both retained samples are 'passed'
+    expect(flag.sampleCount).toBe(3);
+    expect(flag.transitionCount).toBe(2); // P, F, P
   });
 
   it('appends no sample when foreign_concurrent_run_count is non-zero, and does append when both counts are zero and oom_killed is false', () => {
