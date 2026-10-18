@@ -2406,6 +2406,12 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+  // Per-command wall time / sampled peak RSS (JSON array); NULL for pre-existing rows.
+  try {
+    target.exec(`ALTER TABLE test_request_runs ADD COLUMN command_stats TEXT`);
+  } catch {
+    /* already exists */
+  }
 
   // investigation_report: closed-vocabulary state (draft/committed/resolved/
   // abandoned) — no persisted 'dispatched' state. In-flight status is a

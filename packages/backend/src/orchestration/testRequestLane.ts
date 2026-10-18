@@ -1743,6 +1743,7 @@ const localRunnerExecutor: LaneRunnerExecutor = async ({
     finishedAt: Date.now(),
     runnerConcurrentRunCount: concurrentRunCount,
     structuredResult,
+    commandStats: raw.commandStats,
   };
 };
 
@@ -2031,6 +2032,7 @@ async function executeTestRequestRun(
       oomKilled,
       acquisitionAttempted,
       result.passed ? null : (result.failedCommand ?? null),
+      pkg.commandStats ? JSON.stringify(pkg.commandStats) : null,
     );
     clearSupersededStructuredResults(spec.projectId, spec.contentHash, runId);
     broadcastRunStatus({
@@ -2074,6 +2076,7 @@ async function executeTestRequestRun(
         ? null
         : failureReasonFor(result, crashSignatures, environmentSignatures),
       structured_result: structuredResultJson,
+      command_stats: pkg.commandStats ? JSON.stringify(pkg.commandStats) : null,
       concurrent_run_count: runConcurrentRunCount,
       oom_killed: oomKilled ? 1 : 0,
       test_report_acquisition_attempted: acquisitionAttempted ? 1 : 0,

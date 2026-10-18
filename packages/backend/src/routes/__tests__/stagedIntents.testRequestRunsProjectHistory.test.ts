@@ -172,4 +172,55 @@ describe('GET /api/test-request-runs/project', () => {
       conflictOutcome: 'merged',
     });
   });
+
+  it('returns commandStats parsed from command_stats, and null for a row without it', async () => {
+    const stats = [
+      { command: 'npm run lint', durationMs: 1200, peakRssMb: null },
+      { command: 'npx vitest run', durationMs: 45000, peakRssMb: 2048.5 },
+    ];
+    insertTestRequestRun('run-stats', 'proj-1', 'hash-stats', null, 2000);
+    completeTestRequestRun(
+      'run-stats',
+      'passed',
+      'ok',
+      null,
+      null,
+      false,
+      undefined,
+      null,
+      JSON.stringify(stats),
+    );
+    insertTestRequestRun('run-legacy', 'proj-1', 'hash-legacy', null, 1000);
+    completeTestRequestRun('run-legacy', 'passed', 'ok');
+
+    const res = await supertest(makeApp())
+      .get('/api/test-request-runs/project')
+      .query({ projectId: 'proj-1' });
+
+    expect(res.status).toBe(200);
+    const byId = Object.fromEntries(
+      res.body.runs.map((r: { id: string }) => [r.id, r]),
+    );
+    expect(byId['run-stats'].commandStats).toEqual(stats);
+    expect(byId['run-legacy'].commandStats).toBeNull();
+  });
+
+  it('adds the command_stats column to a populated table, leaving the existing row NULL', async () => {
+    const Database = (await import('better-sqlite3')).default;
+    const { runMigrations } = await import('../../db/schema');
+    const mem = new Database(':memory:');
+    mem.exec(
+      `CREATE TABLE test_request_runs (id TEXT PRIMARY KEY, project_id TEXT, structured_result TEXT)`,
+    );
+    mem
+      .prepare(
+        `INSERT INTO test_request_runs (id, project_id) VALUES ('old', 'p')`,
+      )
+      .run();
+    runMigrations(mem);
+    const row = mem
+      .prepare(`SELECT command_stats FROM test_request_runs WHERE id = 'old'`)
+      .get() as { command_stats: string | null };
+    expect(row.command_stats).toBeNull();
+  });
 });
