@@ -14,7 +14,10 @@ import {
 } from '../../routes/stagedIntents';
 import type { SessionManager } from '../../session/SessionManager';
 import { getSession } from '../../db/queries';
-import { isInvestigateSession } from '../../session/sessionPredicates';
+import {
+  isInvestigateSession,
+  isOperatorConcludedSession,
+} from '../../session/sessionPredicates';
 import { TaskReferenceValidationError } from '../../tasks/taskReferenceValidation';
 import {
   taskTypeSchema,
@@ -407,7 +410,7 @@ export function registerStageProposalTools(
     {
       title: 'Stage a deliberate no-op for this task',
       description:
-        "Stages a planning.noOp intent — a deliberate declaration that this turn reached terminal with nothing to change, distinct from a silent park. Purely informational/auditable: no operator disposition is required or offered for it. Use only when there is genuinely no decision to make (e.g. a re-dispatch of an already-settled task) — if there is a real gap, name it instead (e.g. groom's Deferred path). A code/ops session declaring its task already satisfied passes `satisfiedByCommit`: the full 40-character SHA of the base-branch commit that delivered the work (it must be on origin/<base>); omit it only when no commit delivered the work.",
+        "Stages a planning.noOp intent — a deliberate declaration that this turn reached terminal with nothing to change, distinct from a silent park. A design/groom no-op is informational and commits with its group. A code/ops session's no-op must be staged WITHOUT groupId: it is closed only when the operator Approves it. Use only when there is genuinely no decision to make (e.g. a re-dispatch of an already-settled task) — if there is a real gap, name it instead (e.g. groom's Deferred path). A code/ops session declaring its task already satisfied passes `satisfiedByCommit`: the full 40-character SHA of the base-branch commit that delivered the work (it must be on origin/<base>); omit it only when no commit delivered the work.",
       inputSchema: envelope({
         taskId: z.string(),
         reason: z.string(),
@@ -419,6 +422,17 @@ export function registerStageProposalTools(
       }),
     },
     async (args) => {
+      if (args.groupId) {
+        const session = getSession(ctx.sessionId);
+        if (
+          session &&
+          isOperatorConcludedSession(session.session_type, session.task_id)
+        ) {
+          throw new TaskReferenceValidationError(
+            "A code/ops session's planning.noOp must be staged without groupId: a grouped no-op commits through the group path as an informational no-op and never closes the task. Re-stage it standalone (omit groupId); the operator closes the task by Approve.",
+          );
+        }
+      }
       await assertNoOpSatisfiedByCommit(
         args.payload,
         ctx.projectId,
