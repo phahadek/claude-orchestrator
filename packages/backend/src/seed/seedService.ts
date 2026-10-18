@@ -185,7 +185,7 @@ export function setSeedItemMinDeployedCommit(
     throw new Error('commit must be a 40-hex SHA');
   }
   const source = ancestry ?? defaultSyncAncestrySourceForProject(item.project);
-  let resolves = false;
+  let resolves: boolean;
   try {
     resolves = source.isAncestor(commit, commit);
   } catch {
