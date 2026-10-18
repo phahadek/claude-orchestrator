@@ -31,6 +31,7 @@ import {
   listSeedMilestoneReadiness,
   appendSeedItemEvent,
   reopenSeedItem,
+  setSeedItemMinDeployedCommit,
 } from '../seedService.js';
 import type { DeployAncestrySource } from '../../gate/gateService.js';
 import { ProjectService } from '../../projects/ProjectService.js';
@@ -378,6 +379,129 @@ describe('appendSeedItemEvent', () => {
 
     const readiness = getSeedReadiness('polimarket-analyser', 'M12');
     expect(readiness.counts).toEqual({ discarded: 1, pending: 1 });
+  });
+});
+
+describe('setSeedItemMinDeployedCommit', () => {
+  const sha1 = 'a'.repeat(40);
+  const sha2 = 'b'.repeat(40);
+  const resolvingAncestry: DeployAncestrySource = {
+    isAncestor: (a, d) => a <= d,
+  };
+  const unresolvingAncestry: DeployAncestrySource = {
+    isAncestor: () => false,
+  };
+
+  function minCommitEvents() {
+    return db
+      .prepare(
+        "SELECT payload, actor_type, project_id FROM audit_log WHERE event_type = 'seed_item_min_commit_set'",
+      )
+      .all() as { payload: string; actor_type: string; project_id: string }[];
+  }
+
+  it('makes an item applyable for a descendant deploySha only', () => {
+    const item = makeItem();
+    const updated = setSeedItemMinDeployedCommit(
+      item.id,
+      sha1,
+      'real dependency merged',
+      'pedro',
+      resolvingAncestry,
+    );
+    expect(updated.minDeployedCommit).toBe(sha1);
+
+    const opts = { ancestrySource: resolvingAncestry, limit: 10 };
+    expect(
+      nextApplyableSeedItems('polimarket-analyser', 'M12', sha2, opts).map(
+        (i) => i.id,
+      ),
+    ).toEqual([item.id]);
+    expect(
+      nextApplyableSeedItems(
+        'polimarket-analyser',
+        'M12',
+        '0'.repeat(40),
+        opts,
+      ),
+    ).toEqual([]);
+  });
+
+  it('records from=null then from=old value in the audit event', () => {
+    const item = makeItem();
+    setSeedItemMinDeployedCommit(
+      item.id,
+      sha1,
+      'first',
+      'pedro',
+      resolvingAncestry,
+    );
+    setSeedItemMinDeployedCommit(
+      item.id,
+      sha2,
+      'second',
+      'pedro',
+      resolvingAncestry,
+    );
+
+    const events = minCommitEvents();
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({
+      actor_type: 'operator',
+      project_id: 'polimarket-analyser',
+    });
+    expect(JSON.parse(events[0].payload)).toEqual({
+      seedItemId: item.id,
+      from: null,
+      to: sha1,
+      reason: 'first',
+      operator: 'pedro',
+    });
+    expect(JSON.parse(events[1].payload)).toMatchObject({
+      from: sha1,
+      to: sha2,
+    });
+  });
+
+  it('rejects bad input and leaves the item unchanged', () => {
+    const item = makeItem();
+    const before = getItem(item.id);
+    const call =
+      (
+        id: string,
+        commit: string,
+        reason: string,
+        ancestry = resolvingAncestry,
+      ) =>
+      () =>
+        setSeedItemMinDeployedCommit(id, commit, reason, 'pedro', ancestry);
+
+    expect(call(item.id, sha1, '')).toThrow(/reason/);
+    expect(call(item.id, sha1, '   ')).toThrow(/reason/);
+    expect(call(item.id, 'abc123', 'why')).toThrow(/40-hex/);
+    expect(call('missing', sha1, 'why')).toThrow(/no item/);
+    expect(call(item.id, sha1, 'why', unresolvingAncestry)).toThrow(
+      /does not resolve/,
+    );
+
+    expect(getItem(item.id)).toEqual(before);
+    expect(minCommitEvents()).toEqual([]);
+  });
+
+  it('does not change state, sources or the item event log', () => {
+    const item = makeItem();
+    const before = getSeedItemDetail(item.id);
+    setSeedItemMinDeployedCommit(
+      item.id,
+      sha1,
+      'why',
+      'pedro',
+      resolvingAncestry,
+    );
+    const after = getSeedItemDetail(item.id);
+    expect(after?.item.state).toBe(before?.item.state);
+    expect(after?.sources).toEqual(before?.sources);
+    expect(after?.events).toEqual(before?.events);
   });
 });
 

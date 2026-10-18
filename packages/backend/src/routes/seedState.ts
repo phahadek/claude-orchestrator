@@ -12,6 +12,7 @@ import {
   reopenSeedItem,
   backfillSeedTask,
   rehomeSeedItem,
+  setSeedItemMinDeployedCommit,
 } from '../seed/seedService';
 import type { SeedItemEventOutcome } from '../db/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -234,6 +235,34 @@ export function createSeedStateRouter(): Router {
       });
     }
   });
+
+  // POST /api/seed/items/:id/min-deployed-commit  { commit, reason, operator }
+  router.post(
+    '/seed/items/:id/min-deployed-commit',
+    (req: Request, res: Response) => {
+      const body = req.body as {
+        commit?: unknown;
+        reason?: unknown;
+        operator?: unknown;
+      };
+      try {
+        const updated = setSeedItemMinDeployedCommit(
+          String(req.params.id),
+          typeof body.commit === 'string' ? body.commit : '',
+          typeof body.reason === 'string' ? body.reason : '',
+          typeof body.operator === 'string' ? body.operator : undefined,
+        );
+        res.json(updated);
+      } catch (err) {
+        res.status(400).json({
+          error:
+            err instanceof Error
+              ? err.message
+              : 'set min-deployed-commit failed',
+        });
+      }
+    },
+  );
 
   // POST /api/seed/items/:id/rehome  { milestone }
   router.post('/seed/items/:id/rehome', (req: Request, res: Response) => {

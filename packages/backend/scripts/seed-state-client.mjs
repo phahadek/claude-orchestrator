@@ -20,6 +20,7 @@
 //   node seed-state-client.mjs event <seedItemId> <json-payload>
 //   node seed-state-client.mjs rehome <seedItemId> <milestone>
 //   node seed-state-client.mjs reopen <seedItemId> [reason] [operator]
+//   node seed-state-client.mjs min-commit <seedItemId> <sha> <reason> [operator]
 //   node seed-state-client.mjs accrete <json-payload>
 //
 // Example:
@@ -198,6 +199,25 @@ export function reopenSeedItem({
   });
 }
 
+export function setSeedItemMinDeployedCommit({
+  host,
+  port,
+  token,
+  seedItemId,
+  commit,
+  reason,
+  operator,
+}) {
+  return requestSeedState({
+    host,
+    port,
+    token,
+    method: 'POST',
+    path: `/api/seed/items/${encodeURIComponent(seedItemId)}/min-deployed-commit`,
+    payload: { commit, reason, operator },
+  });
+}
+
 export function accreteSeedContribution({ host, port, token, contribution }) {
   return requestSeedState({
     host,
@@ -232,6 +252,7 @@ const USAGE =
   '  node seed-state-client.mjs event <seedItemId> <json-payload>\n' +
   '  node seed-state-client.mjs rehome <seedItemId> <milestone>\n' +
   '  node seed-state-client.mjs reopen <seedItemId> [reason] [operator]\n' +
+  '  node seed-state-client.mjs min-commit <seedItemId> <sha> <reason> [operator]\n' +
   '  node seed-state-client.mjs accrete <json-payload>';
 
 async function main() {
@@ -323,6 +344,18 @@ async function main() {
         port,
         token,
         seedItemId,
+        reason,
+        operator,
+      });
+    } else if (command === 'min-commit') {
+      const [seedItemId, commit, reason, operator] = rest;
+      if (!seedItemId || !commit || !reason) return fail(USAGE);
+      result = await setSeedItemMinDeployedCommit({
+        host,
+        port,
+        token,
+        seedItemId,
+        commit,
         reason,
         operator,
       });

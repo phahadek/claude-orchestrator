@@ -291,6 +291,10 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
     audience: 'tooling',
     reason: 'called by packages/backend/scripts/seed-state-client.mjs',
   },
+  'POST /api/seed/items/:id/min-deployed-commit': {
+    audience: 'tooling',
+    reason: 'called by packages/backend/scripts/seed-state-client.mjs',
+  },
   'POST /api/seed/backfill': {
     audience: 'tooling',
     reason: 'Remote-Control tooling (seed-state-client.mjs)',
