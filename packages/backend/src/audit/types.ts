@@ -97,6 +97,7 @@ type EventType =
   | 'seed_item_state_changed'
   | 'seed_item_source_added'
   | 'seed_item_rehomed'
+  | 'seed_item_min_commit_set'
   | 'investigation_report_created'
   | 'investigation_report_state_changed'
   | 'task_created'
