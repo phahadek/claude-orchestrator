@@ -25,6 +25,7 @@ const seedServiceMock = vi.hoisted(() => ({
   ),
   reopenSeedItem: vi.fn(),
   rehomeSeedItem: vi.fn(),
+  setSeedItemMinDeployedCommit: vi.fn(),
   backfillSeedTask: vi.fn(),
 }));
 
@@ -224,6 +225,41 @@ describe('GET /api/seed/items/:id/detail', () => {
     seedServiceMock.getSeedItemDetail.mockReturnValue(undefined);
     const res = await request(makeApp()).get('/api/seed/items/missing/detail');
     expect(res.status).toBe(404);
+  });
+});
+
+describe('POST /api/seed/items/:id/min-deployed-commit', () => {
+  const sha = 'a'.repeat(40);
+
+  it('calls setSeedItemMinDeployedCommit and returns the updated item', async () => {
+    const updated = { id: 'seed-1', minDeployedCommit: sha };
+    seedServiceMock.setSeedItemMinDeployedCommit.mockReturnValue(updated);
+
+    const res = await request(makeApp())
+      .post('/api/seed/items/seed-1/min-deployed-commit')
+      .send({ commit: sha, reason: 'real dep merged', operator: 'pedro' });
+
+    expect(seedServiceMock.setSeedItemMinDeployedCommit).toHaveBeenCalledWith(
+      'seed-1',
+      sha,
+      'real dep merged',
+      'pedro',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(updated);
+  });
+
+  it('400s with the error message when the service rejects', async () => {
+    seedServiceMock.setSeedItemMinDeployedCommit.mockImplementation(() => {
+      throw new Error('commit must be a 40-hex SHA');
+    });
+
+    const res = await request(makeApp())
+      .post('/api/seed/items/seed-1/min-deployed-commit')
+      .send({ commit: 'bad', reason: 'x' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'commit must be a 40-hex SHA' });
   });
 });
 

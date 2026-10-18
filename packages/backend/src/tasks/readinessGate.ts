@@ -773,6 +773,9 @@ const SEED_TARGET_CATEGORIES = [
   'catalog',
   'daemon_roster',
   'canary_scenarios',
+  'invariant_catalog',
+  'metric_sample_threshold',
+  'daemon_memory',
 ];
 
 /** Matches an entity-key-shaped token: a snake_case identifier, a backtick-quoted name, or a `key=value` assignment. */
@@ -836,6 +839,28 @@ export function hasSeedShape(spec: string): boolean {
   if (!category) return false;
   const withoutCategory = stripWholeWordCI(spec, category);
   return ENTITY_KEY_PATTERN.test(withoutCategory);
+}
+
+/**
+ * Server-side seed_contribution candidate derivation: every non-heading line
+ * anywhere in the stored body that hasSeedShape flags, with list markers
+ * stripped. Unlike parseOperationalSeedItems this is not scoped to the
+ * Operational seed section — bodies filed outside bodyRender.ts declare seeds
+ * under Context or Acceptance criteria. Decides only whether a disposition is
+ * owed; never feeds accretion.
+ */
+export function deriveSeedShapedLines(body: string): string[] {
+  const out: string[] = [];
+  for (const line of body.split('\n')) {
+    if (/^\s*#{1,6}\s/.test(line)) continue;
+    const text = line
+      .trim()
+      .replace(/^[-*]\s+/, '')
+      .replace(/^\d+[.)]\s+/, '')
+      .trim();
+    if (text && hasSeedShape(text)) out.push(text);
+  }
+  return out;
 }
 
 export interface AccretionContentMatchResult {

@@ -1,4 +1,5 @@
 import * as seedStore from './seedStore';
+import { recordEvent } from '../audit/AuditLog';
 import type { SeedItem } from './seedStore';
 import {
   defaultSyncAncestrySourceForProject,
@@ -158,6 +159,61 @@ export function rehomeSeedItem(id: string, targetMilestone: string): SeedItem {
     targetMilestone,
     new Date().toISOString(),
   );
+}
+
+const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/i;
+
+/**
+ * Operator-stamped min_deployed_commit, for an item whose sources never merge
+ * a PR. A later recomputeMinDeployedCommit from a real merge overwrites it.
+ */
+export function setSeedItemMinDeployedCommit(
+  seedItemId: string,
+  commit: string,
+  reason: string,
+  operator?: string,
+  ancestry?: DeployAncestrySource,
+): SeedItem {
+  const item = seedStore.getItem(seedItemId);
+  if (!item) {
+    throw new Error(`seed_item: no item ${seedItemId}`);
+  }
+  if (typeof reason !== 'string' || reason.trim() === '') {
+    throw new Error('reason is required');
+  }
+  if (typeof commit !== 'string' || !FULL_SHA_PATTERN.test(commit)) {
+    throw new Error('commit must be a 40-hex SHA');
+  }
+  const source = ancestry ?? defaultSyncAncestrySourceForProject(item.project);
+  let resolves: boolean;
+  try {
+    resolves = source.isAncestor(commit, commit);
+  } catch {
+    resolves = false;
+  }
+  if (!resolves) {
+    throw new Error(
+      `commit ${commit} does not resolve in the repo for project ${item.project}`,
+    );
+  }
+  seedStore.setMinDeployedCommit(seedItemId, commit, new Date().toISOString());
+  recordEvent({
+    event_type: 'seed_item_min_commit_set',
+    actor_type: 'operator',
+    project_id: item.project,
+    payload: {
+      seedItemId,
+      from: item.minDeployedCommit ?? null,
+      to: commit,
+      reason,
+      operator,
+    },
+  });
+  const updated = seedStore.getItem(seedItemId);
+  if (!updated) {
+    throw new Error(`seed_item: no item ${seedItemId}`);
+  }
+  return updated;
 }
 
 const DEFAULT_LIST_LIMIT = 20;

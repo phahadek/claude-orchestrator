@@ -63,6 +63,7 @@ import { extractPathToken } from './groomLoad';
 import type { TrackedFileSetCache } from './groomLoad';
 import { getCachedStatus, getCachedType } from '../tasks/TaskWriteCommands';
 import { STATUS_DISPLAY } from '../tasks/statusCanonical';
+import { deriveSeedShapedLines } from '../tasks/readinessGate';
 
 const SIZE_CHECK_DECISIONS = new Set([
   'no_split',
@@ -513,6 +514,46 @@ function isSeedContributionCandidatesClassified(
       (c) =>
         `seed_contribution candidate "${c.spec}" has no recorded classification — every candidate ` +
         'must be triaged operational-seed / in-pr / needs-triage before promotion.',
+    );
+  return { ok: reasons.length === 0, reasons };
+}
+
+function normalizeSeedLine(text: string): string {
+  return text.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/**
+ * Server-derived seed_contribution candidates: every seed-shaped line in the
+ * stored task body must carry a groomer classification (matched against the
+ * session-supplied candidates by normalized containment) unless the recorded
+ * seed decision is `seeds` (content-match owns that path). Does not trust the
+ * session to self-report the candidate set.
+ */
+function isDerivedSeedCandidatesClassified(
+  type: string | undefined,
+  taskId: string,
+  taskBody: string | undefined,
+  supplied: GroomingGateEntry['seedContributionCandidates'],
+): { ok: boolean; reasons: string[] } {
+  if (!taskBody || !type || !SEED_CONTRIBUTION_TYPES.has(type)) {
+    return { ok: true, reasons: [] };
+  }
+  const marker = getSeedAccretionMarker(taskId);
+  if (!marker || marker.decision === 'seeds') return { ok: true, reasons: [] };
+  const classified = (supplied ?? [])
+    .filter((c) => c.classification && `${c.classification}`.trim())
+    .map((c) => normalizeSeedLine(c.spec))
+    .filter(Boolean);
+  const reasons = deriveSeedShapedLines(taskBody)
+    .filter((line) => {
+      const n = normalizeSeedLine(line);
+      return !classified.some((s) => n.includes(s) || s.includes(n));
+    })
+    .map(
+      (line) =>
+        `seed_contribution decision is "${marker.decision}" but the task body declares a seed-shaped line with no ` +
+        `classification: "${line}" — classify it operational-seed / in-pr / needs-triage in ` +
+        'seedContributionCandidates, or accrete it with decision "seeds".',
     );
   return { ok: reasons.length === 0, reasons };
 }
@@ -1103,6 +1144,15 @@ export async function checkGroomingPromotionGate(
   reasons.push(
     ...checkAccretionContributions(entry, taskId, resolvedType, accretionOpts)
       .reasons,
+  );
+
+  reasons.push(
+    ...isDerivedSeedCandidatesClassified(
+      resolvedType,
+      taskId,
+      taskBody,
+      entry.seedContributionCandidates,
+    ).reasons,
   );
 
   const { entries: serverFilesPathsEntries, blockedReason } =
