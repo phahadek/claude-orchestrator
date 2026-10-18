@@ -15339,7 +15339,9 @@ function getLatestCompletedFullRunAt(projectId: string): number | null {
       `SELECT MAX(finished_at) AS finished_at FROM test_request_runs
        WHERE project_id = @project_id AND run_kind = 'full' AND state IN ('passed', 'failed')`,
     )
-    .get({ project_id: projectId }) as { finished_at: number | null } | undefined;
+    .get({ project_id: projectId }) as
+    | { finished_at: number | null }
+    | undefined;
   return row?.finished_at ?? null;
 }
 

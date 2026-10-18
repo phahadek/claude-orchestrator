@@ -5027,18 +5027,19 @@ describe('ingestTestRunResultsTx — skips baseline/flip-rate recompute for non-
       seedBaselineRow(testId);
       const before = getTestPerfBaseline(testId)!;
 
-      insertTestRequestRun(
-        'conc-run',
-        'proj-1',
-        'conc-hash',
-        null,
-        Date.now(),
-      );
+      insertTestRequestRun('conc-run', 'proj-1', 'conc-hash', null, Date.now());
       const onDigestSample = vi.fn();
       ingestTestRunResultsTx(
         'conc-run',
         'proj-1',
-        [{ test_id: testId, name: testId, outcome: 'failed', duration_ms: 999 }],
+        [
+          {
+            test_id: testId,
+            name: testId,
+            outcome: 'failed',
+            duration_ms: 999,
+          },
+        ],
         opts.concurrentRunCount,
         false,
         false,
@@ -5066,10 +5067,7 @@ describe('ingestTestRunResultsTx — skips baseline/flip-rate recompute for non-
       'an OOM kill',
       { concurrentRunCount: 0, oomKilled: true, timedOut: false },
     ],
-    [
-      'a timeout',
-      { concurrentRunCount: 2, oomKilled: false, timedOut: true },
-    ],
+    ['a timeout', { concurrentRunCount: 2, oomKilled: false, timedOut: true }],
   ])(
     'issues zero test_perf_baselines statements and leaves the existing row byte-identical for %s',
     (_label, opts) => {
