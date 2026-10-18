@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
@@ -70,8 +70,10 @@ import {
   setPendingPush,
   setPauseReason,
   clearTerminalPRFlags,
+  setHeadSha,
 } from '../../db/queries';
 import { shouldAutoReview } from '../reviewUtils';
+import { logger } from '../../logger';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -309,5 +311,83 @@ describe('PRMergeWatcher.handlePushDetected — routes through ReviewOrchestrato
 
     // No reviewOrchestrator was set on bareWatcher, so nothing to assert
     // against it — the call simply must not throw.
+  });
+
+  describe('expectedHeadSha (lagging GitHub head)', () => {
+    const NEW_SHA = 'new9999999999';
+    const row = () =>
+      makePRRow({
+        last_reviewed_sha: HEAD_SHA,
+        review_result: verdictResult('needs_changes'),
+      });
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    async function run(opts?: { expectedHeadSha?: string | null }) {
+      const p = watcher.handlePushDetected(row(), opts);
+      await vi.runAllTimersAsync();
+      await p;
+    }
+
+    it('waits for GitHub to catch up and reviews the new head', async () => {
+      vi.mocked(github.fetchPR)
+        .mockResolvedValueOnce({ headSha: HEAD_SHA } as any)
+        .mockResolvedValueOnce({ headSha: HEAD_SHA } as any)
+        .mockResolvedValueOnce({ headSha: NEW_SHA } as any);
+
+      await run({ expectedHeadSha: NEW_SHA });
+
+      expect(github.fetchPR).toHaveBeenCalledTimes(3);
+      expect(setHeadSha).toHaveBeenCalledWith(PR_NUMBER, REPO, NEW_SHA);
+      expect(reviewOrchestrator.enqueueReview).toHaveBeenCalledWith(
+        expect.objectContaining({ headSha: NEW_SHA }),
+      );
+      expect(shouldAutoReview).toHaveBeenCalledWith(
+        expect.objectContaining({ headSha: NEW_SHA }),
+        expect.anything(),
+      );
+    });
+
+    it('falls back to the pushed head after retries and warns once', async () => {
+      const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      await run({ expectedHeadSha: NEW_SHA });
+
+      expect(github.fetchPR).toHaveBeenCalledTimes(6);
+      expect(setHeadSha).toHaveBeenCalledWith(PR_NUMBER, REPO, NEW_SHA);
+      expect(reviewOrchestrator.enqueueReview).toHaveBeenCalledWith(
+        expect.objectContaining({ headSha: NEW_SHA }),
+      );
+      const lagWarns = warn.mock.calls.filter((c) =>
+        String(c[0]).includes('using pushed head'),
+      );
+      expect(lagWarns).toHaveLength(1);
+      warn.mockRestore();
+    });
+
+    it('uses a third SHA from GitHub and ignores expectedHeadSha', async () => {
+      vi.mocked(github.fetchPR).mockResolvedValue({
+        headSha: 'third00000000',
+      } as any);
+
+      await run({ expectedHeadSha: NEW_SHA });
+
+      expect(github.fetchPR).toHaveBeenCalledTimes(1);
+      expect(setHeadSha).toHaveBeenCalledWith(PR_NUMBER, REPO, 'third00000000');
+      expect(reviewOrchestrator.enqueueReview).toHaveBeenCalledWith(
+        expect.objectContaining({ headSha: 'third00000000' }),
+      );
+    });
+
+    it('does not retry without expectedHeadSha', async () => {
+      await run();
+
+      expect(github.fetchPR).toHaveBeenCalledTimes(1);
+      expect(setHeadSha).not.toHaveBeenCalled();
+    });
   });
 });

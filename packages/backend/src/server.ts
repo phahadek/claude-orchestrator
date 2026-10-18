@@ -562,7 +562,13 @@ sessionManager.on('message', broadcast);
 // This thin wrapper resolves the coding session → PR row and delegates.
 sessionManager.on(
   'push_detected',
-  ({ sessionId: codingSessionId }: { sessionId: string }) => {
+  ({
+    sessionId: codingSessionId,
+    headSha,
+  }: {
+    sessionId: string;
+    headSha?: string | null;
+  }) => {
     logger.info(
       `[server] push_detected from session ${codingSessionId.slice(0, 8)}`,
     );
@@ -574,7 +580,7 @@ sessionManager.on(
       return;
     }
     void prMergeWatcher
-      .handlePushDetected(prRow)
+      .handlePushDetected(prRow, { expectedHeadSha: headSha ?? null })
       .catch((err: unknown) =>
         logger.error('[server] push_detected: handlePushDetected failed:', err),
       );
