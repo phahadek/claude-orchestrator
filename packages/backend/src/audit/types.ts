@@ -204,7 +204,7 @@ type EventType =
   | 'feedback_delivery_deferred'
   | 'feedback_duplicate_dropped';
 
-type ActorType = 'ai' | 'human' | 'system';
+type ActorType = 'ai' | 'human' | 'system' | 'operator';
 
 export interface AuditEvent {
   event_type: EventType;

@@ -447,7 +447,7 @@ describe('setSeedItemMinDeployedCommit', () => {
     const events = minCommitEvents();
     expect(events).toHaveLength(2);
     expect(events[0]).toMatchObject({
-      actor_type: 'human',
+      actor_type: 'operator',
       project_id: 'polimarket-analyser',
     });
     expect(JSON.parse(events[0].payload)).toEqual({

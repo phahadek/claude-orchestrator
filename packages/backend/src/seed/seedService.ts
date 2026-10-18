@@ -199,7 +199,7 @@ export function setSeedItemMinDeployedCommit(
   seedStore.setMinDeployedCommit(seedItemId, commit, new Date().toISOString());
   recordEvent({
     event_type: 'seed_item_min_commit_set',
-    actor_type: 'human',
+    actor_type: 'operator',
     project_id: item.project,
     payload: {
       seedItemId,
