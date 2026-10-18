@@ -908,6 +908,7 @@ describe('planning.noOp — grouped no-op from an operator-concluded session', (
     expect(result.isError).toBeFalsy();
     const intent = parseIntentResult(result);
     expect(getStagedIntent(intent.id as string)).toBeTruthy();
+    expect(intent.noOpOperatorApprovable).toBe(true);
   });
 
   it('the tool description no longer claims no operator disposition is required', async () => {
