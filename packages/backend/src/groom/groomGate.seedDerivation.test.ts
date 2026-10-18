@@ -5,7 +5,7 @@ vi.mock('../db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
-import { db } from '../db/db.js';
+import { db } from '../db/db';
 import {
   checkGroomingPromotionGate,
   type GroomingGateEntry,
