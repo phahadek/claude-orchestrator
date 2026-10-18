@@ -293,6 +293,16 @@ export function setStagedIntentBroadcast(
  * `intent.annotation`, `intent.sessionId`) rather than re-reading the row,
  * since every call site already has one on hand.
  */
+function parseCommandStats(raw: string | null | undefined): unknown[] | null {
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 function broadcastIntentChange(intent: StagedIntent): void {
   if (!isIntentVisibleOnDecisionSurface(intent, stagedIntentSessionManager)) {
     return;
@@ -9981,6 +9991,7 @@ export function createStagedIntentsRouter(
             finishedAt: run.finished_at,
             durationMs:
               run.finished_at != null ? run.finished_at - run.started_at : null,
+            commandStats: parseCommandStats(run.command_stats),
             concurrentRunCount: run.concurrent_run_count,
             outcome: classification.outcome,
             nextAction: classification.nextAction,
@@ -10044,6 +10055,7 @@ export function createStagedIntentsRouter(
           finishedAt: run.finished_at,
           durationMs:
             run.finished_at != null ? run.finished_at - run.started_at : null,
+          commandStats: parseCommandStats(run.command_stats),
           outcome: classification.outcome,
           nextAction: classification.nextAction,
           outcomeCounts,

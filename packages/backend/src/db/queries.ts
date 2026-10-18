@@ -9981,9 +9981,10 @@ export function completeTestRequestRun(
   oomKilled?: boolean,
   acquisitionAttempted?: boolean,
   failedCommand?: string | null,
+  commandStats?: string | null,
 ): void {
   db.prepare(
-    `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ?, failure_reason = ?, structured_result = ?, oom_killed = ?, test_report_acquisition_attempted = ?, failed_command = ? WHERE id = ?`,
+    `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ?, failure_reason = ?, structured_result = ?, oom_killed = ?, test_report_acquisition_attempted = ?, failed_command = ?, command_stats = ? WHERE id = ?`,
   ).run(
     state,
     output,
@@ -9993,6 +9994,7 @@ export function completeTestRequestRun(
     oomKilled ? 1 : 0,
     acquisitionAttempted === undefined ? null : acquisitionAttempted ? 1 : 0,
     failedCommand ?? null,
+    commandStats ?? null,
     id,
   );
 }
@@ -10130,7 +10132,7 @@ export function clearAwaitingDisposition(id: string): void {
   ).run(id);
 }
 
-const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha, foreign_concurrent_run_count, worktree_path, superseded_by, failed_command, commands, coverage_source_run_id, awaiting_disposition_at, runner_executed`;
+const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, command_stats, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha, foreign_concurrent_run_count, worktree_path, superseded_by, failed_command, commands, coverage_source_run_id, awaiting_disposition_at, runner_executed`;
 
 const AWAITING_DISPOSITION_COLUMNS = TEST_REQUEST_RUN_COLUMNS.split(', ')
   .map((c) => `test_request_runs.${c}`)
@@ -10659,7 +10661,7 @@ export function listTestRequestRunsForProject(
     .prepare<{ project_id: string; limit: number }>(
       `SELECT r.id, r.project_id, r.content_hash, r.session_id, r.state, r.output,
               r.requested_at, r.started_at, r.finished_at, r.failure_reason,
-              r.structured_result, r.concurrent_run_count, r.oom_killed,
+              r.structured_result, r.command_stats, r.concurrent_run_count, r.oom_killed,
               r.test_report_acquisition_attempted, r.run_origin, r.producer,
               r.run_kind, r.base_sha, r.merged_dev_sha, r.conflict_outcome,
               s.passed_count, s.failed_count, s.skipped_count, s.error_count,
