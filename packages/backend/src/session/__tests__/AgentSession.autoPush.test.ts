@@ -199,7 +199,58 @@ describe('AgentSession.handlePushDetected — auto-push logic', () => {
     expect(pushDetectedEvents).toHaveLength(1);
     expect(pushDetectedEvents[0]).toMatchObject({
       sessionId: 'test-auto-push',
+      headSha: 'abc1234',
     });
+  });
+
+  it('carries the local HEAD as headSha when it already equals the ls-remote head', async () => {
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd.includes('rev-parse --abbrev-ref'))
+        return Buffer.from('feature/foo\n');
+      if (cmd.includes('rev-parse HEAD')) return Buffer.from('abc1234\n');
+      if (cmd.includes('ls-remote'))
+        return Buffer.from('abc1234\tfeature/foo\n');
+      return Buffer.from('');
+    });
+    const session = makeSession();
+    const events: any[] = [];
+    session.on('push_detected', (e: unknown) => events.push(e));
+    await callHandlePushDetected(session);
+    expect(events[0].headSha).toBe('abc1234');
+  });
+
+  it('emits headSha null when the branch is diverged', async () => {
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd.includes('rev-parse --abbrev-ref'))
+        return Buffer.from('feature/diverged\n');
+      if (cmd.includes('rev-parse HEAD')) return Buffer.from('local111\n');
+      if (cmd.includes('ls-remote'))
+        return Buffer.from('remote222\tfeature/diverged\n');
+      if (cmd.includes('rev-list --left-right')) return Buffer.from('2\t1\n');
+      return Buffer.from('');
+    });
+    const session = makeSession();
+    const events: any[] = [];
+    session.on('push_detected', (e: unknown) => events.push(e));
+    await callHandlePushDetected(session);
+    expect(events[0].headSha).toBeNull();
+  });
+
+  it('emits headSha null when the auto-push throws', async () => {
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd.includes('rev-parse --abbrev-ref'))
+        return Buffer.from('feature/x\n');
+      if (cmd.includes('rev-parse HEAD')) return Buffer.from('abc1234\n');
+      if (cmd.includes('ls-remote')) return Buffer.from('def5678\tfeature/x\n');
+      if (cmd.includes('rev-list --left-right')) return Buffer.from('0\t1\n');
+      if (cmd.includes('git push')) throw new Error('rejected');
+      return Buffer.from('');
+    });
+    const session = makeSession();
+    const events: any[] = [];
+    session.on('push_detected', (e: unknown) => events.push(e));
+    await callHandlePushDetected(session);
+    expect(events[0].headSha).toBeNull();
   });
 
   it('does not push when worktree HEAD equals origin HEAD', async () => {

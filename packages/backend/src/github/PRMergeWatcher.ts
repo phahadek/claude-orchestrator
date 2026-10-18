@@ -1803,7 +1803,10 @@ export class PRMergeWatcher extends EventEmitter {
    * The prRow should be freshly loaded from the DB before calling so that
    * head_sha and other fields reflect the current state.
    */
-  async handlePushDetected(prRow: PullRequestRow): Promise<void> {
+  async handlePushDetected(
+    prRow: PullRequestRow,
+    opts?: { expectedHeadSha?: string | null },
+  ): Promise<void> {
     if (!AUTO_REVIEW_ENABLED) {
       logger.info('[PRMergeWatcher] handlePushDetected: auto-review disabled');
       return;
@@ -1826,6 +1829,22 @@ export class PRMergeWatcher extends EventEmitter {
           );
           headSha = freshPR.headSha;
           fetchError = undefined;
+          const expected = opts?.expectedHeadSha ?? null;
+          if (expected && headSha === prRow.head_sha && headSha !== expected) {
+            // GitHub's PR head lags a push by more than the 1-3 s between the
+            // push and this read — wait for it to catch up before trusting it.
+            for (let lag = 0; lag < 5 && headSha === prRow.head_sha; lag++) {
+              await new Promise<void>((resolve) => setTimeout(resolve, 2000));
+              headSha = (await this.github.fetchPR(prRow.repo, prRow.pr_number))
+                .headSha;
+            }
+            if (headSha === prRow.head_sha) {
+              logger.warn(
+                `[PRMergeWatcher] PR #${prRow.pr_number} head still ${prRow.head_sha?.slice(0, 7)} on GitHub after push of ${expected.slice(0, 7)} — using pushed head`,
+              );
+              headSha = expected;
+            }
+          }
           if (headSha !== prRow.head_sha) {
             setHeadSha(prRow.pr_number, prRow.repo, headSha);
             // The tree every queued run against this worktree was staged

@@ -276,7 +276,7 @@ export const ALLOWED_TOOLS = [
   // now directs it to stage this instead of stopping silently, which would
   // otherwise leave the task to be re-dispatched forever (see
   // CODE_INTENT_KINDS, planningIntentKinds.ts, and routes/stagedIntents.ts's
-  // maybeAutoResolveCodeNoOp). Same failure mode as test.request/
+  // applyOperatorApprovedNoOp, reached by operator Approve). Same failure mode as test.request/
   // review.dispute/report.file above without this entry: registered
   // server-side but unlisted here, every call denied by the CLI before it
   // reaches the MCP server.

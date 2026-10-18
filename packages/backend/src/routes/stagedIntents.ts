@@ -5942,7 +5942,7 @@ function isGateVerifyAutoCommitEligible(row: StagedIntentRow): boolean {
  * -> appendGateItemEvent), never a bespoke write. Tags the row
  * `annotation: {autoCommitted: true}` (mirroring the `{autoApproved: true}`/
  * `auto_committed` provenance vocabulary already established for
- * autoApproveAccretionRow / maybeAutoResolveCodeNoOp) and, critically, calls
+ * autoApproveAccretionRow) and, critically, calls
  * planningOrchestrator.handleDisposition with `disposition: 'approve'` —
  * the same call the operator apply route makes — so the originating parked
  * verify session is released (markTerminal) exactly as it would be for a
@@ -8401,7 +8401,7 @@ async function applyOperatorApprovedNoOp(
  * Auto-resolves a standalone planning.noOp staged by an investigate-batch
  * session (task_id `report-batch:<batchId>`, see isInvestigateSession)
  * declaring one of its own dispatched reports has no actionable finding —
- * the investigate analog of maybeAutoResolveCodeNoOp above, but resolving
+ * the investigate analog of applyOperatorApprovedNoOp, but resolving
  * through updateReportState against the named report rather than
  * applyResolvedNoOp against a real task, since an investigate session's
  * task_id is the synthetic batch id, not a task the TaskBackend knows
