@@ -206,20 +206,14 @@ describe('GET /api/test-request-runs/project', () => {
   });
 
   it('adds the command_stats column to a populated table, leaving the existing row NULL', async () => {
-    const Database = (await import('better-sqlite3')).default;
     const { runMigrations } = await import('../../db/schema');
-    const mem = new Database(':memory:');
-    mem.exec(
-      `CREATE TABLE test_request_runs (id TEXT PRIMARY KEY, project_id TEXT, structured_result TEXT)`,
-    );
-    mem
+    insertTestRequestRun('run-old', 'proj-1', 'hash-old', null, 1000);
+    db.exec('ALTER TABLE test_request_runs DROP COLUMN command_stats');
+    runMigrations(db);
+    const row = db
       .prepare(
-        `INSERT INTO test_request_runs (id, project_id) VALUES ('old', 'p')`,
+        `SELECT command_stats FROM test_request_runs WHERE id = 'run-old'`,
       )
-      .run();
-    runMigrations(mem);
-    const row = mem
-      .prepare(`SELECT command_stats FROM test_request_runs WHERE id = 'old'`)
       .get() as { command_stats: string | null };
     expect(row.command_stats).toBeNull();
   });
