@@ -1151,8 +1151,13 @@ function renderSkeleton(
           '`gate.accrete` / `seed.stage` above. When the pre-groom body carries ' +
           'no such section, stage no strip intent at all — there is nothing to ' +
           'remove.\n\n' +
-          "Before accreting, classify each candidate line the pre-groom body's " +
-          '"## Operational seed" section carries as `operational-seed` (a ' +
+          'The gate derives seed candidates itself from the whole stored body ' +
+          '(Context and Acceptance criteria included, not only "## Operational ' +
+          'seed"): a `none`/`n/a` decision is blocked while any seed-shaped line ' +
+          '(a data_invariants / invariant_catalog / alarm_rules / ' +
+          'metric_sample_threshold / daemon_memory row, etc.) is unclassified.\n\n' +
+          'Before accreting, classify every seed-shaped line in the pre-groom ' +
+          "body (the \"## Operational seed\" section's lines and any elsewhere) as `operational-seed` (a " +
           "genuine data/config value kept out of this task's own PR), `in-pr` " +
           '(mislabeled — it actually ships in the PR and does not accrete), or ' +
           '`needs-triage` (unclear, deferred) — recorded as ' +
@@ -1162,8 +1167,8 @@ function renderSkeleton(
           'accrete only the `operational-seed`-classified candidates via ' +
           '`seed.stage`, never the `in-pr`/`needs-triage` ones.\n\n' +
           "seed.stage's content-match check runs the opposite direction: the " +
-          'task body starts with a "## Operational seed" section already present ' +
-          '(every task body carries one, `None.` by default), and after a ' +
+          'task body\'s "## Operational seed" section is the strip source (a body ' +
+          'filed without that heading has no strip to match), and after a ' +
           '`seed.stage` accretion this session fills it in with the same seed ' +
           'spec(s), never leaves it at `None.`, and never packs it into the same ' +
           '`groupId` as the arming `task.setStatus` — commit the fill-in as its ' +
