@@ -914,7 +914,9 @@ describe('planning.noOp — grouped no-op from an operator-concluded session', (
     const { client, close } = await connectedClient();
     const { tools } = await client.listTools();
     const tool = tools.find((t) => t.name === 'planning.noOp');
-    expect(tool?.description).not.toContain('no operator disposition is required');
+    expect(tool?.description).not.toContain(
+      'no operator disposition is required',
+    );
     await close();
   });
 });
