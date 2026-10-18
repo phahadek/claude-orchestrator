@@ -11156,6 +11156,8 @@ export interface TestPerfDigestSampleResult {
   durations: number[];
   /** Oldest-first, capped at TEST_OUTCOME_DIGEST_CAPACITY — same order as the stored ring. */
   outcomes: DigestOutcomeSample[];
+  /** False when only the outcome ring advanced (a concurrent run) — durations/baseline are unchanged. */
+  durationAdmitted: boolean;
 }
 
 function parseDigestOutcomes(json: string): DigestOutcomeSample[] {
@@ -11214,9 +11216,10 @@ let _stmtUpsertTestPerfDigest: Database.Statement | null = null;
  * upsertTestPerfBaseline) could easily do by racing ahead or behind within
  * the same millisecond across thousands of tests in one run.
  *
- * No-op (digest untouched) when the sample fails the existing validity
- * predicate — a row with concurrent_run_count != 0 or oom_killed never
- * occupied a window slot before, and must not start now.
+ * Admission is split: outcome samples (P/F) are appended unless the run was
+ * OOM-killed or timed out (contention-induced), regardless of concurrency;
+ * duration samples are appended only for a clean solo run (no peer, no
+ * foreign peer), since contention inflates timings. Otherwise a no-op.
  *
  * On a brand-new test_id, the INSERT branch below writes
  * median_duration_ms/mad_duration_ms/sample_count/is_regressed as literal
@@ -11243,13 +11246,13 @@ export function recordTestPerfDigestSample(
   markers?: string[],
   foreignConcurrentRunCount?: number | null,
   contentHash?: string | null,
+  timedOut?: boolean,
 ): TestPerfDigestSampleResult | null {
-  if (
-    concurrentRunCount !== 0 ||
-    oomKilled ||
-    (foreignConcurrentRunCount ?? 0) !== 0
-  )
-    return null;
+  if (oomKilled || timedOut) return null;
+  const durationAdmitted =
+    concurrentRunCount === 0 && (foreignConcurrentRunCount ?? 0) === 0;
+  const outcomeAdmitted = outcome === 'passed' || outcome === 'failed';
+  if (!durationAdmitted && !outcomeAdmitted) return null;
 
   _stmtGetTestPerfDigest ??= db.prepare<{ test_id: string }>(
     `SELECT recent_outcomes, recent_durations FROM test_perf_baselines WHERE test_id = @test_id`,
@@ -11261,7 +11264,7 @@ export function recordTestPerfDigestSample(
   const outcomes = existing
     ? parseDigestOutcomes(existing.recent_outcomes)
     : [];
-  if (outcome === 'passed' || outcome === 'failed') {
+  if (outcomeAdmitted) {
     const sample: DigestOutcomeSample = {
       o: outcome === 'passed' ? 'P' : 'F',
       t: sequencedAt,
@@ -11276,9 +11279,11 @@ export function recordTestPerfDigestSample(
   const durations = existing
     ? parseDigestDurations(existing.recent_durations)
     : [];
-  durations.push(durationMs);
-  if (durations.length > TEST_DURATION_DIGEST_CAPACITY) {
-    durations.splice(0, durations.length - TEST_DURATION_DIGEST_CAPACITY);
+  if (durationAdmitted) {
+    durations.push(durationMs);
+    if (durations.length > TEST_DURATION_DIGEST_CAPACITY) {
+      durations.splice(0, durations.length - TEST_DURATION_DIGEST_CAPACITY);
+    }
   }
 
   _stmtUpsertTestPerfDigest ??= db.prepare<{
@@ -11307,14 +11312,14 @@ export function recordTestPerfDigestSample(
     test_id: testId,
     project_id: projectId,
     name,
-    last_duration_ms: durationMs,
+    last_duration_ms: durationAdmitted ? durationMs : 0,
     recent_outcomes: JSON.stringify(outcomes),
     recent_durations: JSON.stringify(durations),
     markers: markers && markers.length > 0 ? JSON.stringify(markers) : null,
     updated_at: sequencedAt,
   });
 
-  return { durations, outcomes };
+  return { durations, outcomes, durationAdmitted };
 }
 
 /**
@@ -11346,6 +11351,7 @@ export function ingestTestRunResultsTx(
   foreignConcurrentRunCount?: number | null,
   contentHash?: string | null,
   onDigestSample?: (testId: string, sample: TestPerfDigestSampleResult) => void,
+  timedOut?: boolean,
 ): TestOutcomeCounts {
   const counts: TestOutcomeCounts = {
     passed: 0,
@@ -11398,6 +11404,7 @@ export function ingestTestRunResultsTx(
         t.markers,
         foreignConcurrentRunCount,
         contentHash,
+        timedOut,
       );
       if (result) digestResults.set(t.test_id, result);
     });
@@ -11451,6 +11458,7 @@ export function ingestTestRunResultsOffMainThread(
     oomKilled: boolean;
     incomplete: boolean;
     foreignConcurrentRunCount: number | null;
+    timedOut: boolean;
     contentHash: string | null;
     flipRateWindowN: number;
     flipRateThresholdK: number;
@@ -11481,6 +11489,7 @@ export function ingestTestRunResultsOffMainThread(
         oomKilled: args.oomKilled,
         incomplete: args.incomplete,
         foreignConcurrentRunCount: args.foreignConcurrentRunCount,
+        timedOut: args.timedOut,
         contentHash: args.contentHash,
         batchSize: TEST_RUN_INGESTION_WORKER_BATCH_SIZE,
         flipRateWindowN: args.flipRateWindowN,
@@ -15183,6 +15192,10 @@ export interface LaneHealthRollup {
    * non-blocking record of the thrash, not a count of anything paused.
    */
   cycleLimitCrossings: number;
+  /** max(test_perf_baselines.updated_at) for the project, epoch ms; null when no digest exists. Far behind latestCompletedFullRunAt means the digest has gone stale. */
+  lastDigestUpdateAt: number | null;
+  /** finished_at of the project's latest completed (passed/failed) full run; null when none. */
+  latestCompletedFullRunAt: number | null;
 }
 
 /**
@@ -15305,7 +15318,29 @@ export function getLaneHealthRollup(
     regressedTests: getRegressedTestsForProject(projectId),
     flakyTests: { count: flakyTests.length, tests: flakyTests },
     cycleLimitCrossings: getCycleLimitCrossingsForProject(projectId),
+    lastDigestUpdateAt: getLastDigestUpdateAt(projectId),
+    latestCompletedFullRunAt: getLatestCompletedFullRunAt(projectId),
   };
+}
+
+function getLastDigestUpdateAt(projectId: string): number | null {
+  const row = db
+    .prepare<{ project_id: string }>(
+      `SELECT MAX(CASE WHEN updated_at < ${MS_VS_US_THRESHOLD} THEN updated_at ELSE updated_at / 1000 END) AS last_at
+       FROM test_perf_baselines WHERE project_id = @project_id`,
+    )
+    .get({ project_id: projectId }) as { last_at: number | null } | undefined;
+  return row?.last_at == null ? null : Math.floor(row.last_at);
+}
+
+function getLatestCompletedFullRunAt(projectId: string): number | null {
+  const row = db
+    .prepare<{ project_id: string }>(
+      `SELECT MAX(finished_at) AS finished_at FROM test_request_runs
+       WHERE project_id = @project_id AND run_kind = 'full' AND state IN ('passed', 'failed')`,
+    )
+    .get({ project_id: projectId }) as { finished_at: number | null } | undefined;
+  return row?.finished_at ?? null;
 }
 
 let _stmtCycleLimitCrossings: Database.Statement | null = null;

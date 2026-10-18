@@ -2359,6 +2359,7 @@ async function dispatchIngestion(
       oomKilled: !!run.oom_killed,
       incomplete,
       foreignConcurrentRunCount: run.foreign_concurrent_run_count ?? null,
+      timedOut: run.failure_reason === 'timeout',
       contentHash: run.content_hash,
       flipRateWindowN: windowN,
       flipRateThresholdK: thresholdK,
@@ -2385,8 +2386,11 @@ async function dispatchIngestion(
         run.content_hash,
         (testId, sample) => {
           sampledTests.set(testId, sample);
-          computeTestPerfBaseline(testId, [...sample.durations].reverse());
+          if (sample.durationAdmitted) {
+            computeTestPerfBaseline(testId, [...sample.durations].reverse());
+          }
         },
+        run.failure_reason === 'timeout',
       );
       recomputeFlipRateFlags(sampledTests);
     },
