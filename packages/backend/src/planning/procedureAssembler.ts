@@ -1157,7 +1157,7 @@ function renderSkeleton(
           '(a data_invariants / invariant_catalog / alarm_rules / ' +
           'metric_sample_threshold / daemon_memory row, etc.) is unclassified.\n\n' +
           'Before accreting, classify every seed-shaped line in the pre-groom ' +
-          "body (the \"## Operational seed\" section's lines and any elsewhere) as `operational-seed` (a " +
+          'body (the "## Operational seed" section\'s lines and any elsewhere) as `operational-seed` (a ' +
           "genuine data/config value kept out of this task's own PR), `in-pr` " +
           '(mislabeled — it actually ships in the PR and does not accrete), or ' +
           '`needs-triage` (unclear, deferred) — recorded as ' +

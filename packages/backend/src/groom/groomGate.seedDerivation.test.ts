@@ -6,7 +6,10 @@ vi.mock('../db/db.js', async () => {
 });
 
 import { db } from '../db/db.js';
-import { checkGroomingPromotionGate, type GroomingGateEntry } from './groomGate';
+import {
+  checkGroomingPromotionGate,
+  type GroomingGateEntry,
+} from './groomGate';
 import { recordAccretionMarker as recordSeedAccretionMarker } from '../seed/seedStore';
 
 const LINE =
