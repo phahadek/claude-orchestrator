@@ -429,7 +429,11 @@ Rules that make it safe:
   --state resolved [--resolution '<json>']`** (wraps `POST /api/ops-journal/:taskId/state` —
   deterministic field write, validated against the allowed state-transition graph server-side); the
   next `ops-context` call trims it: **deletion is the fragile part, not the write, and it's no longer
-  yours to get wrong.** `set-state`'s response on success is **the updated `ops_journal` row itself**
+  yours to get wrong.** A **non-🔎 Investigation → `resolved`** from any state other than
+  `applied-pending-confirm` (e.g. a 🧪 Testing task at `candidate`) is rejected with 400 unless the
+  call carries one of: **`--no-change-reason '<text>'`** (non-empty; nothing needed changing) or
+  **`--reconciliation '{"description":"<what was reconciled>","passed":true|false}'`** (object with
+  a string `description` and boolean `passed`). `set-state`'s response on success is **the updated `ops_journal` row itself**
   (same shape as one entry in `journal --milestone <M>`'s `entries[]`) — not `{ entry }` — and
   `ops-client.mjs` also prints a one-line `<taskId> -> <state>` confirmation to stderr.
 - **Interactive-throughout is a lighter path.** The full `pending` → `candidate` /
@@ -438,7 +442,7 @@ Rules that make it safe:
   to hand off), the journal is a live scratchpad, not a handoff artifact — you may collapse the
   provisional states to just `pending` → `resolved`, still recording `resolution` per task. Here
   **`evidence[]` can stay in-conversation and land on the task page** (that's what worked) — by
-  design `ops-client.mjs set-state` writes only `state` / `resolution` / `disposition`, **not**
+  design `ops-client.mjs set-state` writes only `state` / `resolution` / `disposition` / `reconciliation` / `noChangeReason`, **not**
   evidence: a fragile evidence append isn't worth it when the operator is present and the task page
   is the durable home. Don't carry the full staging ceremony when there's no handoff to protect.
 - This is ops-native and **distinct from `/wrap`** (which sweeps broad session residue).
