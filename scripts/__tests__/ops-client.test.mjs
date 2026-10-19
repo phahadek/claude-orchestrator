@@ -26,7 +26,7 @@ function runScript(args, env) {
 async function startCapturingServer() {
   const captured = { bodies: [] };
   if (server) await new Promise((r) => server.close(r));
-  server =http.createServer((req, res) => {
+  server = http.createServer((req, res) => {
     let data = '';
     req.on('data', (c) => (data += c));
     req.on('end', () => {
@@ -49,7 +49,15 @@ describe('ops-client.mjs — set-state resolve assertions', () => {
   it('sends noChangeReason from --no-change-reason', async () => {
     const cap = await startCapturingServer();
     await runScript(
-      ['set-state', '--task', 't', '--state', 'resolved', '--no-change-reason', 'x'],
+      [
+        'set-state',
+        '--task',
+        't',
+        '--state',
+        'resolved',
+        '--no-change-reason',
+        'x',
+      ],
       cap.env,
     );
     assert.deepEqual(cap.bodies, [{ state: 'resolved', noChangeReason: 'x' }]);
@@ -84,7 +92,15 @@ describe('ops-client.mjs — set-state resolve assertions', () => {
       const cap = await startCapturingServer();
       await assert.rejects(
         runScript(
-          ['set-state', '--task', 't', '--state', 'resolved', '--reconciliation', bad],
+          [
+            'set-state',
+            '--task',
+            't',
+            '--state',
+            'resolved',
+            '--reconciliation',
+            bad,
+          ],
           cap.env,
         ),
         (e) => e.code === 1 && /--reconciliation/.test(e.stderr),
@@ -96,7 +112,15 @@ describe('ops-client.mjs — set-state resolve assertions', () => {
   it('leaves the body unchanged when neither flag is given', async () => {
     const cap = await startCapturingServer();
     await runScript(
-      ['set-state', '--task', 't', '--state', 'resolved', '--disposition', 'pass'],
+      [
+        'set-state',
+        '--task',
+        't',
+        '--state',
+        'resolved',
+        '--disposition',
+        'pass',
+      ],
       cap.env,
     );
     assert.deepEqual(cap.bodies, [{ state: 'resolved', disposition: 'pass' }]);
