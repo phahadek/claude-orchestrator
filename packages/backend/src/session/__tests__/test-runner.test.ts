@@ -601,6 +601,75 @@ describe('runTestCommands — RSS kill', () => {
   });
 });
 
+describe('runCommandWithTimeout — durationMs / peakRssMb', () => {
+  let originalPlatform: PropertyDescriptor | undefined;
+
+  beforeEach(() => {
+    originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', {
+      value: 'linux',
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  afterEach(() => {
+    if (originalPlatform) {
+      Object.defineProperty(process, 'platform', originalPlatform);
+    }
+  });
+
+  it('returns the maximum sampled memory as peakRssMb and a non-zero durationMs', async () => {
+    const samplesKb = [100 * 1024, 300 * 1024, 200 * 1024];
+    let i = 0;
+    vi.mocked(fsModule.readFileSync).mockImplementation(
+      () =>
+        `VmRSS:\t${samplesKb[Math.min(i++, samplesKb.length - 1)]} kB\n` as unknown as Buffer,
+    );
+    _spawnHook = () => makeProc(0, 'ok', '', 7_000);
+
+    const promise = runCommandWithTimeout(
+      'pytest',
+      '/worktree',
+      300_000,
+      4096,
+      'run-peak',
+    );
+    await vi.advanceTimersByTimeAsync(8_000);
+    const result = await promise;
+
+    expect(result.peakRssMb).toBe(300);
+    expect(result.durationMs).toBeGreaterThan(0);
+  });
+
+  it('reports peakRssMb null when the poller is disabled, still setting durationMs', async () => {
+    _spawnHook = () => makeProc(0, 'ok', '', 3_000);
+
+    const promise = runCommandWithTimeout(
+      'pytest',
+      '/worktree',
+      300_000,
+      0,
+      'run-nopoll',
+    );
+    await vi.advanceTimersByTimeAsync(4_000);
+    const result = await promise;
+
+    expect(result.peakRssMb).toBeNull();
+    expect(result.durationMs).toBeGreaterThan(0);
+  });
+
+  it('runTestCommands records one commandStats entry per command that ran, in order', async () => {
+    _spawnHook = () => makeProc(0, 'ok');
+
+    const promise = runTestCommands('/worktree', ['a', 'b'], 300, () => {});
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(result.commandStats?.map((s) => s.command)).toEqual(['a', 'b']);
+  });
+});
+
 describe('getRunMemoryMb', () => {
   afterEach(() => {
     _resetForTesting();

@@ -172,4 +172,49 @@ describe('GET /api/test-request-runs/project', () => {
       conflictOutcome: 'merged',
     });
   });
+
+  it('returns commandStats parsed from command_stats, and null for a row without it', async () => {
+    const stats = [
+      { command: 'npm run lint', durationMs: 1200, peakRssMb: null },
+      { command: 'npx vitest run', durationMs: 45000, peakRssMb: 2048.5 },
+    ];
+    insertTestRequestRun('run-stats', 'proj-1', 'hash-stats', null, 2000);
+    completeTestRequestRun(
+      'run-stats',
+      'passed',
+      'ok',
+      null,
+      null,
+      false,
+      undefined,
+      null,
+      JSON.stringify(stats),
+    );
+    insertTestRequestRun('run-legacy', 'proj-1', 'hash-legacy', null, 1000);
+    completeTestRequestRun('run-legacy', 'passed', 'ok');
+
+    const res = await supertest(makeApp())
+      .get('/api/test-request-runs/project')
+      .query({ projectId: 'proj-1' });
+
+    expect(res.status).toBe(200);
+    const byId = Object.fromEntries(
+      res.body.runs.map((r: { id: string }) => [r.id, r]),
+    );
+    expect(byId['run-stats'].commandStats).toEqual(stats);
+    expect(byId['run-legacy'].commandStats).toBeNull();
+  });
+
+  it('adds the command_stats column to a populated table, leaving the existing row NULL', async () => {
+    const { runMigrations } = await import('../../db/schema');
+    insertTestRequestRun('run-old', 'proj-1', 'hash-old', null, 1000);
+    db.exec('ALTER TABLE test_request_runs DROP COLUMN command_stats');
+    runMigrations(db);
+    const row = db
+      .prepare(
+        `SELECT command_stats FROM test_request_runs WHERE id = 'run-old'`,
+      )
+      .get() as { command_stats: string | null };
+    expect(row.command_stats).toBeNull();
+  });
 });

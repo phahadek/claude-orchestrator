@@ -83,6 +83,7 @@ function insertTestResult(opts: {
   outcome: 'passed' | 'failed';
   createdAt: number;
   contentHash?: string;
+  concurrentRunCount?: number;
 }): void {
   seq += 1;
   const runId = `run-${seq}`;
@@ -116,7 +117,7 @@ function insertTestResult(opts: {
     opts.name,
     opts.outcome,
     1,
-    0,
+    opts.concurrentRunCount ?? 0,
     false,
     opts.createdAt,
     undefined,
@@ -533,6 +534,27 @@ describe('conditional ghost-prune write (zero-work tick cost)', () => {
     expect(precomputed[0]?.transitionCount).toBe(
       preOptimization[0]?.transitionCount,
     );
+  });
+
+  it('flags a test whose flip sequence came entirely from concurrent runs, in both the live and rollup-worker computations', async () => {
+    ['passed', 'failed', 'passed', 'failed'].forEach((outcome, i) =>
+      insertTestResult({
+        projectId: 'proj-1',
+        testId: 'test-conc-flaky',
+        name: 'suite > concurrent flaky',
+        outcome: outcome as 'passed' | 'failed',
+        createdAt: i,
+        concurrentRunCount: 3,
+      }),
+    );
+    const live = computeTestFlipRateFlag('test-conc-flaky', 20, 2);
+    expect(live.transitionCount).toBe(3);
+    expect(live.flagged).toBe(true);
+
+    await replaceFlaggedFlakyTestsRollup('proj-1', 20, 2, 1000);
+    const rollup = getFlaggedFlakyTestsRollup('proj-1');
+    expect(rollup.map((t) => t.testId)).toEqual(['test-conc-flaky']);
+    expect(rollup[0]?.transitionCount).toBe(3);
   });
 });
 

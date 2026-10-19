@@ -1322,6 +1322,8 @@ export interface TestRequestRunRow {
   finished_at: number | null;
   /** Normalized test-result JSON (junit-xml parse), populated by the acquisition/parser follow-on. Null for pre-existing rows and until that follow-on runs. */
   structured_result: string | null;
+  /** JSON array of {command, durationMs, peakRssMb} in run order. Null for pre-existing rows and runner-executor runs that don't report it. */
+  command_stats: string | null;
   failure_reason: TestRequestFailureReason | null;
   /** Per-project Semaphore occupancy at admission, captured before insertion — see testRequestLane.ts. Null for pre-existing rows. */
   concurrent_run_count: number | null;

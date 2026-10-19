@@ -36,7 +36,15 @@ export {
   collectStructuredTestResult,
 };
 
+export interface CommandStat {
+  command: string;
+  durationMs: number;
+  peakRssMb: number | null;
+}
+
 export interface TestCommandResult {
+  /** Per-command wall time and sampled peak RSS, in run order; fail-fast-skipped commands have no entry. */
+  commandStats?: CommandStat[];
   passed: boolean;
   output: string;
   timedOut?: boolean;
@@ -246,6 +254,10 @@ export interface BoundedCommandResult {
   oomKilled: boolean;
   spawnFailed: boolean;
   teardownVerificationFailed: boolean;
+  /** Wall time from spawn to settle. */
+  durationMs: number;
+  /** Max positive sampled run memory (MB) from the RSS poller; null when the poller is disabled or took no positive sample. A sampled lower bound. */
+  peakRssMb: number | null;
   /** The per-run TMPDIR created for this command, if one could be created. Removed by the time this result resolves. */
   tmpDir?: string;
 }
@@ -307,6 +319,8 @@ export function runCommandWithTimeout(
     // bounded, run-scoped leaf rather than main/ or a leaf shared with other
     // runs — see spawnIntoTestRunCgroup's doc comment for why post-spawn
     // placement can't close this race.
+    const startedAt = Date.now();
+    let peakRssMb: number | null = null;
     const proc = spawnIntoTestRunCgroup(runId, () => spawn(cmd, spawnOpts));
     let chunks: Buffer[] = [];
     let headDroppedChars = 0;
@@ -383,6 +397,8 @@ export function runCommandWithTimeout(
           spawnFailed: false,
           teardownVerificationFailed: survived,
           tmpDir: runTmp ?? undefined,
+          durationMs: Date.now() - startedAt,
+          peakRssMb,
           ...result,
         });
       });
@@ -437,6 +453,9 @@ export function runCommandWithTimeout(
       rssPoller = setInterval(() => {
         if (proc.pid == null) return;
         const rss = getRunMemoryMb(runId, proc.pid);
+        if (rss > 0 && (peakRssMb === null || rss > peakRssMb)) {
+          peakRssMb = rss;
+        }
         if (rss > 0 && rss > maxRssMb) {
           escalate(
             false,
@@ -520,6 +539,7 @@ export async function runTestCommands(
   let anySpawnFailed = false;
   let anyTeardownVerificationFailed = false;
   let failedCommand: string | undefined;
+  const commandStats: CommandStat[] = [];
 
   for (const cmd of commands) {
     log(`[test-runner] running: ${cmd}\n`);
@@ -530,6 +550,8 @@ export async function runTestCommands(
       oomKilled,
       spawnFailed,
       teardownVerificationFailed,
+      durationMs,
+      peakRssMb,
     } = await runCommandWithTimeout(
       cmd,
       worktreePath,
@@ -539,6 +561,7 @@ export async function runTestCommands(
       env,
     );
     outputParts.push(`$ ${cmd}\n${output}`);
+    commandStats.push({ command: cmd, durationMs, peakRssMb });
 
     const wasPassing = allPassed;
     if (spawnFailed) {
@@ -580,6 +603,7 @@ export async function runTestCommands(
     spawnFailed: anySpawnFailed,
     teardownVerificationFailed: anyTeardownVerificationFailed,
     failedCommand,
+    commandStats,
   };
 }
 

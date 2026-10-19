@@ -123,11 +123,11 @@ describe('computeTestFlipRateFlag', () => {
     expect(flag.flagged).toBe(false);
   });
 
-  it('never counts a sample with concurrent_run_count > 0 or oom_killed as a window slot, pass, fail, or transition', () => {
+  it('never counts an oom_killed sample as a window slot, pass, fail, or transition, but does count concurrent ones', () => {
     insertSample({ testId: 'test-c', outcome: 'passed', createdAt: 0 });
     insertSample({
       testId: 'test-c',
-      outcome: 'failed',
+      outcome: 'passed',
       concurrentRunCount: 1,
       createdAt: 1,
     });
@@ -140,12 +140,12 @@ describe('computeTestFlipRateFlag', () => {
     insertSample({ testId: 'test-c', outcome: 'passed', createdAt: 3 });
 
     const flag = computeTestFlipRateFlag('test-c', 20, 2);
-    expect(flag.sampleCount).toBe(2);
+    expect(flag.sampleCount).toBe(3);
     expect(flag.transitionCount).toBe(0);
     expect(flag.flagged).toBe(false);
   });
 
-  it('never counts a sample with a nonzero foreign_concurrent_run_count as a window slot, and treats a NULL foreign count as zero', () => {
+  it('counts a sample with a nonzero or NULL foreign_concurrent_run_count as an outcome window slot', () => {
     insertSample({ testId: 'test-foreign', outcome: 'passed', createdAt: 0 });
     insertSample({
       testId: 'test-foreign',
@@ -161,9 +161,7 @@ describe('computeTestFlipRateFlag', () => {
     });
 
     const flag = computeTestFlipRateFlag('test-foreign', 20, 2);
-    // The foreign-contended sample never occupies a slot; the NULL-foreign
-    // sample (a pre-migration row) is treated as 0 and does occupy one.
-    expect(flag.sampleCount).toBe(2);
+    expect(flag.sampleCount).toBe(3);
     expect(flag.transitionCount).toBe(1);
   });
 
@@ -308,7 +306,87 @@ describe('recordTestPerfDigestSample content hash persistence', () => {
     expect('h' in samples[1]).toBe(false);
   });
 
-  it('never writes a digest sample when concurrent_run_count, oom_killed, or foreign_concurrent_run_count exclude the row, even with a content hash supplied', () => {
+  it('appends outcome but not duration samples for concurrent and foreign-concurrent runs, advancing updated_at', () => {
+    recordTestPerfDigestSample(
+      'test-conc',
+      'proj-1',
+      'test-conc',
+      'passed',
+      100,
+      0,
+      false,
+      10,
+      undefined,
+      undefined,
+      'hash-1',
+    );
+    const concurrent = recordTestPerfDigestSample(
+      'test-conc',
+      'proj-1',
+      'test-conc',
+      'failed',
+      9999,
+      3,
+      false,
+      20,
+      undefined,
+      undefined,
+      'hash-1',
+    );
+    const foreign = recordTestPerfDigestSample(
+      'test-conc',
+      'proj-1',
+      'test-conc',
+      'passed',
+      9999,
+      0,
+      false,
+      30,
+      undefined,
+      2,
+      'hash-1',
+    );
+    expect(concurrent?.durationAdmitted).toBe(false);
+    expect(foreign?.durationAdmitted).toBe(false);
+
+    const row = db
+      .prepare(
+        `SELECT recent_outcomes, recent_durations, updated_at FROM test_perf_baselines WHERE test_id = ?`,
+      )
+      .get('test-conc') as {
+      recent_outcomes: string;
+      recent_durations: string;
+      updated_at: number;
+    };
+    expect(
+      JSON.parse(row.recent_outcomes).map((s: { o: string }) => s.o),
+    ).toEqual(['P', 'F', 'P']);
+    expect(JSON.parse(row.recent_durations)).toEqual([100]);
+    expect(row.updated_at).toBe(30);
+  });
+
+  it('flags a flip sequence made entirely of concurrent-run outcome samples', () => {
+    const outcomes: Array<'passed' | 'failed'> = [
+      'passed',
+      'failed',
+      'passed',
+      'failed',
+    ];
+    outcomes.forEach((outcome, i) =>
+      insertSample({
+        testId: 'test-conc-flip',
+        outcome,
+        concurrentRunCount: 3,
+        createdAt: i,
+      }),
+    );
+    const flag = computeTestFlipRateFlag('test-conc-flip', 20, 2);
+    expect(flag.sampleCount).toBe(4);
+    expect(flag.transitionCount).toBe(3);
+    expect(flag.flagged).toBe(true);
+  });
+
+  it('never writes a digest sample when the run is oom_killed or timed out, even when concurrent', () => {
     recordTestPerfDigestSample(
       'test-excluded',
       'proj-1',
@@ -316,11 +394,25 @@ describe('recordTestPerfDigestSample content hash persistence', () => {
       'failed',
       1,
       1,
-      false,
+      true,
       0,
       undefined,
       undefined,
       'hash-1',
+    );
+    recordTestPerfDigestSample(
+      'test-excluded',
+      'proj-1',
+      'test-excluded',
+      'failed',
+      1,
+      0,
+      false,
+      1,
+      undefined,
+      undefined,
+      'hash-1',
+      true,
     );
     recordTestPerfDigestSample(
       'test-excluded',
@@ -330,19 +422,6 @@ describe('recordTestPerfDigestSample content hash persistence', () => {
       1,
       0,
       true,
-      1,
-      undefined,
-      undefined,
-      'hash-1',
-    );
-    recordTestPerfDigestSample(
-      'test-excluded',
-      'proj-1',
-      'test-excluded',
-      'failed',
-      1,
-      0,
-      false,
       2,
       undefined,
       1,

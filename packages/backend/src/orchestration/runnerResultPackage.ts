@@ -33,6 +33,12 @@ export interface RunnerResultPackage {
   runnerConcurrentRunCount: number;
   /** Already-normalized report parsed on the runner; null when acquisition failed or no report is configured. */
   structuredResult: StructuredTestResult | null;
+  /** Per-command wall time and sampled peak RSS in run order; absent from a runner that does not report it. */
+  commandStats?: {
+    command: string;
+    durationMs: number;
+    peakRssMb: number | null;
+  }[];
 }
 
 function isNonNegInt(v: unknown): v is number {

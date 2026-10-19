@@ -44,6 +44,7 @@ interface TestRunIngestionWorkerData {
   oomKilled: boolean;
   incomplete: boolean;
   foreignConcurrentRunCount: number | null;
+  timedOut: boolean;
   contentHash: string | null;
   batchSize: number;
   flipRateWindowN: number;
@@ -178,6 +179,7 @@ function insertTestRunSummary(
 interface DigestSampleResult {
   durations: number[];
   outcomes: DigestOutcomeSample[];
+  durationAdmitted: boolean;
 }
 
 /** Mirrors recordTestPerfDigestSample in db/queries.ts. */
@@ -194,13 +196,13 @@ function recordTestPerfDigestSample(
   markers: string[] | undefined,
   foreignConcurrentRunCount: number | null,
   contentHash: string | null,
+  timedOut: boolean,
 ): DigestSampleResult | null {
-  if (
-    concurrentRunCount !== 0 ||
-    oomKilled ||
-    (foreignConcurrentRunCount ?? 0) !== 0
-  )
-    return null;
+  if (oomKilled || timedOut) return null;
+  const durationAdmitted =
+    concurrentRunCount === 0 && (foreignConcurrentRunCount ?? 0) === 0;
+  const outcomeAdmitted = outcome === 'passed' || outcome === 'failed';
+  if (!durationAdmitted && !outcomeAdmitted) return null;
 
   stmtGetTestPerfDigest ??= database.prepare(
     `SELECT recent_outcomes, recent_durations FROM test_perf_baselines WHERE test_id = @test_id`,
@@ -212,7 +214,7 @@ function recordTestPerfDigestSample(
   const outcomes = existing
     ? parseDigestOutcomes(existing.recent_outcomes)
     : [];
-  if (outcome === 'passed' || outcome === 'failed') {
+  if (outcomeAdmitted) {
     const sample: DigestOutcomeSample = {
       o: outcome === 'passed' ? 'P' : 'F',
       t: sequencedAt,
@@ -227,9 +229,11 @@ function recordTestPerfDigestSample(
   const durations = existing
     ? parseDigestDurations(existing.recent_durations)
     : [];
-  durations.push(durationMs);
-  if (durations.length > TEST_DURATION_DIGEST_CAPACITY) {
-    durations.splice(0, durations.length - TEST_DURATION_DIGEST_CAPACITY);
+  if (durationAdmitted) {
+    durations.push(durationMs);
+    if (durations.length > TEST_DURATION_DIGEST_CAPACITY) {
+      durations.splice(0, durations.length - TEST_DURATION_DIGEST_CAPACITY);
+    }
   }
 
   stmtUpsertTestPerfDigest ??= database.prepare(`
@@ -249,14 +253,14 @@ function recordTestPerfDigestSample(
     test_id: testId,
     project_id: projectId,
     name,
-    last_duration_ms: durationMs,
+    last_duration_ms: durationAdmitted ? durationMs : 0,
     recent_outcomes: JSON.stringify(outcomes),
     recent_durations: JSON.stringify(durations),
     markers: markers && markers.length > 0 ? JSON.stringify(markers) : null,
     updated_at: sequencedAt,
   });
 
-  return { durations, outcomes };
+  return { durations, outcomes, durationAdmitted };
 }
 
 function median(sorted: number[]): number {
@@ -458,13 +462,16 @@ function run(): TestRunIngestionWorkerResult {
             item.markers,
             data.foreignConcurrentRunCount,
             data.contentHash,
+            data.timedOut,
           );
           if (sample) {
-            computeTestPerfBaseline(
-              database,
-              item.test_id,
-              [...sample.durations].reverse(),
-            );
+            if (sample.durationAdmitted) {
+              computeTestPerfBaseline(
+                database,
+                item.test_id,
+                [...sample.durations].reverse(),
+              );
+            }
             logFlipRateFlagIfFlagged(
               item.test_id,
               sample.outcomes,
