@@ -44,6 +44,17 @@ vi.mock('../../tasks/TaskBackend', () => ({
   }),
 }));
 
+// config.getProjectById lazy-`require`s ProjectService, which a native
+// require cannot load as TypeScript under vitest — resolve it via ESM import.
+vi.mock('../../config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../config')>();
+  const { ProjectService } = await import('../../projects/ProjectService.js');
+  return {
+    ...actual,
+    getProjectById: (id: string) => ProjectService.getById(id),
+  };
+});
+
 vi.mock('../../db/db.js', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
   return { db: setupTestDb() };
