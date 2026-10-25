@@ -326,6 +326,20 @@ export function createGateStateRouter(): Router {
       return;
     }
     const disposition = body.disposition as string | undefined;
+    const isGateSession =
+      (req as Request & { routeSession?: unknown }).routeSession !==
+        undefined || req.header('x-gate-session') === '1';
+    if (
+      isGateSession &&
+      (disposition === undefined ||
+        ['noted', 'deferred', 'discarded'].includes(disposition))
+    ) {
+      res.status(400).json({
+        error:
+          'a gate session event needs a disposition of pass, fail (with filedFollowon), needs-setup (with evidence) or not-yet-triggerable (with evidence); noted, deferred, discarded and disposition-less events are not allowed',
+      });
+      return;
+    }
     try {
       const updated = appendGateItemEvent(id, {
         disposition,

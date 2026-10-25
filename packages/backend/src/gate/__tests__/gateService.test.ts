@@ -1241,6 +1241,17 @@ describe('appendGateItemEvent', () => {
     expect(getGateReadiness(item.project, item.milestone).status).toBe('green');
   });
 
+  it('rejects `fail` without filedFollowon and `needs-setup` without evidence', () => {
+    const item = makeItem({ classification: 'Read-Only' });
+    expect(() =>
+      appendGateItemEvent(item.id, { disposition: 'fail', evidence: 'x' }),
+    ).toThrow(/requires filedFollowon/);
+    expect(() =>
+      appendGateItemEvent(item.id, { disposition: 'needs-setup' }),
+    ).toThrow(/requires evidence/);
+    expect(getGateItem(item.id)?.events).toHaveLength(0);
+  });
+
   it('rejects `discarded` without an evidence/reason', () => {
     const item = makeItem({ classification: 'Read-Only' });
     expect(() =>
