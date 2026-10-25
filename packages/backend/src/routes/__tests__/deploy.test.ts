@@ -15,6 +15,7 @@ const deployServiceMock = vi.hoisted(() => ({
   reportProjectDeploy: vi.fn(),
   getLatestDeployRun: vi.fn(),
   listDeployRunEvents: vi.fn(),
+  appendDeployRunEvent: vi.fn(),
   DeployRunConflictError: class DeployRunConflictError extends Error {},
 }));
 
@@ -235,6 +236,7 @@ describe('GET /api/deploy/status', () => {
       status: 'running',
       started_at: '2026-07-20T00:00:00.000Z',
       completed_at: null,
+      launched_by: 'pedro-laptop',
     };
     const events = [
       {
@@ -255,6 +257,7 @@ describe('GET /api/deploy/status', () => {
     );
 
     expect(res.status).toBe(200);
+    expect(res.body.run.launched_by).toBe('pedro-laptop');
     expect(res.body).toEqual({
       run,
       events,
@@ -381,6 +384,7 @@ describe('GET /api/deploy/status', () => {
       status: 'failed',
       started_at: '2026-07-20T00:00:00.000Z',
       completed_at: '2026-07-20T00:05:00.000Z',
+      launched_by: 'session:abc',
     };
     const events = [
       {
@@ -401,6 +405,7 @@ describe('GET /api/deploy/status', () => {
     );
 
     expect(res.status).toBe(200);
+    expect(res.body.run.launched_by).toBe('session:abc');
     expect(res.body).toEqual({
       run,
       events,
@@ -415,6 +420,80 @@ describe('GET /api/deploy/status', () => {
     const res = await request(makeApp()).get('/api/deploy/status');
 
     expect(res.status).toBe(400);
+  });
+});
+
+describe('wrap routes: launched_by', () => {
+  function appWith(auth: Record<string, unknown>) {
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      Object.assign(req, auth);
+      next();
+    });
+    app.use('/api', createDeployRouter());
+    return app;
+  }
+
+  const launchBody = {
+    projectId: 'claude-orchestrator',
+    closingMilestoneId: 'M1',
+    nextMilestoneId: 'M2',
+    releaseVersion: '1.0.0',
+  };
+
+  beforeEach(() => {
+    queriesMock.getProjectRowById.mockReturnValue({
+      id: 'claude-orchestrator',
+      project_dir: '/repo/claude-orchestrator',
+      github_repo: null,
+      base_branch: 'dev',
+    });
+    deployOrchestratorMock.startDeploy.mockResolvedValue({ run_id: 'w1' });
+  });
+
+  it('passes the device name to startDeploy for a device-authed /wrap/launch', async () => {
+    const res = await request(appWith({ device: { name: 'pedro-laptop' } }))
+      .post('/api/wrap/launch')
+      .send(launchBody);
+    expect(res.status).toBe(202);
+    expect(deployOrchestratorMock.startDeploy).toHaveBeenCalledWith(
+      'M1',
+      'pedro-laptop',
+    );
+  });
+
+  it('uses session:<id> for a session-route-authed /wrap/launch, and unknown when unresolvable', async () => {
+    await request(appWith({ routeSession: { sessionId: 'abc' } }))
+      .post('/api/wrap/launch')
+      .send(launchBody);
+    expect(deployOrchestratorMock.startDeploy).toHaveBeenLastCalledWith(
+      'M1',
+      'session:abc',
+    );
+    await request(appWith({}))
+      .post('/api/wrap/launch')
+      .send({ ...launchBody, operator: 'alice' });
+    expect(deployOrchestratorMock.startDeploy).toHaveBeenLastCalledWith(
+      'M1',
+      'alice',
+    );
+    await request(appWith({})).post('/api/wrap/launch').send(launchBody);
+    expect(deployOrchestratorMock.startDeploy).toHaveBeenLastCalledWith(
+      'M1',
+      'unknown',
+    );
+  });
+
+  it('GET /wrap/status returns launched_by on the run', async () => {
+    const run = { run_id: 'w1', launched_by: 'pedro-laptop', status: 'running' };
+    deployServiceMock.getLatestDeployRun.mockReturnValue(run);
+    deployServiceMock.listDeployRunEvents.mockReturnValue([]);
+    const res = await request(makeApp()).get(
+      '/api/wrap/status?projectId=claude-orchestrator',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.run.launched_by).toBe('pedro-laptop');
   });
 });
 
