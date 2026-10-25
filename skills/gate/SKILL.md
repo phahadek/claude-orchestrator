@@ -73,18 +73,23 @@ observable work.
 >   legitimate third path between "stage it" and "defer it", and its absence is what made this
 >   doctrine read as all-or-nothing. *(This was the `Opportunistic` tier's job; that tier is retired
 >   and the disposition now carries it — the item parks at `pending` on a backoff clock.)*
-> - **`Human-Observation` items are invisible to a gate session.** They are the operator's alone and
->   reach them through the Decision Inbox. Never pass `--classification Human-Observation` to `next`;
->   never call `item` or `event` on one; never reclassify an item into or out of that class; and never
->   pull, read, record on, count, or mention one — in any output, to the operator or anywhere else.
->   Treat them as if they do not exist.
+> - **A pulled item that needs a UI action or similar only a human can do → reclassify it to
+>   `Human-Observation`** (`reclassify <id> Human-Observation`). That hands it to the operator via
+>   the Decision Inbox; do not pass `--classification Human-Observation` to `next`.
+>
+> **A pulled item ends in exactly one of five outcomes, and is never left runnable or closed out as
+> `noted`:**
+> 1. **Not-yet-triggerable** — waiting on an external trigger that has not happened (`not-yet-triggerable`; evidence names the trigger and the exact observable that settles it).
+> 2. **Needs-setup** — an in-depth setup is required (`needs-setup`; evidence names the setup).
+> 3. **Human-Observation reclassification** — only a human can do the check.
+> 4. **Pass** — with the evidence.
+> 5. **Fail** — with the evidence, the root cause, and the fix task filed (`filedFollowon`). A fail without its fix task is rejected (400); a root cause is found in-session, never left for a separate run.
 > - **`Read-Only` → just go read it.** Unchanged — and it now also covers the bounded,
 >   cleanly-reversible scratch write.
 >
 > **The trace guide is what makes a park legitimate** — and it is no longer only convention: the
 > server **rejects** `not-yet-triggerable` without non-empty evidence naming the observable to
-> watch for. Every non-resolving disposition (`noted`,
-> `needs-setup`, a parked `not-yet-triggerable` item) records **the exact observables to capture when the
+> watch for. Every non-resolving disposition (`needs-setup`, a parked `not-yet-triggerable` item) records **the exact observables to capture when the
 > behavior fires**: which table or log, which field, which value separates pass from fail, and the
 > query that will settle it. A park with a trace guide is a *prepared* verification the next session
 > executes in one step; a park without one is a punt wearing better clothes. This pattern emerged
@@ -233,10 +238,8 @@ The six disciplines below are how that rule is kept:
   evidence and attach the intent check.
 - **An item whose check depends on a 🔧 Operational task's run cannot pass until that run
   happens.** Disposition `needs-setup` naming the owning task; never restate the item to pass early.
-- **Gate scope: lightweight items only.** Heavy work — multi-step RCAs, recomputes, backfills, long
-  observations, multi-agent investigations — belongs in a separate `/ops` or `/investigate` run
-  spun out from the gate. Record a disposition with a trace guide and name that run; do not do the
-  heavy work inline.
+- **Heavy work is still the gate's job.** Locate the root cause of every fail in-session and file the
+  fix task with it; "needs a separate /investigate run" is not an outcome.
 - **Ownership check includes seed items.** Before declaring a prod action unowned, check the
   milestone's seed items (`seed-state-client.mjs` `readiness` / `next`) as well as the board's
   🔧/🔎/🧪 tasks, and read the fix task's own text — it may assign the apply to the deploy. (The
@@ -330,8 +333,8 @@ Beyond the DB-safety rules above, every verifier brief MUST:
   area (one entry per item: id, disposition, evidence, trace guide), and return only the path and a
   one-line tally.
 - **Carry the refusal procedure.** A refused command covers that action only: the verifier keeps
-  working every other item and never stops the shard. It records a refused item as `noted` (never
-  `needs-setup`), with evidence starting `refused: <exact command shape> (<classifier reason>)`, plus
+  working every other item and never stops the shard. It records a refused item as `needs-setup`,
+  with evidence starting `refused: <exact command shape> (<classifier reason>)`, plus
   the read that would settle it. It never asks the parent to run the refused action for it
   (permission laundering). The parent re-runs refused items only after the operator changes the
   approval mode.
@@ -474,11 +477,8 @@ For every item in the pulled batch:
    | disposition | rollup effect | when |
    | --- | --- | --- |
    | `pass` | ✅ resolves | behavior **observed** — in the operational record (history) or by live staging. Evidence: `verified: <what you observed>`, or `covered-elsewhere: <taskId>` (a Done 🧪 Testing task / sibling already verified it — *done* = **pass**, cite the task; **not** a deferral) |
-   | `deferred` | ✅ resolves | **genuinely rare AND unsafe/impossible to manufacture**, punted to a later milestone to verify there — rare last resort, never "I didn't stage it" (`moved-to-<milestone>: <why>`) |
-   | `discarded` | ✅ resolves (non-blocking) | the item is **void / mis-accreted / created in error** — not real work and **not** a next-milestone deferral. Terminal, audit-preserving, **requires evidence**. Where a mis-keyed / orphaned `gate_item` goes — **not** `deferred`. |
    | `fail` | ❌ stays blocking | behavior is **broken** — present the follow-on Code task, then file it at Backlog **unconditionally** (`filedFollowon: <taskId>`; never gated on arm/auto-launch state); the item stays unresolved, re-verified after the fix deploys. "Record `fail`" is not a resolution. |
-   | `noted` | non-terminal (stays `runnable`) | "attempted, not yet resolved" — records the event + evidence without advancing state. The sanctioned home for a non-resolving attempt (or just omit `disposition`). |
-   | `needs-setup` | non-terminal (stays `runnable`) | the verifier's bounded best-effort **abstain** — records the attempt; `next` skips the item until a later event supersedes it. |
+   | `needs-setup` | non-terminal (stays `runnable`) | an in-depth setup is needed; **requires `evidence` naming the setup** (400 otherwise). `next` skips the item until a later event supersedes it. |
    | `not-yet-triggerable` | non-terminal (advances to `pending`) | **`Read-Only`/`Prod-Mutating`-only, and requires `evidence`** — the triggering condition genuinely hasn't happened yet (no occurrence in history, nothing to stage). Enters a backoff schedule; `next` skips it until the backoff clock elapses, then it resurfaces `runnable` for a fresh look. |
 
    **Rules the vocabulary encodes:**

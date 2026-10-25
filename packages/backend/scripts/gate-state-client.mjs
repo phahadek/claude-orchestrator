@@ -40,13 +40,11 @@
 // repeat call for the same item and target milestone returns the existing
 // copy rather than minting a second one.
 //
-// `disposition` on an `event` payload is optional (omit it for a pure log
-// entry — evidence recorded, state left unchanged) and, when present, must
-// be one of the server's closed vocabulary: pass, fail, deferred, discarded,
-// noted. Anything else is rejected with 400. `noted` is non-terminal —
-// records the event without resolving. `discarded` is terminal and
-// non-blocking (void/created-in-error, distinct from `deferred`'s
-// punted-to-next-milestone) and requires `evidence`.
+// `disposition` on an `event` payload is required and must be one of:
+// pass, fail (requires `filedFollowon`), needs-setup (requires `evidence`),
+// not-yet-triggerable (requires `evidence`). `noted`, `deferred`,
+// `discarded` and disposition-less events are rejected with 400 on this
+// path (the client marks its requests as gate-session requests).
 //
 // Env:
 //   ORCHESTRATOR_BACKEND_HOST backend loopback host (default 127.0.0.1)
@@ -83,7 +81,15 @@ function resolveRouteToken() {
  * with `{statusCode, body}`. Exported (rather than inlined per-verb) so tests
  * can exercise it directly without spawning a child process.
  */
-export function requestGateState({ host, port, token, method, path, payload }) {
+export function requestGateState({
+  host,
+  port,
+  token,
+  method,
+  path,
+  payload,
+  headers,
+}) {
   const body = payload === undefined ? undefined : JSON.stringify(payload);
   return new Promise((resolve, reject) => {
     const req = http.request(
@@ -94,6 +100,7 @@ export function requestGateState({ host, port, token, method, path, payload }) {
         method,
         headers: {
           Authorization: `Bearer ${token}`,
+          ...headers,
           ...(body
             ? {
                 'Content-Type': 'application/json',
@@ -168,6 +175,7 @@ export function appendGateItemEvent({ host, port, token, gateItemId, event }) {
     method: 'POST',
     path: `/api/gate/items/${encodeURIComponent(gateItemId)}/events`,
     payload: event,
+    headers: { 'X-Gate-Session': '1' },
   });
 }
 

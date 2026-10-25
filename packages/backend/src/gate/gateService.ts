@@ -1124,6 +1124,16 @@ export function appendGateItemEvent(
   if (event.disposition === 'discarded' && !event.evidence) {
     throw new Error(`gate_item_event: 'discarded' requires an evidence/reason`);
   }
+  if (event.disposition === 'fail' && !event.filedFollowon) {
+    throw new Error(
+      `gate_item_event: 'fail' requires filedFollowon — file the fix task first`,
+    );
+  }
+  if (event.disposition === 'needs-setup' && !event.evidence) {
+    throw new Error(
+      `gate_item_event: 'needs-setup' requires evidence naming the setup`,
+    );
+  }
   if (
     event.disposition === 'not-yet-triggerable' &&
     !PENDING_ELIGIBLE_CLASSIFICATIONS.has(item.classification)

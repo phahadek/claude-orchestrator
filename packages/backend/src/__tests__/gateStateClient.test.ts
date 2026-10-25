@@ -225,6 +225,22 @@ describe('gate-state-client.mjs', () => {
     });
   });
 
+  it('marks event requests as gate-session requests', async () => {
+    let header: string | string[] | undefined;
+    const port = await startFixtureServer((req, res) => {
+      header = req.headers['x-gate-session'];
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end('{}');
+    });
+    await appendGateItemEvent({
+      port,
+      token: 't',
+      gateItemId: 'gi-1',
+      event: { disposition: 'pass', evidence: 'x' },
+    });
+    expect(header).toBe('1');
+  });
+
   it('surfaces a non-2xx status and error body on failure', async () => {
     const port = await startFixtureServer((_req, res) => {
       res.writeHead(400, { 'Content-Type': 'application/json' });

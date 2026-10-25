@@ -169,7 +169,10 @@ describe('getGateReadiness', () => {
   it('distinguishes an attempted-but-inconclusive item from an untouched one', () => {
     const untouched = makeItem({ text: 'never attempted' });
     const abstained = makeItem({ text: 'attempted, inconclusive' });
-    appendGateItemEvent(abstained.id, { disposition: 'needs-setup' });
+    appendGateItemEvent(abstained.id, {
+      disposition: 'needs-setup',
+      evidence: 'needs a fixture',
+    });
 
     const readiness = getGateReadiness('polimarket-analyser', 'M12');
     expect(readiness.blocking).toHaveLength(2);
@@ -185,7 +188,10 @@ describe('getGateReadiness', () => {
     const untouched = makeItem({ text: 'never attempted' });
     const abstained = makeItem({ text: 'awaiting setup' });
     const noted = makeItem({ text: 'noted, not awaiting setup' });
-    appendGateItemEvent(abstained.id, { disposition: 'needs-setup' });
+    appendGateItemEvent(abstained.id, {
+      disposition: 'needs-setup',
+      evidence: 'needs a fixture',
+    });
     appendGateItemEvent(noted.id, { disposition: 'noted' });
 
     const readiness = getGateReadiness('polimarket-analyser', 'M12');
@@ -711,6 +717,7 @@ describe('reconcileGateRunnability', () => {
       appendGateItemEvent(item.id, {
         disposition: 'fail',
         evidence: { minDeployedCommitAtFail: 'sha1' },
+        filedFollowon: 'notion:d-code',
       });
       expect((await run('sha1')).reopened).toEqual([]);
       expect(getGateItem(item.id)?.state).toBe('fail');
@@ -786,6 +793,7 @@ describe('reconcileGateRunnability', () => {
     appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: 'the deploy script never wrote the new env var',
+      filedFollowon: 'fix-x',
     });
 
     expect(getGateItem(item.id)?.state).toBe('fail');
@@ -793,6 +801,7 @@ describe('reconcileGateRunnability', () => {
     expect(events.at(-1)).toMatchObject({
       disposition: 'fail',
       evidence: 'the deploy script never wrote the new env var',
+      filedFollowon: 'fix-x',
       minDeployedCommitAtFail: getGateItem(item.id)?.minDeployedCommit,
     });
     expect(events.at(-1)?.minDeployedCommitAtFail).toBe('sha1');
@@ -805,6 +814,7 @@ describe('reconcileGateRunnability', () => {
     appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: 'observed broken behaviour',
+      filedFollowon: 'fix-x',
     });
     expect(getGateItem(item.id)?.state).toBe('fail');
 
@@ -825,6 +835,7 @@ describe('reconcileGateRunnability', () => {
     appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: 'observed broken behaviour',
+      filedFollowon: 'notion:abc',
     });
 
     setMinDeployedCommit(item.id, 'sha2', new Date(2).toISOString());
@@ -843,6 +854,7 @@ describe('reconcileGateRunnability', () => {
     appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: 'observed broken behaviour',
+      filedFollowon: 'fix-x',
     });
     expect(getGateItem(item.id)?.minDeployedCommit).toBeUndefined();
     expect(getGateItem(item.id)?.state).toBe('fail');
@@ -1180,6 +1192,7 @@ describe('appendGateItemEvent', () => {
     const updated = appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: 'progress bar missing entirely',
+      filedFollowon: 'fix-x',
       operator: 'gate-verifier',
     });
     expect(updated.state).toBe('fail');
@@ -1190,6 +1203,7 @@ describe('appendGateItemEvent', () => {
     const updated = appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: 'checkout threw a 500',
+      filedFollowon: 'fix-x',
     });
     expect(updated.state).toBe('fail');
     expect(
@@ -1239,6 +1253,17 @@ describe('appendGateItemEvent', () => {
     });
     expect(updated.state).toBe('discarded');
     expect(getGateReadiness(item.project, item.milestone).status).toBe('green');
+  });
+
+  it('rejects `fail` without filedFollowon and `needs-setup` without evidence', () => {
+    const item = makeItem({ classification: 'Read-Only' });
+    expect(() =>
+      appendGateItemEvent(item.id, { disposition: 'fail', evidence: 'x' }),
+    ).toThrow(/requires filedFollowon/);
+    expect(() =>
+      appendGateItemEvent(item.id, { disposition: 'needs-setup' }),
+    ).toThrow(/requires evidence/);
+    expect(getGateItem(item.id)?.events).toHaveLength(0);
   });
 
   it('rejects `discarded` without an evidence/reason', () => {
@@ -1491,7 +1516,10 @@ describe('nextPendingGateItems', () => {
       disposition: 'not-yet-triggerable',
       evidence: 'still waiting',
     });
-    appendGateItemEvent(item.id, { disposition: 'needs-setup' });
+    appendGateItemEvent(item.id, {
+      disposition: 'needs-setup',
+      evidence: 'needs a fixture',
+    });
     schedulePendingAttempt(
       item.id,
       new Date(Date.now() - 1000).toISOString(),
@@ -1936,6 +1964,7 @@ describe('getGateItemDetail', () => {
     appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: { note: 'x' },
+      filedFollowon: 'notion:abc',
     });
 
     const detail = getGateItemDetail(item.id);
@@ -2003,7 +2032,10 @@ describe('listGateItems', () => {
   it('filters to awaiting-setup items', () => {
     const abstained = makeItem({ text: 'needs a fixture' });
     const untouched = makeItem({ text: 'never attempted' });
-    appendGateItemEvent(abstained.id, { disposition: 'needs-setup' });
+    appendGateItemEvent(abstained.id, {
+      disposition: 'needs-setup',
+      evidence: 'needs a fixture',
+    });
 
     expect(
       listGateItems({ awaitingSetup: true }).items.map((i) => i.id),

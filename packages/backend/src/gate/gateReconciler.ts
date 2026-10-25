@@ -629,7 +629,9 @@ export async function routeVerificationResult(
   } else if (result.disposition === 'needs-setup') {
     appendGateItemEvent(item.id, {
       disposition: 'needs-setup',
-      evidence: result.evidence,
+      evidence: result.evidence ?? {
+        reason: 'verifier abstained without evidence',
+      },
       deploySha: deploySha ?? undefined,
       unattended,
     });
@@ -678,19 +680,21 @@ export async function routeVerificationResult(
       const followup = await followupFiler.fileFollowupFixTask(item, result);
       const now = new Date().toISOString();
       if (!followup) {
-        // No located root cause (operator-supplied fail on a mirror, or a
-        // legacy row): record the fail, file nothing.
+        // A fail is only ever written together with its fix task.
         appendGateItemEvent(item.id, {
-          disposition: 'fail',
-          evidence: failEvidence(item, result.evidence),
+          disposition: 'needs-setup',
+          evidence: {
+            reason:
+              'fail reported but no fix task could be filed (no located root cause) — file the fix task, then record the fail with filedFollowon',
+            verifierEvidence: result.evidence,
+          },
           deploySha: deploySha ?? undefined,
           unattended,
         });
-        gateStore.advanceState(item.id, 'open', 'fail', now);
         return {
           itemId: item.id,
           classification: item.classification,
-          disposition: result.disposition,
+          disposition: 'needs-setup',
         };
       }
       // Attached first, with the filer's title, so appendGateItemEvent's own

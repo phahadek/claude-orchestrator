@@ -44,6 +44,19 @@ vi.mock('../../tasks/TaskBackend', () => ({
   }),
 }));
 
+// config.getProjectById lazy-`require`s ProjectService, which a native
+// require cannot load as TypeScript under vitest — resolve it via ESM import.
+const projectLookup = vi.hoisted(() => ({
+  getById: undefined as undefined | ((id: string) => unknown),
+}));
+vi.mock('../../config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../config')>();
+  return {
+    ...actual,
+    getProjectById: (id: string) => projectLookup.getById?.(id),
+  };
+});
+
 vi.mock('../../db/db.js', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
   return { db: setupTestDb() };
@@ -66,6 +79,8 @@ import { createStagedIntentsRouter, stageIntent } from '../stagedIntents';
 import { PLANNING_INTENT_KINDS } from '../../planning/planningIntentKinds';
 import { KNOWN_INTENT_KINDS } from '../stagedIntents';
 import { ProjectService } from '../../projects/ProjectService.js';
+
+projectLookup.getById = (id) => ProjectService.getById(id);
 
 function makeApp() {
   const app = express();
@@ -387,7 +402,7 @@ describe('gate.verify — fail disposition files a follow-up task via resolveMil
     );
   });
 
-  it('records the fail and files nothing when no proposedFix is reported', async () => {
+  it('records no fail and files nothing when no proposedFix is reported', async () => {
     const item = makeGateItem({ milestone: 'M13' });
     const app = makeApp();
     const agent = supertest(app);
@@ -410,8 +425,11 @@ describe('gate.verify — fail disposition files a follow-up task via resolveMil
 
     expect(applied.status).toBe(200);
     expect(createTaskMock).not.toHaveBeenCalled();
+    expect(getItem(item.id)?.events.some((e) => e.disposition === 'fail')).toBe(
+      false,
+    );
     expect(getItem(item.id)?.events.at(-1)).toMatchObject({
-      disposition: 'fail',
+      disposition: 'needs-setup',
     });
   });
 });
@@ -812,8 +830,11 @@ describe('gate.verify — Human-Observation mirror apply (operator-supplied disp
 
     const updated = getItem(item.id);
     expect(updated?.state).toBe('open');
-    expect(updated?.events.at(-1)).toMatchObject({ disposition: 'fail' });
-    // No verifier ran, so no RCA: the fail is recorded and nothing is filed.
+    expect(updated?.events.some((e) => e.disposition === 'fail')).toBe(false);
+    expect(updated?.events.at(-1)).toMatchObject({
+      disposition: 'needs-setup',
+    });
+    // No verifier ran, so no RCA: no fail is recorded without its fix task.
     expect(createTaskMock).not.toHaveBeenCalled();
   });
 

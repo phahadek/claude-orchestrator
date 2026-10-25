@@ -670,7 +670,10 @@ describe('runGateReconcilerTick', () => {
       disposition: 'not-yet-triggerable',
       evidence: 'still waiting',
     });
-    appendGateItemEvent(parked.id, { disposition: 'needs-setup' });
+    appendGateItemEvent(parked.id, {
+      disposition: 'needs-setup',
+      evidence: 'needs a fixture',
+    });
     schedulePendingAttempt(
       parked.id,
       new Date(Date.now() - 1000).toISOString(),
@@ -790,7 +793,7 @@ describe('runGateReconcilerTick', () => {
     });
   });
 
-  it('a fail the default filer declines (no structured payload) is recorded with no follow-on and nothing filed', async () => {
+  it('a fail the default filer declines (no structured payload) is never recorded as a fail without its fix task', async () => {
     const item = await makeRunnableItem({ classification: 'Read-Only' });
     await runGateReconcilerTick({
       deployAdvanceTrigger: fixedTrigger('sha1'),
@@ -799,10 +802,11 @@ describe('runGateReconcilerTick', () => {
     });
 
     const updated = getItem(item.id)!;
-    expect(updated.state).toBe('open');
     expect(updated.sources).toHaveLength(1);
-    expect(updated.events.at(-1)).toMatchObject({ disposition: 'fail' });
-    expect(updated.events.at(-1)?.filedFollowon).toBeUndefined();
+    expect(updated.events.some((e) => e.disposition === 'fail')).toBe(false);
+    expect(updated.events.at(-1)).toMatchObject({
+      disposition: 'needs-setup',
+    });
   });
 
   it('verifier fail path ends with exactly one source row for the follow-up (filer title kept) and state open', async () => {
@@ -2257,6 +2261,7 @@ describe('runGateReconcilerTick — wrapped-milestone scoping', () => {
     appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: { minDeployedCommitAtFail: 'sha1' },
+      filedFollowon: 'notion:abc',
     });
     expect(getItem(item.id)?.state).toBe('fail');
 
@@ -2264,6 +2269,7 @@ describe('runGateReconcilerTick — wrapped-milestone scoping', () => {
     appendGateItemEvent(wrappedItem.id, {
       disposition: 'fail',
       evidence: { minDeployedCommitAtFail: 'sha1' },
+      filedFollowon: 'notion:abc',
     });
     expect(getItem(wrappedItem.id)?.state).toBe('fail');
 

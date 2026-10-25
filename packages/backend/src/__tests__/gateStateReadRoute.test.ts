@@ -68,7 +68,10 @@ describe('GET /api/gate/items', () => {
 describe('GET /api/gate/items/:id/detail', () => {
   it('returns the item plus its sources and event history, by value', async () => {
     const item = makeItem();
-    appendGateItemEvent(item.id, { disposition: 'fail' });
+    appendGateItemEvent(item.id, {
+      disposition: 'fail',
+      filedFollowon: 'fix-x',
+    });
 
     const res = await request(makeApp()).get(
       `/api/gate/items/${item.id}/detail`,
@@ -76,7 +79,7 @@ describe('GET /api/gate/items/:id/detail', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.item.id).toBe(item.id);
-    expect(res.body.sources).toHaveLength(1);
+    expect(res.body.sources).toHaveLength(2);
     expect(res.body.events).toHaveLength(1);
     expect(res.body.events[0].disposition).toBe('fail');
   });

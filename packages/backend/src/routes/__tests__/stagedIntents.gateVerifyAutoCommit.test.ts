@@ -25,6 +25,19 @@ vi.mock('../../tasks/TaskBackend', () => ({
   }),
 }));
 
+// config.getProjectById lazy-`require`s ProjectService, which a native
+// require cannot load as TypeScript under vitest — resolve it via ESM import.
+const projectLookup = vi.hoisted(() => ({
+  getById: undefined as undefined | ((id: string) => unknown),
+}));
+vi.mock('../../config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../config')>();
+  return {
+    ...actual,
+    getProjectById: (id: string) => projectLookup.getById?.(id),
+  };
+});
+
 vi.mock('../../db/db', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
   return { db: setupTestDb() };
@@ -36,7 +49,7 @@ import {
   getSession,
   setSessionMetadata,
 } from '../../db/queries';
-import { insertItem } from '../../gate/gateStore';
+import { insertItem, appendEvent } from '../../gate/gateStore';
 import {
   createStagedIntentsRouter,
   stageIntent,
@@ -51,6 +64,8 @@ import {
 import { createMilestonesRouter } from '../milestones';
 import { PlanningOrchestrator } from '../../orchestration/PlanningOrchestrator';
 import { ProjectService } from '../../projects/ProjectService';
+
+projectLookup.getById = (id) => ProjectService.getById(id);
 import { upsertGateVerifyAutoCommitPolicy } from '../../db/queries';
 
 function makeSessionManager() {
@@ -192,6 +207,14 @@ describe('gate.verify auto-commit — staging-time attempt', () => {
     'records the dispatch origin on the gate_item_event: %s with metadata %s -> unattended=%i',
     async (disposition, metadata, expected) => {
       const item = makeRunnableGateItem();
+      if (disposition === 'fail') {
+        // A prior open fix task lets the reconciler dedup instead of filing one.
+        appendEvent(item.id, {
+          disposition: 'fail',
+          filedFollowon: 'notion:prior-fix',
+          at: new Date(0).toISOString(),
+        });
+      }
       seedVerifySession('verify-session-origin', item.id, metadata);
       upsertGateVerifyAutoCommitPolicy('M12', disposition, true, Date.now());
 
@@ -219,7 +242,7 @@ describe('gate.verify auto-commit — staging-time attempt', () => {
 
       const row = db
         .prepare(
-          'SELECT unattended FROM gate_item_event WHERE gate_item_id = ? AND disposition = ?',
+          'SELECT unattended FROM gate_item_event WHERE gate_item_id = ? AND disposition = ? ORDER BY id DESC',
         )
         .get(item.id, disposition) as { unattended: number } | undefined;
       expect(row?.unattended).toBe(expected);
