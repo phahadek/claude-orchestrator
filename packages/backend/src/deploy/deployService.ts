@@ -47,6 +47,7 @@ export interface StartDeployRunInput {
   targetSha: string;
   startedAt: string;
   runId?: string;
+  launchedBy?: string | null;
 }
 
 /**
@@ -67,6 +68,7 @@ export function startDeployRun(input: StartDeployRunInput): DeployRunRow {
     status: 'running',
     started_at: input.startedAt,
     completed_at: null,
+    launched_by: input.launchedBy ?? null,
   };
   try {
     insertDeployRun(row);

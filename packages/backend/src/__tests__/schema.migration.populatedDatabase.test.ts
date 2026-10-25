@@ -366,6 +366,22 @@ describe('populated-database migration fixture — deploy_run.kind', () => {
     expect(() => runMigrations(db)).not.toThrow();
   });
 
+  it('adds a nullable launched_by column without losing rows, leaving old rows NULL', () => {
+    const db = new Database(':memory:');
+    preMigrationDeployRunShape(db);
+    insertRows(db, 'deploy_run', realisticDeployRunRows());
+    runMigrations(db);
+
+    expect(tableXinfoColumnNames(db, 'deploy_run')).toContain('launched_by');
+    const rows = db
+      .prepare('SELECT run_id, launched_by FROM deploy_run')
+      .all() as Array<{ run_id: string; launched_by: string | null }>;
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.launched_by).toBeNull();
+    }
+  });
+
   it('backfills kind to the default for every pre-existing row', () => {
     const db = new Database(':memory:');
     preMigrationDeployRunShape(db);

@@ -51,6 +51,7 @@ import {
 import { orchestratorMcpToolName } from '../mcp/toolNaming';
 import { logger } from '../logger';
 import { asyncHandler } from './asyncHandler';
+import { resolveOperator } from './requestOperator';
 
 const GATE_RECONCILER_JOB = 'gate_verification_reconciler';
 
@@ -562,7 +563,7 @@ export function createDeployRouter(): Router {
   router.post(
     '/deploy/launch',
     asyncHandler(async (req: Request, res: Response) => {
-      const body = req.body as { projectId?: unknown };
+      const body = req.body as { projectId?: unknown; operator?: unknown };
       const projectId =
         typeof body.projectId === 'string' ? body.projectId : null;
       if (!projectId) {
@@ -578,7 +579,10 @@ export function createDeployRouter(): Router {
 
       try {
         const orchestrator = getOrchestrator(projectId, project.project_dir);
-        const run = await orchestrator.startDeploy();
+        const run = await orchestrator.startDeploy(
+          undefined,
+          resolveOperator(req, body.operator) ?? 'unknown',
+        );
         res.status(202).json({ run });
       } catch (err) {
         if (err instanceof DeployRunConflictError) {
@@ -769,6 +773,7 @@ export function createWrapRouter(): Router {
         closingMilestoneId?: unknown;
         nextMilestoneId?: unknown;
         releaseVersion?: unknown;
+        operator?: unknown;
       };
       const projectId =
         typeof body.projectId === 'string' ? body.projectId : null;
@@ -813,7 +818,10 @@ export function createWrapRouter(): Router {
       const orchestrator = createWrapOrchestrator(project, params);
 
       try {
-        const run = await orchestrator.startDeploy(closingMilestoneId);
+        const run = await orchestrator.startDeploy(
+          closingMilestoneId,
+          resolveOperator(req, body.operator) ?? 'unknown',
+        );
         // Recorded immediately so a boot-time resume (resumeActiveWrapRuns)
         // can rebuild this exact playbook if the process restarts mid-run —
         // see recordWrapLaunchParams.

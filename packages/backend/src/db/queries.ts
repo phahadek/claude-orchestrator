@@ -6780,11 +6780,11 @@ export function getLatestDeployRunForProject(
 export function insertDeployRun(row: DeployRunRow): void {
   _stmtInsertDeployRun ??= db.prepare<DeployRunRow>(`
     INSERT INTO deploy_run
-      (run_id, project, kind, target_sha, current_step, status, started_at, completed_at)
+      (run_id, project, kind, target_sha, current_step, status, started_at, completed_at, launched_by)
     VALUES
-      (@run_id, @project, @kind, @target_sha, @current_step, @status, @started_at, @completed_at)
+      (@run_id, @project, @kind, @target_sha, @current_step, @status, @started_at, @completed_at, @launched_by)
   `);
-  _stmtInsertDeployRun.run(row);
+  _stmtInsertDeployRun.run({ ...row, launched_by: row.launched_by ?? null });
 }
 
 export function updateDeployRunStep(runId: string, step: string): void {

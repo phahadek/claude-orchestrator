@@ -21,7 +21,7 @@ import {
   getGateVerifyFleetState,
 } from '../gate/gateService';
 import { dispatchGateItemVerification } from '../gate/gateReconciler';
-import type { GateItemClassification, DeviceRow } from '../db/types';
+import type { GateItemClassification } from '../db/types';
 import {
   getFlowRejectionRate,
   getFlakeRecoveryMisclassificationRates,
@@ -42,34 +42,7 @@ import {
   UnknownMilestoneError,
 } from '../projects/milestoneResolver';
 import { asyncHandler } from './asyncHandler';
-
-/**
- * Resolves the operator to attribute a gate disposition to: an explicit
- * body value always wins (naming a human behind a shared device/session);
- * otherwise the authenticated caller identity — the device name for a
- * device-authed caller, or a session-derived label for a caller authenticated
- * via a per-session route credential (requireDeviceOrSessionRouteAuth sets
- * exactly one of req.device / req.routeSession, never both).
- */
-function resolveOperator(
-  req: Request,
-  bodyOperator: unknown,
-): string | undefined {
-  if (typeof bodyOperator === 'string' && bodyOperator) {
-    return bodyOperator;
-  }
-  const device = (req as Request & { device?: DeviceRow }).device;
-  if (device) {
-    return device.name;
-  }
-  const routeSession = (
-    req as Request & { routeSession?: { sessionId: string } }
-  ).routeSession;
-  if (routeSession) {
-    return `session:${routeSession.sessionId}`;
-  }
-  return undefined;
-}
+import { resolveOperator } from './requestOperator';
 
 /**
  * Thin read/write surface over gateService's module functions — the

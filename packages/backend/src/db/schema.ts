@@ -3394,6 +3394,16 @@ export function runMigrations(target: Database.Database): void {
       throw err;
     }
   }
+  // deploy_run.launched_by: the authenticated caller that launched the run.
+  // Nullable; rows that predate the column stay NULL.
+  try {
+    target.exec(`ALTER TABLE deploy_run ADD COLUMN launched_by TEXT`);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!message.includes('duplicate column name')) {
+      throw err;
+    }
+  }
   target.exec(`DROP INDEX IF EXISTS idx_deploy_run_active_per_project`);
   target.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_deploy_run_active_per_project_kind
