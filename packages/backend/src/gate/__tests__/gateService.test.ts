@@ -169,7 +169,10 @@ describe('getGateReadiness', () => {
   it('distinguishes an attempted-but-inconclusive item from an untouched one', () => {
     const untouched = makeItem({ text: 'never attempted' });
     const abstained = makeItem({ text: 'attempted, inconclusive' });
-    appendGateItemEvent(abstained.id, { disposition: 'needs-setup' });
+    appendGateItemEvent(abstained.id, {
+      disposition: 'needs-setup',
+      evidence: 'needs a fixture',
+    });
 
     const readiness = getGateReadiness('polimarket-analyser', 'M12');
     expect(readiness.blocking).toHaveLength(2);
@@ -185,7 +188,10 @@ describe('getGateReadiness', () => {
     const untouched = makeItem({ text: 'never attempted' });
     const abstained = makeItem({ text: 'awaiting setup' });
     const noted = makeItem({ text: 'noted, not awaiting setup' });
-    appendGateItemEvent(abstained.id, { disposition: 'needs-setup' });
+    appendGateItemEvent(abstained.id, {
+      disposition: 'needs-setup',
+      evidence: 'needs a fixture',
+    });
     appendGateItemEvent(noted.id, { disposition: 'noted' });
 
     const readiness = getGateReadiness('polimarket-analyser', 'M12');
@@ -1510,7 +1516,10 @@ describe('nextPendingGateItems', () => {
       disposition: 'not-yet-triggerable',
       evidence: 'still waiting',
     });
-    appendGateItemEvent(item.id, { disposition: 'needs-setup' });
+    appendGateItemEvent(item.id, {
+      disposition: 'needs-setup',
+      evidence: 'needs a fixture',
+    });
     schedulePendingAttempt(
       item.id,
       new Date(Date.now() - 1000).toISOString(),
@@ -2023,7 +2032,10 @@ describe('listGateItems', () => {
   it('filters to awaiting-setup items', () => {
     const abstained = makeItem({ text: 'needs a fixture' });
     const untouched = makeItem({ text: 'never attempted' });
-    appendGateItemEvent(abstained.id, { disposition: 'needs-setup' });
+    appendGateItemEvent(abstained.id, {
+      disposition: 'needs-setup',
+      evidence: 'needs a fixture',
+    });
 
     expect(
       listGateItems({ awaitingSetup: true }).items.map((i) => i.id),

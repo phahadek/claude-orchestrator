@@ -670,7 +670,10 @@ describe('runGateReconcilerTick', () => {
       disposition: 'not-yet-triggerable',
       evidence: 'still waiting',
     });
-    appendGateItemEvent(parked.id, { disposition: 'needs-setup' });
+    appendGateItemEvent(parked.id, {
+      disposition: 'needs-setup',
+      evidence: 'needs a fixture',
+    });
     schedulePendingAttempt(
       parked.id,
       new Date(Date.now() - 1000).toISOString(),
