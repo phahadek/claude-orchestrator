@@ -43,7 +43,11 @@ const loadPlaybookMock = vi.hoisted(() => ({
 
 vi.mock('../../deploy/loadPlaybook.js', () => loadPlaybookMock);
 
-import { createDeployRouter, setDeployScheduler } from '../deploy.js';
+import {
+  createDeployRouter,
+  createWrapRouter,
+  setDeployScheduler,
+} from '../deploy.js';
 import { DeployOrchestrator } from '../../deploy/DeployOrchestrator.js';
 
 function makeApp() {
@@ -431,7 +435,7 @@ describe('wrap routes: launched_by', () => {
       Object.assign(req, auth);
       next();
     });
-    app.use('/api', createDeployRouter());
+    app.use('/api', createWrapRouter());
     return app;
   }
 
@@ -493,7 +497,7 @@ describe('wrap routes: launched_by', () => {
     };
     deployServiceMock.getLatestDeployRun.mockReturnValue(run);
     deployServiceMock.listDeployRunEvents.mockReturnValue([]);
-    const res = await request(makeApp()).get(
+    const res = await request(appWith({})).get(
       '/api/wrap/status?projectId=claude-orchestrator',
     );
     expect(res.status).toBe(200);
