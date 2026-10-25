@@ -306,6 +306,15 @@ export function setupSessionCgroup(
       path.join(ownPath, 'cgroup.subtree_control'),
       hasIo ? '+memory +io' : '+memory',
     );
+    // Per-run leaves (tests/<runId>/) and per-session leaves only expose
+    // memory.current when the controller is enabled on their parent too.
+    // Neither parent holds processes directly, so this is allowed.
+    for (const parent of [testsPath, sessionsPath]) {
+      fs.writeFileSync(
+        path.join(parent, 'cgroup.subtree_control'),
+        hasIo ? '+memory +io' : '+memory',
+      );
+    }
     ioControllerAvailable = hasIo;
     if (!hasIo) {
       logger.warn(
