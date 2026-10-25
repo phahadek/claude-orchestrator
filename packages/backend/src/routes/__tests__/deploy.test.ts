@@ -37,6 +37,10 @@ const queriesMock = vi.hoisted(() => ({
 
 vi.mock('../../db/queries.js', () => queriesMock);
 
+vi.mock('../../projects/ProjectService.js', () => ({
+  ProjectService: { getMilestone: vi.fn().mockReturnValue(undefined) },
+}));
+
 const loadPlaybookMock = vi.hoisted(() => ({
   loadDeployPlaybook: vi.fn(),
 }));
