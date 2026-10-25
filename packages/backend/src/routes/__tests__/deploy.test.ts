@@ -132,9 +132,63 @@ describe('POST /api/deploy/launch', () => {
       .post('/api/deploy/launch')
       .send({ projectId: 'claude-orchestrator' });
 
-    expect(deployOrchestratorMock.startDeploy).toHaveBeenCalledWith();
+    expect(deployOrchestratorMock.startDeploy).toHaveBeenCalledWith(
+      undefined,
+      'unknown',
+    );
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ run });
+  });
+
+  describe('launched_by attribution', () => {
+    function appWith(auth: Record<string, unknown>) {
+      const app = express();
+      app.use(express.json());
+      app.use((req, _res, next) => {
+        Object.assign(req, auth);
+        next();
+      });
+      app.use('/api', createDeployRouter());
+      return app;
+    }
+
+    beforeEach(() => {
+      queriesMock.getProjectRowById.mockReturnValue({
+        id: 'claude-orchestrator',
+        project_dir: '/repo/claude-orchestrator',
+      });
+      deployOrchestratorMock.startDeploy.mockResolvedValue({});
+    });
+
+    it('uses the device name for a device-authed caller', async () => {
+      await request(appWith({ device: { name: 'pedro-laptop' } }))
+        .post('/api/deploy/launch')
+        .send({ projectId: 'claude-orchestrator' });
+      expect(deployOrchestratorMock.startDeploy).toHaveBeenCalledWith(
+        undefined,
+        'pedro-laptop',
+      );
+    });
+
+    it('uses session:<id> for a session-route-authed caller', async () => {
+      await request(appWith({ routeSession: { sessionId: 'abc' } }))
+        .post('/api/deploy/launch')
+        .send({ projectId: 'claude-orchestrator' });
+      expect(deployOrchestratorMock.startDeploy).toHaveBeenCalledWith(
+        undefined,
+        'session:abc',
+      );
+    });
+
+    it('lets an explicit body operator win', async () => {
+      await request(appWith({ device: { name: 'pedro-laptop' } }))
+        .post('/api/deploy/launch')
+        .send({ projectId: 'claude-orchestrator', operator: 'alice' });
+      expect(deployOrchestratorMock.startDeploy).toHaveBeenCalledWith(
+        undefined,
+        'alice',
+      );
+    });
   });
 
   it('400s when projectId is missing', async () => {

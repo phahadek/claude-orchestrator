@@ -74,6 +74,16 @@ describe('deploy_run: run-state store', () => {
     expect(getActiveDeployRun('claude-orchestrator')).toEqual(run);
   });
 
+  it('persists launched_by and reads it back', () => {
+    const run = startDeployRun({
+      project: 'claude-orchestrator',
+      targetSha: 'sha1',
+      startedAt: '2026-07-20T00:00:00.000Z',
+      launchedBy: 'pedro-laptop',
+    });
+    expect(getDeployRun(run.run_id)?.launched_by).toBe('pedro-laptop');
+  });
+
   it('advances the step pointer and completes the run', () => {
     const run = startDeployRun({
       project: 'claude-orchestrator',

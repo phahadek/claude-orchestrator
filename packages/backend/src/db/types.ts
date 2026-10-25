@@ -748,6 +748,8 @@ export interface DeployRunRow {
   status: DeployRunStatus;
   started_at: string;
   completed_at: string | null;
+  /** Caller that launched the run; NULL for rows that predate the column. */
+  launched_by?: string | null;
 }
 
 export interface DeployRunEventRow {

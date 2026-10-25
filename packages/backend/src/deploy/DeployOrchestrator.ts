@@ -614,7 +614,10 @@ export class DeployOrchestrator {
    * the project already has an active run — at most one active run per
    * project.
    */
-  async startDeploy(targetSha?: string): Promise<DeployRunRow> {
+  async startDeploy(
+    targetSha?: string,
+    launchedBy?: string,
+  ): Promise<DeployRunRow> {
     const loaded = this.loadPlaybook(this.projectDir);
     if (!loaded.ok) {
       throw new Error(`cannot start deploy: ${loaded.reason}`);
@@ -637,6 +640,7 @@ export class DeployOrchestrator {
       kind: this.kind,
       targetSha: resolvedSha,
       startedAt: this.now(),
+      launchedBy,
     });
     const deployedShaAtStart = getProjectDeployedSha(this.project);
     void this.drive(
