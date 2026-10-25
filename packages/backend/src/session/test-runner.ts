@@ -1,6 +1,7 @@
 import { spawn, execFileSync } from 'child_process';
 import { randomUUID } from 'crypto';
 import {
+  readdirSync,
   readFileSync,
   unlinkSync,
   writeFileSync,
@@ -190,6 +191,7 @@ export function getRunMemoryMb(
   pid: number,
   _platform: NodeJS.Platform = process.platform,
   readFn: (path: string) => string = (p) => readFileSync(p, 'utf8') as string,
+  listPids: () => number[] = listProcPids,
 ): number {
   if (_platform !== 'linux') return 0;
   const cgroupPath = testRunCgroupMemoryCurrentPath(runId);
@@ -202,7 +204,55 @@ export function getRunMemoryMb(
       // leaf not yet created / already torn down — fall through
     }
   }
-  return getChildRssMb(pid, _platform, readFn);
+  return getProcessTreeRssMb(pid, _platform, readFn, listPids);
+}
+
+/**
+ * Summed VmRSS of `rootPid` and all its descendants (via /proc PPid links).
+ * Used when the run's cgroup leaf has no memory.current, so the `sh -c`
+ * wrapper's own RSS is never mistaken for the whole run's footprint.
+ */
+function getProcessTreeRssMb(
+  rootPid: number,
+  _platform: NodeJS.Platform = process.platform,
+  readFn: (path: string) => string = (p) => readFileSync(p, 'utf8') as string,
+  listPids: () => number[] = listProcPids,
+): number {
+  if (_platform !== 'linux') return 0;
+  const children = new Map<number, number[]>();
+  try {
+    for (const p of listPids()) {
+      try {
+        const m = readFn(`/proc/${p}/status`).match(/^PPid:\s+(\d+)/m);
+        if (!m) continue;
+        const ppid = parseInt(m[1], 10);
+        const arr = children.get(ppid);
+        if (arr) arr.push(p);
+        else children.set(ppid, [p]);
+      } catch {
+        // process exited mid-scan
+      }
+    }
+  } catch {
+    return getChildRssMb(rootPid, _platform, readFn);
+  }
+  let total = 0;
+  const stack = [rootPid];
+  const seen = new Set<number>();
+  while (stack.length > 0) {
+    const cur = stack.pop() as number;
+    if (seen.has(cur)) continue;
+    seen.add(cur);
+    total += getChildRssMb(cur, _platform, readFn);
+    stack.push(...(children.get(cur) ?? []));
+  }
+  return total;
+}
+
+function listProcPids(): number[] {
+  return readdirSync('/proc')
+    .filter((n) => /^\d+$/.test(n))
+    .map((n) => parseInt(n, 10));
 }
 
 /** Bounded retries for verifyRunTeardown — a cgroup.kill signal needs a moment to actually reap before cgroup.procs reflects it as empty. */
