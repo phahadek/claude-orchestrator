@@ -36,7 +36,7 @@ import {
   getSession,
   setSessionMetadata,
 } from '../../db/queries';
-import { insertItem } from '../../gate/gateStore';
+import { insertItem, appendEvent } from '../../gate/gateStore';
 import {
   createStagedIntentsRouter,
   stageIntent,
@@ -192,6 +192,14 @@ describe('gate.verify auto-commit — staging-time attempt', () => {
     'records the dispatch origin on the gate_item_event: %s with metadata %s -> unattended=%i',
     async (disposition, metadata, expected) => {
       const item = makeRunnableGateItem();
+      if (disposition === 'fail') {
+        // A prior open fix task lets the reconciler dedup instead of filing one.
+        appendEvent(item.id, {
+          disposition: 'fail',
+          filedFollowon: 'notion:prior-fix',
+          at: new Date(0).toISOString(),
+        });
+      }
       seedVerifySession('verify-session-origin', item.id, metadata);
       upsertGateVerifyAutoCommitPolicy('M12', disposition, true, Date.now());
 
@@ -201,13 +209,7 @@ describe('gate.verify auto-commit — staging-time attempt', () => {
 
       const staged = stageIntent(
         'gate.verify',
-        {
-          gateItemId: item.id,
-          disposition,
-          ...(disposition === 'fail'
-            ? { proposedFix: { existingTaskId: 'notion:abc' } }
-            : {}),
-        },
+        { gateItemId: item.id, disposition },
         'proj-auto-commit',
         null,
         'verify-session-origin',
@@ -225,7 +227,7 @@ describe('gate.verify auto-commit — staging-time attempt', () => {
 
       const row = db
         .prepare(
-          'SELECT unattended FROM gate_item_event WHERE gate_item_id = ? AND disposition = ?',
+          'SELECT unattended FROM gate_item_event WHERE gate_item_id = ? AND disposition = ? ORDER BY id DESC',
         )
         .get(item.id, disposition) as { unattended: number } | undefined;
       expect(row?.unattended).toBe(expected);
