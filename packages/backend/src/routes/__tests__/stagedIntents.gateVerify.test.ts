@@ -812,8 +812,11 @@ describe('gate.verify — Human-Observation mirror apply (operator-supplied disp
 
     const updated = getItem(item.id);
     expect(updated?.state).toBe('open');
-    expect(updated?.events.at(-1)).toMatchObject({ disposition: 'fail' });
-    // No verifier ran, so no RCA: the fail is recorded and nothing is filed.
+    expect(updated?.events.some((e) => e.disposition === 'fail')).toBe(false);
+    expect(updated?.events.at(-1)).toMatchObject({
+      disposition: 'needs-setup',
+    });
+    // No verifier ran, so no RCA: no fail is recorded without its fix task.
     expect(createTaskMock).not.toHaveBeenCalled();
   });
 

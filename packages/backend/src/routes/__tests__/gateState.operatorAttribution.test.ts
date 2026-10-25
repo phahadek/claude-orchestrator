@@ -117,7 +117,7 @@ describe('operator attribution — POST /api/gate/items/:id/events', () => {
     const item = makeItem();
     const res = await request(makeApp(sessionAuth('sess-abc')))
       .post(`/api/gate/items/${item.id}/events`)
-      .send({ evidence: 'looked fine' });
+      .send({ disposition: 'pass', evidence: 'looked fine' });
     expect(res.status).toBe(200);
     const operator = latestEventOperator(item.id);
     expect(operator).not.toBeNull();
@@ -137,8 +137,35 @@ describe('operator attribution — POST /api/gate/items/:id/events', () => {
     const item = makeItem();
     await request(makeApp(sessionAuth('sess-abc')))
       .post(`/api/gate/items/${item.id}/events`)
-      .send({ evidence: 'looked fine', operator: 'named-human' });
+      .send({
+        disposition: 'pass',
+        evidence: 'looked fine',
+        operator: 'named-human',
+      });
     expect(latestEventOperator(item.id)).toBe('named-human');
+  });
+
+  it('gate-session path rejects noted/deferred/discarded/disposition-less events and fail without filedFollowon', async () => {
+    const item = makeItem();
+    const app = makeApp(sessionAuth('sess-abc'));
+    for (const body of [
+      { evidence: 'x' },
+      { disposition: 'noted', evidence: 'x' },
+      { disposition: 'deferred', evidence: 'x' },
+      { disposition: 'discarded', evidence: 'x' },
+      { disposition: 'fail', evidence: 'x' },
+      { disposition: 'needs-setup' },
+    ]) {
+      const res = await request(app)
+        .post(`/api/gate/items/${item.id}/events`)
+        .send(body);
+      expect(res.status).toBe(400);
+    }
+    const viaHeader = await request(makeApp(deviceAuth(testDevice)))
+      .post(`/api/gate/items/${item.id}/events`)
+      .set('X-Gate-Session', '1')
+      .send({ disposition: 'noted', evidence: 'x' });
+    expect(viaHeader.status).toBe(400);
   });
 });
 

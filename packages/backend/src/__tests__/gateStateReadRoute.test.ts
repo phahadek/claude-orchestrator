@@ -68,7 +68,10 @@ describe('GET /api/gate/items', () => {
 describe('GET /api/gate/items/:id/detail', () => {
   it('returns the item plus its sources and event history, by value', async () => {
     const item = makeItem();
-    appendGateItemEvent(item.id, { disposition: 'fail' });
+    appendGateItemEvent(item.id, {
+      disposition: 'fail',
+      filedFollowon: 'fix-x',
+    });
 
     const res = await request(makeApp()).get(
       `/api/gate/items/${item.id}/detail`,

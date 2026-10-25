@@ -711,6 +711,7 @@ describe('reconcileGateRunnability', () => {
       appendGateItemEvent(item.id, {
         disposition: 'fail',
         evidence: { minDeployedCommitAtFail: 'sha1' },
+        filedFollowon: 'fix-x',
       });
       expect((await run('sha1')).reopened).toEqual([]);
       expect(getGateItem(item.id)?.state).toBe('fail');
@@ -786,6 +787,7 @@ describe('reconcileGateRunnability', () => {
     appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: 'the deploy script never wrote the new env var',
+      filedFollowon: 'fix-x',
     });
 
     expect(getGateItem(item.id)?.state).toBe('fail');
@@ -793,6 +795,7 @@ describe('reconcileGateRunnability', () => {
     expect(events.at(-1)).toMatchObject({
       disposition: 'fail',
       evidence: 'the deploy script never wrote the new env var',
+      filedFollowon: 'fix-x',
       minDeployedCommitAtFail: getGateItem(item.id)?.minDeployedCommit,
     });
     expect(events.at(-1)?.minDeployedCommitAtFail).toBe('sha1');
@@ -805,6 +808,7 @@ describe('reconcileGateRunnability', () => {
     appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: 'observed broken behaviour',
+      filedFollowon: 'fix-x',
     });
     expect(getGateItem(item.id)?.state).toBe('fail');
 
@@ -825,6 +829,7 @@ describe('reconcileGateRunnability', () => {
     appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: 'observed broken behaviour',
+      filedFollowon: 'fix-x',
     });
 
     setMinDeployedCommit(item.id, 'sha2', new Date(2).toISOString());
@@ -843,6 +848,7 @@ describe('reconcileGateRunnability', () => {
     appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: 'observed broken behaviour',
+      filedFollowon: 'fix-x',
     });
     expect(getGateItem(item.id)?.minDeployedCommit).toBeUndefined();
     expect(getGateItem(item.id)?.state).toBe('fail');
@@ -1180,6 +1186,7 @@ describe('appendGateItemEvent', () => {
     const updated = appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: 'progress bar missing entirely',
+      filedFollowon: 'fix-x',
       operator: 'gate-verifier',
     });
     expect(updated.state).toBe('fail');
@@ -1190,6 +1197,7 @@ describe('appendGateItemEvent', () => {
     const updated = appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: 'checkout threw a 500',
+      filedFollowon: 'fix-x',
     });
     expect(updated.state).toBe('fail');
     expect(
@@ -1947,6 +1955,7 @@ describe('getGateItemDetail', () => {
     appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: { note: 'x' },
+      filedFollowon: 'fix-x',
     });
 
     const detail = getGateItemDetail(item.id);

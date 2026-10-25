@@ -207,7 +207,11 @@ describe('gateService — retiring a genuine gate.verify intent left stranded by
     const item = await makeDispatchedRunnableItem();
     const intent = dispatchVerifySession(item.id, 'verify-session-2');
 
-    appendGateItemEvent(item.id, { disposition: 'fail', operator: 'jane' });
+    appendGateItemEvent(item.id, {
+      disposition: 'fail',
+      filedFollowon: 'fix-x',
+      operator: 'jane',
+    });
 
     expect(getIntentRow(intent.id).state).toBe('withdrawn');
     expect(getSessionStatus('verify-session-2')).toBe('done');
