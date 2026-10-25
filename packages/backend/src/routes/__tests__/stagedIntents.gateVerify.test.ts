@@ -46,12 +46,14 @@ vi.mock('../../tasks/TaskBackend', () => ({
 
 // config.getProjectById lazy-`require`s ProjectService, which a native
 // require cannot load as TypeScript under vitest — resolve it via ESM import.
+const projectLookup = vi.hoisted(() => ({
+  getById: undefined as undefined | ((id: string) => unknown),
+}));
 vi.mock('../../config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../config')>();
-  const { ProjectService } = await import('../../projects/ProjectService.js');
   return {
     ...actual,
-    getProjectById: (id: string) => ProjectService.getById(id),
+    getProjectById: (id: string) => projectLookup.getById?.(id),
   };
 });
 
@@ -77,6 +79,8 @@ import { createStagedIntentsRouter, stageIntent } from '../stagedIntents';
 import { PLANNING_INTENT_KINDS } from '../../planning/planningIntentKinds';
 import { KNOWN_INTENT_KINDS } from '../stagedIntents';
 import { ProjectService } from '../../projects/ProjectService.js';
+
+projectLookup.getById = (id) => ProjectService.getById(id);
 
 function makeApp() {
   const app = express();

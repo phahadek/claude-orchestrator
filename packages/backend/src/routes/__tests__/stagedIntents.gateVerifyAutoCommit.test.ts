@@ -27,12 +27,14 @@ vi.mock('../../tasks/TaskBackend', () => ({
 
 // config.getProjectById lazy-`require`s ProjectService, which a native
 // require cannot load as TypeScript under vitest — resolve it via ESM import.
+const projectLookup = vi.hoisted(() => ({
+  getById: undefined as undefined | ((id: string) => unknown),
+}));
 vi.mock('../../config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../config')>();
-  const { ProjectService } = await import('../../projects/ProjectService');
   return {
     ...actual,
-    getProjectById: (id: string) => ProjectService.getById(id),
+    getProjectById: (id: string) => projectLookup.getById?.(id),
   };
 });
 
@@ -62,6 +64,8 @@ import {
 import { createMilestonesRouter } from '../milestones';
 import { PlanningOrchestrator } from '../../orchestration/PlanningOrchestrator';
 import { ProjectService } from '../../projects/ProjectService';
+
+projectLookup.getById = (id) => ProjectService.getById(id);
 import { upsertGateVerifyAutoCommitPolicy } from '../../db/queries';
 
 function makeSessionManager() {
