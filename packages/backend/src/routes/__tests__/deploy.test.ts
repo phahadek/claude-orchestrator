@@ -486,7 +486,11 @@ describe('wrap routes: launched_by', () => {
   });
 
   it('GET /wrap/status returns launched_by on the run', async () => {
-    const run = { run_id: 'w1', launched_by: 'pedro-laptop', status: 'running' };
+    const run = {
+      run_id: 'w1',
+      launched_by: 'pedro-laptop',
+      status: 'running',
+    };
     deployServiceMock.getLatestDeployRun.mockReturnValue(run);
     deployServiceMock.listDeployRunEvents.mockReturnValue([]);
     const res = await request(makeApp()).get(
