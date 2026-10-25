@@ -201,7 +201,13 @@ describe('gate.verify auto-commit — staging-time attempt', () => {
 
       const staged = stageIntent(
         'gate.verify',
-        { gateItemId: item.id, disposition },
+        {
+          gateItemId: item.id,
+          disposition,
+          ...(disposition === 'fail'
+            ? { proposedFix: { existingTaskId: 'notion:abc' } }
+            : {}),
+        },
         'proj-auto-commit',
         null,
         'verify-session-origin',

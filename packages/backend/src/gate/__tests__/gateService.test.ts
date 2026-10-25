@@ -717,7 +717,7 @@ describe('reconcileGateRunnability', () => {
       appendGateItemEvent(item.id, {
         disposition: 'fail',
         evidence: { minDeployedCommitAtFail: 'sha1' },
-        filedFollowon: 'fix-x',
+        filedFollowon: 'notion:d-code',
       });
       expect((await run('sha1')).reopened).toEqual([]);
       expect(getGateItem(item.id)?.state).toBe('fail');
@@ -835,7 +835,7 @@ describe('reconcileGateRunnability', () => {
     appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: 'observed broken behaviour',
-      filedFollowon: 'fix-x',
+      filedFollowon: 'notion:abc',
     });
 
     setMinDeployedCommit(item.id, 'sha2', new Date(2).toISOString());
@@ -1964,7 +1964,7 @@ describe('getGateItemDetail', () => {
     appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: { note: 'x' },
-      filedFollowon: 'fix-x',
+      filedFollowon: 'notion:abc',
     });
 
     const detail = getGateItemDetail(item.id);

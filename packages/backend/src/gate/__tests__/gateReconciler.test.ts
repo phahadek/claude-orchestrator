@@ -802,7 +802,6 @@ describe('runGateReconcilerTick', () => {
     });
 
     const updated = getItem(item.id)!;
-    expect(updated.state).toBe('open');
     expect(updated.sources).toHaveLength(1);
     expect(updated.events.some((e) => e.disposition === 'fail')).toBe(false);
     expect(updated.events.at(-1)).toMatchObject({
@@ -2262,6 +2261,7 @@ describe('runGateReconcilerTick — wrapped-milestone scoping', () => {
     appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: { minDeployedCommitAtFail: 'sha1' },
+      filedFollowon: 'notion:abc',
     });
     expect(getItem(item.id)?.state).toBe('fail');
 
@@ -2269,6 +2269,7 @@ describe('runGateReconcilerTick — wrapped-milestone scoping', () => {
     appendGateItemEvent(wrappedItem.id, {
       disposition: 'fail',
       evidence: { minDeployedCommitAtFail: 'sha1' },
+      filedFollowon: 'notion:abc',
     });
     expect(getItem(wrappedItem.id)?.state).toBe('fail');
 

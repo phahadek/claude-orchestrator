@@ -387,7 +387,7 @@ describe('gate.verify — fail disposition files a follow-up task via resolveMil
     );
   });
 
-  it('records the fail and files nothing when no proposedFix is reported', async () => {
+  it('records no fail and files nothing when no proposedFix is reported', async () => {
     const item = makeGateItem({ milestone: 'M13' });
     const app = makeApp();
     const agent = supertest(app);
@@ -410,8 +410,11 @@ describe('gate.verify — fail disposition files a follow-up task via resolveMil
 
     expect(applied.status).toBe(200);
     expect(createTaskMock).not.toHaveBeenCalled();
+    expect(getItem(item.id)?.events.some((e) => e.disposition === 'fail')).toBe(
+      false,
+    );
     expect(getItem(item.id)?.events.at(-1)).toMatchObject({
-      disposition: 'fail',
+      disposition: 'needs-setup',
     });
   });
 });
