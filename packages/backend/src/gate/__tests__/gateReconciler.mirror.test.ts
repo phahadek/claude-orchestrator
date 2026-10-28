@@ -505,12 +505,28 @@ describe('reconcileHumanObservationMirrors — unresolved-source mirrors', () =>
     },
   );
 
-  it('keeps a mirror live for a genuinely-unresolved 💻 Code source not yet Done', () => {
+  it('retires a mirror whose source is a tracked, not-yet-merged 💻 Code task, with a specific reason', () => {
     const item = makeUnresolvedSourceItem('notion:code-src');
     upsertTaskCache(
       'notion:code-src',
-      JSON.stringify({ type: '💻 Code', status: '🚧 In Progress' }),
+      JSON.stringify({ type: '💻 Code', status: '🔲 Backlog' }),
     );
+    stageUnresolvedSourceMirror(item);
+
+    const result = reconcileHumanObservationMirrors();
+
+    expect(result.retired).toHaveLength(1);
+    expect(liveMirrorRows('unresolved-source')).toHaveLength(0);
+    const row = db
+      .prepare('SELECT disposition_reason FROM staged_intent WHERE id = ?')
+      .get(result.retired[0]) as { disposition_reason: string | null };
+    expect(row.disposition_reason).toMatch(
+      /source now tracked, not yet merged/,
+    );
+  });
+
+  it('keeps a mirror live for an untracked source with no merge commit', () => {
+    const item = makeUnresolvedSourceItem('notion:untracked-src');
     stageUnresolvedSourceMirror(item);
 
     const result = reconcileHumanObservationMirrors();
