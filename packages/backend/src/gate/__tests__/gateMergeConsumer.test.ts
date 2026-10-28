@@ -335,6 +335,56 @@ describe('catchUpMergeCommits — backoff for a permanently-unresolved source', 
   });
 });
 
+describe('catchUpMergeCommits — structurally-unresolvable sources are not re-queried', () => {
+  it('issues no local_branches lookup on a second call for unfilled Design sources', async () => {
+    const n = 5;
+    for (let i = 0; i < n; i++) {
+      const id = `notion:struct-skip-${i}`;
+      insertItem({
+        project: 'polimarket-analyser',
+        milestone: 'M16',
+        text: `Design ${i}`,
+        classification: 'needs-triage',
+        sources: [{ sourceTaskId: id, sourceTaskTitle: `Design ${i}` }],
+        updatedAt: new Date(0).toISOString(),
+      });
+      upsertTaskCache(
+        id,
+        JSON.stringify({ type: '📐 Design', status: '✅ Done' }),
+      );
+    }
+    const prepareSpy = vi.spyOn(db, 'prepare');
+    const lbCalls = () =>
+      prepareSpy.mock.calls.filter(([sql]) =>
+        String(sql).includes('FROM local_branches'),
+      ).length;
+
+    await catchUpMergeCommits();
+    expect(lbCalls()).toBeGreaterThan(0);
+    prepareSpy.mockClear();
+
+    await catchUpMergeCommits();
+    expect(lbCalls()).toBe(0);
+    prepareSpy.mockRestore();
+  });
+
+  it('merge-commit lookup plan does not scan local_branches', () => {
+    const plan = db
+      .prepare(
+        `EXPLAIN QUERY PLAN
+         SELECT lb.merge_commit_sha FROM local_branches lb
+         JOIN sessions s ON s.session_id = lb.session_id
+         WHERE s.task_id = 'x' AND lb.status = 'merged'
+           AND lb.merge_commit_sha IS NOT NULL
+         ORDER BY lb.updated_at DESC LIMIT 1`,
+      )
+      .all() as { detail: string }[];
+    expect(plan.map((p) => p.detail).join('\n')).not.toMatch(
+      /SCAN (lb|local_branches)/,
+    );
+  });
+});
+
 describe('catchUpMergeCommits — escalation ceiling excludes structurally/temporarily unresolvable sources', () => {
   /** Drives catchUpMergeCommits past the escalation ceiling, jumping the fake clock past the max backoff window between each call so every call performs a fresh lookup. */
   async function driveAttempts(times: number): Promise<void> {
