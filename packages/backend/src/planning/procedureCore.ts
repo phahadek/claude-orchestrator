@@ -593,7 +593,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
     appliesTo: ['ops'],
     text:
       "DO state a throughput or latency cause only with its share of the producer's own " +
-      'time — an idle-inclusive profile or a statement-time delta on the producer\'s own ' +
+      "time — an idle-inclusive profile or a statement-time delta on the producer's own " +
       'process. DO NOT name "the host is busy" / IO contention as the cause. DO rank ' +
       'costs with an idle-inclusive recording over at least 60 s; point dumps locate a ' +
       'stuck thread and DO NOT rank costs (5/5 dumps named a function a 60 s recording ' +
@@ -601,7 +601,8 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
   },
   {
     id: 'no-rollback-or-easy-out-recommendation',
-    title: 'Recommend from the proven mechanism, not a revert or easy-out lever',
+    title:
+      'Recommend from the proven mechanism, not a revert or easy-out lever',
     appliesTo: ['ops'],
     text:
       "DO base a recommendation on the proven mechanism and the project's stated " +
