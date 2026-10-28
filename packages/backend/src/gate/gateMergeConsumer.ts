@@ -192,8 +192,13 @@ export async function catchUpMergeCommits(): Promise<CatchUpMergeCommitsResult> 
         if (isStructurallyUnresolvableSource(sourceTaskId)) {
           // Design task, or an Operational task with no PR at all — never
           // produces a merge commit, no matter how long or how often this
-          // retries. Don't track attempts or ever escalate.
-          unresolvedAttempts.delete(sourceTaskId);
+          // retries. Never escalate; park it for the max backoff window so
+          // each tick doesn't re-scan for it (re-checked daily in case the
+          // task type or PR state changes).
+          unresolvedAttempts.set(sourceTaskId, {
+            attempts: 0,
+            nextAttemptAt: nowMs + UNRESOLVED_MAX_BACKOFF_MS,
+          });
           return;
         }
         const attempts =

@@ -120,6 +120,7 @@ export function runMigrations(target: Database.Database): void {
       updated_at    TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_local_branches_project_status ON local_branches(project_id, status);
+    CREATE INDEX IF NOT EXISTS idx_local_branches_session_id_status ON local_branches(session_id, status);
 
     CREATE TABLE IF NOT EXISTS audit_log (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
