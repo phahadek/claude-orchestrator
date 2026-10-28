@@ -15,6 +15,8 @@ import {
   hasLiveVerifySessionForGateItem,
   isStructurallyUnresolvableSource,
   isSourceTaskDeferred,
+  isSourceTaskDone,
+  isSourceTaskUntracked,
   listActiveGateVerifyMirrors,
   type GateVerifyMirrorOrigin,
 } from '../db/queries';
@@ -947,6 +949,8 @@ function isUnresolvedSourceStillLive(item: GateItem): boolean {
     item.sources.some(
       (s) =>
         !s.mergeCommit &&
+        (isSourceTaskDone(s.sourceTaskId) ||
+          isSourceTaskUntracked(s.sourceTaskId)) &&
         !isStructurallyUnresolvableSource(s.sourceTaskId) &&
         !isSourceTaskDeferred(s.sourceTaskId),
     )
@@ -973,6 +977,16 @@ function retireReasonFor(origin: GateItemMirrorOrigin, item: GateItem): string {
       )
     ) {
       return 'source deferred, never merged';
+    }
+    if (
+      item.sources.some(
+        (s) =>
+          !s.mergeCommit &&
+          !isSourceTaskDone(s.sourceTaskId) &&
+          !isSourceTaskUntracked(s.sourceTaskId),
+      )
+    ) {
+      return 'source now tracked, not yet merged';
     }
     return `gate_item resolved to ${item.state}`;
   }
