@@ -69,6 +69,10 @@ acceptance criterion; that gets filed as a separate Code task.
 >   *This is not a dead end and not "Done" — it's a dependency.*
 > - **`pass-with-caveat`** — done, with one aspect superseded/deferred and noted.
 >
+> **Breadth before depth:** run every check in the check table to at least a by-value first reading and
+> present the table **before** deep-diving any single failing check — unless an incident freeze applies.
+> Digging one family's outage while the other checks sit unrun is the failure.
+>
 > *Test-authoring* (writing test code) is **not** this — it's 💻 Code.
 
 ## Execution context — autonomous vs interactive (this replaces "Phase 1 / Phase 2")
@@ -162,6 +166,24 @@ unattended while still keeping a human on every close.
   it must be **kept honest by a real forcing function** (a one-time precondition at the point of
   resumption, a hard dependency) — never a rot-able backlog note, and never a standing per-run check
   that taxes every future execution to police a finite, shrinking condition.
+- **A throughput/latency cause is named only with its measured share — never as host contention.**
+  "The host is IO-busy" is contention, not attribution. State the cause with its share of the
+  producer's own time: an idle-inclusive profile or a statement-time delta (e.g. `pg_stat_statements`)
+  on the producer's own process. Real run: a slow backlog drain was blamed on a busy host; the profile
+  and statement deltas showed five distinct causes in the producer itself.
+- **Point dumps locate a stuck thread; they do not rank costs.** Rank costs with an idle-inclusive
+  recording over ≥ 60 s (e.g. `py-spy record --idle`). Real run: 5/5 dumps named a function that the
+  60 s recording put at 4.6% while the real costs sat elsewhere (29%, 22%).
+- **Recommend from the proven mechanism and the project's stated priorities — never a revert or an
+  easy-out lever as the default.** A rollback, or a lever that trades live freshness for correctness
+  (e.g. capping a live watermark behind a backlog), is not offered as the recommendation, least of
+  all under time pressure. Real run: "revert three commits" was proposed; investigating instead found
+  two more proven defects the revert would have hidden. Live first, then historical, unless the
+  project says otherwise.
+- **A committed live window stays watched.** When a run names a future live window as the re-run or
+  measurement target for a check, keep a watch armed for it — or state explicitly, in that same turn,
+  that you are stopping and the window will be missed. Naming a window and then doing nothing leaves
+  it silently unmeasured.
 
 ### Evidence law — the claim shape dictates the admissible evidence
 

@@ -588,6 +588,50 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       "producer's own predicate was run.",
   },
   {
+    id: 'measured-attribution-for-capacity-causes',
+    title: 'Name a capacity cause only from measured attribution',
+    appliesTo: ['ops'],
+    text:
+      "DO state a throughput or latency cause only with its share of the producer's own " +
+      "time — an idle-inclusive profile or a statement-time delta on the producer's own " +
+      'process. DO NOT name "the host is busy" / IO contention as the cause. DO rank ' +
+      'costs with an idle-inclusive recording over at least 60 s; point dumps locate a ' +
+      'stuck thread and DO NOT rank costs (5/5 dumps named a function a 60 s recording ' +
+      'put at 4.6%). DO NOT cite a distinct cause without its measured share.',
+  },
+  {
+    id: 'no-rollback-or-easy-out-recommendation',
+    title:
+      'Recommend from the proven mechanism, not a revert or easy-out lever',
+    appliesTo: ['ops'],
+    text:
+      "DO base a recommendation on the proven mechanism and the project's stated " +
+      'priorities (live first, then historical unless the project says otherwise). DO ' +
+      'NOT offer a revert, or a lever that trades live freshness for correctness, as the ' +
+      'default — a proposed 3-commit revert would have hidden two further proven defects ' +
+      'that investigation found.',
+  },
+  {
+    id: 'committed-live-window-stays-watched',
+    title: 'A committed live window stays watched',
+    appliesTo: ['ops'],
+    text:
+      'DO keep a watch armed for any future live window the run names as a re-run or ' +
+      'measurement target, or state explicitly in that same turn that you are stopping ' +
+      'and the window will be missed. DO NOT name a window and then do nothing — it ' +
+      'goes silently unmeasured.',
+  },
+  {
+    id: 'testing-breadth-before-depth',
+    title: 'Observational E2E: breadth before depth',
+    appliesTo: ['ops'],
+    text:
+      'DO run every check in an observational E2E check table to at least a by-value ' +
+      'first reading and present the table BEFORE deep-diving any single failing check. ' +
+      'DO NOT dig one failing family while other checks are unrun, unless an incident ' +
+      'freeze applies.',
+  },
+  {
     id: 'denominators-by-content',
     title: 'A fraction is a claim about content, not only count',
     appliesTo: ['ops'],

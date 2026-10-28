@@ -106,6 +106,22 @@ Canonical source: `packages/backend/src/planning/procedureCore.ts` (`CORE_PRINCI
 
 - **ops**: DO attribute a degenerate or zero analyzer/pipeline reading to a cause ONLY after replicating the producer's OWN predicate on one concrete scope, by value — its own CTE, its own funnel counters, its own run record — run the producer's actual query/counter against one scope before naming a mechanism. DO NOT accept a plausible-sounding input-side explanation ("thin prices", "sparse tags", "a destroyed corpus") as the finding merely because it fits the shape of the inputs — three real cases tried exactly that and each hid a different, provable mechanism (a pairing-window/closed-market timing bug, a cohort fan-out that replaced the channel scope, a sub-horizon burst slice, and a crash loop) that only surfaced once the producer's own predicate was run.
 
+## Name a capacity cause only from measured attribution
+
+- **ops**: DO state a throughput or latency cause only with its share of the producer's own time — an idle-inclusive profile or a statement-time delta on the producer's own process. DO NOT name "the host is busy" / IO contention as the cause. DO rank costs with an idle-inclusive recording over at least 60 s; point dumps locate a stuck thread and DO NOT rank costs (5/5 dumps named a function a 60 s recording put at 4.6%). DO NOT cite a distinct cause without its measured share.
+
+## Recommend from the proven mechanism, not a revert or easy-out lever
+
+- **ops**: DO base a recommendation on the proven mechanism and the project's stated priorities (live first, then historical unless the project says otherwise). DO NOT offer a revert, or a lever that trades live freshness for correctness, as the default — a proposed 3-commit revert would have hidden two further proven defects that investigation found.
+
+## A committed live window stays watched
+
+- **ops**: DO keep a watch armed for any future live window the run names as a re-run or measurement target, or state explicitly in that same turn that you are stopping and the window will be missed. DO NOT name a window and then do nothing — it goes silently unmeasured.
+
+## Observational E2E: breadth before depth
+
+- **ops**: DO run every check in an observational E2E check table to at least a by-value first reading and present the table BEFORE deep-diving any single failing check. DO NOT dig one failing family while other checks are unrun, unless an incident freeze applies.
+
 ## A fraction is a claim about content, not only count
 
 - **ops**: DO state what the excluded or included part of a fraction *contains*, by value, before citing it as evidence of impact — a coverage/exclusion fraction ("E affects 9% of segments") is a claim about content, not just magnitude. DO NOT report a fraction as evidence of low impact without first checking by value what falls in it — a real case's excluded rows were exactly the stage-day parallel-stream slots (the live match chat), which the count alone hid completely.
