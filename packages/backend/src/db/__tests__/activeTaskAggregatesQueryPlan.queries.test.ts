@@ -56,9 +56,9 @@ function captureSql(): string {
 describe('getActiveTaskAggregates', () => {
   upsertTaskCache(TASK_ID, JSON.stringify({ id: TASK_ID }));
   upsertTaskCache(EMPTY_TASK_ID, JSON.stringify({ id: EMPTY_TASK_ID }));
-  seedSession('plan-old', 'planning', 1000);
-  seedSession('plan-new', 'planning', 3000);
-  seedSession('plan-mid', 'planning', 2000);
+  seedSession('plan-old', 'groom', 1000);
+  seedSession('plan-new', 'design', 3000);
+  seedSession('plan-mid', 'groom', 2000);
   seedSession('rev-old', 'review', 1500);
   seedSession('rev-new', 'review', 4000);
   seedSession('rev-mid', 'review', 2500);
