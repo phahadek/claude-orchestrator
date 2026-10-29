@@ -56,6 +56,7 @@ import {
   dispatchGateItemVerification,
   defaultFollowupFiler,
   reattachOutstandingGateVerifications,
+  countFixAttempts,
   type DeployAdvanceTrigger,
   type GateItemVerifier,
   type FollowupFixTaskFiler,
@@ -1247,6 +1248,19 @@ describe('runGateReconcilerTick', () => {
       disposition: 'fail',
       filedFollowon: 'notion:40722f91-52f3-8102-0000-000000000002',
     });
+  });
+
+  it('countFixAttempts counts a three-follow-on fail as one fix cycle', async () => {
+    const item = await makeRunnableItem({ classification: 'Read-Only' });
+    appendGateItemEvent(item.id, {
+      disposition: 'fail',
+      filedFollowon: [
+        '40722f91-52f3-8111-0000-000000000011',
+        '40722f91-52f3-8112-0000-000000000012',
+        '40722f91-52f3-8113-0000-000000000013',
+      ],
+    });
+    expect(countFixAttempts(getItem(item.id)!)).toBe(1);
   });
 
   it('per-item in-flight guard prevents a duplicate dispatch of a live verify', async () => {

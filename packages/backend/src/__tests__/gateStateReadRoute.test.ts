@@ -65,6 +65,41 @@ describe('GET /api/gate/items', () => {
   });
 });
 
+describe('POST /api/gate/items/:id/events — filedFollowon validation', () => {
+  it('400s a PLACEHOLDER follow-on naming the token, writing no event or source', async () => {
+    const item = makeItem();
+    const res = await request(makeApp())
+      .post(`/api/gate/items/${item.id}/events`)
+      .send({ disposition: 'fail', filedFollowon: 'PLACEHOLDER' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('PLACEHOLDER');
+    const events = db
+      .prepare('SELECT COUNT(*) AS n FROM gate_item_event WHERE gate_item_id = ?')
+      .get(item.id) as { n: number };
+    const sources = db
+      .prepare('SELECT COUNT(*) AS n FROM gate_item_source WHERE gate_item_id = ?')
+      .get(item.id) as { n: number };
+    expect(events.n).toBe(0);
+    expect(sources.n).toBe(1);
+  });
+
+  it('accepts a string[] of follow-ons', async () => {
+    const item = makeItem();
+    const res = await request(makeApp())
+      .post(`/api/gate/items/${item.id}/events`)
+      .send({
+        disposition: 'fail',
+        filedFollowon: [
+          '40722f91-52f3-813f-b063-fd64f8936aa6',
+          '40722f91-52f3-8127-91a4-c24c0a2f03b2',
+        ],
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.sources).toHaveLength(3);
+  });
+});
+
 describe('GET /api/gate/items/:id/detail', () => {
   it('returns the item plus its sources and event history, by value', async () => {
     const item = makeItem();

@@ -476,7 +476,7 @@ function latestFailFollowon(item: GateItem): string | undefined {
 }
 
 /** Fix cycles already spent on this item — a `fail` event that filed a follow-up. */
-function countFixAttempts(item: GateItem): number {
+export function countFixAttempts(item: GateItem): number {
   return item.events.filter((e) => e.disposition === 'fail' && e.filedFollowon)
     .length;
 }
