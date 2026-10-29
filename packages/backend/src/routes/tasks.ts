@@ -44,6 +44,7 @@ import { computeOpsBlockingDeps, isOpsEligibleType } from '../ops/opsLoad';
 import { groomBlockingDepTitles } from '../orchestration/planningCandidates';
 import { resolveProjectDepStatus } from '../orchestration/DispatchTriggerEvaluator';
 import { normalizeTaskId, normalizeBoardId } from '../tasks/taskId';
+import { normalizePriority, priorityLevelRank } from '../tasks/priority';
 import {
   loadExecutionRanks,
   executionSortKey,
@@ -389,6 +390,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
 
   const notionStatus = notionTask?.status ?? '';
   const priority = notionTask?.priority ?? '';
+  const priorityLevel = normalizePriority(priority);
 
   let codeSession: TaskView['codeSession'] = null;
   if (row.code_session_id) {
@@ -510,6 +512,8 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
       blocks_merge: e.blocks_merge,
     })),
     priority,
+    priorityLevel,
+    priorityRank: priorityLevelRank(priorityLevel),
     notionUrl: notionTask?.notionUrl ?? '',
     taskType: notionTask?.type ?? '',
     blocked: false,

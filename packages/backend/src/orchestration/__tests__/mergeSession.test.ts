@@ -17,6 +17,38 @@ function sections(overrides: Partial<TaskBodySections> = {}): TaskBodySections {
   };
 }
 
+describe('planMerge priority union', () => {
+  const task = (id: string, priority: string): MergeTaskContent => ({
+    id,
+    dependsOn: [],
+    priority,
+    sections: sections({ summary: id }),
+  });
+  const unioned = (a: string, b: string) =>
+    planMerge({
+      milestoneTasks: [
+        { id: 'notion:a', dependsOn: [] },
+        { id: 'notion:b', dependsOn: [] },
+      ],
+      mergeSet: [task('notion:a', a), task('notion:b', b)],
+      survivorId: 'notion:a',
+    }).intents.find((i) => i.kind === 'task.setProperties')?.payload;
+
+  it('keeps 🔴 Critical over 🔴 High', () => {
+    expect(unioned('🔴 High', '🔴 Critical')).toEqual({
+      taskId: 'notion:a',
+      patch: { priority: '🔴 Critical' },
+    });
+  });
+
+  it('keeps 🟠 High over 🟡 Medium', () => {
+    expect(unioned('🟡 Medium', '🟠 High')).toEqual({
+      taskId: 'notion:a',
+      patch: { priority: '🟠 High' },
+    });
+  });
+});
+
 describe('planMerge', () => {
   it('stages a survivor union (updateBody + setProperties), an archive per merged-away task, and re-points every prior dependent at the survivor with no dangling reference', () => {
     const a: MergeTaskContent = {

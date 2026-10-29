@@ -11,6 +11,8 @@ function makeTask(overrides: Partial<TaskView> = {}): TaskView {
     displayStatus: 'ready',
     pauseReason: null,
     priority: '🟡 Medium',
+    priorityLevel: 'medium',
+    priorityRank: 2,
     notionUrl: 'https://notion.so/task-1',
     taskType: '💻 Code',
     blocked: false,
@@ -27,6 +29,22 @@ function makeTask(overrides: Partial<TaskView> = {}): TaskView {
 }
 
 describe('CompactTaskCard', () => {
+  it.each([
+    ['🔴 Critical', 'critical', 0],
+    ['🟠 High', 'high', 1],
+  ] as const)('renders a priority dot for %s', (priority, level, rank) => {
+    render(
+      <CompactTaskCard
+        task={makeTask({ priority, priorityLevel: level, priorityRank: rank })}
+        showCheckbox={false}
+        checked={false}
+        onCheckChange={vi.fn()}
+        onClick={vi.fn()}
+      />,
+    );
+    expect(screen.getByLabelText(priority).textContent).not.toBe('');
+  });
+
   it('renders the task name', () => {
     render(
       <CompactTaskCard
