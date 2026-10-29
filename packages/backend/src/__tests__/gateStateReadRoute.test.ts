@@ -75,10 +75,14 @@ describe('POST /api/gate/items/:id/events — filedFollowon validation', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('PLACEHOLDER');
     const events = db
-      .prepare('SELECT COUNT(*) AS n FROM gate_item_event WHERE gate_item_id = ?')
+      .prepare(
+        'SELECT COUNT(*) AS n FROM gate_item_event WHERE gate_item_id = ?',
+      )
       .get(item.id) as { n: number };
     const sources = db
-      .prepare('SELECT COUNT(*) AS n FROM gate_item_source WHERE gate_item_id = ?')
+      .prepare(
+        'SELECT COUNT(*) AS n FROM gate_item_source WHERE gate_item_id = ?',
+      )
       .get(item.id) as { n: number };
     expect(events.n).toBe(0);
     expect(sources.n).toBe(1);
