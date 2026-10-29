@@ -23,7 +23,7 @@ vi.mock('../../hooks/useSessionStore', () => ({
   useSessionStore: () => ({
     sessions: [],
     tasks: [],
-    tasksReady: false,
+    tasksReady: true,
     synced: true,
     readyCount: 0,
     blockedCount: 0,

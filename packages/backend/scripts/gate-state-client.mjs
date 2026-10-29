@@ -18,6 +18,7 @@
 //   node gate-state-client.mjs event <gateItemId> <json-payload>
 //   node gate-state-client.mjs approve <gateItemId> [operator]
 //   node gate-state-client.mjs reopen <gateItemId> [reason] [operator]
+//   node gate-state-client.mjs discard <gateItemId> <reason> [operator]
 //   node gate-state-client.mjs reclassify <gateItemId> <classification> [operator]
 //   node gate-state-client.mjs accrete <json-payload>
 //   node gate-state-client.mjs carry-forward <gateItemId> <milestone>
@@ -211,6 +212,26 @@ export function reopenGateItem({
   });
 }
 
+export function discardGateItem({
+  host,
+  port,
+  token,
+  gateItemId,
+  reason,
+  operator,
+}) {
+  const payload = { reason };
+  if (operator !== undefined) payload.operator = operator;
+  return requestGateState({
+    host,
+    port,
+    token,
+    method: 'POST',
+    path: `/api/gate/items/${encodeURIComponent(gateItemId)}/discard`,
+    payload,
+  });
+}
+
 export function reclassifyGateItem({
   host,
   port,
@@ -282,6 +303,7 @@ const USAGE =
   '  node gate-state-client.mjs event <gateItemId> <json-payload>\n' +
   '  node gate-state-client.mjs approve <gateItemId> [operator]\n' +
   '  node gate-state-client.mjs reopen <gateItemId> [reason] [operator]\n' +
+  '  node gate-state-client.mjs discard <gateItemId> <reason> [operator]\n' +
   '  node gate-state-client.mjs reclassify <gateItemId> <classification> [operator]\n' +
   '  node gate-state-client.mjs accrete <json-payload>\n' +
   '  node gate-state-client.mjs carry-forward <gateItemId> <milestone>';
@@ -367,6 +389,17 @@ async function main() {
       const [gateItemId, reason, operator] = rest;
       if (!gateItemId) return fail(USAGE);
       result = await reopenGateItem({
+        host,
+        port,
+        token,
+        gateItemId,
+        reason,
+        operator,
+      });
+    } else if (command === 'discard') {
+      const [gateItemId, reason, operator] = rest;
+      if (!gateItemId || !reason) return fail(USAGE);
+      result = await discardGateItem({
         host,
         port,
         token,

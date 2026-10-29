@@ -633,9 +633,16 @@ export default function App() {
       return;
     }
 
-    // Any change to the underlying data (project/board switch, tasks_ready,
-    // forced refresh) invalidates both cached shapes — a topView switch alone does not.
-    const generation = `${activeProjectId}|${activeBoardId}|${tasksReady}|${taskListRefreshTrigger}`;
+    // tasks_ready is a precondition, not an invalidation signal: fetching before
+    // it arrives would be discarded when its taskListRefreshTrigger bump lands.
+    if (!tasksReady) {
+      setTaskViewsLoading(true);
+      return;
+    }
+
+    // Any change to the underlying data (project/board switch, forced refresh)
+    // invalidates both cached shapes — a topView switch alone does not.
+    const generation = `${activeProjectId}|${activeBoardId}|${taskListRefreshTrigger}`;
     if (taskShapeGenerationRef.current !== generation) {
       taskShapeGenerationRef.current = generation;
       taskShapeCacheRef.current = { full: null, summary: null };

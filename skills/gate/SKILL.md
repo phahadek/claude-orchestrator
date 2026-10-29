@@ -503,7 +503,10 @@ For every item in the pulled batch:
      proposal explicitly when the evidence doesn't hold (see Reporting discipline).
    - **A mis-accreted / orphaned item → `discarded` (with evidence), never `deferred`.**
      Deferred means punted-to-a-later-milestone; a void item that should never have existed
-     is `discarded` — terminal and non-blocking, but audited.
+     is `discarded` — terminal and non-blocking, but audited. A gate session cannot record
+     `discarded` through `event` (rejected with 400); only on the **operator's explicit ruling**,
+     record it with `discard <gateItemId> <reason> [operator]` (see Corrective commands). Without
+     that ruling, report the item and leave it open.
    - **A compound item that won't isolate → split it** into atomic `gate_item`s
      (`task-writing.md` § atomic gate items), don't force a bespoke disposition.
    - **Two known vocabulary gaps — name them in `evidence` rather than forcing a fit.**
@@ -663,7 +666,13 @@ triage actions, not routine disposition:
 ```bash
 node ~/.claude/scripts/gate-state-client.mjs reopen <gateItemId> [reason] [operator]
 node ~/.claude/scripts/gate-state-client.mjs reclassify <gateItemId> <classification> [operator]
+node ~/.claude/scripts/gate-state-client.mjs discard <gateItemId> <reason> [operator]
 ```
+
+- **`discard`** — void a mis-accreted / orphaned item (terminal, non-blocking, one audit
+  row with `reason` as evidence). Use **only on the operator's explicit ruling**, passing
+  their reason; dispatched sessions (including gate-verify) are rejected and cannot
+  self-discard.
 
 - **`reopen`** — deliberately move a **resolved** item (`pass` / `deferred`) back to
   runnable when it needs re-verification: a regression surfaced, the deploy that

@@ -199,6 +199,7 @@ describe('TaskCacheRefresher — unresolvable milestone registration', () => {
 
     expect(logger.warn).not.toHaveBeenCalled();
     expect(logger.error).not.toHaveBeenCalled();
-    expect(broadcasts.length).toBe(2);
+    // Second tick is unchanged, so only the first refresh broadcasts.
+    expect(broadcasts.length).toBe(1);
   });
 });

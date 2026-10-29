@@ -11,11 +11,13 @@ vi.mock('../../hooks/useWebSocket', () => ({
   useWebSocket: () => ({ send: vi.fn(), connectionState: 'connected' }),
 }));
 
+const storeState = vi.hoisted(() => ({ tasksReady: true, trigger: 0 }));
+
 vi.mock('../../hooks/useSessionStore', () => ({
   useSessionStore: () => ({
     sessions: [],
     tasks: [],
-    tasksReady: false,
+    tasksReady: storeState.tasksReady,
     synced: true,
     readyCount: 0,
     blockedCount: 0,
@@ -39,7 +41,7 @@ vi.mock('../../hooks/useSessionStore', () => ({
     incompleteReviews: [],
     lastTaskUpdate: null,
     lastStagedIntentChange: null,
-    taskListRefreshTrigger: 0,
+    taskListRefreshTrigger: storeState.trigger,
     lastAutofixEvent: null,
     lastReviewStartedEvent: null,
     lastCiBillingBlockedEvent: null,
@@ -120,6 +122,8 @@ function activeTaskCalls(fetchMock: ReturnType<typeof vi.fn>) {
 import App from '../../App';
 
 beforeEach(() => {
+  storeState.tasksReady = true;
+  storeState.trigger = 0;
   stubLocalStorage();
   mockMatchMedia();
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -247,5 +251,49 @@ describe('App — per-shape taskViews cache', () => {
 
     // The stale response must be discarded — taskViews must still show the fresher data
     expect(screen.getByTestId('task-list').textContent).toBe('fresh-task');
+  });
+
+  it('issues no /api/tasks/active request before tasks_ready, then exactly one after it', async () => {
+    storeState.tasksReady = false;
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes('/api/config')) {
+        return Promise.resolve({ ok: true, json: async () => [PROJECT] });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ tasks: [], coldCache: false }),
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { rerender } = render(<App />);
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some((c) => String(c[0]).includes('/api/config')),
+      ).toBe(true);
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(activeTaskCalls(fetchMock).length).toBe(0);
+
+    // tasks_ready: tasksReady flips true and the refresh trigger increments together.
+    storeState.tasksReady = true;
+    storeState.trigger = 1;
+    rerender(<App />);
+    await waitFor(() => {
+      expect(activeTaskCalls(fetchMock).length).toBe(1);
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(activeTaskCalls(fetchMock).length).toBe(1);
+
+    // A later taskListRefreshTrigger bump (e.g. pr_merged) still refetches once.
+    storeState.trigger = 2;
+    rerender(<App />);
+    await waitFor(() => {
+      expect(activeTaskCalls(fetchMock).length).toBe(2);
+    });
   });
 });
