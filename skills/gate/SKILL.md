@@ -280,19 +280,13 @@ and put the restatement to the operator rather than recording a fail on the bad 
 
 ---
 
-## Run budget — a gate run is bounded in time
+## No run budget — stop on items, not the clock
 
-**Wall-clock budget.** A gate run has a budget: the operator-stated one, else a default of
-**45 minutes** from session start. Note the start time at Step 0 and check elapsed time before each
-pull and each fan-out.
+A gate run has **no wall-clock budget**. The only stopping conditions are no items left (including
+the sweeps and completion gate below) or an operator interrupt. Root-cause work is never time-capped.
 
-**On reaching the budget**, every remaining pulled item gets `not-yet-triggerable` (when its
-trigger, window or flip is pending) with an exact-timestamp trace guide, or is left untouched
-(still `open`/`runnable`) for a separate session. Then the session reports. This is a time bound,
-not a hand-back: nothing is lost, state persists server-side. The completion contract's
-never-stop / never-check-in rule applies *within* the budget.
-
-**Never wait for an observation window, natural trigger or reconciler flip inside a run.** If an
+**Never wait for an observation window, natural trigger or reconciler flip inside a run.** This rule
+is about idle waiting, not about working: keep working other items. If an
 item's window has not elapsed, its natural trigger has not fired, or the gate reconciler has not yet
 flipped it to `runnable`, park it immediately as `not-yet-triggerable` with an **interim reading**
 (what the observable shows now) and a trace guide naming the **exact timestamp** at which the window
@@ -312,17 +306,17 @@ pass, a sentinel). Do not poll for the roll or the reconciler to converge.
 
 Beyond the DB-safety rules above, every verifier brief MUST:
 
-- **Carry a hard per-agent time budget** (e.g. 10 minutes). At the budget the agent stops and
-  returns what it has, marking unfinished items `not-yet-triggerable` or unverified.
-- **Forbid background watchers, polling loops, and sleeps** beyond ~2 minutes. An item whose window
-  is pending is reported as not-yet-triggerable with an interim reading and trace guide, not waited
-  on.
+- **Carry no time budget.** Verification and RCA agents run until every item in their shard has a
+  disposition; root-cause agents are never time-capped. The brief says so explicitly.
+- **Forbid idle waiting:** no background watchers, polling loops, or sleeps beyond ~2 minutes. An
+  item whose window is pending is reported as not-yet-triggerable with an interim reading and trace
+  guide, not waited on; the agent moves on to other work instead.
 - **Point the agent at the actual budget or spec source.** Name the exact page/task that holds it
   (it may live in a Done investigation's Implementation notes, not a Deferred task). Verifiers
   once read a Deferred task and concluded "no budget exists" while the budget sat in a Done
   investigation.
-- **Send back an under-trying verifier.** An agent that reports items "not attempted (budget)"
-  after using a fraction of its time budget (e.g. ~3 of 12 minutes) is sent back to do them.
+- **Send back an under-trying verifier.** An agent that returns any unlocated fail ("root cause not
+  located") or any "not attempted" item is re-dispatched to finish them, whatever time it used.
 - **"Deployed" is not "installed" for host config.** A merged change under `infra/` is not live
   until it is on the host: verify the `/etc/...` content and mtime, not just git ancestry. Say so
   in the brief.
@@ -342,8 +336,7 @@ Beyond the DB-safety rules above, every verifier brief MUST:
 The parent **records from that file** and spot-checks all fails plus a sample of passes against the
 evidence. It never hand-transcribes verifier evidence into JSON. Before recording a shard whose
 verifier reports a refusal, the parent checks that it did not mass-convert unattempted items to
-`needs-setup`. Don't wait on the slowest agent past the run budget; record what has returned and
-park the rest.
+`needs-setup`. Record shards as they return, but do not report until every shard is resolved.
 
 ---
 
@@ -573,19 +566,16 @@ For every item in the pulled batch:
 ## Step 4 — Loop
 
 Repeat Steps 2–3 for the next tier/batch until `readiness` reports `green`,
-or until the operator interrupts to stop the session (leaving remaining items
-`open`/`runnable` for a later pass — nothing is lost, the state persists
+or until the operator interrupts to stop the session (state persists
 server-side). The session itself does not propose stopping — see the
 completion contract below.
 
 ### Completion contract
 
 A gate run dispositions **every item it pulls** before it reports anything.
-Running out of items — not running out of appetite — is the only stopping
-condition available to the session, **other than the wall-clock run budget**
-(§ Run budget — a gate run is bounded in time). The never-stop rule below holds
-*within* the budget; on reaching the budget the session parks what is left and
-reports:
+Running out of items — not running out of appetite or clock — is the only
+stopping condition available to the session, besides an operator interrupt.
+There is no wall-clock run budget:
 
 - **Never ask the operator whether to continue.** No "want me to keep going?",
   no continue/stop menu, no "continuing unless you'd rather I stop." The
@@ -603,6 +593,37 @@ reports:
   actually the operator's to make — hold it, keep dispositioning everything
   else, and raise every held question once, together, alongside the final
   report.
+
+### Completion gate — before any report
+
+Before reporting, every pulled item with a fail finding (including every fail a verifier returned)
+must have the three root-cause locks from `config/task-writing.md` § Root cause (the branch, the
+input that takes it, the fix that follows) **and** a filed `filedFollowon`, or be shown to be a
+pass, a restatement, or a pending window (`not-yet-triggerable` with a trace guide). **"Root cause
+not located" is not a reportable state**: root-causing is the gate session's job, never the
+operator's. An unlocated fail makes the session re-dispatch root-cause agents (or root-cause it
+directly) until it is resolved. Root-cause work is never time-capped. A report with a fail that
+lacks its locks or follow-on, or an item still "not attempted", is a rejected report.
+
+### Sweeps — run in the same session, before reporting
+
+Both sweeps finish before the report; neither is left for a separate session.
+
+**(a) Needs-setup sweep.** `next` skips `needs-setup` items, so pull the milestone's needs-setup
+items explicitly (list the milestone's items by state, e.g. via `readiness`/the client's listing
+command) and, for each, either **perform the named setup and verify it**, or **re-disposition it**
+to one of the five outcomes with evidence. A needs-setup item may stay only if its setup is owned by
+a named non-Done task. Refusal-derived items (evidence starting `refused:`) are re-run only after
+the operator changes the approval mode; until then they stay with their refusal evidence.
+
+**(b) Fail sweep.** For each item in `fail` state whose filed follow-on task has deployed (Done and
+its commit is live on the host), `reopen` it and re-verify, recording either a pass with evidence or
+a fresh fail with RCA (three locks) and a new `filedFollowon`. Fails whose follow-on has not
+deployed stay blocking, but each must already carry the three root-cause locks; if one does not,
+root-cause it now.
+
+Re-pull both sets to confirm they are empty (or contain only the permitted remainders above); never
+assert it from memory.
 
 ### Reporting discipline
 
