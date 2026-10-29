@@ -6,13 +6,20 @@ import {
 import { normalizeTaskId } from '../tasks/taskId';
 
 export type ExecutionGroup = 'execute_now' | 'urgent' | 'blocker' | 'priority';
-export type AssignedPriority = 'high' | 'medium' | 'low' | null;
+import {
+  normalizePriority,
+  priorityLevelRank,
+  type PriorityLevel,
+} from '../tasks/priority';
+
+type AssignedPriority = PriorityLevel | null;
 
 export interface RankInputTask {
   id: string;
   status: string;
   dependsOn: string[];
-  priority: AssignedPriority;
+  /** Raw board Priority string (e.g. '🔴 Critical'); normalized when ranked. */
+  priority: string | null | undefined;
 }
 
 export interface RankInputFlags {
@@ -40,14 +47,12 @@ const GROUP_ORDER: Record<ExecutionGroup, number> = {
   priority: 3,
 };
 
-const PRIORITY_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2 };
-
 function isUnfinished(status: string): boolean {
   return !status.includes('Done');
 }
 
 function priorityRank(p: AssignedPriority): number {
-  return p === null ? 3 : PRIORITY_ORDER[p];
+  return priorityLevelRank(p);
 }
 
 export function computeExecutionRanks(
@@ -126,7 +131,7 @@ export function computeExecutionRanks(
       urgentInherited,
       urgentVia,
       blocksCount: count,
-      priority: t.priority,
+      priority: normalizePriority(t.priority),
       executeNowSetAt: f?.executeNowSetAt ?? null,
     });
   }
@@ -233,15 +238,6 @@ export function countEffectiveUrgent(ranks: Iterable<ExecutionRank>): {
   return { direct, effective };
 }
 
-function parsePriority(p: string | undefined): AssignedPriority {
-  if (!p) return null;
-  const s = p.toLowerCase();
-  if (s.includes('high')) return 'high';
-  if (s.includes('medium')) return 'medium';
-  if (s.includes('low')) return 'low';
-  return null;
-}
-
 /** Ranks one board's tasks using the stored per-task flags for the project. */
 export function loadExecutionRanks(
   projectId: string,
@@ -261,7 +257,7 @@ export function loadExecutionRanks(
     id: normalizeTaskId(t.id),
     status: t.status,
     dependsOn: t.dependsOn.map((d) => normalizeTaskId(d)),
-    priority: parsePriority(t.priority),
+    priority: t.priority,
   }));
   return computeExecutionRanks(inputs, flags);
 }

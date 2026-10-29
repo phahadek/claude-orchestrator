@@ -6,14 +6,13 @@ import {
   executionSortKey,
   type RankInputTask,
   type RankInputFlags,
-  type AssignedPriority,
 } from '../executionPriority';
 
 const T = (
   id: string,
   dependsOn: string[] = [],
   status = '🔲 Ready',
-  priority: AssignedPriority = null,
+  priority: string | undefined | null = null,
 ): RankInputTask => ({ id, status, dependsOn, priority });
 
 const flags = (o: Record<string, Partial<RankInputFlags>>) =>
@@ -158,6 +157,48 @@ describe('compareExecutionRank', () => {
         new Map(),
       ),
     ).toEqual(['h', 'm', 'l', 'n']);
+  });
+
+  it('ranks literal board strings: 🔴 Critical > 🔴/🟠 High > unset in every group and in executionSortKey', () => {
+    const P = (id: string, p: string | undefined, deps: string[] = []) =>
+      T(id, deps, '🔲 Ready', p);
+    // priority group
+    expect(
+      sorted(
+        [P('n', undefined), P('h', '🔴 High'), P('c', '🔴 Critical')],
+        new Map(),
+      ),
+    ).toEqual(['c', 'h', 'n']);
+    expect(
+      sorted([P('h', '🟠 High'), P('c', '🔴 Critical')], new Map()),
+    ).toEqual(['c', 'h']);
+    // urgent group (both directly urgent, priority is the secondary key)
+    expect(
+      sorted(
+        [P('h', '🔴 High'), P('c', '🔴 Critical')],
+        flags({ h: { urgent: true }, c: { urgent: true } }),
+      ),
+    ).toEqual(['c', 'h']);
+    // blocker group (equal blocksCount)
+    expect(
+      sorted(
+        [
+          P('h', '🟠 High'),
+          P('c', '🔴 Critical'),
+          P('x1', undefined, ['h']),
+          P('x2', undefined, ['c']),
+        ],
+        new Map(),
+      ).slice(0, 2),
+    ).toEqual(['c', 'h']);
+    // executionSortKey
+    const r = computeExecutionRanks(
+      [P('h', '🔴 High'), P('c', '🔴 Critical'), P('n', undefined)],
+      new Map(),
+    );
+    const key = (id: string) => executionSortKey(r.get(id)!, 0, id);
+    expect(key('c')[1]).toBeLessThan(key('h')[1] as number);
+    expect(key('h')[1]).toBeLessThan(key('n')[1] as number);
   });
 
   it('falls back to tieBreak and is stable under shuffling', () => {

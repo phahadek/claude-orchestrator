@@ -32,6 +32,10 @@ export interface TaskView {
     blocks_merge?: boolean;
   }[];
   priority: string;
+  /** Canonical priority level from the backend normalizer; null when unset/unrecognised. */
+  priorityLevel?: 'critical' | 'high' | 'medium' | 'low' | null;
+  /** Sort rank: critical 0, high 1, medium 2, low 3, unset 4. Absent sorts as unset. */
+  priorityRank?: number;
   notionUrl: string;
   taskType: string;
   blocked: boolean;

@@ -1,10 +1,23 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import { sortByPriority, priorityRank } from '../taskSort';
+import { sortByPriority } from '../taskSort';
 import type { TaskView } from '../../types/taskView';
 
+// Mirrors the backend normalizer's output, which the board view carries to the frontend.
+const LEVELS: Record<string, NonNullable<TaskView['priorityLevel']>> = {
+  '🔴 Critical': 'critical',
+  '🔴 High': 'high',
+  '🟠 High': 'high',
+  '🟡 Medium': 'medium',
+  '🟢 Low': 'low',
+};
+const RANKS = { critical: 0, high: 1, medium: 2, low: 3 };
+
 function makeTask(taskId: string, priority: string): TaskView {
+  const priorityLevel = LEVELS[priority] ?? null;
   return {
+    priorityLevel,
+    priorityRank: priorityLevel ? RANKS[priorityLevel] : 4,
     taskId,
     taskName: `Task ${taskId}`,
     notionStatus: 'In Progress',
@@ -58,9 +71,22 @@ describe('sortByPriority', () => {
     expect(result.map((t) => t.taskId)).toEqual(['task-b', 'task-a']);
   });
 
-  it('unset priorities rank last', () => {
-    expect(priorityRank('unknown')).toBe(99);
-    expect(priorityRank('🔴 High')).toBeLessThan(priorityRank('🟡 Medium'));
-    expect(priorityRank('🟡 Medium')).toBeLessThan(priorityRank('🟢 Low'));
+  it('sorts Critical, High (both emoji), Medium, Low, unset', () => {
+    const tasks = [
+      makeTask('t-unset', ''),
+      makeTask('t-low', '🟢 Low'),
+      makeTask('t-med', '🟡 Medium'),
+      makeTask('t-orange', '🟠 High'),
+      makeTask('t-red', '🔴 High'),
+      makeTask('t-crit', '🔴 Critical'),
+    ];
+    expect(sortByPriority(tasks).map((t) => t.taskId)).toEqual([
+      't-crit',
+      't-orange',
+      't-red',
+      't-med',
+      't-low',
+      't-unset',
+    ]);
   });
 });

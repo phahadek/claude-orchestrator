@@ -1,25 +1,16 @@
 import type { DisplayStatus, TaskView } from '../types/taskView';
 
-const PRIORITY_RANK: Record<string, number> = {
-  '🔴 High': 0,
-  '🟡 Medium': 1,
-  '🟢 Low': 2,
-};
-
-export function priorityRank(p: string): number {
-  return PRIORITY_RANK[p] ?? 99;
-}
+const rankOf = (t: TaskView): number =>
+  t.priorityRank ?? Number.MAX_SAFE_INTEGER;
 
 /**
- * Returns a new array sorted by priority (High → Medium → Low → unset), with a
- * stable id tiebreak so equal-priority items keep a deterministic order across
- * re-fetches instead of whatever order the input happened to arrive in.
+ * Returns a new array sorted by the backend's priority rank (Critical → High →
+ * Medium → Low → unset), with a stable id tiebreak so equal-priority items keep
+ * a deterministic order across re-fetches.
  */
 export function sortByPriority<T extends TaskView>(tasks: T[]): T[] {
   return [...tasks].sort(
-    (a, b) =>
-      priorityRank(a.priority) - priorityRank(b.priority) ||
-      a.taskId.localeCompare(b.taskId),
+    (a, b) => rankOf(a) - rankOf(b) || a.taskId.localeCompare(b.taskId),
   );
 }
 
@@ -48,10 +39,7 @@ export function sortByExecutionRank<T extends TaskView>(tasks: T[]): T[] {
       if (d !== 0) return d;
     } else if (ka) return -1;
     else if (kb) return 1;
-    return (
-      priorityRank(a.priority) - priorityRank(b.priority) ||
-      a.taskId.localeCompare(b.taskId)
-    );
+    return rankOf(a) - rankOf(b) || a.taskId.localeCompare(b.taskId);
   });
 }
 

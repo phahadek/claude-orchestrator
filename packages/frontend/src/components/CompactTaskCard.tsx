@@ -18,10 +18,11 @@ interface Props {
   projectId?: string | null;
 }
 
-const PRIORITY_ICONS: Record<string, string> = {
-  '🔴 High': '🔴',
-  '🟡 Medium': '🟡',
-  '🟢 Low': '🟢',
+const PRIORITY_ICONS: Record<NonNullable<TaskView['priorityLevel']>, string> = {
+  critical: '🔴',
+  high: '🟠',
+  medium: '🟡',
+  low: '🟢',
 };
 
 function planningSessionTypeLabel(sessionType: string): string {
@@ -42,7 +43,9 @@ export function CompactTaskCard({
   blockedReason = null,
   projectId = null,
 }: Props) {
-  const priorityIcon = PRIORITY_ICONS[task.priority] ?? '';
+  const priorityIcon = task.priorityLevel
+    ? PRIORITY_ICONS[task.priorityLevel]
+    : '';
   const isBlocked = task.blocked;
 
   return (
