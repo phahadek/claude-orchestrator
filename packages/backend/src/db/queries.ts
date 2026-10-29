@@ -5497,26 +5497,6 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
         WHERE (session_type = 'standard' OR session_type IS NULL)
           AND task_id IN (${placeholders})
       ),
-      ranked_planning AS (
-        SELECT *,
-          ROW_NUMBER() OVER (
-            PARTITION BY task_id
-            ORDER BY started_at DESC
-          ) AS rn
-        FROM sessions
-        WHERE session_type IN (${PLANNING_SESSION_TYPE_SQL_LIST})
-          AND task_id IN (${placeholders})
-      ),
-      ranked_review AS (
-        SELECT *,
-          ROW_NUMBER() OVER (
-            PARTITION BY task_id
-            ORDER BY started_at DESC
-          ) AS rn
-        FROM sessions
-        WHERE session_type = 'review'
-          AND task_id IN (${placeholders})
-      ),
       ranked_pr AS (
         SELECT *,
           ROW_NUMBER() OVER (
@@ -5581,8 +5561,15 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       drv.verdict             AS depth_review_verdict
     FROM task_cache tc
     LEFT JOIN ranked_code cs ON cs.task_id = tc.task_id AND cs.rn = 1
-    LEFT JOIN ranked_planning ps ON ps.task_id = tc.task_id AND ps.rn = 1
-    LEFT JOIN ranked_review rs ON rs.task_id = tc.task_id AND rs.rn = 1
+    LEFT JOIN sessions ps ON ps.session_id = (
+      SELECT s.session_id FROM sessions s
+      WHERE s.task_id = tc.task_id
+        AND s.session_type IN (${PLANNING_SESSION_TYPE_SQL_LIST})
+      ORDER BY s.started_at DESC LIMIT 1)
+    LEFT JOIN sessions rs ON rs.session_id = (
+      SELECT s.session_id FROM sessions s
+      WHERE s.task_id = tc.task_id AND s.session_type = 'review'
+      ORDER BY s.started_at DESC LIMIT 1)
     LEFT JOIN ranked_pr pr ON pr.task_id = tc.task_id AND pr.rn = 1
     LEFT JOIN depth_review_verdicts drv
       ON drv.pr_number = pr.pr_number AND drv.repo = pr.repo
@@ -5591,13 +5578,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
     ORDER BY tc.fetched_at DESC
   `,
     )
-    .all(
-      ...taskIds,
-      ...taskIds,
-      ...taskIds,
-      ...taskIds,
-      ...taskIds,
-    ) as TaskAggregateRow[];
+    .all(...taskIds, ...taskIds, ...taskIds) as TaskAggregateRow[];
 }
 
 /** Returns the most recent standard (non-review) session for a given task ID. */

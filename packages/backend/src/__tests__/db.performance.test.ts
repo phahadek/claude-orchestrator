@@ -269,7 +269,7 @@ describe('getActiveTaskAggregates — CTE task-id predicate pushdown', () => {
 
     const plan = typedDb
       .prepare(`EXPLAIN QUERY PLAN ${sql}`)
-      .all('plan-task', 'plan-task', 'plan-task', 'plan-task', 'plan-task') as {
+      .all('plan-task', 'plan-task', 'plan-task') as {
       detail: string;
     }[];
     const details = plan.map((r) => r.detail).join('\n');
