@@ -390,6 +390,40 @@ export function createGateStateRouter(): Router {
     }
   });
 
+  // POST /api/gate/items/:id/discard  { reason, operator }
+  // Operator-directed void. Dispatched sessions (routeSession) cannot
+  // self-discard; the /events path still rejects `discarded` for gate sessions.
+  router.post('/gate/items/:id/discard', (req: Request, res: Response) => {
+    if (
+      (req as Request & { routeSession?: unknown }).routeSession !== undefined
+    ) {
+      res.status(403).json({
+        error: 'dispatched sessions cannot discard a gate item',
+      });
+      return;
+    }
+    const id = String(req.params.id);
+    const body = (req.body ?? {}) as { operator?: unknown; reason?: unknown };
+    if (typeof body.reason !== 'string' || !body.reason.trim()) {
+      res
+        .status(400)
+        .json({ error: 'reason is required to discard a gate item' });
+      return;
+    }
+    try {
+      const updated = appendGateItemEvent(id, {
+        disposition: 'discarded',
+        evidence: body.reason,
+        operator: resolveOperator(req, body.operator),
+      });
+      res.json(updated);
+    } catch (err) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : 'gate item discard failed',
+      });
+    }
+  });
+
   // POST /api/gate/items/:id/classification  { classification, operator }
   router.post(
     '/gate/items/:id/classification',
