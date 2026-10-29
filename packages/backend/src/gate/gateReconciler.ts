@@ -41,6 +41,7 @@ import {
   nextPendingGateItems,
   appendGateItemEvent,
   attachFailFollowonSource,
+  sanitizeStoredFollowon,
   defaultAncestrySourceForProject,
   isFollowupTaskDone,
   proposeGateItemReclassification,
@@ -467,13 +468,15 @@ export interface GateReconcileTickResult {
 function latestFailFollowon(item: GateItem): string | undefined {
   for (let i = item.events.length - 1; i >= 0; i--) {
     const e = item.events[i];
-    if (e.disposition === 'fail' && e.filedFollowon) return e.filedFollowon;
+    if (e.disposition === 'fail' && e.filedFollowon) {
+      return sanitizeStoredFollowon(e.filedFollowon, item.id);
+    }
   }
   return undefined;
 }
 
 /** Fix cycles already spent on this item — a `fail` event that filed a follow-up. */
-function countFixAttempts(item: GateItem): number {
+export function countFixAttempts(item: GateItem): number {
   return item.events.filter((e) => e.disposition === 'fail' && e.filedFollowon)
     .length;
 }

@@ -470,7 +470,7 @@ For every item in the pulled batch:
    | disposition | rollup effect | when |
    | --- | --- | --- |
    | `pass` | ✅ resolves | behavior **observed** — in the operational record (history) or by live staging. Evidence: `verified: <what you observed>`, or `covered-elsewhere: <taskId>` (a Done 🧪 Testing task / sibling already verified it — *done* = **pass**, cite the task; **not** a deferral) |
-   | `fail` | ❌ stays blocking | behavior is **broken** — present the follow-on Code task, then file it at Backlog **unconditionally** (`filedFollowon: <taskId>`; never gated on arm/auto-launch state); the item stays unresolved, re-verified after the fix deploys. "Record `fail`" is not a resolution. |
+   | `fail` | ❌ stays blocking | behavior is **broken** — present the follow-on Code task, then file it at Backlog **unconditionally** (`filedFollowon: [<taskId>, …]` — task ids or `seed:<uuid>` ids, one per fix task; a placeholder, prose or truncated id is rejected with a 400, so a fail with no fix task yet filed is not recordable as fail; never gated on arm/auto-launch state); the item stays unresolved, re-verified after the fix deploys. "Record `fail`" is not a resolution. |
    | `needs-setup` | non-terminal (stays `runnable`) | an in-depth setup is needed; **requires `evidence` naming the setup** (400 otherwise). `next` skips the item until a later event supersedes it. |
    | `not-yet-triggerable` | non-terminal (advances to `pending`) | **`Read-Only`/`Prod-Mutating`-only, and requires `evidence`** — the triggering condition genuinely hasn't happened yet (no occurrence in history, nothing to stage). Enters a backoff schedule; `next` skips it until the backoff clock elapses, then it resurfaces `runnable` for a fresh look. |
 

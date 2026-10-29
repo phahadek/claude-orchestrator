@@ -318,8 +318,10 @@ export function createGateStateRouter(): Router {
         disposition,
         evidence: body.evidence,
         filedFollowon:
-          typeof body.filedFollowon === 'string'
-            ? body.filedFollowon
+          typeof body.filedFollowon === 'string' ||
+          (Array.isArray(body.filedFollowon) &&
+            body.filedFollowon.every((t) => typeof t === 'string'))
+            ? (body.filedFollowon as string | string[])
             : undefined,
         deploySha:
           typeof body.deploySha === 'string' ? body.deploySha : undefined,

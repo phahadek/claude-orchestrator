@@ -56,6 +56,7 @@ import {
   dispatchGateItemVerification,
   defaultFollowupFiler,
   reattachOutstandingGateVerifications,
+  countFixAttempts,
   type DeployAdvanceTrigger,
   type GateItemVerifier,
   type FollowupFixTaskFiler,
@@ -120,7 +121,12 @@ function makeItem(overrides: Partial<Parameters<typeof insertItem>[0]> = {}) {
     milestone: 'M12',
     text: 'Verify the deploy script writes the new env var',
     classification: 'Read-Only',
-    sources: [{ sourceTaskId: 'notion:abc', sourceTaskTitle: 'Add env var' }],
+    sources: [
+      {
+        sourceTaskId: 'notion:40722f91-52f3-8104-0000-000000000004',
+        sourceTaskTitle: 'Add env var',
+      },
+    ],
     updatedAt: new Date(0).toISOString(),
     ...overrides,
   });
@@ -131,7 +137,7 @@ function mergeSource(
   itemId: string,
   sha: string,
   at: string,
-  sourceTaskId = 'notion:abc',
+  sourceTaskId = 'notion:40722f91-52f3-8104-0000-000000000004',
 ) {
   setSourceMergeCommit(itemId, sourceTaskId, sha);
   setMinDeployedCommit(itemId, sha, at);
@@ -730,7 +736,7 @@ describe('runGateReconcilerTick', () => {
     };
     const followupFiler: FollowupFixTaskFiler = {
       fileFollowupFixTask: vi.fn(async () => ({
-        taskId: 'notion:followup-1',
+        taskId: 'notion:40722f91-52f3-8101-0000-000000000001',
         taskTitle:
           'Fix gate item: Verify the deploy script writes the new env var',
       })),
@@ -750,13 +756,13 @@ describe('runGateReconcilerTick', () => {
     expect(updated.state).toBe('open');
     expect(updated.sources).toHaveLength(2);
     expect(updated.sources[1]).toMatchObject({
-      sourceTaskId: 'notion:followup-1',
+      sourceTaskId: 'notion:40722f91-52f3-8101-0000-000000000001',
       sourceTaskTitle:
         'Fix gate item: Verify the deploy script writes the new env var',
     });
     expect(updated.events.at(-1)).toMatchObject({
       disposition: 'fail',
-      filedFollowon: 'notion:followup-1',
+      filedFollowon: 'notion:40722f91-52f3-8101-0000-000000000001',
     });
   });
 
@@ -773,7 +779,9 @@ describe('runGateReconcilerTick', () => {
       verifier: {
         verify: async () => ({
           disposition: 'fail' as const,
-          proposedFix: { existingTaskId: 'notion:existing-cause-task' },
+          proposedFix: {
+            existingTaskId: 'notion:40722f91-52f3-8103-0000-000000000003',
+          },
         }),
       },
       followupFiler,
@@ -784,12 +792,12 @@ describe('runGateReconcilerTick', () => {
     expect(updated.state).toBe('open');
     expect(
       updated.sources.filter(
-        (s) => s.sourceTaskId === 'notion:existing-cause-task',
+        (s) => s.sourceTaskId === 'notion:40722f91-52f3-8103-0000-000000000003',
       ),
     ).toHaveLength(1);
     expect(updated.events.at(-1)).toMatchObject({
       disposition: 'fail',
-      filedFollowon: 'notion:existing-cause-task',
+      filedFollowon: 'notion:40722f91-52f3-8103-0000-000000000003',
     });
   });
 
@@ -813,7 +821,7 @@ describe('runGateReconcilerTick', () => {
     const item = await makeRunnableItem({ classification: 'Read-Only' });
     const followupFiler: FollowupFixTaskFiler = {
       fileFollowupFixTask: vi.fn(async () => ({
-        taskId: 'notion:followup-2',
+        taskId: 'notion:40722f91-52f3-8102-0000-000000000002',
         taskTitle: 'Filer title',
       })),
     };
@@ -826,7 +834,7 @@ describe('runGateReconcilerTick', () => {
     const updated = getItem(item.id)!;
     expect(updated.state).toBe('open');
     const rows = updated.sources.filter(
-      (s) => s.sourceTaskId === 'notion:followup-2',
+      (s) => s.sourceTaskId === 'notion:40722f91-52f3-8102-0000-000000000002',
     );
     expect(rows).toHaveLength(1);
     expect(rows[0].sourceTaskTitle).toBe('Filer title');
@@ -1150,7 +1158,7 @@ describe('runGateReconcilerTick', () => {
       fileFollowupFixTask: vi.fn(async () => {
         callCount += 1;
         return {
-          taskId: `notion:followup-${callCount}`,
+          taskId: `notion:40722f91-52f3-810${callCount}-0000-00000000000${callCount}`,
           taskTitle: `Fix gate item: attempt ${callCount}`,
         };
       }),
@@ -1163,7 +1171,7 @@ describe('runGateReconcilerTick', () => {
     });
     expect(followupFiler.fileFollowupFixTask).toHaveBeenCalledTimes(1);
 
-    // Re-verify while notion:followup-1 is still open (no task_cache row = not Done).
+    // Re-verify while notion:40722f91-52f3-8101-0000-000000000001 is still open (no task_cache row = not Done).
     advanceState(
       item.id,
       'runnable',
@@ -1181,7 +1189,7 @@ describe('runGateReconcilerTick', () => {
     expect(updated.sources).toHaveLength(2);
     expect(updated.events.at(-1)).toMatchObject({
       disposition: 'fail',
-      filedFollowon: 'notion:followup-1',
+      filedFollowon: 'notion:40722f91-52f3-8101-0000-000000000001',
     });
   });
 
@@ -1195,7 +1203,7 @@ describe('runGateReconcilerTick', () => {
       fileFollowupFixTask: vi.fn(async () => {
         callCount += 1;
         return {
-          taskId: `notion:followup-${callCount}`,
+          taskId: `notion:40722f91-52f3-810${callCount}-0000-00000000000${callCount}`,
           taskTitle: `Fix gate item: attempt ${callCount}`,
         };
       }),
@@ -1208,12 +1216,19 @@ describe('runGateReconcilerTick', () => {
     });
     expect(followupFiler.fileFollowupFixTask).toHaveBeenCalledTimes(1);
 
-    upsertTaskCache('notion:followup-1', JSON.stringify({ status: '✅ Done' }));
+    upsertTaskCache(
+      'notion:40722f91-52f3-8101-0000-000000000001',
+      JSON.stringify({ status: '✅ Done' }),
+    );
     // The follow-up task reaching Done also means its fix merged and
     // deployed — otherwise the reconciler's own coverage check (every
     // source's merge_commit must be an ancestor of the deployed sha) would
     // immediately flip the item back to open before verification runs.
-    setSourceMergeCommit(item.id, 'notion:followup-1', 'sha1');
+    setSourceMergeCommit(
+      item.id,
+      'notion:40722f91-52f3-8101-0000-000000000001',
+      'sha1',
+    );
     advanceState(
       item.id,
       'runnable',
@@ -1231,8 +1246,21 @@ describe('runGateReconcilerTick', () => {
     expect(updated.sources).toHaveLength(3);
     expect(updated.events.at(-1)).toMatchObject({
       disposition: 'fail',
-      filedFollowon: 'notion:followup-2',
+      filedFollowon: 'notion:40722f91-52f3-8102-0000-000000000002',
     });
+  });
+
+  it('countFixAttempts counts a three-follow-on fail as one fix cycle', async () => {
+    const item = await makeRunnableItem({ classification: 'Read-Only' });
+    appendGateItemEvent(item.id, {
+      disposition: 'fail',
+      filedFollowon: [
+        '40722f91-52f3-8111-0000-000000000011',
+        '40722f91-52f3-8112-0000-000000000012',
+        '40722f91-52f3-8113-0000-000000000013',
+      ],
+    });
+    expect(countFixAttempts(getItem(item.id)!)).toBe(1);
   });
 
   it('per-item in-flight guard prevents a duplicate dispatch of a live verify', async () => {
@@ -1315,7 +1343,7 @@ describe('runGateReconcilerTick', () => {
     };
     const followupFiler: FollowupFixTaskFiler = {
       fileFollowupFixTask: vi.fn(async () => ({
-        taskId: 'notion:followup-1',
+        taskId: 'notion:40722f91-52f3-8101-0000-000000000001',
         taskTitle: 'fix it',
       })),
     };
@@ -1334,7 +1362,11 @@ describe('runGateReconcilerTick', () => {
     // task the fail path attached, or the item stays open (fail-dedup test
     // above does the same double-merge for the same reason).
     mergeSource(item.id, 'sha2', new Date(2).toISOString());
-    setSourceMergeCommit(item.id, 'notion:followup-1', 'sha2');
+    setSourceMergeCommit(
+      item.id,
+      'notion:40722f91-52f3-8101-0000-000000000001',
+      'sha2',
+    );
     await reconcileGateRunnability('sha2');
     expect(getItem(item.id)?.state).toBe('runnable');
 
@@ -1395,7 +1427,7 @@ describe('reconcileGateRunnability — carried pending copy', () => {
     const source = makeItem({
       sources: [
         {
-          sourceTaskId: 'notion:abc',
+          sourceTaskId: 'notion:40722f91-52f3-8104-0000-000000000004',
           sourceTaskTitle: 'Add env var',
           mergeCommit: 'sha1',
         },
@@ -1538,7 +1570,12 @@ describe('reconcileGateRunnability — synchronous git-spawn hot-path regression
     const passItemCount = 50;
     for (let i = 0; i < passItemCount; i++) {
       const item = makeItem({ text: `pass item ${i}` });
-      mergeSource(item.id, 'sha1', new Date(1).toISOString(), 'notion:abc');
+      mergeSource(
+        item.id,
+        'sha1',
+        new Date(1).toISOString(),
+        'notion:40722f91-52f3-8104-0000-000000000004',
+      );
       appendGateItemEvent(item.id, { disposition: 'pass' });
     }
     // One still-open item, so the tick still has real reconciliation work to do.
@@ -1651,7 +1688,7 @@ describe('reconcileGateRunnability — synchronous git-spawn hot-path regression
     };
     const followupFiler: FollowupFixTaskFiler = {
       fileFollowupFixTask: vi.fn(async () => ({
-        taskId: 'notion:followup-1',
+        taskId: 'notion:40722f91-52f3-8101-0000-000000000001',
         taskTitle: 'fix it',
       })),
     };
@@ -1673,7 +1710,11 @@ describe('reconcileGateRunnability — synchronous git-spawn hot-path regression
     expect(getItem(item.id)?.state).toBe('open');
 
     mergeSource(item.id, 'sha2', new Date(2).toISOString());
-    setSourceMergeCommit(item.id, 'notion:followup-1', 'sha2');
+    setSourceMergeCommit(
+      item.id,
+      'notion:40722f91-52f3-8101-0000-000000000001',
+      'sha2',
+    );
     const passingVerifier: GateItemVerifier = {
       verify: vi.fn(async () => ({ disposition: 'pass' as const })),
     };
@@ -2049,7 +2090,7 @@ describe('runGateReconcilerTick — auto-run dispatch is not serialized behind e
     const secondVerify = vi.fn(async () => ({ disposition: 'pass' as const }));
     const secondFollowupFiler: FollowupFixTaskFiler = {
       fileFollowupFixTask: vi.fn(async () => ({
-        taskId: 'notion:followup-1',
+        taskId: 'notion:40722f91-52f3-8101-0000-000000000001',
         taskTitle: 'fix it',
       })),
     };
@@ -2261,7 +2302,7 @@ describe('runGateReconcilerTick — wrapped-milestone scoping', () => {
     appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: { minDeployedCommitAtFail: 'sha1' },
-      filedFollowon: 'notion:abc',
+      filedFollowon: 'notion:40722f91-52f3-8104-0000-000000000004',
     });
     expect(getItem(item.id)?.state).toBe('fail');
 
@@ -2269,7 +2310,7 @@ describe('runGateReconcilerTick — wrapped-milestone scoping', () => {
     appendGateItemEvent(wrappedItem.id, {
       disposition: 'fail',
       evidence: { minDeployedCommitAtFail: 'sha1' },
-      filedFollowon: 'notion:abc',
+      filedFollowon: 'notion:40722f91-52f3-8104-0000-000000000004',
     });
     expect(getItem(wrappedItem.id)?.state).toBe('fail');
 
