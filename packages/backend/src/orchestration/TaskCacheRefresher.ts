@@ -299,7 +299,8 @@ export class TaskCacheRefresher {
           const tasks = skipCache
             ? await backend.fetchReadyTasks(fetchId, true)
             : await backend.fetchReadyTasks(fetchId);
-          changedRows += this.countChangedTaskRows(tasks);
+          const milestoneChangedRows = this.countChangedTaskRows(tasks);
+          changedRows += milestoneChangedRows;
           const taskIdsForMilestone = new Set<string>();
           for (const item of tasks) {
             const taskId = item?.task?.id;
@@ -308,21 +309,26 @@ export class TaskCacheRefresher {
               taskIdsForMilestone.add(taskId);
             }
           }
-          this.milestoneTaskIds.set(
-            `${project.id}::${milestone.id}`,
-            taskIdsForMilestone,
-          );
+          const milestoneKey = `${project.id}::${milestone.id}`;
+          const previousIds = this.milestoneTaskIds.get(milestoneKey);
+          const idSetChanged =
+            !previousIds ||
+            previousIds.size !== taskIdsForMilestone.size ||
+            [...taskIdsForMilestone].some((id) => !previousIds.has(id));
+          this.milestoneTaskIds.set(milestoneKey, taskIdsForMilestone);
           // The board cache is always keyed on the DB milestone UUID (milestone.id),
           // regardless of what identifier the backend needed to fetch the data —
           // this must match the read side (ws/router) and the write side (each
           // backend's own upsertTaskCache call).
-          this.broadcast?.({
-            type: 'task_cache_updated',
-            projectId: project.id,
-            boardId: milestone.id,
-            taskCount: tasks.length,
-            refreshedAt: Date.now(),
-          });
+          if (milestoneChangedRows > 0 || idSetChanged || skipCache === true) {
+            this.broadcast?.({
+              type: 'task_cache_updated',
+              projectId: project.id,
+              boardId: milestone.id,
+              taskCount: tasks.length,
+              refreshedAt: Date.now(),
+            });
+          }
           this.milestoneFailureCounts.delete(condemnedKey);
         } catch (err) {
           // This milestone's tasks are missing from fetchedTaskIds this tick
@@ -383,18 +389,22 @@ export class TaskCacheRefresher {
           project.nonMilestoneSourceConfig,
           project.id,
         );
-        changedRows += this.countChangedTaskRows(nonMilestoneTasks);
+        const nonMilestoneChangedRows =
+          this.countChangedTaskRows(nonMilestoneTasks);
+        changedRows += nonMilestoneChangedRows;
         for (const item of nonMilestoneTasks) {
           const taskId = item?.task?.id;
           if (taskId) fetchedTaskIds.add(taskId);
         }
-        this.broadcast?.({
-          type: 'task_cache_updated',
-          projectId: project.id,
-          boardId: '__non_milestone__',
-          taskCount: 0,
-          refreshedAt: Date.now(),
-        });
+        if (nonMilestoneChangedRows > 0 || skipCache === true) {
+          this.broadcast?.({
+            type: 'task_cache_updated',
+            projectId: project.id,
+            boardId: '__non_milestone__',
+            taskCount: 0,
+            refreshedAt: Date.now(),
+          });
+        }
       } catch (err) {
         hadFailure = true;
         logger.warn(
