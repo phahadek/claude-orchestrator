@@ -23,8 +23,7 @@ function makeApp(routeSession?: unknown) {
   app.use(express.json());
   if (routeSession !== undefined) {
     app.use((req, _res, next) => {
-      (req as unknown as { routeSession: unknown }).routeSession =
-        routeSession;
+      (req as unknown as { routeSession: unknown }).routeSession = routeSession;
       next();
     });
   }
