@@ -339,6 +339,8 @@ describe('TaskList', () => {
         displayStatus: 'ready',
         wave: 1,
         priority: '🟢 Low',
+        priorityLevel: 'low',
+        priorityRank: 3,
       }),
       makeTask({
         taskId: 't2',
@@ -346,6 +348,8 @@ describe('TaskList', () => {
         displayStatus: 'ready',
         wave: 1,
         priority: '🔴 High',
+        priorityLevel: 'high',
+        priorityRank: 1,
       }),
     ]);
     const taskTexts = screen
