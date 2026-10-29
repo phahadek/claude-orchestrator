@@ -252,6 +252,11 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
     audience: 'operator',
     reason: "gate item disposition — the consent gate's reject path",
   },
+  'POST /api/gate/items/:id/discard': {
+    audience: 'known-gap',
+    reason: 'operator-directed discard; no dashboard discard control yet',
+    fixTask: 'Discard control on the dashboard gate item view',
+  },
   'POST /api/gate/items/:id/reopen': {
     audience: 'operator',
     reason: 'gate item disposition',
