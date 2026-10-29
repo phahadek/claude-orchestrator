@@ -612,6 +612,79 @@ describe('TaskCacheRefresher', () => {
     });
   });
 
+  describe('task_cache_updated broadcast gating', () => {
+    function setup(
+      fetch: (skip?: boolean) => Promise<{ task: { id: string } }[]>,
+    ) {
+      vi.mocked(getAllProjects).mockReturnValue([makeProject({ id: 'pg' })]);
+      vi.mocked(ProjectService.listMilestones).mockReturnValue([
+        makeMilestone('mg', 'src-g'),
+      ]);
+      vi.mocked(getTaskBackend).mockReturnValue(
+        makeBackend({
+          fetchReadyTasks: vi
+            .fn()
+            .mockImplementation((_id: string, skip?: boolean) => fetch(skip)),
+        }),
+      );
+      const broadcast = vi.fn();
+      const refresher = new TaskCacheRefresher(broadcast, {
+        listProjects: getAllProjects,
+        resolveBackend: getTaskBackend,
+      });
+      return { broadcast, refresher };
+    }
+
+    it('broadcasts on the first tick only when consecutive refreshes are identical', async () => {
+      const { broadcast, refresher } = setup(async () => {
+        upsertTaskCache('gate-a', JSON.stringify({ v: 1 }));
+        return [{ task: { id: 'gate-a' } }];
+      });
+      await refresher.refreshOnce();
+      await refresher.refreshOnce();
+      expect(broadcast).toHaveBeenCalledTimes(1);
+    });
+
+    it('broadcasts when a task row content changes', async () => {
+      let v = 1;
+      const { broadcast, refresher } = setup(async () => {
+        upsertTaskCache('gate-b', JSON.stringify({ v }));
+        return [{ task: { id: 'gate-b' } }];
+      });
+      await refresher.refreshOnce();
+      await refresher.refreshOnce();
+      expect(broadcast).toHaveBeenCalledTimes(1);
+      v = 2;
+      await refresher.refreshOnce();
+      expect(broadcast).toHaveBeenCalledTimes(2);
+    });
+
+    it('broadcasts when a task disappears with no other change', async () => {
+      let ids = ['gate-c1', 'gate-c2'];
+      const { broadcast, refresher } = setup(async () => {
+        for (const id of ids) upsertTaskCache(id, JSON.stringify({ v: 1 }));
+        return ids.map((id) => ({ task: { id } }));
+      });
+      await refresher.refreshOnce();
+      await refresher.refreshOnce();
+      expect(broadcast).toHaveBeenCalledTimes(1);
+      ids = ['gate-c1'];
+      await refresher.refreshOnce();
+      expect(broadcast).toHaveBeenCalledTimes(2);
+    });
+
+    it('broadcasts on a forced refresh with no change', async () => {
+      const { broadcast, refresher } = setup(async () => {
+        upsertTaskCache('gate-d', JSON.stringify({ v: 1 }));
+        return [{ task: { id: 'gate-d' } }];
+      });
+      await refresher.refreshOnce();
+      expect(broadcast).toHaveBeenCalledTimes(1);
+      await refresher.refreshProjectById('pg', true);
+      expect(broadcast).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('items_processed reporting', () => {
     it('returns a non-zero count when a cached task row changed, and 0 when nothing changed', async () => {
       const project = makeProject({ id: 'p1' });
