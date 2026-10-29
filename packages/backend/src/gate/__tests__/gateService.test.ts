@@ -80,7 +80,7 @@ function makeItem(overrides: Partial<Parameters<typeof insertItem>[0]> = {}) {
 const ABC_ID = 'notion:40722f91-52f3-8100-0000-00000000abc0';
 const D_CODE_ID = 'notion:40722f91-52f3-8100-0000-0000000d0c0d';
 const FOLLOWUP_ID = 'notion:40722f91-52f3-8100-0000-0000000f0110';
-const FIX_X ='40722f91-52f3-813f-b063-fd64f8936aa6';
+const FIX_X = '40722f91-52f3-813f-b063-fd64f8936aa6';
 const FIX_X_NORM = `notion:${FIX_X}`;
 const FIX_Y = '40722f91-52f3-8127-91a4-c24c0a2f03b2';
 const FIX_Y_NORM = `notion:${FIX_Y}`;
@@ -472,12 +472,7 @@ describe('reconcileGateRunnability', () => {
     expect(getGateItem(item.id)?.state).toBe('fail');
 
     // The follow-up fix source merges and pushes min_deployed_commit forward...
-    mergeSource(
-      item.id,
-      'sha2',
-      new Date(2).toISOString(),
-      FOLLOWUP_ID,
-    );
+    mergeSource(item.id, 'sha2', new Date(2).toISOString(), FOLLOWUP_ID);
     // ...and once sha2 deploys, the item auto-reopens straight through to runnable.
     const advanced = await reconcileGateRunnability('sha2', {
       ancestrySource: orderedAncestry,

@@ -120,7 +120,12 @@ function makeItem(overrides: Partial<Parameters<typeof insertItem>[0]> = {}) {
     milestone: 'M12',
     text: 'Verify the deploy script writes the new env var',
     classification: 'Read-Only',
-    sources: [{ sourceTaskId: 'notion:40722f91-52f3-8104-0000-000000000004', sourceTaskTitle: 'Add env var' }],
+    sources: [
+      {
+        sourceTaskId: 'notion:40722f91-52f3-8104-0000-000000000004',
+        sourceTaskTitle: 'Add env var',
+      },
+    ],
     updatedAt: new Date(0).toISOString(),
     ...overrides,
   });
@@ -773,7 +778,9 @@ describe('runGateReconcilerTick', () => {
       verifier: {
         verify: async () => ({
           disposition: 'fail' as const,
-          proposedFix: { existingTaskId: 'notion:40722f91-52f3-8103-0000-000000000003' },
+          proposedFix: {
+            existingTaskId: 'notion:40722f91-52f3-8103-0000-000000000003',
+          },
         }),
       },
       followupFiler,
@@ -1208,12 +1215,19 @@ describe('runGateReconcilerTick', () => {
     });
     expect(followupFiler.fileFollowupFixTask).toHaveBeenCalledTimes(1);
 
-    upsertTaskCache('notion:40722f91-52f3-8101-0000-000000000001', JSON.stringify({ status: '✅ Done' }));
+    upsertTaskCache(
+      'notion:40722f91-52f3-8101-0000-000000000001',
+      JSON.stringify({ status: '✅ Done' }),
+    );
     // The follow-up task reaching Done also means its fix merged and
     // deployed — otherwise the reconciler's own coverage check (every
     // source's merge_commit must be an ancestor of the deployed sha) would
     // immediately flip the item back to open before verification runs.
-    setSourceMergeCommit(item.id, 'notion:40722f91-52f3-8101-0000-000000000001', 'sha1');
+    setSourceMergeCommit(
+      item.id,
+      'notion:40722f91-52f3-8101-0000-000000000001',
+      'sha1',
+    );
     advanceState(
       item.id,
       'runnable',
@@ -1334,7 +1348,11 @@ describe('runGateReconcilerTick', () => {
     // task the fail path attached, or the item stays open (fail-dedup test
     // above does the same double-merge for the same reason).
     mergeSource(item.id, 'sha2', new Date(2).toISOString());
-    setSourceMergeCommit(item.id, 'notion:40722f91-52f3-8101-0000-000000000001', 'sha2');
+    setSourceMergeCommit(
+      item.id,
+      'notion:40722f91-52f3-8101-0000-000000000001',
+      'sha2',
+    );
     await reconcileGateRunnability('sha2');
     expect(getItem(item.id)?.state).toBe('runnable');
 
@@ -1538,7 +1556,12 @@ describe('reconcileGateRunnability — synchronous git-spawn hot-path regression
     const passItemCount = 50;
     for (let i = 0; i < passItemCount; i++) {
       const item = makeItem({ text: `pass item ${i}` });
-      mergeSource(item.id, 'sha1', new Date(1).toISOString(), 'notion:40722f91-52f3-8104-0000-000000000004');
+      mergeSource(
+        item.id,
+        'sha1',
+        new Date(1).toISOString(),
+        'notion:40722f91-52f3-8104-0000-000000000004',
+      );
       appendGateItemEvent(item.id, { disposition: 'pass' });
     }
     // One still-open item, so the tick still has real reconciliation work to do.
@@ -1673,7 +1696,11 @@ describe('reconcileGateRunnability — synchronous git-spawn hot-path regression
     expect(getItem(item.id)?.state).toBe('open');
 
     mergeSource(item.id, 'sha2', new Date(2).toISOString());
-    setSourceMergeCommit(item.id, 'notion:40722f91-52f3-8101-0000-000000000001', 'sha2');
+    setSourceMergeCommit(
+      item.id,
+      'notion:40722f91-52f3-8101-0000-000000000001',
+      'sha2',
+    );
     const passingVerifier: GateItemVerifier = {
       verify: vi.fn(async () => ({ disposition: 'pass' as const })),
     };

@@ -538,7 +538,8 @@ export interface ParsedFollowons {
   seedIds: string[];
 }
 
-const FOLLOWON_TASK_ID_RE = /^(?:notion:)?[0-9a-f]{32}$|^(?:notion:)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const FOLLOWON_TASK_ID_RE =
+  /^(?:notion:)?[0-9a-f]{32}$|^(?:notion:)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const FOLLOWON_SEED_ID_RE =
   /^seed:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -619,7 +620,9 @@ export function sanitizeStoredFollowon(
   raw: string,
   itemId?: string,
 ): string | undefined {
-  const formatted = formatFiledFollowons(parseFiledFollowonsLenient(raw, itemId));
+  const formatted = formatFiledFollowons(
+    parseFiledFollowonsLenient(raw, itemId),
+  );
   return formatted || undefined;
 }
 
