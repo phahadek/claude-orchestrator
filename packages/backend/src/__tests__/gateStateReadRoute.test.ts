@@ -70,7 +70,7 @@ describe('GET /api/gate/items/:id/detail', () => {
     const item = makeItem();
     appendGateItemEvent(item.id, {
       disposition: 'fail',
-      filedFollowon: 'fix-x',
+      filedFollowon: '40722f91-52f3-813f-b063-fd64f8936aa6',
     });
 
     const res = await request(makeApp()).get(

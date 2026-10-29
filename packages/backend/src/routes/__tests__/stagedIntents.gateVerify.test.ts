@@ -35,7 +35,7 @@ const STRUCTURED_FIX = {
 };
 
 const { createTaskMock } = vi.hoisted(() => ({
-  createTaskMock: vi.fn(async () => 'notion:new-followup-task'),
+  createTaskMock: vi.fn(async () => 'notion:40722f91-52f3-8100-0000-00000000fe01'),
 }));
 vi.mock('../../tasks/TaskBackend', () => ({
   getTaskBackend: vi.fn().mockReturnValue({

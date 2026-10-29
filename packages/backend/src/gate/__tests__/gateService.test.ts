@@ -44,6 +44,8 @@ import {
   listGateItems,
   listMilestoneReadiness,
   appendGateItemEvent,
+  parseFiledFollowons,
+  formatFiledFollowons,
   approveGateItem,
   rejectGateItem,
   reopenGateItem,
@@ -69,11 +71,20 @@ function makeItem(overrides: Partial<Parameters<typeof insertItem>[0]> = {}) {
     milestone: 'M12',
     text: 'Verify the deploy script writes the new env var',
     classification: 'Read-Only',
-    sources: [{ sourceTaskId: 'notion:abc', sourceTaskTitle: 'Add env var' }],
+    sources: [{ sourceTaskId: ABC_ID, sourceTaskTitle: 'Add env var' }],
     updatedAt: new Date(0).toISOString(),
     ...overrides,
   });
 }
+
+const ABC_ID = 'notion:40722f91-52f3-8100-0000-00000000abc0';
+const D_CODE_ID = 'notion:40722f91-52f3-8100-0000-0000000d0c0d';
+const FOLLOWUP_ID = 'notion:40722f91-52f3-8100-0000-0000000f0110';
+const FIX_X ='40722f91-52f3-813f-b063-fd64f8936aa6';
+const FIX_X_NORM = `notion:${FIX_X}`;
+const FIX_Y = '40722f91-52f3-8127-91a4-c24c0a2f03b2';
+const FIX_Y_NORM = `notion:${FIX_Y}`;
+const SEED_ID = 'seed:861b4782-3cc8-433f-87b0-199d933d872c';
 
 /** A total order over sha strings — later strings are "descendants" of earlier ones. */
 const orderedAncestry: DeployAncestrySource = {
@@ -93,7 +104,7 @@ function mergeSource(
   itemId: string,
   sha: string,
   at: string,
-  sourceTaskId = 'notion:abc',
+  sourceTaskId = ABC_ID,
 ) {
   setSourceMergeCommit(itemId, sourceTaskId, sha);
   setMinDeployedCommit(itemId, sha, at);
@@ -389,11 +400,11 @@ describe('reconcileGateRunnability', () => {
   it('becomes runnable only once every source has merged and deployed, not just the first', async () => {
     const item = makeItem({
       sources: [
-        { sourceTaskId: 'notion:abc', sourceTaskTitle: 'Source A' },
+        { sourceTaskId: ABC_ID, sourceTaskTitle: 'Source A' },
         { sourceTaskId: 'notion:def', sourceTaskTitle: 'Source B' },
       ],
     });
-    mergeSource(item.id, 'sha1', new Date(1).toISOString(), 'notion:abc');
+    mergeSource(item.id, 'sha1', new Date(1).toISOString(), ABC_ID);
 
     // Source B hasn't merged yet — the item must stay open even though A is
     // merged and deployed.
@@ -448,7 +459,7 @@ describe('reconcileGateRunnability', () => {
     appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: { minDeployedCommitAtFail: 'sha1' },
-      filedFollowon: 'notion:followup-1',
+      filedFollowon: FOLLOWUP_ID,
     });
     expect(getGateItem(item.id)?.state).toBe('fail');
 
@@ -465,7 +476,7 @@ describe('reconcileGateRunnability', () => {
       item.id,
       'sha2',
       new Date(2).toISOString(),
-      'notion:followup-1',
+      FOLLOWUP_ID,
     );
     // ...and once sha2 deploys, the item auto-reopens straight through to runnable.
     const advanced = await reconcileGateRunnability('sha2', {
@@ -673,10 +684,10 @@ describe('reconcileGateRunnability', () => {
       reconcileGateRunnability(sha, { ancestrySource: orderedAncestry });
 
     it('marks runnable a deployed Code source plus a Deferred source', async () => {
-      const item = makeItem({ sources: src('notion:d-code', 'notion:d-dead') });
-      cache('notion:d-code', '💻 Code');
+      const item = makeItem({ sources: src(D_CODE_ID, 'notion:d-dead') });
+      cache(D_CODE_ID, '💻 Code');
       cache('notion:d-dead', '💻 Code', '⏭️ Deferred');
-      setSourceMergeCommit(item.id, 'notion:d-code', 'sha1');
+      setSourceMergeCommit(item.id, D_CODE_ID, 'sha1');
       const result = await run('sha1');
       expect(result.markedRunnable).toEqual([item.id]);
     });
@@ -690,10 +701,10 @@ describe('reconcileGateRunnability', () => {
     });
 
     it('stays open for an undeployed Code source plus a Deferred source', async () => {
-      const item = makeItem({ sources: src('notion:d-code', 'notion:d-dead') });
-      cache('notion:d-code', '💻 Code');
+      const item = makeItem({ sources: src(D_CODE_ID, 'notion:d-dead') });
+      cache(D_CODE_ID, '💻 Code');
       cache('notion:d-dead', '📝 Docs', '⏭️ Deferred');
-      setSourceMergeCommit(item.id, 'notion:d-code', 'sha9');
+      setSourceMergeCommit(item.id, D_CODE_ID, 'sha9');
       const result = await run('sha1');
       expect(result.markedRunnable).toEqual([]);
       expect(getGateItem(item.id)?.state).toBe('open');
@@ -709,21 +720,21 @@ describe('reconcileGateRunnability', () => {
     });
 
     it('a Deferred source neither triggers nor blocks a fail auto-reopen', async () => {
-      const item = makeItem({ sources: src('notion:d-code', 'notion:d-dead') });
-      cache('notion:d-code', '💻 Code');
+      const item = makeItem({ sources: src(D_CODE_ID, 'notion:d-dead') });
+      cache(D_CODE_ID, '💻 Code');
       cache('notion:d-dead', '💻 Code', '⏭️ Deferred');
-      mergeSource(item.id, 'sha1', new Date(1).toISOString(), 'notion:d-code');
+      mergeSource(item.id, 'sha1', new Date(1).toISOString(), D_CODE_ID);
       await run('sha1');
       appendGateItemEvent(item.id, {
         disposition: 'fail',
         evidence: { minDeployedCommitAtFail: 'sha1' },
-        filedFollowon: 'notion:d-code',
+        filedFollowon: D_CODE_ID,
       });
       expect((await run('sha1')).reopened).toEqual([]);
       expect(getGateItem(item.id)?.state).toBe('fail');
 
       // Deferred source "merging" is irrelevant; a live source advancing is what reopens.
-      setSourceMergeCommit(item.id, 'notion:d-code', 'sha2');
+      setSourceMergeCommit(item.id, D_CODE_ID, 'sha2');
       setMinDeployedCommit(item.id, 'sha2', new Date(2).toISOString());
       expect((await run('sha1')).reopened).toEqual([]);
       expect((await run('sha2')).reopened).toEqual([item.id]);
@@ -793,7 +804,7 @@ describe('reconcileGateRunnability', () => {
     appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: 'the deploy script never wrote the new env var',
-      filedFollowon: 'fix-x',
+      filedFollowon: FIX_X,
     });
 
     expect(getGateItem(item.id)?.state).toBe('fail');
@@ -801,7 +812,7 @@ describe('reconcileGateRunnability', () => {
     expect(events.at(-1)).toMatchObject({
       disposition: 'fail',
       evidence: 'the deploy script never wrote the new env var',
-      filedFollowon: 'fix-x',
+      filedFollowon: FIX_X_NORM,
       minDeployedCommitAtFail: getGateItem(item.id)?.minDeployedCommit,
     });
     expect(events.at(-1)?.minDeployedCommitAtFail).toBe('sha1');
@@ -814,7 +825,7 @@ describe('reconcileGateRunnability', () => {
     appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: 'observed broken behaviour',
-      filedFollowon: 'fix-x',
+      filedFollowon: FIX_X,
     });
     expect(getGateItem(item.id)?.state).toBe('fail');
 
@@ -835,7 +846,7 @@ describe('reconcileGateRunnability', () => {
     appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: 'observed broken behaviour',
-      filedFollowon: 'notion:abc',
+      filedFollowon: ABC_ID,
     });
 
     setMinDeployedCommit(item.id, 'sha2', new Date(2).toISOString());
@@ -854,7 +865,7 @@ describe('reconcileGateRunnability', () => {
     appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: 'observed broken behaviour',
-      filedFollowon: 'fix-x',
+      filedFollowon: FIX_X,
     });
     expect(getGateItem(item.id)?.minDeployedCommit).toBeUndefined();
     expect(getGateItem(item.id)?.state).toBe('fail');
@@ -1192,7 +1203,7 @@ describe('appendGateItemEvent', () => {
     const updated = appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: 'progress bar missing entirely',
-      filedFollowon: 'fix-x',
+      filedFollowon: FIX_X,
       operator: 'gate-verifier',
     });
     expect(updated.state).toBe('fail');
@@ -1203,7 +1214,7 @@ describe('appendGateItemEvent', () => {
     const updated = appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: 'checkout threw a 500',
-      filedFollowon: 'fix-x',
+      filedFollowon: FIX_X,
     });
     expect(updated.state).toBe('fail');
     expect(
@@ -1277,13 +1288,13 @@ describe('appendGateItemEvent', () => {
 
 describe('fail filedFollowon attaches as a gate-item source', () => {
   const followSources = (id: string) =>
-    getGateItem(id)!.sources.filter((s) => s.sourceTaskId.includes('fix-x'));
+    getGateItem(id)!.sources.filter((s) => s.sourceTaskId === FIX_X_NORM);
 
   it('adds the follow-on as an unmerged source on a fail event and leaves state fail', () => {
     const item = makeItem();
     appendGateItemEvent(item.id, {
       disposition: 'fail',
-      filedFollowon: 'fix-x',
+      filedFollowon: FIX_X,
     });
     const got = getGateItem(item.id)!;
     expect(got.state).toBe('fail');
@@ -1295,15 +1306,15 @@ describe('fail filedFollowon attaches as a gate-item source', () => {
     const item = makeItem();
     appendGateItemEvent(item.id, {
       disposition: 'fail',
-      filedFollowon: 'fix-x',
+      filedFollowon: FIX_X,
     });
     appendGateItemEvent(item.id, {
       disposition: 'fail',
-      filedFollowon: 'fix-x',
+      filedFollowon: FIX_X,
     });
     appendGateItemEvent(item.id, {
       disposition: 'fail',
-      filedFollowon: 'notion:fix-x',
+      filedFollowon: `notion:${FIX_X}`,
     });
     expect(followSources(item.id)).toHaveLength(1);
   });
@@ -1312,12 +1323,12 @@ describe('fail filedFollowon attaches as a gate-item source', () => {
     const item = makeItem();
     appendGateItemEvent(item.id, {
       disposition: 'noted',
-      filedFollowon: 'fix-x',
+      filedFollowon: FIX_X,
     });
-    appendGateItemEvent(item.id, { filedFollowon: 'fix-x' });
+    appendGateItemEvent(item.id, { filedFollowon: FIX_X });
     appendGateItemEvent(item.id, {
       disposition: 'pass',
-      filedFollowon: 'fix-x',
+      filedFollowon: FIX_X,
     });
     expect(followSources(item.id)).toHaveLength(0);
   });
@@ -1327,14 +1338,14 @@ describe('fail filedFollowon attaches as a gate-item source', () => {
     mergeSource(item.id, 'sha1', new Date(1).toISOString());
     appendGateItemEvent(item.id, {
       disposition: 'fail',
-      filedFollowon: 'fix-x',
+      filedFollowon: FIX_X,
     });
     expect(getGateItem(item.id)!.state).toBe('fail');
 
     await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
     expect(getGateItem(item.id)!.state).toBe('fail');
 
-    mergeSource(item.id, 'sha2', new Date(2).toISOString(), 'fix-x');
+    mergeSource(item.id, 'sha2', new Date(2).toISOString(), FIX_X_NORM);
     await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
     expect(getGateItem(item.id)!.state).toBe('fail');
 
@@ -1351,16 +1362,117 @@ describe('fail filedFollowon attaches as a gate-item source', () => {
     const item = makeItem();
     appendGateItemEvent(item.id, {
       disposition: 'fail',
-      filedFollowon: 'fix-x',
+      filedFollowon: FIX_X,
     });
     db.prepare(
-      `DELETE FROM gate_item_source WHERE gate_item_id = ? AND source_task_id LIKE '%fix-x'`,
-    ).run(item.id);
+      `DELETE FROM gate_item_source WHERE gate_item_id = ? AND source_task_id = ?`,
+    ).run(item.id, FIX_X_NORM);
     expect(followSources(item.id)).toHaveLength(0);
 
     await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
     await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
     expect(followSources(item.id)).toHaveLength(1);
+  });
+});
+
+describe('parseFiledFollowons', () => {
+  const HYPHENLESS = FIX_X.replace(/-/g, '');
+
+  it('accepts single hyphenated, hyphenless, notion:-prefixed ids', () => {
+    expect(parseFiledFollowons(FIX_X).taskIds).toEqual([FIX_X_NORM]);
+    expect(parseFiledFollowons(HYPHENLESS).taskIds).toEqual([FIX_X_NORM]);
+    expect(parseFiledFollowons(FIX_X_NORM).taskIds).toEqual([FIX_X_NORM]);
+  });
+
+  it('accepts | lists, , lists, arrays and seed ids, deduped in order', () => {
+    const want = [FIX_X_NORM, FIX_Y_NORM];
+    expect(parseFiledFollowons(`${FIX_X}|${FIX_Y}`).taskIds).toEqual(want);
+    expect(parseFiledFollowons(`${FIX_X}, ${FIX_Y}`).taskIds).toEqual(want);
+    expect(parseFiledFollowons([FIX_X, FIX_Y, HYPHENLESS]).taskIds).toEqual(
+      want,
+    );
+    const mixed = parseFiledFollowons(`${FIX_X},${SEED_ID}`);
+    expect(mixed.taskIds).toEqual([FIX_X_NORM]);
+    expect(mixed.seedIds).toEqual([SEED_ID]);
+    expect(formatFiledFollowons(mixed)).toBe(`${FIX_X_NORM}|${SEED_ID}`);
+  });
+
+  it.each([
+    'PLACEHOLDER',
+    'OPS_PLACEHOLDER',
+    '40722f91-52f3-8162',
+    `notion:${FIX_X} (lateness) + notion:${FIX_Y} (gauge silence)`,
+    '',
+  ])('rejects %j', (bad) => {
+    expect(() => parseFiledFollowons(bad)).toThrow();
+  });
+
+  it('rejects an empty list and names the offending token', () => {
+    expect(() => parseFiledFollowons([])).toThrow();
+    expect(() => parseFiledFollowons('PLACEHOLDER')).toThrow(/PLACEHOLDER/);
+  });
+});
+
+describe('appendGateItemEvent — filedFollowon list', () => {
+  const sourceIds = (id: string) =>
+    getGateItem(id)!
+      .sources.map((s) => s.sourceTaskId)
+      .filter((s) => s !== ABC_ID);
+
+  it('attaches each id as its own normalized source and stores a pipe list', () => {
+    const item = makeItem();
+    appendGateItemEvent(item.id, {
+      disposition: 'fail',
+      filedFollowon: `${FIX_X},${FIX_Y}`,
+    });
+    const got = getGateItem(item.id)!;
+    expect(sourceIds(item.id)).toEqual([FIX_X_NORM, FIX_Y_NORM]);
+    expect(got.events[got.events.length - 1].filedFollowon).toBe(
+      `${FIX_X_NORM}|${FIX_Y_NORM}`,
+    );
+  });
+
+  it('rejects a placeholder, writing no event and no source', () => {
+    const item = makeItem();
+    expect(() =>
+      appendGateItemEvent(item.id, {
+        disposition: 'fail',
+        filedFollowon: 'PLACEHOLDER',
+      }),
+    ).toThrow(/PLACEHOLDER/);
+    expect(getGateItem(item.id)!.events).toHaveLength(0);
+    expect(sourceIds(item.id)).toEqual([]);
+  });
+
+  it('stores a seed id on the event but attaches no source', () => {
+    const item = makeItem();
+    appendGateItemEvent(item.id, {
+      disposition: 'fail',
+      filedFollowon: SEED_ID,
+    });
+    const got = getGateItem(item.id)!;
+    expect(got.events[0].filedFollowon).toBe(SEED_ID);
+    expect(sourceIds(item.id)).toEqual([]);
+  });
+
+  it('reconcile re-attaches legacy comma-joined values as normalized sources without throwing', async () => {
+    const item = makeItem();
+    advanceState(item.id, 'fail', 'fail', new Date(1).toISOString());
+    db.prepare(
+      `INSERT INTO gate_item_event (gate_item_id, disposition, filed_followon, at) VALUES (?, 'fail', ?, ?)`,
+    ).run(item.id, `${FIX_X},${FIX_Y}`, new Date(1).toISOString());
+    await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    expect(sourceIds(item.id)).toEqual([FIX_X_NORM, FIX_Y_NORM]);
+  });
+
+  it('reconcile attaches nothing for a legacy placeholder and does not throw', async () => {
+    const item = makeItem();
+    advanceState(item.id, 'fail', 'fail', new Date(1).toISOString());
+    db.prepare(
+      `INSERT INTO gate_item_event (gate_item_id, disposition, filed_followon, at) VALUES (?, 'fail', 'PLACEHOLDER', ?)`,
+    ).run(item.id, new Date(1).toISOString());
+    await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    expect(sourceIds(item.id)).toEqual([]);
   });
 });
 
@@ -1959,12 +2071,12 @@ describe('proposeGateItemReclassification', () => {
 describe('getGateItemDetail', () => {
   it('returns the item split from its sources and event history, by value', () => {
     const item = makeItem({
-      sources: [{ sourceTaskId: 'notion:abc', sourceTaskTitle: 'Add env var' }],
+      sources: [{ sourceTaskId: ABC_ID, sourceTaskTitle: 'Add env var' }],
     });
     appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: { note: 'x' },
-      filedFollowon: 'notion:abc',
+      filedFollowon: ABC_ID,
     });
 
     const detail = getGateItemDetail(item.id);
@@ -1973,7 +2085,7 @@ describe('getGateItemDetail', () => {
     expect(detail!.item).not.toHaveProperty('sources');
     expect(detail!.item).not.toHaveProperty('events');
     expect(detail!.sources).toEqual([
-      expect.objectContaining({ sourceTaskId: 'notion:abc' }),
+      expect.objectContaining({ sourceTaskId: ABC_ID }),
     ]);
     expect(detail!.events).toEqual([
       expect.objectContaining({ disposition: 'fail' }),

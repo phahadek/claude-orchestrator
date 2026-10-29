@@ -531,10 +531,103 @@ function getAncestryMemoEntry(
   return entry;
 }
 
+export interface ParsedFollowons {
+  /** Normalized `notion:<hyphenated-uuid>`, deduped, order kept. */
+  taskIds: string[];
+  /** `seed:<uuid>`, deduped. */
+  seedIds: string[];
+}
+
+const FOLLOWON_TASK_ID_RE = /^(?:notion:)?[0-9a-f]{32}$|^(?:notion:)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const FOLLOWON_SEED_ID_RE =
+  /^seed:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function followonTokens(raw: string | string[]): string[] {
+  const parts = Array.isArray(raw) ? raw : raw.split(/[|,]/);
+  return parts.map((t) => t.trim()).filter((t) => t.length > 0);
+}
+
+function classifyFollowonToken(
+  token: string,
+): { kind: 'task' | 'seed'; id: string } | undefined {
+  if (FOLLOWON_SEED_ID_RE.test(token)) {
+    return { kind: 'seed', id: token.toLowerCase() };
+  }
+  if (FOLLOWON_TASK_ID_RE.test(token)) {
+    return { kind: 'task', id: normalizeTaskId(token.toLowerCase()) };
+  }
+  return undefined;
+}
+
+function collectFollowons(
+  tokens: string[],
+  onInvalid: (token: string) => void,
+): ParsedFollowons {
+  const taskIds: string[] = [];
+  const seedIds: string[] = [];
+  for (const token of tokens) {
+    const c = classifyFollowonToken(token);
+    if (!c) {
+      onInvalid(token);
+      continue;
+    }
+    const list = c.kind === 'task' ? taskIds : seedIds;
+    if (!list.includes(c.id)) list.push(c.id);
+  }
+  return { taskIds, seedIds };
+}
+
+/** Strict: throws on any token that is not a task id or a seed id. */
+export function parseFiledFollowons(raw: string | string[]): ParsedFollowons {
+  const tokens = followonTokens(raw);
+  if (tokens.length === 0) {
+    throw new Error(
+      'filedFollowon: at least one follow-on task id (or seed: id) is required',
+    );
+  }
+  return collectFollowons(tokens, (token) => {
+    throw new Error(
+      `filedFollowon: '${token}' is not a task id or seed:<uuid> id — file the fix task first and pass its id`,
+    );
+  });
+}
+
+/** Canonical storage form for gate_item_event.filed_followon: tokens joined with '|'. */
+export function formatFiledFollowons(p: ParsedFollowons): string {
+  return [...p.taskIds, ...p.seedIds].join('|');
+}
+
+const warnedLegacyFollowonTokens = new Set<string>();
+
+/** Legacy rows hold arbitrary strings: keep every valid token, skip (and log once per item) the rest. */
+function parseFiledFollowonsLenient(
+  raw: string,
+  itemId?: string,
+): ParsedFollowons {
+  return collectFollowons(followonTokens(raw), (token) => {
+    const key = `${itemId ?? ''}\u0000${token}`;
+    if (warnedLegacyFollowonTokens.has(key)) return;
+    warnedLegacyFollowonTokens.add(key);
+    logger.warn(
+      `gateService: skipping malformed legacy filedFollowon token '${token}'${itemId ? ` on gate item ${itemId}` : ''}`,
+    );
+  });
+}
+
+/** A stored filedFollowon reduced to its valid tokens in canonical form; undefined when none survive. */
+export function sanitizeStoredFollowon(
+  raw: string,
+  itemId?: string,
+): string | undefined {
+  const formatted = formatFiledFollowons(parseFiledFollowonsLenient(raw, itemId));
+  return formatted || undefined;
+}
+
 /**
  * Attaches a fail event's follow-on task as a gate-item source so the
  * reconciler's fail -> open auto-reopen can fire once it deploys. Idempotent:
  * gate_item_source has no uniqueness constraint, so dedup on normalized id.
+ * Single-id: callers holding a list parse it first.
  */
 export function attachFailFollowonSource(
   itemId: string,
@@ -559,10 +652,10 @@ export function attachFailFollowonSource(
       cachedTitle = undefined;
     }
   }
-  const sourceTaskTitle = title ?? cachedTitle ?? followonTaskId;
+  const sourceTaskTitle = title ?? cachedTitle ?? normalized;
   gateStore.addSource(
     itemId,
-    { sourceTaskId: followonTaskId, sourceTaskTitle },
+    { sourceTaskId: normalized, sourceTaskTitle },
     at,
   );
   return true;
@@ -613,7 +706,14 @@ export async function reconcileGateRunnability(
       .reverse()
       .find((e) => e.disposition === 'fail');
     if (!lastFail?.filedFollowon) continue;
-    if (attachFailFollowonSource(item.id, lastFail.filedFollowon, now)) {
+    let attached = false;
+    for (const taskId of parseFiledFollowonsLenient(
+      lastFail.filedFollowon,
+      item.id,
+    ).taskIds) {
+      if (attachFailFollowonSource(item.id, taskId, now)) attached = true;
+    }
+    if (attached) {
       item.sources = gateStore.getItem(item.id)?.sources ?? item.sources;
     }
   }
@@ -968,7 +1068,7 @@ export interface AppendGateItemEventInput {
   /** Omit for a pure log entry — appends with evidence, does not advance state. */
   disposition?: string;
   evidence?: unknown;
-  filedFollowon?: string;
+  filedFollowon?: string | string[];
   deploySha?: string;
   operator?: string;
   /** true = a fully-unattended reconciler auto-launch verified this event; false = a manual dispatch; omit for a non-verifier-originated event. */
@@ -1124,10 +1224,17 @@ export function appendGateItemEvent(
   if (event.disposition === 'discarded' && !event.evidence) {
     throw new Error(`gate_item_event: 'discarded' requires an evidence/reason`);
   }
-  if (event.disposition === 'fail' && !event.filedFollowon) {
-    throw new Error(
-      `gate_item_event: 'fail' requires filedFollowon — file the fix task first`,
-    );
+  let parsedFollowons: ParsedFollowons | undefined;
+  if (event.disposition === 'fail') {
+    if (
+      event.filedFollowon === undefined ||
+      (typeof event.filedFollowon === 'string' && !event.filedFollowon.trim())
+    ) {
+      throw new Error(
+        `gate_item_event: 'fail' requires filedFollowon — file the fix task first`,
+      );
+    }
+    parsedFollowons = parseFiledFollowons(event.filedFollowon);
   }
   if (event.disposition === 'needs-setup' && !event.evidence) {
     throw new Error(
@@ -1148,7 +1255,15 @@ export function appendGateItemEvent(
     );
   }
   const now = new Date().toISOString();
-  gateStore.appendEvent(gateItemId, { ...event, at: now });
+  gateStore.appendEvent(gateItemId, {
+    ...event,
+    filedFollowon: parsedFollowons
+      ? formatFiledFollowons(parsedFollowons)
+      : Array.isArray(event.filedFollowon)
+        ? event.filedFollowon.join('|')
+        : event.filedFollowon,
+    at: now,
+  });
 
   const advances =
     event.disposition !== undefined &&
@@ -1170,8 +1285,8 @@ export function appendGateItemEvent(
     );
   }
 
-  if (event.disposition === 'fail' && event.filedFollowon) {
-    attachFailFollowonSource(gateItemId, event.filedFollowon, now);
+  for (const taskId of parsedFollowons?.taskIds ?? []) {
+    attachFailFollowonSource(gateItemId, taskId, now);
   }
 
   if (event.disposition === 'not-yet-triggerable') {
@@ -1511,15 +1626,19 @@ function isNotStartedStatus(cachedStatus: string): boolean {
  * check) rather than a live fetch — a cache miss/stale read defaults to
  * not-Done, the conservative (skip-refile) side.
  */
-export function isFollowupTaskDone(taskId: string): boolean {
-  const cacheRow = getTaskCache(normalizeTaskId(taskId));
-  if (!cacheRow) return false;
-  try {
-    const parsed = JSON.parse(cacheRow.raw_json) as { status?: string };
-    return (parsed.status ?? '').includes('Done');
-  } catch {
-    return false;
-  }
+export function isFollowupTaskDone(filedFollowon: string): boolean {
+  const { taskIds } = parseFiledFollowonsLenient(filedFollowon);
+  if (taskIds.length === 0) return false;
+  return taskIds.every((taskId) => {
+    const cacheRow = getTaskCache(taskId);
+    if (!cacheRow) return false;
+    try {
+      const parsed = JSON.parse(cacheRow.raw_json) as { status?: string };
+      return (parsed.status ?? '').includes('Done');
+    } catch {
+      return false;
+    }
+  });
 }
 
 export interface BackfillGateTaskInput {

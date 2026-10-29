@@ -209,7 +209,7 @@ describe('gateService — retiring a genuine gate.verify intent left stranded by
 
     appendGateItemEvent(item.id, {
       disposition: 'fail',
-      filedFollowon: 'fix-x',
+      filedFollowon: '40722f91-52f3-813f-b063-fd64f8936aa6',
       operator: 'jane',
     });
 

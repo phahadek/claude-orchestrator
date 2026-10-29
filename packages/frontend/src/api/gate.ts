@@ -169,7 +169,7 @@ export interface GateVerifyDispatchResult {
 export interface RecordGateItemEventInput {
   disposition: string;
   evidence?: GateItemEvidence;
-  filedFollowon?: string;
+  filedFollowon?: string | string[];
   deploySha?: string;
   operator?: string;
 }
