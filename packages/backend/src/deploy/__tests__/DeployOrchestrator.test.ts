@@ -181,7 +181,7 @@ describe('DeployOrchestrator: succeeded shell step output retention', () => {
     const output = 'H'.repeat(8192) + 'M'.repeat(5000) + 'T'.repeat(8192);
     const detail = (await runWithOutput(output))?.detail as string;
     expect(detail.startsWith('H'.repeat(8192))).toBe(true);
-    expect(detail.endsWith('T'.repeat(8192))).toBe(true);
+    expect(detail).toContain('T'.repeat(8192) + '\n[full output: GET ');
     expect(detail).toContain('5000 chars elided');
     expect(detail).not.toContain('M');
   });
