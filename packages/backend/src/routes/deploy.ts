@@ -11,8 +11,10 @@ import {
   completeDeployRun,
   listDeployRunEvents,
   appendDeployRunEvent,
+  getDeployRun,
   DeployRunConflictError,
 } from '../deploy/deployService';
+import { readStepOutput } from '../deploy/stepOutputStore';
 import {
   DeployOrchestrator,
   buildDeployAgenticTaskId,
@@ -53,7 +55,11 @@ import { logger } from '../logger';
 import { asyncHandler } from './asyncHandler';
 import { resolveOperator } from './requestOperator';
 
-const GATE_RECONCILER_JOB = 'gate_verification_reconciler';
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const STEP_ID_RE = /^[a-z0-9_]+$/;
+
+const GATE_RECONCILER_JOB ='gate_verification_reconciler';
 
 /**
  * The SHA `npm run build` embeds into `dist/build-sha.txt` (see
@@ -637,6 +643,25 @@ export function createDeployRouter(): Router {
       plan,
     });
   });
+
+  router.get(
+    '/deploy/runs/:runId/steps/:stepId/output',
+    (req: Request, res: Response) => {
+      const runId = String(req.params.runId);
+      const stepId = String(req.params.stepId);
+      if (!UUID_RE.test(runId) || !STEP_ID_RE.test(stepId)) {
+        res.status(400).json({ error: 'invalid runId or stepId' });
+        return;
+      }
+      const run = getDeployRun(runId);
+      const output = run ? readStepOutput(run.project, runId, stepId) : null;
+      if (output === null) {
+        res.status(404).json({ error: 'step output not found' });
+        return;
+      }
+      res.status(200).type('text/plain').send(output);
+    },
+  );
 
   return router;
 }

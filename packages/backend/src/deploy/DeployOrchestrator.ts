@@ -31,6 +31,7 @@ import {
   getProjectDeployedSha,
 } from './deployService';
 import type { DeployRunRow, DeployRunKind } from '../db/types';
+import { writeStepOutput, pruneStepOutputs } from './stepOutputStore';
 
 /**
  * Conventional step id for the step that restarts this project's own backend
@@ -643,6 +644,7 @@ export class DeployOrchestrator {
       launchedBy,
     });
     const deployedShaAtStart = getProjectDeployedSha(this.project);
+    pruneStepOutputs(this.project);
     void this.drive(
       run.run_id,
       loaded.playbook,
@@ -1036,12 +1038,20 @@ export class DeployOrchestrator {
                 },
               })
             : await runIt();
+        let successDetail: string | undefined;
+        if (result.ok) {
+          successDetail = boundSuccessOutput(result.output);
+          if (result.output.length > 0) {
+            writeStepOutput(this.project, runId, step.id, result.output);
+            if (result.output.length > SUCCESS_OUTPUT_MAX_CHARS) {
+              successDetail += `\n[full output: GET /api/deploy/runs/${runId}/steps/${step.id}/output]`;
+            }
+          }
+        }
         return {
           ok: result.ok,
           detail: result.ok ? undefined : shellFailureDetail(step.id, result),
-          successDetail: result.ok
-            ? boundSuccessOutput(result.output)
-            : undefined,
+          successDetail,
         };
       }
 

@@ -189,6 +189,63 @@ describe('DeployOrchestrator: succeeded shell step output retention', () => {
   it('leaves detail null for empty output', async () => {
     expect((await runWithOutput(''))?.detail ?? null).toBeNull();
   });
+
+  describe('full output file', () => {
+    let tmp: string;
+    let prevXdg: string | undefined;
+    beforeEach(() => {
+      prevXdg = process.env.XDG_DATA_HOME;
+      tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-out-'));
+      process.env.XDG_DATA_HOME = tmp;
+    });
+    afterEach(() => {
+      if (prevXdg === undefined) delete process.env.XDG_DATA_HOME;
+      else process.env.XDG_DATA_HOME = prevXdg;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    });
+
+    it('writes the full output and appends a pointer when the detail is elided', async () => {
+      const output = 'H'.repeat(20000) + 'T'.repeat(30000);
+      const ev = await runWithOutput(output);
+      const detail = ev?.detail as string;
+      expect(detail).toContain('chars elided');
+      expect(
+        detail.endsWith(
+          `\n[full output: GET /api/deploy/runs/${ev?.run_id}/steps/build/output]`,
+        ),
+      ).toBe(true);
+      const file = path.join(
+        tmp,
+        'claude-orchestrator',
+        'deploy-output',
+        'proj',
+        ev?.run_id as string,
+        'build.log',
+      );
+      expect(fs.readFileSync(file, 'utf8')).toBe(output);
+    });
+
+    it('writes a file but no pointer for short output', async () => {
+      const ev = await runWithOutput('risk: ok');
+      expect(ev?.detail).toBe('risk: ok');
+      const file = path.join(
+        tmp,
+        'claude-orchestrator',
+        'deploy-output',
+        'proj',
+        ev?.run_id as string,
+        'build.log',
+      );
+      expect(fs.readFileSync(file, 'utf8')).toBe('risk: ok');
+    });
+
+    it('still succeeds with the bounded detail when the write fails', async () => {
+      fs.writeFileSync(path.join(tmp, 'claude-orchestrator'), 'not a dir');
+      const ev = await runWithOutput('X'.repeat(40000));
+      expect(ev?.event_type).toBe('step_succeeded');
+      expect(ev?.detail).toContain('chars elided');
+    });
+  });
 });
 
 describe('DeployOrchestrator: latest-dev target resolution', () => {

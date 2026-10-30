@@ -9,13 +9,18 @@
 
 import express from 'express';
 import request from 'supertest';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { writeStepOutput } from '../../deploy/stepOutputStore.js';
 
 const deployServiceMock = vi.hoisted(() => ({
   reportProjectDeploy: vi.fn(),
   getLatestDeployRun: vi.fn(),
   listDeployRunEvents: vi.fn(),
   appendDeployRunEvent: vi.fn(),
+  getDeployRun: vi.fn(),
   DeployRunConflictError: class DeployRunConflictError extends Error {},
 }));
 
@@ -428,6 +433,65 @@ describe('GET /api/deploy/status', () => {
     const res = await request(makeApp()).get('/api/deploy/status');
 
     expect(res.status).toBe(400);
+  });
+});
+
+describe('GET /api/deploy/runs/:runId/steps/:stepId/output', () => {
+  const runId = '11111111-2222-4333-8444-555555555555';
+  let tmp: string;
+  let prevXdg: string | undefined;
+
+  beforeEach(() => {
+    prevXdg = process.env.XDG_DATA_HOME;
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'deploy-route-'));
+    process.env.XDG_DATA_HOME = tmp;
+    deployServiceMock.getDeployRun.mockReturnValue({
+      run_id: runId,
+      project: 'proj',
+    });
+  });
+
+  afterEach(() => {
+    if (prevXdg === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = prevXdg;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('returns 200 text/plain with the stored output', async () => {
+    writeStepOutput('proj', runId, 'migrate_roll_verify', 'full output');
+    const res = await request(makeApp()).get(
+      `/api/deploy/runs/${runId}/steps/migrate_roll_verify/output`,
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('text/plain');
+    expect(res.text).toBe('full output');
+  });
+
+  it('returns 404 for an unknown step or run', async () => {
+    const missingStep = await request(makeApp()).get(
+      `/api/deploy/runs/${runId}/steps/nope/output`,
+    );
+    expect(missingStep.status).toBe(404);
+    deployServiceMock.getDeployRun.mockReturnValue(undefined);
+    const missingRun = await request(makeApp()).get(
+      `/api/deploy/runs/${runId}/steps/build/output`,
+    );
+    expect(missingRun.status).toBe(404);
+  });
+
+  it('returns 400 for a malformed stepId or runId', async () => {
+    const dots = await request(makeApp()).get(
+      `/api/deploy/runs/${runId}/steps/..%2Fx/output`,
+    );
+    expect(dots.status).toBe(400);
+    const bad = await request(makeApp()).get(
+      `/api/deploy/runs/${runId}/steps/Bad.Id/output`,
+    );
+    expect(bad.status).toBe(400);
+    const badRun = await request(makeApp()).get(
+      '/api/deploy/runs/not-a-uuid/steps/build/output',
+    );
+    expect(badRun.status).toBe(400);
   });
 });
 
