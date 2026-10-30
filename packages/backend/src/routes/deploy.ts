@@ -59,7 +59,7 @@ const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const STEP_ID_RE = /^[a-z0-9_]+$/;
 
-const GATE_RECONCILER_JOB ='gate_verification_reconciler';
+const GATE_RECONCILER_JOB = 'gate_verification_reconciler';
 
 /**
  * The SHA `npm run build` embeds into `dist/build-sha.txt` (see

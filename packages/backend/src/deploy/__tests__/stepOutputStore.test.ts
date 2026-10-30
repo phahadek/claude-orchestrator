@@ -22,7 +22,9 @@ describe('stepOutputStore', () => {
   it('round-trips output byte for byte', () => {
     const out = 'héllo\n'.repeat(1000);
     expect(writeStepOutput('p', 'run1', 'build', out, dir)).toBe(true);
-    expect(fs.readFileSync(stepOutputPath('p', 'run1', 'build', dir), 'utf8')).toBe(out);
+    expect(
+      fs.readFileSync(stepOutputPath('p', 'run1', 'build', dir), 'utf8'),
+    ).toBe(out);
     expect(readStepOutput('p', 'run1', 'build', dir)).toBe(out);
   });
 

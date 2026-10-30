@@ -106,6 +106,8 @@ export function pruneStepOutputs(
       fs.rmSync(path.join(dir, old.name), { recursive: true, force: true });
     }
   } catch (err) {
-    logger.warn(`[stepOutputStore] prune failed for ${project}: ${String(err)}`);
+    logger.warn(
+      `[stepOutputStore] prune failed for ${project}: ${String(err)}`,
+    );
   }
 }
