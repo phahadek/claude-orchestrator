@@ -29,7 +29,9 @@ export interface OrchestratorClaudeMdParams {
    * "Pre-PR Gate" and "When a Test Fails" sections.
    * Format and lint are handled by orchestrator autofix — not included here.
    * Rendered from the project's `.claude-orchestrator.yml` verify list.
-   * When empty or omitted, the gate shows a "no local verify" fallback.
+   * Callers pass only entries that are not test-lane commands (see
+   * getLocalVerifyCommands). When empty or omitted, the gate shows a "no
+   * local verify" fallback.
    */
   verify?: string[];
   /**
