@@ -353,6 +353,8 @@ export interface AutofixGateEnvOptions {
   cacheEnv?: Record<string, string>;
   /** Toolchain versions this gate expects. See OrchestratorConfig.expected_tool_versions. */
   expectedToolVersions?: ToolVersionCheck[];
+  /** Commit locally only: skip the push and the post-push sync to origin. */
+  noPush?: boolean;
 }
 
 export async function runAutofix(
@@ -646,6 +648,23 @@ export async function runAutofix(
     preRunDirtyPaths,
     log,
   );
+
+  if (gateEnvOptions.noPush) {
+    return {
+      success: failures.length === 0,
+      commitSha: sha,
+      touchedFiles,
+      restoredPaths,
+      summary:
+        failures.length === 0
+          ? `autofix committed ${sha}`
+          : `autofix committed ${sha} with failures: ${failures.join('; ')}`,
+      unfixableViolations:
+        failures.length === 0 ? unfixableViolations : undefined,
+      unfixableMentionedFiles:
+        failures.length === 0 ? unfixableMentionedFiles : undefined,
+    };
+  }
 
   // Capture current branch before pushing so we can sync to it afterward
   const { stdout: branchRaw } = await spawnCmd(
