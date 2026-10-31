@@ -938,7 +938,7 @@ export class PreReviewPipeline {
     ) {
       return false;
     }
-    let recorded: string[] | null = null;
+    let recorded: string[] | null;
     try {
       const parsed = verify.commands ? JSON.parse(verify.commands) : null;
       recorded = Array.isArray(parsed) ? (parsed as string[]) : null;
