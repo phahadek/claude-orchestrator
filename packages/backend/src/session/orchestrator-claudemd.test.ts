@@ -917,7 +917,10 @@ describe('Pre-PR Gate excludes test-lane verify entries', () => {
   });
 
   it('falls back to the no-local-verify step when every entry is a lane command', () => {
-    const s = gate({ verify: ['uv run task test'], test: ['uv run task test'] });
+    const s = gate({
+      verify: ['uv run task test'],
+      test: ['uv run task test'],
+    });
     expect(s).toContain('2. No local verify step configured — CI is the gate.');
   });
 
