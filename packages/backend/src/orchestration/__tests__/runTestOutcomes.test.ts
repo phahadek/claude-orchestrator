@@ -24,8 +24,14 @@ import {
   readRunTestOutcomes,
   trackRunIngestion,
 } from '../runTestOutcomes';
-import { filterVerifyFailureByBaseHealth } from '../baseAttributableFilter';
 import {
+  filterBaseAttributableFailuresForF2Gate,
+  filterVerifyFailureByBaseHealth,
+} from '../baseAttributableFilter';
+import { insertExcusedVerifyCoverageRun } from '../testRequestLane';
+import { db } from '../../db/db';
+import {
+  getLatestTestRequestRun,
   insertTestRequestRun,
   completeTestRequestRun,
   ingestTestRunResultsTx,
@@ -214,6 +220,71 @@ describe('verify gate regression — structured_result cleared between runs on t
     expect(replayed?.passed).toBe(true);
     expect(replayed?.excludedTests.map((t) => t.test_id).sort()).toEqual(
       fresh?.excludedTests.map((t) => t.test_id).sort(),
+    );
+  });
+});
+
+describe('excused verify coverage row (full run_kind)', () => {
+  it('follows coverage_source_run_id so the F2 filter passes on a coverage row whose own structured_result is null', async () => {
+    mockBreadthFlagged.clear();
+    mockBreadthFlagged.add('t.fail');
+    mockBreadthFlagged.add('t.err');
+    const hash = 'hash-coverage-f2';
+    seedExtractedRun('run-cov-verify', hash, 'failed');
+    const verify = getTestRequestRunById('run-cov-verify')!;
+
+    const coverageId = insertExcusedVerifyCoverageRun({
+      projectId: PROJECT.id,
+      contentHash: hash,
+      worktreePath: '/tmp/x',
+      commands: ['npm test'],
+      source: verify,
+    });
+    db.prepare(
+      'UPDATE test_request_runs SET structured_result = NULL WHERE id = ?',
+    ).run(coverageId);
+
+    const full = getLatestTestRequestRun(PROJECT.id, hash, 'full')!;
+    expect(full.id).toBe(coverageId);
+    expect(full.state).toBe('failed');
+    expect(full.coverage_source_run_id).toBe('run-cov-verify');
+    expect(JSON.parse(full.commands!)).toEqual(['npm test']);
+
+    const outcomes = readRunTestOutcomes(full);
+    expect(outcomes.failingTests.map((t) => t.test_id).sort()).toEqual([
+      't.err',
+      't.fail',
+    ]);
+
+    const { result } = await filterBaseAttributableFailuresForF2Gate(
+      PROJECT,
+      full,
+      null,
+    );
+    expect(result.passed).toBe(true);
+  });
+
+  it('returns no outcomes for a coverage row whose source is itself a coverage row', () => {
+    insertTestRequestRun('run-cov-a', PROJECT.id, 'hash-cov-chain', null, 1);
+    completeTestRequestRun('run-cov-a', 'failed', '', null, null);
+    const a = getTestRequestRunById('run-cov-a')!;
+    const bId = insertExcusedVerifyCoverageRun({
+      projectId: PROJECT.id,
+      contentHash: 'hash-cov-chain',
+      worktreePath: '/tmp/x',
+      commands: ['npm test'],
+      source: a,
+    });
+    const b = getTestRequestRunById(bId)!;
+    const cId = insertExcusedVerifyCoverageRun({
+      projectId: PROJECT.id,
+      contentHash: 'hash-cov-chain',
+      worktreePath: '/tmp/x',
+      commands: ['npm test'],
+      source: b,
+    });
+    expect(readRunTestOutcomes(getTestRequestRunById(cId)!).source).toBe(
+      'none',
     );
   });
 });
