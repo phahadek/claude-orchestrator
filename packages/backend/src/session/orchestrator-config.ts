@@ -95,6 +95,22 @@ export function getPrePrAnalyzeCommands(cfg: {
     .map((c) => c.command);
 }
 
+/**
+ * Verify commands the injected Pre-PR Gate should list: drops entries that are
+ * character-exact members of `test:` / `test_scoped:` (the same comparison as
+ * PreReviewPipeline.commandsAreSubset), since those run via test_request.
+ * Returns undefined when nothing remains.
+ */
+export function getLocalVerifyCommands(cfg: {
+  verify: string[];
+  test?: string[];
+  test_scoped?: string[];
+}): string[] | undefined {
+  const lane = new Set([...(cfg.test ?? []), ...(cfg.test_scoped ?? [])]);
+  const local = cfg.verify.filter((c) => !lane.has(c));
+  return local.length > 0 ? local : undefined;
+}
+
 /** Backward-compatible: a bare string is a command with no path trigger (always runs, no content-hash caching). */
 export type AnalyzeCommand = string | AnalyzeCommandEntry;
 

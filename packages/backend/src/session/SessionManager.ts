@@ -33,6 +33,7 @@ import {
   isToolShapedCapability,
   resolvePreGrantCapabilities,
   getPrePrAnalyzeCommands,
+  getLocalVerifyCommands,
 } from './orchestrator-config';
 import { WorktreeSetupError } from './WorktreeSetupError';
 import { CliSessionRunner, PreSpawnConfigError } from './CliSessionRunner';
@@ -2696,7 +2697,7 @@ export class SessionManager extends EventEmitter {
           targetBranch: startingPoint,
           projectDir,
           worktreePath,
-          verify: orchConfig.verify.length > 0 ? orchConfig.verify : undefined,
+          verify: getLocalVerifyCommands(orchConfig),
           prePrAnalyze: getPrePrAnalyzeCommands(orchConfig),
           bashRules:
             orchConfig.bash_rules.length > 0
@@ -3330,7 +3331,7 @@ export class SessionManager extends EventEmitter {
         targetBranch: project.baseBranch ?? 'dev',
         projectDir,
         worktreePath,
-        verify: orchConfig.verify.length > 0 ? orchConfig.verify : undefined,
+        verify: getLocalVerifyCommands(orchConfig),
         prePrAnalyze: getPrePrAnalyzeCommands(orchConfig),
         bashRules:
           orchConfig.bash_rules.length > 0 ? orchConfig.bash_rules : undefined,

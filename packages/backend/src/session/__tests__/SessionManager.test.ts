@@ -90,6 +90,7 @@ vi.mock('../orchestrator-config', () => ({
   }),
   resolvePreGrantCapabilities: vi.fn(() => []),
   getPrePrAnalyzeCommands: vi.fn(() => []),
+  getLocalVerifyCommands: vi.fn(() => undefined),
 }));
 vi.mock('../sessionRecovery', () => ({
   recoverSession: vi.fn().mockResolvedValue(undefined),

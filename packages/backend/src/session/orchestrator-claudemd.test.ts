@@ -11,6 +11,7 @@ import { buildSessionContext, stripOrchestratorHeader } from './ContextBuilder';
 import {
   loadOrchestratorConfig,
   getPrePrAnalyzeCommands,
+  getLocalVerifyCommands,
 } from './orchestrator-config';
 
 const defaultParams = {
@@ -875,6 +876,74 @@ describe('loadOrchestratorConfig', () => {
     const config = loadOrchestratorConfig(tmpDir);
     expect(config.verify).toEqual([]);
     expect(config.allowed_tools).toEqual([]);
+  });
+});
+
+describe('Pre-PR Gate excludes test-lane verify entries', () => {
+  const gate = (cfg: {
+    verify: string[];
+    test?: string[];
+    test_scoped?: string[];
+    prePrAnalyze?: string[];
+  }) => {
+    const r = buildOrchestratorClaudeMd({
+      ...defaultParams,
+      verify: getLocalVerifyCommands(cfg),
+      prePrAnalyze: cfg.prePrAnalyze,
+    });
+    return r.slice(
+      r.indexOf('## Pre-PR Gate'),
+      r.indexOf('## Forbidden Actions'),
+    );
+  };
+
+  it('omits verify entries that are in test:', () => {
+    const s = gate({
+      verify: ['uv run pyright', 'uv run task test'],
+      test: ['uv run task test'],
+    });
+    expect(s).toContain('`uv run pyright` — must pass.');
+    expect(s).not.toContain('uv run task test');
+  });
+
+  it('omits verify entries that are only in test_scoped:', () => {
+    const s = gate({
+      verify: ['uv run pyright', 'pytest -k scoped'],
+      test: [],
+      test_scoped: ['pytest -k scoped'],
+    });
+    expect(s).toContain('`uv run pyright` — must pass.');
+    expect(s).not.toContain('pytest -k scoped');
+  });
+
+  it('falls back to the no-local-verify step when every entry is a lane command', () => {
+    const s = gate({
+      verify: ['uv run task test'],
+      test: ['uv run task test'],
+    });
+    expect(s).toContain('2. No local verify step configured — CI is the gate.');
+  });
+
+  it('numbers analyze steps directly after the remaining verify steps', () => {
+    const s = gate({
+      verify: ['uv run pyright', 'uv run task test'],
+      test: ['uv run task test'],
+      prePrAnalyze: ['npx knip'],
+    });
+    expect(s).toContain('2. `uv run pyright` — must pass.');
+    expect(s).toContain('3. `npx knip` — must pass.');
+    expect(s).toContain('4. Stage only your implementation files');
+  });
+
+  it('leaves verify untouched when there is no overlap', () => {
+    expect(
+      getLocalVerifyCommands({
+        verify: ['npm run build'],
+        test: ['npm test'],
+        test_scoped: [],
+      }),
+    ).toEqual(['npm run build']);
+    expect(getLocalVerifyCommands({ verify: [] })).toBeUndefined();
   });
 });
 
