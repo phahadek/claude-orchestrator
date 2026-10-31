@@ -54,6 +54,7 @@ import { resolveAutoLaunchMilestoneId } from './autoLaunchMilestone';
 import { normalizeTaskId } from '../tasks/taskId';
 import type { NotionTask } from '../notion/types';
 import { recordEvent } from '../audit/AuditLog';
+import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import {
   runTestCommands,
   collectStructuredTestResultOffMainThread,
@@ -1748,6 +1749,63 @@ const localRunnerExecutor: LaneRunnerExecutor = async ({
 };
 
 /**
+ * Runs the project's autofix commands against the worktree while the merge
+ * hold is still held. Commits locally only (never pushes). Never throws.
+ */
+async function runPreTestAutofix(
+  spec: TestRequestRunSpec,
+  runId: string,
+  baseBranch: string,
+): Promise<{ note: string; committed: boolean }> {
+  try {
+    const project = getProjectById(spec.projectId);
+    if (!project) return { note: '', committed: false };
+    const cmds = loadAutofixCommands(project.projectDir);
+    if (cmds.length === 0) return { note: '', committed: false };
+    const cfg = loadOrchestratorConfig(project.projectDir);
+    const result = await runAutofix(
+      spec.worktreePath,
+      project.projectDir,
+      cmds,
+      (msg) =>
+        logger.info(`[testRequestLane] pre-test autofix ${runId}: ${msg}`),
+      baseBranch,
+      cfg.autofix_skip_ci ?? false,
+      {
+        cacheEnv: cfg.cache_env,
+        expectedToolVersions: cfg.expected_tool_versions,
+        noPush: true,
+      },
+    );
+    logger.info(
+      { runId, success: result.success, commitSha: result.commitSha },
+      `[testRequestLane] pre-test autofix: ${result.summary}`,
+    );
+    recordEvent({
+      event_type: 'test_run_autofix_applied',
+      actor_type: 'system',
+      actor_id: null,
+      project_id: spec.projectId,
+      task_id: spec.taskId ?? null,
+      payload: {
+        runId,
+        success: result.success,
+        commitSha: result.commitSha ?? null,
+        summary: result.summary,
+        touchedFiles: result.touchedFiles ?? [],
+      },
+    });
+    const note = result.unfixableViolations
+      ? `[testRequestLane] pre-test autofix left unfixable violations:\n${result.unfixableViolations}\n`
+      : '';
+    return { note, committed: Boolean(result.commitSha) };
+  } catch (err) {
+    logger.warn({ err, runId }, '[testRequestLane] pre-test autofix failed');
+    return { note: '', committed: false };
+  }
+}
+
+/**
  * Runs the pre-test merge for a run whose grant took its owner's merge hold,
  * releasing the hold when the merge finishes (or throws). Returns a note to
  * prefix onto the run's output when the merge could not be applied.
@@ -1768,26 +1826,32 @@ async function runPreTestMerge(
       `origin/${baseBranch}`,
     );
     recordTestRequestRunMerge(runId, result.mergedSha ?? null, result.outcome);
-    if (result.outcome === 'merged') {
-      try {
-        const newHash = await computeWholeTreeContentHash(spec.worktreePath);
-        if (newHash) {
-          rebindWorktreeContentHash(
-            spec.projectId,
-            spec.worktreePath,
-            spec.contentHash,
-            newHash,
+    if (result.outcome === 'merged' || result.outcome === 'up_to_date') {
+      const mergeNote =
+        result.outcome === 'merged'
+          ? `${formatPreTestMergeSuccess({ baseBranch, mergedSha: result.mergedSha ?? null })}\n`
+          : '';
+      const autofix = await runPreTestAutofix(spec, runId, baseBranch);
+      if (result.outcome === 'merged' || autofix.committed) {
+        try {
+          const newHash = await computeWholeTreeContentHash(spec.worktreePath);
+          if (newHash) {
+            rebindWorktreeContentHash(
+              spec.projectId,
+              spec.worktreePath,
+              spec.contentHash,
+              newHash,
+            );
+          }
+        } catch (err) {
+          logger.warn(
+            { err, runId },
+            '[testRequestLane] post-merge content hash failed — run will withdraw on the content check',
           );
         }
-      } catch (err) {
-        logger.warn(
-          { err, runId },
-          '[testRequestLane] post-merge content hash failed — run will withdraw on the content check',
-        );
       }
-      return `${formatPreTestMergeSuccess({ baseBranch, mergedSha: result.mergedSha ?? null })}\n`;
+      return `${autofix.note}${mergeNote}`;
     }
-    if (result.outcome === 'up_to_date') return '';
     if (result.outcome === 'dirty_refused') {
       return `${formatPreTestMergeDirtyRefused({ baseBranch, detail: result.detail })}\n`;
     }

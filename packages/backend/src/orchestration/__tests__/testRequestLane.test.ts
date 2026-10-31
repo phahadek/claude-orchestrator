@@ -5,7 +5,7 @@
  * leftover `running` row as `failed` at boot.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../../db/db', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
@@ -97,6 +97,39 @@ vi.mock('../../db/queries', async (importOriginal) => {
   return {
     ...actual,
     ingestTestRunResultsOffMainThread: mockIngestOffMainThread,
+  };
+});
+
+const { mockGetProjectById, mockMerge, mockRunAutofix, mockLoadAutofixCmds } =
+  vi.hoisted(() => ({
+    mockGetProjectById: vi.fn(),
+    mockMerge: vi.fn(),
+    mockRunAutofix: vi.fn(),
+    mockLoadAutofixCmds: vi.fn(() => [] as string[]),
+  }));
+
+vi.mock('../../config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../config')>();
+  mockGetProjectById.mockImplementation(actual.getProjectById);
+  return { ...actual, getProjectById: mockGetProjectById };
+});
+
+vi.mock('../localBranchHelpers', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../localBranchHelpers')>();
+  return {
+    ...actual,
+    fetchBaseBranch: vi.fn(async () => undefined),
+    mergeBaseIntoSessionBranch: mockMerge,
+  };
+});
+
+vi.mock('../../session/autofix-runner', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../session/autofix-runner')>();
+  return {
+    ...actual,
+    loadAutofixCommands: mockLoadAutofixCmds,
+    runAutofix: mockRunAutofix,
   };
 });
 
@@ -5589,6 +5622,104 @@ describe('rebindWorktreeContentHash — pre-test merge hash rebind', () => {
     expect(settled).not.toContain('pre');
 
     testRequestLaneEvents.off('settled', onSettled);
+  });
+});
+
+describe('pre-test autofix (under the merge hold)', () => {
+  const savedHash = mockComputeHash.getMockImplementation();
+  const savedProject = mockGetProjectById.getMockImplementation();
+  afterEach(() => {
+    mockComputeHash.mockReset();
+    if (savedHash) mockComputeHash.mockImplementation(savedHash);
+    mockGetProjectById.mockReset();
+    if (savedProject) mockGetProjectById.mockImplementation(savedProject);
+    mockMerge.mockReset();
+    mockLoadAutofixCmds.mockReset();
+    mockLoadAutofixCmds.mockReturnValue([]);
+    mockRunAutofix.mockReset();
+  });
+
+  function setup(mergeOutcome: string) {
+    insertProject({
+      id: 'proj-1',
+      name: 'P',
+      project_dir: '/tmp/p1',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    mockGetProjectById.mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/tmp/p1',
+      baseBranch: 'dev',
+    });
+    mockMerge.mockResolvedValue({ outcome: mergeOutcome });
+    mockLoadAutofixCmds.mockReturnValue(['npx prettier --write .']);
+    mockRunAutofix.mockReset();
+    mockComputeHash.mockResolvedValue('post-autofix-hash');
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+    db.prepare('DELETE FROM sessions WHERE session_id = ?').run('sess-af');
+    insertSession({
+      session_id: 'sess-af',
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      project_id: 'proj-1',
+      status: 'done',
+      started_at: new Date().toISOString(),
+    } as Parameters<typeof insertSession>[0]);
+  }
+
+  it('commits locally without pushing, rebinds the hash, and prefixes unfixable violations', async () => {
+    setup('up_to_date');
+    mockRunAutofix.mockResolvedValue({
+      success: true,
+      commitSha: 'abc123',
+      summary: 'autofix committed abc123',
+      unfixableViolations: 'E501 line too long',
+    });
+    const res = await runProjectTestRequest(
+      baseSpec({ contentHash: 'pre-autofix-hash', sessionId: 'sess-af' }),
+    );
+    expect(mockRunAutofix).toHaveBeenCalledTimes(1);
+    expect(mockRunAutofix.mock.calls[0][6]).toMatchObject({ noPush: true });
+    expect(res.superseded).toBeUndefined();
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    expect(
+      res.output.startsWith('[testRequestLane] pre-test autofix left'),
+    ).toBe(true);
+    expect(res.output).toContain('E501 line too long');
+    expect(isMergeHeld('sess-af')).toBe(false);
+  });
+
+  it.each(['dirty_refused', 'conflict'])(
+    'skips autofix on a %s merge outcome',
+    async (outcome) => {
+      setup(outcome);
+      await runProjectTestRequest(
+        baseSpec({ contentHash: `h-${outcome}`, sessionId: 'sess-af' }),
+      );
+      expect(mockRunAutofix).not.toHaveBeenCalled();
+    },
+  );
+
+  it('does not run autofix for a run without a merge hold', async () => {
+    setup('up_to_date');
+    await runProjectTestRequest(
+      baseSpec({ contentHash: 'h-gate', runOrigin: 'pr_gate' as never }),
+    );
+    expect(mockRunAutofix).not.toHaveBeenCalled();
+  });
+
+  it('releases the merge hold when autofix throws', async () => {
+    setup('up_to_date');
+    mockRunAutofix.mockRejectedValue(new Error('boom'));
+    mockComputeHash.mockResolvedValue('h-throw');
+    await runProjectTestRequest(
+      baseSpec({ contentHash: 'h-throw', sessionId: 'sess-af' }),
+    );
+    expect(isMergeHeld('sess-af')).toBe(false);
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
   });
 });
 

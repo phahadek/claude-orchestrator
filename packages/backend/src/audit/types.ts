@@ -61,6 +61,7 @@ type EventType =
   | 'pipeline_stage_failed'
   | 'autofix_started'
   | 'autofix_complete'
+  | 'test_run_autofix_applied'
   | 'autofix_noop_retry_skipped'
   | 'gate_head_moved_during_run'
   | 'pr_terminal_flags_cleared'
