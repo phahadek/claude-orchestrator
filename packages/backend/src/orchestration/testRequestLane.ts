@@ -951,13 +951,44 @@ function sessionKey(projectId: string, sessionId: string): string {
  * candidate (a row predating the `commands` column, or a coverage row that
  * carries no comparable command list of its own) never covers anything.
  */
-function commandsCovered(
+export function commandsCovered(
   required: string[],
   candidateCommands: string[] | null,
 ): boolean {
   if (!candidateCommands) return false;
   const have = new Set(candidateCommands.map((c) => c.trim()));
   return required.every((c) => have.has(c.trim()));
+}
+
+/**
+ * Writes a 'full' coverage row at the tree carrying `source`'s (failed,
+ * all-failures-excused) verify verdict, so 'full'-only readers (F2 gate,
+ * AutoMerger) see a run for the tree. readRunTestOutcomes follows
+ * coverage_source_run_id to the source's per-test outcomes.
+ */
+export function insertExcusedVerifyCoverageRun(params: {
+  projectId: string;
+  contentHash: string;
+  worktreePath: string;
+  commands: string[];
+  source: TestRequestRunRow;
+}): string {
+  const newId = randomUUID();
+  insertCoverageTestRequestRun(
+    newId,
+    params.projectId,
+    params.contentHash,
+    null,
+    'full',
+    null,
+    params.worktreePath,
+    'pr_pipeline',
+    'pr_gate',
+    params.commands,
+    Date.now(),
+    params.source,
+  );
+  return newId;
 }
 
 function parseCommands(json: string | null): string[] | null {
