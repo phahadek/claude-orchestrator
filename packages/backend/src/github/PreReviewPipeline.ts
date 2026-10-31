@@ -51,6 +51,7 @@ import {
   formatToolchainMismatch,
 } from '../orchestration/gateEnv';
 import { runTestCommands } from '../session/test-runner';
+import { acquireAnalyzePermit } from './analyzeSemaphore';
 import { admitTestRequest } from '../orchestration/testRequestLane';
 import type {
   TestRequestRunResult,
@@ -658,127 +659,135 @@ export class PreReviewPipeline {
           passed = cached?.passed === 1;
           output = cached?.output ?? '';
         } else {
-          const mismatch = await checkToolchainVersions(
-            ctx.worktreePath,
-            config.expected_tool_versions,
-          );
-          if (mismatch) {
-            const reason = formatToolchainMismatch(mismatch);
-            return {
-              summary: reason,
-              isToolInfraFailure: true,
-              toolFailureReason: reason,
-            };
-          }
-
-          const scopedEnv = buildScopedEnv(ctx.worktreePath, config.cache_env);
-          const normalized = config.analyze.map(normalizeAnalyzeCommand);
-          let diffPaths: string[];
+          const releasePermit = await acquireAnalyzePermit();
           try {
-            diffPaths = await getChangedFiles(
+            const mismatch = await checkToolchainVersions(
               ctx.worktreePath,
-              getPRByNumber(ctx.prNumber, ctx.repo)?.base_branch ??
-                ctx.project.baseBranch,
+              config.expected_tool_versions,
             );
-          } catch (err) {
-            const reason = `analyze not run: changed files unavailable (${err instanceof Error ? err.message : String(err)})`;
-            return {
-              summary: reason,
-              isToolInfraFailure: true,
-              toolFailureReason: reason,
-            };
-          }
-
-          const outputParts: string[] = [];
-          let allPassed = true;
-          let anyTimedOut = false;
-          let anyOomKilled = false;
-          let anyTransientOutputMatch = false;
-
-          for (const entry of normalized) {
-            if (!isAnalyzeCommandTriggered(entry, diffPaths)) {
-              logger.info(
-                `[PreReviewPipeline] analyze skipped (no trigger-path match) PR #${ctx.prNumber}: ${entry.command}`,
-              );
-              outputParts.push(
-                `$ ${entry.command}\n[skipped — no diff file matched trigger_paths]`,
-              );
-              continue;
+            if (mismatch) {
+              const reason = formatToolchainMismatch(mismatch);
+              return {
+                summary: reason,
+                isToolInfraFailure: true,
+                toolFailureReason: reason,
+              };
             }
 
-            const contentHash = entry.trigger_paths?.length
-              ? await computeTriggerContentHash(
-                  ctx.worktreePath,
-                  entry.trigger_paths,
-                )
-              : null;
-
-            if (contentHash) {
-              const cached = getAnalyzeContentCacheResult(
-                entry.command,
-                contentHash,
+            const scopedEnv = buildScopedEnv(
+              ctx.worktreePath,
+              config.cache_env,
+            );
+            const normalized = config.analyze.map(normalizeAnalyzeCommand);
+            let diffPaths: string[];
+            try {
+              diffPaths = await getChangedFiles(
+                ctx.worktreePath,
+                getPRByNumber(ctx.prNumber, ctx.repo)?.base_branch ??
+                  ctx.project.baseBranch,
               );
-              if (cached) {
+            } catch (err) {
+              const reason = `analyze not run: changed files unavailable (${err instanceof Error ? err.message : String(err)})`;
+              return {
+                summary: reason,
+                isToolInfraFailure: true,
+                toolFailureReason: reason,
+              };
+            }
+
+            const outputParts: string[] = [];
+            let allPassed = true;
+            let anyTimedOut = false;
+            let anyOomKilled = false;
+            let anyTransientOutputMatch = false;
+
+            for (const entry of normalized) {
+              if (!isAnalyzeCommandTriggered(entry, diffPaths)) {
                 logger.info(
-                  `[PreReviewPipeline] analyze content-cache hit PR #${ctx.prNumber}: ${entry.command}`,
+                  `[PreReviewPipeline] analyze skipped (no trigger-path match) PR #${ctx.prNumber}: ${entry.command}`,
                 );
                 outputParts.push(
-                  `$ ${entry.command}\n[cached]\n${cached.output}`,
+                  `$ ${entry.command}\n[skipped — no diff file matched trigger_paths]`,
                 );
-                if (cached.passed !== 1) allPassed = false;
-                if (!allPassed && config.analyze_fail_fast) break;
                 continue;
               }
-            }
 
-            const result = await runTestCommands(
-              ctx.worktreePath,
-              [entry.command],
-              config.analyze_timeout_sec,
-              (msg) =>
-                logger.info(
-                  `[PreReviewPipeline] analyze PR #${ctx.prNumber}: ${msg}`,
-                ),
-              {
-                maxRssMb: config.analyze_max_rss_mb,
-                failFast: config.analyze_fail_fast,
-                env: scopedEnv,
-              },
-            );
+              const contentHash = entry.trigger_paths?.length
+                ? await computeTriggerContentHash(
+                    ctx.worktreePath,
+                    entry.trigger_paths,
+                  )
+                : null;
 
-            outputParts.push(result.output);
-            if (!result.passed) allPassed = false;
-            if (result.timedOut) anyTimedOut = true;
-            if (result.oomKilled) anyOomKilled = true;
-            if (
-              !result.passed &&
-              matchesTransientOutputPattern(entry, result.output)
-            ) {
-              anyTransientOutputMatch = true;
-            }
+              if (contentHash) {
+                const cached = getAnalyzeContentCacheResult(
+                  entry.command,
+                  contentHash,
+                );
+                if (cached) {
+                  logger.info(
+                    `[PreReviewPipeline] analyze content-cache hit PR #${ctx.prNumber}: ${entry.command}`,
+                  );
+                  outputParts.push(
+                    `$ ${entry.command}\n[cached]\n${cached.output}`,
+                  );
+                  if (cached.passed !== 1) allPassed = false;
+                  if (!allPassed && config.analyze_fail_fast) break;
+                  continue;
+                }
+              }
 
-            if (contentHash) {
-              insertAnalyzeContentCacheResult(
-                entry.command,
-                contentHash,
-                result.passed,
-                result.output,
+              const result = await runTestCommands(
+                ctx.worktreePath,
+                [entry.command],
+                config.analyze_timeout_sec,
+                (msg) =>
+                  logger.info(
+                    `[PreReviewPipeline] analyze PR #${ctx.prNumber}: ${msg}`,
+                  ),
+                {
+                  maxRssMb: config.analyze_max_rss_mb,
+                  failFast: config.analyze_fail_fast,
+                  env: scopedEnv,
+                },
               );
+
+              outputParts.push(result.output);
+              if (!result.passed) allPassed = false;
+              if (result.timedOut) anyTimedOut = true;
+              if (result.oomKilled) anyOomKilled = true;
+              if (
+                !result.passed &&
+                matchesTransientOutputPattern(entry, result.output)
+              ) {
+                anyTransientOutputMatch = true;
+              }
+
+              if (contentHash) {
+                insertAnalyzeContentCacheResult(
+                  entry.command,
+                  contentHash,
+                  result.passed,
+                  result.output,
+                );
+              }
+
+              if (!allPassed && config.analyze_fail_fast) break;
             }
 
-            if (!allPassed && config.analyze_fail_fast) break;
+            passed = allPassed;
+            output = outputParts.join('\n');
+            upsertAnalyzeResult(
+              ctx.prNumber,
+              ctx.repo,
+              ctx.headSha,
+              passed,
+              output,
+              anyTimedOut || anyOomKilled || anyTransientOutputMatch,
+            );
+          } finally {
+            releasePermit();
           }
-
-          passed = allPassed;
-          output = outputParts.join('\n');
-          upsertAnalyzeResult(
-            ctx.prNumber,
-            ctx.repo,
-            ctx.headSha,
-            passed,
-            output,
-            anyTimedOut || anyOomKilled || anyTransientOutputMatch,
-          );
         }
 
         logger.info(

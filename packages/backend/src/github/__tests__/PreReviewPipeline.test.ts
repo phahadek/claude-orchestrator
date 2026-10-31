@@ -25,8 +25,10 @@ const mockUpdateTestRequestRunState = vi.fn();
 const mockAddAutofixSha = vi.fn();
 const mockGetAnalyzeContentCacheResult = vi.fn().mockReturnValue(undefined);
 const mockInsertAnalyzeContentCacheResult = vi.fn();
+const mockGetSetting = vi.fn().mockReturnValue(null);
 
 vi.mock('../../db/queries', () => ({
+  getSetting: (...args: unknown[]) => mockGetSetting(...args),
   getPRByNumber: (...args: unknown[]) => mockGetPRByNumber(...args),
   getSession: (...args: unknown[]) => mockGetSession(...args),
   setPRReviewResult: (...args: unknown[]) => mockSetPRReviewResult(...args),
@@ -212,6 +214,10 @@ vi.mock('../../audit/AuditLog', () => ({
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
 import { PreReviewPipeline } from '../PreReviewPipeline';
+import {
+  acquireAnalyzePermit,
+  __resetAnalyzeSemaphoreForTest,
+} from '../analyzeSemaphore';
 import type { ReviewJob } from '../types';
 import { parseGateFailureDetail } from '../../orchestration/gateFailureDetail';
 
@@ -268,6 +274,8 @@ function makeSessionManager() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockGetSetting.mockReturnValue(null);
+  __resetAnalyzeSemaphoreForTest();
   mockGetPRByNumber.mockReturnValue(makePRRow());
   mockGetSession.mockReturnValue(makeSessionRow());
   mockRunVerifyAsGate.mockResolvedValue({ passed: true });
@@ -2925,5 +2933,101 @@ describe('PreReviewPipeline.rerunFlakyAnalyze', () => {
       'npm ERR! ECONNRESET',
       true,
     );
+  });
+});
+
+describe('PreReviewPipeline — analyze_max_concurrent permit', () => {
+  const tick = () => new Promise((r) => setTimeout(r, 15));
+  function deferred<T>() {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((r) => (resolve = r));
+    return { promise, resolve };
+  }
+
+  beforeEach(() => {
+    mockLoadOrchestratorConfig.mockReturnValue({
+      verify: [],
+      autofix: [],
+      analyze: ['pyright'],
+      test: [],
+      test_timeout_sec: 300,
+      test_max_rss_mb: 0,
+      test_fail_fast: true,
+      analyze_timeout_sec: 300,
+      analyze_max_rss_mb: 0,
+      analyze_fail_fast: true,
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    });
+  });
+
+  it('with the cap at 1, the second uncached analyze starts only after the first upsert', async () => {
+    mockGetSetting.mockReturnValue('1');
+    const first = deferred<{ passed: boolean; output: string }>();
+    mockRunTestCommands
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce({ passed: true, output: '' });
+    const pipeline = new PreReviewPipeline(makeSessionManager());
+
+    const p1 = pipeline.run(makeJob(), makeProject());
+    const p2 = pipeline.run(makeJob(), makeProject());
+    await tick();
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    expect(mockUpsertAnalyzeResult).not.toHaveBeenCalled();
+
+    first.resolve({ passed: true, output: '' });
+    await Promise.all([p1, p2]);
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
+    const upsertOrder = mockUpsertAnalyzeResult.mock.invocationCallOrder[0];
+    const secondRunOrder = mockRunTestCommands.mock.invocationCallOrder[1];
+    expect(upsertOrder).toBeLessThan(secondRunOrder);
+  });
+
+  it('a cached analyze result completes without a permit while all permits are held', async () => {
+    mockGetSetting.mockReturnValue('1');
+    const release = await acquireAnalyzePermit();
+    mockHasAnalyzeResultForSha.mockReturnValue(true);
+    mockGetAnalyzeResult.mockReturnValue({ passed: 1, output: 'ok' });
+    const pipeline = new PreReviewPipeline(makeSessionManager());
+
+    const result = await pipeline.run(makeJob(), makeProject());
+    expect(result.passed).toBe(true);
+    expect(mockRunTestCommands).not.toHaveBeenCalled();
+    release();
+  });
+
+  it('a timed-out command releases its permit so a later pipeline proceeds', async () => {
+    mockGetSetting.mockReturnValue('1');
+    mockRunTestCommands
+      .mockResolvedValueOnce({ passed: false, output: 'slow', timedOut: true })
+      .mockResolvedValueOnce({ passed: false, output: 'big', oomKilled: true })
+      .mockResolvedValueOnce({ passed: true, output: '' });
+    const pipeline = new PreReviewPipeline(makeSessionManager());
+
+    await Promise.all([
+      pipeline.run(makeJob(), makeProject()),
+      pipeline.run(makeJob(), makeProject()),
+    ]);
+    const third = await pipeline.run(makeJob(), makeProject());
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(3);
+    expect(third.passed).toBe(true);
+  });
+
+  it('releases the permit when the stage throws', async () => {
+    mockGetSetting.mockReturnValue('1');
+    mockRunTestCommands.mockRejectedValueOnce(new Error('boom'));
+    const pipeline = new PreReviewPipeline(makeSessionManager());
+    await pipeline.run(makeJob(), makeProject()).catch(() => undefined);
+
+    let granted = false;
+    const p = acquireAnalyzePermit().then((r) => {
+      granted = true;
+      return r;
+    });
+    await tick();
+    expect(granted).toBe(true);
+    (await p)();
   });
 });
