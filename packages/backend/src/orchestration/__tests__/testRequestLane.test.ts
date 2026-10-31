@@ -5,7 +5,7 @@
  * leftover `running` row as `failed` at boot.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../../db/db', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
@@ -5626,6 +5626,19 @@ describe('rebindWorktreeContentHash — pre-test merge hash rebind', () => {
 });
 
 describe('pre-test autofix (under the merge hold)', () => {
+  const savedHash = mockComputeHash.getMockImplementation();
+  const savedProject = mockGetProjectById.getMockImplementation();
+  afterEach(() => {
+    mockComputeHash.mockReset();
+    if (savedHash) mockComputeHash.mockImplementation(savedHash);
+    mockGetProjectById.mockReset();
+    if (savedProject) mockGetProjectById.mockImplementation(savedProject);
+    mockMerge.mockReset();
+    mockLoadAutofixCmds.mockReset();
+    mockLoadAutofixCmds.mockReturnValue([]);
+    mockRunAutofix.mockReset();
+  });
+
   function setup(mergeOutcome: string) {
     insertProject({
       id: 'proj-1',
@@ -5701,6 +5714,7 @@ describe('pre-test autofix (under the merge hold)', () => {
   it('releases the merge hold when autofix throws', async () => {
     setup('up_to_date');
     mockRunAutofix.mockRejectedValue(new Error('boom'));
+    mockComputeHash.mockResolvedValue('h-throw');
     await runProjectTestRequest(
       baseSpec({ contentHash: 'h-throw', sessionId: 'sess-af' }),
     );
