@@ -157,6 +157,13 @@ export function readRunTestOutcomes(run: TestRequestRunRow): RunTestOutcomes {
     };
   }
 
+  if (run.coverage_source_run_id) {
+    const source = getTestRequestRunById(run.coverage_source_run_id);
+    if (source && !source.coverage_source_run_id) {
+      return readRunTestOutcomes(source);
+    }
+  }
+
   return { ...NONE, parseFailed };
 }
 

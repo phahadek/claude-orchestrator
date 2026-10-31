@@ -10411,6 +10411,7 @@ export function getLatestTestRequestRun(
          AND (
            @include_unsettled_crash_rows = 1
            OR state != 'failed'
+           OR coverage_source_run_id IS NOT NULL
            OR structured_result IS NOT NULL
            OR EXISTS (
              SELECT 1 FROM test_run_results

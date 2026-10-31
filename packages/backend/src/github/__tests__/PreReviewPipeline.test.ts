@@ -25,6 +25,9 @@ const mockUpdateTestRequestRunState = vi.fn();
 const mockAddAutofixSha = vi.fn();
 const mockGetAnalyzeContentCacheResult = vi.fn().mockReturnValue(undefined);
 const mockInsertAnalyzeContentCacheResult = vi.fn();
+const mockGetFailingTestIdsForRun = vi.fn().mockReturnValue([]);
+const mockGetUnexcusedFailingTestIdsForRun = vi.fn().mockReturnValue([]);
+const mockInsertExcusedVerifyCoverageRun = vi.fn();
 const mockGetSetting = vi.fn().mockReturnValue(null);
 
 vi.mock('../../db/queries', () => ({
@@ -55,6 +58,10 @@ vi.mock('../../db/queries', () => ({
   insertAnalyzeContentCacheResult: (...args: unknown[]) =>
     mockInsertAnalyzeContentCacheResult(...args),
   addAutofixSha: (...args: unknown[]) => mockAddAutofixSha(...args),
+  getFailingTestIdsForRun: (...args: unknown[]) =>
+    mockGetFailingTestIdsForRun(...args),
+  getUnexcusedFailingTestIdsForRun: (...args: unknown[]) =>
+    mockGetUnexcusedFailingTestIdsForRun(...args),
 }));
 
 const mockComputeTriggerContentHash = vi.fn().mockResolvedValue(null);
@@ -89,6 +96,11 @@ vi.mock('../../orchestration/testRequestLane', () => ({
   runProjectTestRequest: (...args: unknown[]) =>
     mockRunProjectTestRequest(...args),
   admitTestRequest: (...args: unknown[]) => mockAdmitTestRequest(...args),
+  commandsCovered: (required: string[], have: string[] | null) =>
+    !!have &&
+    required.every((c) => have.map((h) => h.trim()).includes(c.trim())),
+  insertExcusedVerifyCoverageRun: (...args: unknown[]) =>
+    mockInsertExcusedVerifyCoverageRun(...args),
 }));
 
 /**
@@ -2276,6 +2288,80 @@ describe('PreReviewPipeline — tests record stage (non-blocking)', () => {
       ([, , stage]) => stage === 'blocked_tests',
     );
     expect(blockedCalls).toHaveLength(0);
+  });
+
+  describe('excused same-tree verify reuse', () => {
+    const verifyRun = (over: Record<string, unknown> = {}) => ({
+      id: 'verify-1',
+      project_id: 'proj-1',
+      content_hash: 'worktree-content-hash',
+      state: 'failed',
+      failure_reason: null,
+      oom_killed: 0,
+      commands: JSON.stringify(['npm test']),
+      failed_command: 'npm test',
+      ...over,
+    });
+    const setup = (run: Record<string, unknown> | undefined) => {
+      mockGetLatestTestRequestRun.mockImplementation(
+        (_p: string, _h: string, kind?: string) =>
+          kind === 'verify' ? run : undefined,
+      );
+      mockGetFailingTestIdsForRun.mockReturnValue([{ test_id: 't1' }]);
+      mockGetUnexcusedFailingTestIdsForRun.mockReturnValue([]);
+      mockInsertExcusedVerifyCoverageRun.mockClear();
+      mockAdmitTestRequest.mockClear();
+    };
+    const testsStageAdmitted = () =>
+      mockAdmitTestRequest.mock.calls.some(
+        ([spec]) => (spec as { commands: string[] }).commands[0] === 'npm test',
+      );
+    const runPipeline = () =>
+      new PreReviewPipeline(makeSessionManager()).run(makeJob(), makeProject());
+
+    afterEach(() => {
+      mockGetLatestTestRequestRun.mockReset().mockReturnValue(undefined);
+      mockGetFailingTestIdsForRun.mockReset().mockReturnValue([]);
+      mockGetUnexcusedFailingTestIdsForRun.mockReset().mockReturnValue([]);
+    });
+
+    it('reuses a fully excused verify run and writes a coverage row', async () => {
+      setup(verifyRun());
+      await runPipeline();
+      expect(testsStageAdmitted()).toBe(false);
+      expect(mockInsertExcusedVerifyCoverageRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          contentHash: 'worktree-content-hash',
+          source: expect.objectContaining({ id: 'verify-1' }),
+        }),
+      );
+    });
+
+    it('admits a fresh run when a failing test is unexcused', async () => {
+      setup(verifyRun());
+      mockGetUnexcusedFailingTestIdsForRun.mockReturnValue([{ test_id: 't1' }]);
+      await runPipeline();
+      expect(testsStageAdmitted()).toBe(true);
+      expect(mockInsertExcusedVerifyCoverageRun).not.toHaveBeenCalled();
+    });
+
+    it('admits a fresh run when verify failed before the suite ran', async () => {
+      setup(verifyRun({ failed_command: 'uv run pyright' }));
+      await runPipeline();
+      expect(testsStageAdmitted()).toBe(true);
+    });
+
+    it.each([
+      ['superseded', { failure_reason: 'superseded' }],
+      ['timeout', { failure_reason: 'timeout' }],
+      ['oom_killed', { failure_reason: 'oom_killed', oom_killed: 1 }],
+      ['non-covering commands', { commands: JSON.stringify(['lint']) }],
+    ])('never reuses a %s verify run', async (_n, over) => {
+      setup(verifyRun(over));
+      await runPipeline();
+      expect(testsStageAdmitted()).toBe(true);
+      expect(mockInsertExcusedVerifyCoverageRun).not.toHaveBeenCalled();
+    });
   });
 
   it('skips tests when the content hash already has a cached result', async () => {

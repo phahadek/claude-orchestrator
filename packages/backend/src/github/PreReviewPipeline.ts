@@ -18,6 +18,8 @@ import {
   addAutofixSha,
   getTestRequestRunById,
   updateTestRequestRunState,
+  getFailingTestIdsForRun,
+  getUnexcusedFailingTestIdsForRun,
 } from '../db/queries';
 import {
   filterBaseAttributableFailuresForF2Gate,
@@ -52,7 +54,11 @@ import {
 } from '../orchestration/gateEnv';
 import { runTestCommands } from '../session/test-runner';
 import { acquireAnalyzePermit } from './analyzeSemaphore';
-import { admitTestRequest } from '../orchestration/testRequestLane';
+import {
+  admitTestRequest,
+  commandsCovered,
+  insertExcusedVerifyCoverageRun,
+} from '../orchestration/testRequestLane';
 import type {
   TestRequestRunResult,
   TestRequestRunSpec,
@@ -842,6 +848,12 @@ export class PreReviewPipeline {
               );
               return;
             }
+            if (this.reuseExcusedVerifyRun(ctx, contentHash, config.test)) {
+              logger.info(
+                `[PreReviewPipeline] tests reused excused same-tree verify run PR #${ctx.prNumber} SHA ${ctx.headSha.slice(0, 7)} — skipping`,
+              );
+              return;
+            }
           }
 
           // Cross-kind reuse (e.g. a passed 'verify' run at this hash whose
@@ -900,6 +912,54 @@ export class PreReviewPipeline {
         }
       },
     };
+  }
+
+  /**
+   * True (after writing a 'full' coverage row carrying the verify's verdict)
+   * when the latest same-tree verify run executed the test: commands and every
+   * failing test it recorded was excused by the base-attributable filter.
+   */
+  private reuseExcusedVerifyRun(
+    ctx: StageContext,
+    contentHash: string,
+    testCommands: string[],
+  ): boolean {
+    const verify = getLatestTestRequestRun(
+      ctx.project.id,
+      contentHash,
+      'verify',
+    );
+    if (!verify || verify.state !== 'failed') return false;
+    if (
+      verify.failure_reason === 'superseded' ||
+      verify.failure_reason === 'timeout' ||
+      verify.failure_reason === 'oom_killed' ||
+      verify.oom_killed
+    ) {
+      return false;
+    }
+    let recorded: string[] | null;
+    try {
+      const parsed = verify.commands ? JSON.parse(verify.commands) : null;
+      recorded = Array.isArray(parsed) ? (parsed as string[]) : null;
+    } catch {
+      recorded = null;
+    }
+    if (!commandsCovered(testCommands, recorded)) return false;
+    const failedCommand = verify.failed_command?.trim();
+    if (!failedCommand || !testCommands.some((c) => c.trim() === failedCommand))
+      return false;
+    if (getFailingTestIdsForRun(verify.id).length === 0) return false;
+    if (getUnexcusedFailingTestIdsForRun(verify.id).length > 0) return false;
+
+    insertExcusedVerifyCoverageRun({
+      projectId: ctx.project.id,
+      contentHash,
+      worktreePath: ctx.worktreePath,
+      commands: testCommands,
+      source: verify,
+    });
+    return true;
   }
 
   /**
