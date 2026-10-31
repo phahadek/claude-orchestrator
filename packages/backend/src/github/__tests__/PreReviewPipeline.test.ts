@@ -2317,10 +2317,7 @@ describe('PreReviewPipeline — tests record stage (non-blocking)', () => {
         ([spec]) => (spec as { commands: string[] }).commands[0] === 'npm test',
       );
     const runPipeline = () =>
-      new PreReviewPipeline(makeSessionManager()).run(
-        makeJob(),
-        makeProject(),
-      );
+      new PreReviewPipeline(makeSessionManager()).run(makeJob(), makeProject());
 
     afterEach(() => {
       mockGetLatestTestRequestRun.mockReset().mockReturnValue(undefined);
