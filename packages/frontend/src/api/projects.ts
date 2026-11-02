@@ -391,7 +391,7 @@ export const projectsApi = {
   },
 };
 
-export interface SessionEventRecord {
+interface SessionEventRecord {
   eventType: EventType;
   content: string;
   timestamp: number;

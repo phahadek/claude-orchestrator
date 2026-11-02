@@ -641,6 +641,7 @@ export function createDeployRouter(): Router {
       deployedShaRecordedAt: deployedShaRow?.recordedAt ?? null,
       behind: { count: behindItems.length, items: behindItems },
       plan,
+      playbookError: playbookResult.ok ? null : playbookResult.reason,
     });
   });
 

@@ -21,6 +21,7 @@ export function DeploySection({ activeProjectId }: Props) {
   const [deployRun, setDeployRun] = useState<DeployRun | null>(null);
   const [deployEvents, setDeployEvents] = useState<DeployRunEvent[]>([]);
   const [deployPlan, setDeployPlan] = useState<DeployPlanStep[]>([]);
+  const [playbookError, setPlaybookError] = useState<string | null>(null);
   const [deployLogExpanded, setDeployLogExpanded] = useState(false);
   const [dismissedDeployRunId, setDismissedDeployRunId] = useState<
     string | null
@@ -44,6 +45,7 @@ export function DeploySection({ activeProjectId }: Props) {
         setDeployedSha(result.deployedSha ?? null);
         setDeployBehind(result.behind ?? { count: 0, items: [] });
         setDeployPlan(result.plan ?? []);
+        setPlaybookError(result.playbookError ?? null);
       })
       .catch(() => {
         /* transient poll failures don't clear the last-known run state */
@@ -56,6 +58,7 @@ export function DeploySection({ activeProjectId }: Props) {
       setDeployRun(null);
       setDeployEvents([]);
       setDeployPlan([]);
+      setPlaybookError(null);
       setDeployedSha(null);
       setDeployBehind({ count: 0, items: [] });
       setDeployConfirmArmed(false);
@@ -103,7 +106,12 @@ export function DeploySection({ activeProjectId }: Props) {
             <button
               className={styles.deployButton}
               onClick={launchDeploy}
-              disabled={deployLaunching || deployRun?.status === 'running'}
+              disabled={
+                deployLaunching ||
+                deployRun?.status === 'running' ||
+                playbookError !== null
+              }
+              title={playbookError ?? undefined}
               data-testid="deploy-launch-button"
             >
               {deployRun?.status === 'running'
@@ -124,7 +132,12 @@ export function DeploySection({ activeProjectId }: Props) {
           <button
             className={styles.deployButton}
             onClick={() => setDeployConfirmArmed(true)}
-            disabled={deployLaunching || deployRun?.status === 'running'}
+            disabled={
+              deployLaunching ||
+              deployRun?.status === 'running' ||
+              playbookError !== null
+            }
+            title={playbookError ?? undefined}
             data-testid="deploy-review-button"
           >
             {deployRun?.status === 'running'
@@ -203,7 +216,13 @@ export function DeploySection({ activeProjectId }: Props) {
             </p>
           );
         })()}
-      {deployRun &&
+      {playbookError !== null && (
+        <p className={styles.error} data-testid="deploy-playbook-error">
+          Deploy playbook failed to load: {playbookError}
+        </p>
+      )}
+      {playbookError === null &&
+        deployRun &&
         deployRun.run_id !== dismissedDeployRunId &&
         deployPlan.length > 0 && (
           <DeployStepStrip plan={deployPlan} events={deployEvents} />

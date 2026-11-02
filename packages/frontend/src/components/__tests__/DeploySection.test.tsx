@@ -243,4 +243,59 @@ describe('DeploySection launch control', () => {
     });
     expect(strip.querySelectorAll('li')).toHaveLength(10);
   });
+
+  it('renders the playbook error and disables launch instead of the step strip when playbookError is set', async () => {
+    deployApiMock.getStatus.mockResolvedValue({
+      run: {
+        run_id: 'run-111',
+        project: 'proj-1',
+        target_sha: 'abc111',
+        current_step: null,
+        status: 'succeeded',
+        started_at: '2026-07-20T00:00:00.000Z',
+        completed_at: '2026-07-20T00:05:00.000Z',
+      },
+      events: [],
+      deployedSha: null,
+      deployedShaRecordedAt: null,
+      behind: { count: 0, items: [] },
+      plan: [],
+      playbookError: 'steps[3].is_prod_mutating must be a boolean',
+    });
+
+    render(<DeploySection activeProjectId="proj-1" />);
+
+    const error = await screen.findByTestId('deploy-playbook-error');
+    expect(error.textContent).toContain('is_prod_mutating must be a boolean');
+    expect(screen.queryByTestId('deploy-step-strip')).toBeNull();
+    const review = (await screen.findByTestId(
+      'deploy-review-button',
+    )) as HTMLButtonElement;
+    expect(review.disabled).toBe(true);
+  });
+
+  it('renders the step strip and no error when playbookError is null', async () => {
+    deployApiMock.getStatus.mockResolvedValue({
+      run: {
+        run_id: 'run-222',
+        project: 'proj-1',
+        target_sha: 'abc222',
+        current_step: null,
+        status: 'running',
+        started_at: '2026-07-20T00:00:00.000Z',
+        completed_at: null,
+      },
+      events: [],
+      deployedSha: null,
+      deployedShaRecordedAt: null,
+      behind: { count: 0, items: [] },
+      plan: [{ id: 'deploy', description: null }],
+      playbookError: null,
+    });
+
+    render(<DeploySection activeProjectId="proj-1" />);
+
+    expect(await screen.findByTestId('deploy-step-strip')).toBeTruthy();
+    expect(screen.queryByTestId('deploy-playbook-error')).toBeNull();
+  });
 });
