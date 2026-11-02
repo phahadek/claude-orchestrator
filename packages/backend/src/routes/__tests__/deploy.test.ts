@@ -464,6 +464,7 @@ describe('GET /api/deploy/status', () => {
       deployedShaRecordedAt: null,
       behind: { count: 0, items: [] },
       plan: [],
+      playbookError: 'unknown project claude-orchestrator',
     });
   });
 
