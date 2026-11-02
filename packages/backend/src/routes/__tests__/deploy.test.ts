@@ -278,6 +278,7 @@ describe('GET /api/deploy/status', () => {
       deployedShaRecordedAt: null,
       behind: { count: 0, items: [] },
       plan: [],
+      playbookError: 'unknown project claude-orchestrator',
     });
   });
 
@@ -296,6 +297,7 @@ describe('GET /api/deploy/status', () => {
       deployedShaRecordedAt: null,
       behind: { count: 0, items: [] },
       plan: [],
+      playbookError: 'unknown project claude-orchestrator',
     });
   });
 
@@ -333,6 +335,42 @@ describe('GET /api/deploy/status', () => {
       { id: 'fetch', description: null },
       { id: 'build', description: 'npm run build' },
     ]);
+    expect(res.body.playbookError).toBeNull();
+  });
+
+  it('surfaces the loader reason as playbookError, with plan: [] and 200, when the playbook fails validation', async () => {
+    deployServiceMock.getLatestDeployRun.mockReturnValue(undefined);
+    deployServiceMock.listDeployRunEvents.mockReturnValue([]);
+    queriesMock.getProjectRowById.mockReturnValue({
+      id: 'claude-orchestrator',
+      project_dir: '/repo/claude-orchestrator',
+    });
+    loadPlaybookMock.loadDeployPlaybook.mockReturnValue({
+      ok: false,
+      reason: 'steps[3].is_prod_mutating must be a boolean',
+    });
+
+    const res = await request(makeApp()).get(
+      '/api/deploy/status?projectId=claude-orchestrator',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.plan).toEqual([]);
+    expect(res.body.playbookError).toContain(
+      'is_prod_mutating must be a boolean',
+    );
+  });
+
+  it('names the unknown project in playbookError', async () => {
+    deployServiceMock.getLatestDeployRun.mockReturnValue(undefined);
+    queriesMock.getProjectRowById.mockReturnValue(undefined);
+
+    const res = await request(makeApp()).get(
+      '/api/deploy/status?projectId=nope',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.playbookError).toBe('unknown project nope');
   });
 
   it('returns plan: [] with a 200 for a project whose playbook is missing or invalid', async () => {
