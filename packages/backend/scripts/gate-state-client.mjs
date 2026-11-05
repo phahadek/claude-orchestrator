@@ -19,6 +19,7 @@
 //   node gate-state-client.mjs approve <gateItemId> [operator]
 //   node gate-state-client.mjs reopen <gateItemId> [reason] [operator]
 //   node gate-state-client.mjs discard <gateItemId> <reason> [operator]
+//   node gate-state-client.mjs defer <gateItemId> <evidence> [operator]
 //   node gate-state-client.mjs reclassify <gateItemId> <classification> [operator]
 //   node gate-state-client.mjs accrete <json-payload>
 //   node gate-state-client.mjs carry-forward <gateItemId> <milestone>
@@ -45,7 +46,9 @@
 // pass, fail (requires `filedFollowon`), needs-setup (requires `evidence`),
 // not-yet-triggerable (requires `evidence`). `noted`, `deferred`,
 // `discarded` and disposition-less events are rejected with 400 on this
-// path (the client marks its requests as gate-session requests).
+// path (the client marks its requests as gate-session requests). An
+// operator-directed deferral goes through the `defer` verb instead, which
+// posts `deferred` without the gate-session header (like `discard`).
 //
 // Env:
 //   ORCHESTRATOR_BACKEND_HOST backend loopback host (default 127.0.0.1)
@@ -232,6 +235,26 @@ export function discardGateItem({
   });
 }
 
+export function deferGateItem({
+  host,
+  port,
+  token,
+  gateItemId,
+  evidence,
+  operator,
+}) {
+  const payload = { disposition: 'deferred', evidence };
+  if (operator !== undefined) payload.operator = operator;
+  return requestGateState({
+    host,
+    port,
+    token,
+    method: 'POST',
+    path: `/api/gate/items/${encodeURIComponent(gateItemId)}/events`,
+    payload,
+  });
+}
+
 export function reclassifyGateItem({
   host,
   port,
@@ -304,6 +327,7 @@ const USAGE =
   '  node gate-state-client.mjs approve <gateItemId> [operator]\n' +
   '  node gate-state-client.mjs reopen <gateItemId> [reason] [operator]\n' +
   '  node gate-state-client.mjs discard <gateItemId> <reason> [operator]\n' +
+  '  node gate-state-client.mjs defer <gateItemId> <evidence> [operator]\n' +
   '  node gate-state-client.mjs reclassify <gateItemId> <classification> [operator]\n' +
   '  node gate-state-client.mjs accrete <json-payload>\n' +
   '  node gate-state-client.mjs carry-forward <gateItemId> <milestone>';
@@ -405,6 +429,17 @@ async function main() {
         token,
         gateItemId,
         reason,
+        operator,
+      });
+    } else if (command === 'defer') {
+      const [gateItemId, evidence, operator] = rest;
+      if (!gateItemId || !evidence || !evidence.trim()) return fail(USAGE);
+      result = await deferGateItem({
+        host,
+        port,
+        token,
+        gateItemId,
+        evidence,
         operator,
       });
     } else if (command === 'reclassify') {
