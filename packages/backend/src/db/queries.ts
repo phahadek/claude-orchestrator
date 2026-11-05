@@ -5474,6 +5474,18 @@ export interface TaskAggregateRow {
   depth_review_verdict: string | null;
 }
 
+/** Returns the given ids present in task_cache, ordered as getActiveTaskAggregates orders its rows (fetched_at DESC). */
+export function getTaskIdsOrderedByFetchedAt(taskIds: string[]): string[] {
+  if (taskIds.length === 0) return [];
+  const placeholders = taskIds.map(() => '?').join(', ');
+  const rows = db
+    .prepare(
+      `SELECT task_id FROM task_cache WHERE task_id IN (${placeholders}) ORDER BY fetched_at DESC`,
+    )
+    .all(...taskIds) as Array<{ task_id: string }>;
+  return rows.map((r) => r.task_id);
+}
+
 export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
   if (taskIds.length === 0) return [];
   const placeholders = taskIds.map(() => '?').join(', ');

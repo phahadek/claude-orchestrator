@@ -8,6 +8,7 @@ import { getTaskBackend } from '../tasks/TaskBackend';
 import {
   getTaskCache,
   getActiveTaskAggregates,
+  getTaskIdsOrderedByFetchedAt,
   clearTaskPauseReason,
   resetTaskCrashCount,
   deleteTaskCacheRow,
@@ -50,7 +51,11 @@ import {
   executionSortKey,
 } from '../orchestration/executionPriority';
 import { rerankTestLaneProject } from '../orchestration/testRequestLane';
+import { yieldToEventLoop } from '../utils/concurrency';
 import yaml from 'js-yaml';
+
+/** Task ids per aggregate read / view-build slice in GET /tasks/active (~40 ms on a 629-task board). */
+const ACTIVE_BUILD_CHUNK = 100;
 import { asyncHandler } from './asyncHandler';
 import { composeReviewFixMessage } from './reviewFixMessage';
 export type { TaskView } from '../ws/types';
@@ -908,16 +913,28 @@ export function createTasksRouter(
       }
       const taskIds = allBoardTasks.map((t) => t.id);
 
-      const aggregates = getActiveTaskAggregates(taskIds);
+      const orderedIds = getTaskIdsOrderedByFetchedAt(taskIds);
       const cap = getReviewIterationCap();
-      const views: TaskView[] = aggregates
-        .map((row) => buildTaskViewFromRow(row, cap))
-        .filter((v) => !v.notionStatus.includes('Deferred'));
+      const views: TaskView[] = [];
+      for (let i = 0; i < orderedIds.length; i += ACTIVE_BUILD_CHUNK) {
+        await yieldToEventLoop();
+        const aggregates = getActiveTaskAggregates(
+          orderedIds.slice(i, i + ACTIVE_BUILD_CHUNK),
+        );
+        for (const row of aggregates) {
+          const v = buildTaskViewFromRow(row, cap);
+          if (!v.notionStatus.includes('Deferred')) views.push(v);
+        }
+      }
 
+      await yieldToEventLoop();
       resolveDependencyBlocking(views, allBoardTasks);
+      await yieldToEventLoop();
       applyExecutionRanks(views, allBoardTasks, projectId);
 
+      await yieldToEventLoop();
       annotateGroomDepBlocking(views, allBoardTasks, projectId);
+      await yieldToEventLoop();
 
       await annotateOpsDepBlocking(views, allBoardTasks, projectId);
 
