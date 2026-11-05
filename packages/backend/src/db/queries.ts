@@ -14703,6 +14703,169 @@ export function supersedeStagedIntent(
   return getStagedIntent(newRow.id) as StagedIntentRow;
 }
 
+export class DecisionSupersedeError extends Error {
+  constructor(
+    public readonly code:
+      | 'target_not_found'
+      | 'target_not_decision'
+      | 'target_wrong_project'
+      | 'target_not_committed'
+      | 'successor_not_found'
+      | 'successor_not_decision'
+      | 'successor_wrong_project'
+      | 'successor_not_committed'
+      | 'successor_is_target'
+      | 'successor_already_linked',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'DecisionSupersedeError';
+  }
+}
+
+/**
+ * Operator-authorized supersession of a committed decision.pickOne, across
+ * sessions. One transaction: the target moves committed -> superseded (an edge
+ * the per-intent state machine deliberately omits, so it is written directly),
+ * the successor — an existing committed decision in the same project, or a
+ * new committed row — gets `supersedes` = target, and one audit row is written.
+ */
+export function supersedeCommittedDecision(opts: {
+  targetId: string;
+  projectId: string;
+  successorId?: string;
+  newSuccessor?: StagedIntentRow;
+  operatorId: string | null;
+  decidingTaskId: string;
+  reason: string | null;
+}): { target: StagedIntentRow; successor: StagedIntentRow } {
+  const tx = db.transaction(() => {
+    const target = getStagedIntent(opts.targetId);
+    if (!target) {
+      throw new DecisionSupersedeError(
+        'target_not_found',
+        `decision "${opts.targetId}" not found`,
+      );
+    }
+    if (target.kind !== 'decision.pickOne') {
+      throw new DecisionSupersedeError(
+        'target_not_decision',
+        `"${opts.targetId}" is a ${target.kind} intent, not a decision.pickOne`,
+      );
+    }
+    if (target.project_id !== opts.projectId) {
+      throw new DecisionSupersedeError(
+        'target_wrong_project',
+        `decision "${opts.targetId}" belongs to a different project`,
+      );
+    }
+    if (target.state !== 'committed') {
+      throw new DecisionSupersedeError(
+        'target_not_committed',
+        `decision "${opts.targetId}" is ${target.state}, only a committed decision can be superseded`,
+      );
+    }
+
+    let successorId: string;
+    if (opts.newSuccessor) {
+      successorId = opts.newSuccessor.id;
+    } else {
+      successorId = opts.successorId as string;
+      if (successorId === opts.targetId) {
+        throw new DecisionSupersedeError(
+          'successor_is_target',
+          'a decision cannot supersede itself',
+        );
+      }
+      const existing = getStagedIntent(successorId);
+      if (!existing) {
+        throw new DecisionSupersedeError(
+          'successor_not_found',
+          `successor decision "${successorId}" not found`,
+        );
+      }
+      if (existing.kind !== 'decision.pickOne') {
+        throw new DecisionSupersedeError(
+          'successor_not_decision',
+          `successor "${successorId}" is not a decision.pickOne`,
+        );
+      }
+      if (existing.project_id !== opts.projectId) {
+        throw new DecisionSupersedeError(
+          'successor_wrong_project',
+          `successor "${successorId}" belongs to a different project`,
+        );
+      }
+      if (existing.state !== 'committed') {
+        throw new DecisionSupersedeError(
+          'successor_not_committed',
+          `successor "${successorId}" is ${existing.state}, it must be committed`,
+        );
+      }
+      if (existing.supersedes) {
+        throw new DecisionSupersedeError(
+          'successor_already_linked',
+          `successor "${successorId}" already supersedes "${existing.supersedes}"`,
+        );
+      }
+    }
+
+    const now = Date.now();
+    db.prepare(
+      `UPDATE staged_intent SET state = 'superseded', updated_at = ? WHERE id = ?`,
+    ).run(now, target.id);
+    if (opts.newSuccessor) {
+      insertStagedIntent({ ...opts.newSuccessor, supersedes: target.id });
+    } else {
+      db.prepare(
+        `UPDATE staged_intent SET supersedes = ?, updated_at = ? WHERE id = ?`,
+      ).run(target.id, now, successorId);
+    }
+    recordEvent({
+      event_type: 'decision_superseded',
+      actor_type: 'operator',
+      actor_id: opts.operatorId,
+      project_id: opts.projectId,
+      task_id: opts.decidingTaskId,
+      payload: {
+        supersededDecisionId: target.id,
+        successorDecisionId: successorId,
+        restaged: Boolean(opts.newSuccessor),
+        decidingTaskId: opts.decidingTaskId,
+        reason: opts.reason,
+      },
+    });
+    return {
+      target: getStagedIntent(target.id) as StagedIntentRow,
+      successor: getStagedIntent(successorId) as StagedIntentRow,
+    };
+  });
+  return tx();
+}
+
+/** Rows of one project filtered by kind and a set of states, newest first — backs the decision-store read route. */
+export function listStagedIntentsByProjectKindStates(
+  projectId: string,
+  kind: string | null,
+  states: StagedIntentState[],
+): StagedIntentRow[] {
+  const clauses = ['project_id = ?'];
+  const params: unknown[] = [projectId];
+  if (kind) {
+    clauses.push('kind = ?');
+    params.push(kind);
+  }
+  if (states.length > 0) {
+    clauses.push(`state IN (${states.map(() => '?').join(',')})`);
+    params.push(...states);
+  }
+  return db
+    .prepare(
+      `SELECT * FROM staged_intent WHERE ${clauses.join(' AND ')} ORDER BY created_at DESC`,
+    )
+    .all(...params) as StagedIntentRow[];
+}
+
 let _stmtSetStagedIntentAnnotation: Database.Statement | null = null;
 
 /** Sets the blocked-apply annotation without moving the intent off its current state. */
