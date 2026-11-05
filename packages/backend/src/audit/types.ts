@@ -1,4 +1,5 @@
 type EventType =
+  | 'decision_superseded'
   | 'session_launched'
   | 'commit'
   | 'pr_opened'

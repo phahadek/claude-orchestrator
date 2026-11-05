@@ -90,6 +90,9 @@ import {
   findActiveDecisionPickOneForSession,
   transitionStagedIntent,
   supersedeStagedIntent,
+  supersedeCommittedDecision,
+  DecisionSupersedeError,
+  listStagedIntentsByProjectKindStates,
   setStagedIntentAnnotation,
   setStagedIntentAppliedTaskId,
   setStagedIntentGroup,
@@ -128,6 +131,7 @@ import {
 } from '../tasks/taskId';
 import { NotionApiError } from '../notion/types';
 import { recordEvent } from '../audit/AuditLog';
+import { requireDeviceAuth } from '../auth/DeviceAuth';
 import type {
   GateContributionSourceTask,
   GateContributionItemInput,
@@ -7699,6 +7703,17 @@ export async function pushBackGroupToOriginatingSession(
 }
 
 /** Active + blocked — the decision-inbox visibility surface: a blocked member must stay visible so the operator can decline it, not vanish the instant it falls out of ACTIVE_STATES. */
+const ALL_STAGED_INTENT_STATES: StagedIntentState[] = [
+  'staged',
+  'pending_verification',
+  'needs_revision',
+  'approved',
+  'committed',
+  'rejected',
+  'superseded',
+  'withdrawn',
+];
+
 const VISIBLE_STATES: StagedIntentState[] = [
   ...ACTIVE_STATES,
   ...BLOCKED_STATES,
@@ -10117,6 +10132,32 @@ export function createStagedIntentsRouter(
       return;
     }
 
+    const kindFilter =
+      typeof req.query.kind === 'string' ? req.query.kind : null;
+    const stateFilter =
+      typeof req.query.state === 'string' ? req.query.state : null;
+    if (projectId && !sessionId && (kindFilter || stateFilter)) {
+      const states = (stateFilter ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const invalid = states.find(
+        (s) => !ALL_STAGED_INTENT_STATES.includes(s as StagedIntentState),
+      );
+      if (invalid) {
+        res.status(400).json({ error: `unknown state "${invalid}"` });
+        return;
+      }
+      const filtered = listStagedIntentsByProjectKindStates(
+        projectId,
+        kindFilter,
+        states as StagedIntentState[],
+      );
+      const cache = createRowToApiCache();
+      res.json({ intents: filtered.map((r) => rowToApi(r, cache)) });
+      return;
+    }
+
     const rows = (
       sessionId
         ? listStagedIntentsBySession(sessionId).filter((r) =>
@@ -10129,6 +10170,154 @@ export function createStagedIntentsRouter(
     const cache = createRowToApiCache();
     res.json({ intents: rows.map((r) => rowToApi(r, cache)) });
   });
+
+  // ── POST /api/staged-intents/decision-supersede ──────────────────────────
+  // Device-authed direct write (no intent kind, so a dispatched stage-token
+  // session cannot reach it): supersedes an already-committed decision.pickOne.
+  router.post(
+    '/staged-intents/decision-supersede',
+    requireDeviceAuth,
+    (req: Request, res: Response) => {
+      const device = (req as Request & { device?: { id: string } }).device;
+      if (!device) {
+        res
+          .status(401)
+          .json({ error: 'unauthorized', code: 'device_not_enrolled' });
+        return;
+      }
+      const body = (req.body ?? {}) as {
+        projectId?: unknown;
+        targetId?: unknown;
+        successorId?: unknown;
+        successor?: {
+          payload?: unknown;
+          decisionProposal?: unknown;
+          investigation?: unknown;
+          answer?: unknown;
+          milestone?: unknown;
+        } | null;
+        decidingTaskId?: unknown;
+        reason?: unknown;
+      };
+      const str = (v: unknown) =>
+        typeof v === 'string' && v.trim() ? v.trim() : null;
+      const projectId = str(body.projectId);
+      const targetId = str(body.targetId);
+      const successorId = str(body.successorId);
+      const decidingTaskId = str(body.decidingTaskId);
+      const reason = str(body.reason);
+      if (!projectId || !targetId || !decidingTaskId) {
+        res.status(400).json({
+          error: 'projectId, targetId and decidingTaskId are required',
+        });
+        return;
+      }
+      if (Boolean(successorId) === Boolean(body.successor)) {
+        res.status(400).json({
+          error: 'exactly one of successorId or successor must be provided',
+        });
+        return;
+      }
+
+      let newSuccessor: StagedIntentRow | undefined;
+      if (body.successor) {
+        const s = body.successor;
+        const decisionProposal = str(s.decisionProposal);
+        const investigation = str(s.investigation);
+        try {
+          validateDecisionPickOnePayload(
+            s.payload,
+            null,
+            decisionProposal,
+            investigation,
+          );
+        } catch (err) {
+          if (err instanceof DecisionPickOneValidationError) {
+            res.status(400).json({ error: err.message });
+            return;
+          }
+          throw err;
+        }
+        const ans = (s.answer ?? {}) as {
+          chosenLabel?: unknown;
+          freeForm?: unknown;
+        };
+        const answer: StagedIntentAnswer = {
+          chosenLabel: str(ans.chosenLabel),
+          freeForm: str(ans.freeForm),
+        };
+        if (!answer.chosenLabel && !answer.freeForm) {
+          res.status(400).json({
+            error: 'successor.answer needs a chosenLabel or freeForm',
+          });
+          return;
+        }
+        let milestone: string | null = null;
+        const rawMilestone = str(s.milestone);
+        if (rawMilestone) {
+          try {
+            milestone = resolveMilestoneForProject(projectId, rawMilestone);
+          } catch (err) {
+            if (err instanceof UnknownMilestoneError) {
+              res.status(400).json({ error: err.message });
+              return;
+            }
+            throw err;
+          }
+        }
+        const now = Date.now();
+        newSuccessor = {
+          id: randomUUID(),
+          kind: 'decision.pickOne',
+          payload: JSON.stringify(s.payload),
+          payload_hash: hashIntentPayload(s.payload),
+          task_id: null,
+          project_id: projectId,
+          session_id: null,
+          group_id: null,
+          milestone,
+          state: 'committed',
+          supersedes: null,
+          annotation: null,
+          decision_proposal: decisionProposal,
+          investigation,
+          groom_proposal: null,
+          advisory: null,
+          disposition_reason: null,
+          answer: JSON.stringify(answer),
+          applied_task_id: null,
+          created_at: now,
+          updated_at: now,
+        };
+      }
+
+      try {
+        const result = supersedeCommittedDecision({
+          targetId,
+          projectId,
+          successorId: successorId ?? undefined,
+          newSuccessor,
+          operatorId: device.id,
+          decidingTaskId,
+          reason,
+        });
+        const cache = createRowToApiCache();
+        const superseded = rowToApi(result.target, cache);
+        const successor = rowToApi(result.successor, cache);
+        broadcastIntentChange(superseded);
+        broadcastIntentChange(successor);
+        res.status(200).json({ superseded, successor });
+      } catch (err) {
+        if (err instanceof DecisionSupersedeError) {
+          res
+            .status(err.code.endsWith('not_found') ? 404 : 409)
+            .json({ error: err.message, code: err.code });
+          return;
+        }
+        throw err;
+      }
+    },
+  );
 
   // ── POST /api/staged-intents ─────────────────────────────────────────────
   router.post(
