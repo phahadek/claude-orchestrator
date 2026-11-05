@@ -79,6 +79,53 @@ describe('classifyStalledPR — gate_failed', () => {
     expect(classifyStalledPR(pr, null)).toEqual({ kind: 'gate_failed' });
   });
 
+  it.each(['autofix_failed', 'verify_failed'])(
+    'returns null for a %s PR while the pre-review pipeline is in flight',
+    (verdict) => {
+      const pr = makePR({ review_result: JSON.stringify({ verdict }) });
+
+      expect(
+        classifyStalledPR(
+          pr,
+          null,
+          null,
+          false,
+          null,
+          Infinity,
+          false,
+          false,
+          true, // isPreReviewPipelineInFlight
+        ),
+      ).toBeNull();
+    },
+  );
+
+  it.each([0, 1])(
+    'still classifies gate-failed verdicts as gate_failed when not in flight (pending_push=%i)',
+    (pending_push) => {
+      for (const verdict of ['autofix_failed', 'verify_failed']) {
+        const pr = makePR({
+          review_result: JSON.stringify({ verdict }),
+          pending_push,
+        });
+
+        expect(
+          classifyStalledPR(
+            pr,
+            null,
+            null,
+            false,
+            null,
+            Infinity,
+            false,
+            false,
+            false,
+          ),
+        ).toEqual({ kind: 'gate_failed' });
+      }
+    },
+  );
+
   it('does not classify a gate_timeout_infra_failure PR as gate_failed', () => {
     const pr = makePR({
       review_result: JSON.stringify({ verdict: 'gate_timeout_infra_failure' }),

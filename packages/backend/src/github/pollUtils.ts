@@ -164,8 +164,12 @@ export function classifyStalledPR(
   // was established (db.ts:278) and consumePendingPushIfSet no-ops without a
   // live session to notify — the reconciler still re-drives it (consuming the
   // pending push itself) rather than treating it as recoverable via the normal
-  // push-detected path.
-  if (verdict === 'autofix_failed' || verdict === 'verify_failed') {
+  // push-detected path. Skipped while the pipeline is in flight: a re-entered
+  // run parked on an analyze permit still carries the previous failed verdict.
+  if (
+    (verdict === 'autofix_failed' || verdict === 'verify_failed') &&
+    !isPreReviewPipelineInFlight
+  ) {
     return { kind: 'gate_failed' };
   }
 
