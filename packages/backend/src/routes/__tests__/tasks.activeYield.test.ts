@@ -104,17 +104,42 @@ describe('GET /api/tasks/active chunked build', () => {
     });
   }
 
-  it('summary shape is the full shape projected, same order', async () => {
-    const full = await supertest(buildApp()).get(
-      '/api/tasks/active?projectId=proj-1&shape=full',
-    );
-    const summary = await supertest(buildApp()).get(
-      '/api/tasks/active?projectId=proj-1&shape=summary',
-    );
-    const f = full.body as { tasks: Array<{ taskId: string }> };
-    const s = summary.body as { tasks: Array<{ taskId: string }> };
-    expect(s.tasks.map((t) => t.taskId)).toEqual(f.tasks.map((t) => t.taskId));
-  });
+  // Reference build: a one-task board is a single chunk with no chunk boundary,
+  // so it is the unchunked build of that row. The tasks are independent
+  // (no dependsOn), so the 350-task board must yield identical views.
+  for (const shape of ['full', 'summary'] as const) {
+    it(`each view on the ${N}-task board deep-equals its unchunked build for shape=${shape}`, async () => {
+      const big = await supertest(buildApp()).get(
+        `/api/tasks/active?projectId=proj-1&shape=${shape}`,
+      );
+      const bigTasks = (
+        big.body as {
+          tasks: Array<Record<string, unknown> & { taskId: string }>;
+        }
+      ).tasks;
+      expect(bigTasks).toHaveLength(N);
+
+      const byId = new Map(bigTasks.map((t) => [t.taskId, t]));
+      for (let i = 0; i < N; i += 7) {
+        const id = ids[i];
+        m.getTaskCache.mockReturnValue({
+          raw_json: JSON.stringify([
+            { id, title: id, status: '🗂️ Ready', dependsOn: [] },
+          ]),
+          fetched_at: Date.now(),
+        });
+        m.getTaskIdsOrderedByFetchedAt.mockReturnValue([id]);
+        const single = await supertest(buildApp()).get(
+          `/api/tasks/active?projectId=proj-1&shape=${shape}`,
+        );
+        const [ref] = (single.body as { tasks: Array<Record<string, unknown>> })
+          .tasks;
+        const { executionRank: _a, ...refRest } = ref;
+        const { executionRank: _b, ...bigRest } = byId.get(id)!;
+        expect(bigRest).toEqual(refRest);
+      }
+    });
+  }
 
   it('yields to the event loop before the response is sent', async () => {
     let immediateRan = false;
