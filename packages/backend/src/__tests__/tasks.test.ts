@@ -11,6 +11,7 @@ vi.mock('../db/queries.js', () =>
   mockDbQueries({
     getTaskCache: vi.fn(),
     getActiveTaskAggregates: vi.fn(),
+    getTaskIdsOrderedByFetchedAt: vi.fn((ids: string[]) => ids),
     getSetting: vi.fn().mockReturnValue(null),
     getMilestoneById: vi.fn().mockReturnValue(null),
     clearTaskPauseReason: vi.fn(),
