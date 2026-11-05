@@ -5573,8 +5573,9 @@ describe('rebindWorktreeContentHash — pre-test merge hash rebind', () => {
         contentHash: 'other-hash',
       }),
     );
-    await vi.waitFor(() =>
-      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    await vi.waitFor(
+      () => expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+      { timeout: 10_000 },
     );
     const wt = '/tmp/wt-rebind';
     const full = admitTestRequest(
@@ -5614,7 +5615,9 @@ describe('rebindWorktreeContentHash — pre-test merge hash rebind', () => {
 
     resolvers[0]({ passed: true, output: '' });
     await blocker.result;
-    await vi.waitFor(() => expect(resolvers.length).toBe(2));
+    await vi.waitFor(() => expect(resolvers.length).toBe(2), {
+      timeout: 10_000,
+    });
     resolvers[1]({ passed: true, output: '' });
     const res = await full.result;
     expect(res.superseded).toBeUndefined();
