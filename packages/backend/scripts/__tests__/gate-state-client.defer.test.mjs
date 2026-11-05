@@ -4,7 +4,9 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { deferGateItem, appendGateItemEvent } from '../gate-state-client.mjs';
 
-const CLIENT = fileURLToPath(new URL('../gate-state-client.mjs', import.meta.url));
+const CLIENT = fileURLToPath(
+  new URL('../gate-state-client.mjs', import.meta.url),
+);
 
 let server;
 let requests;
@@ -93,7 +95,10 @@ describe('gate-state-client.mjs — deferGateItem', () => {
       gateItemId: 'gi-1',
       evidence: 'why',
     });
-    expect(requests[0].body).toEqual({ disposition: 'deferred', evidence: 'why' });
+    expect(requests[0].body).toEqual({
+      disposition: 'deferred',
+      evidence: 'why',
+    });
   });
 
   it('CLI defer with missing or empty evidence exits non-zero and makes no request', async () => {
