@@ -142,7 +142,9 @@ unattended while still keeping a human on every close.
   unknown state. Capture + **file the fix**; don't loop on restarts.
 - **Drill-budget / conversion tripwire — it caps *fixing*, never *understanding*.** Diagnostic
   depth has **no budget**: an Investigation digs until the root cause is *proven* (see § 🔎
-  Investigation). What the budget stops is **open-ended *doing* solo** — implementing a fix, building
+  Investigation). **A diagnosis is never paused to ask whether to continue** — carry it to the proven
+  root cause and report; the only legitimate stops are a genuine external / access blocker, or the
+  work turning from diagnosing to implementing. What the budget stops is **open-ended *doing* solo** — implementing a fix, building
   a module, excavating a large change. The moment the work turns from *diagnosing* to *implementing*,
   **stop — file a Code task carrying the proven root cause, capture the state, and surface it.**
   Don't build solo. Concretely:
@@ -666,6 +668,12 @@ Step 5 is where this skill is most often mishandled. Codified:
   "and also X" or "next up is Y" onto the turn that closes the current one. This is the review
   unit: **one task per closing message** — sub-decisions inside a research-first Operational task
   happen *within* that task's close, not as separate advancing steps.
+  **Exception — operator-requested batching.** When the operator explicitly asks to batch **and**
+  pre-authorizes execution, the session may work several low-risk, mechanically verifiable tasks in
+  one turn and present **one consolidated close** listing each task's outcome, filed follow-ons and
+  proposed status. Every task still gets its own outcome entry, and the operator still confirms each
+  Done. Present-before-apply still applies to anything the pre-authorization doesn't cover (a new
+  write class, a changed plan), and a classifier block still stops the action.
 - **Open each task with context — never cold.** Lead with (a) what the task is *for* and (b) what
   the read-only diagnosis *found*; then the decision / recommendation. The operator should be able
   to engage from your message alone, without re-reading the task body.
