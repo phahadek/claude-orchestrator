@@ -232,9 +232,9 @@ describe('GET /staged-intents with kind/state filters', () => {
 
     expect(res.status).toBe(200);
     const byId = Object.fromEntries(
-      (res.body.intents as Array<{ id: string; supersedes: string | null }>).map(
-        (i) => [i.id, i.supersedes],
-      ),
+      (
+        res.body.intents as Array<{ id: string; supersedes: string | null }>
+      ).map((i) => [i.id, i.supersedes]),
     );
     expect(Object.keys(byId).sort()).toEqual(['dec-new', 'dec-old']);
     expect(byId['dec-new']).toBe('dec-old');
