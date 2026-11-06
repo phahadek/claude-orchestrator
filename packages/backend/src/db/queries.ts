@@ -15755,16 +15755,28 @@ function passRateOfBands(counts: TestRunBandCounts): number | null {
   return denominator > 0 ? counts.executed_passed / denominator : null;
 }
 
+// Failure rows only matter for a failed, non-reused run (the sole bands that
+// read them); gating keeps passed/reused runs from paying for the subqueries.
+// Each subquery is served by idx_test_run_results_run_id.
 const CLASSIFIER_FAILURE_COUNT_COLUMNS = `
-  (SELECT COUNT(*) FROM test_run_results t
-     WHERE t.test_request_run_id = test_request_runs.id
-       AND t.outcome IN ('failed', 'error') AND t.excused_at IS NULL) AS unexcused_failures,
-  (SELECT COUNT(*) FROM test_run_results t
-     WHERE t.test_request_run_id = test_request_runs.id
-       AND t.outcome IN ('failed', 'error') AND t.excused_at IS NOT NULL) AS excused_failures,
-  (SELECT group_concat(DISTINCT COALESCE(t.excused_reason, 'unknown')) FROM test_run_results t
-     WHERE t.test_request_run_id = test_request_runs.id
-       AND t.outcome IN ('failed', 'error') AND t.excused_at IS NOT NULL) AS excused_reasons`;
+  CASE WHEN state = 'failed' AND coverage_source_run_id IS NULL THEN
+    (SELECT COUNT(*) FROM test_run_results t
+       WHERE t.test_request_run_id = test_request_runs.id
+         AND t.outcome IN ('failed', 'error') AND t.excused_at IS NULL)
+  ELSE 0 END AS unexcused_failures,
+  CASE WHEN state = 'failed' AND coverage_source_run_id IS NULL THEN
+    (SELECT COUNT(*) FROM test_run_results t
+       WHERE t.test_request_run_id = test_request_runs.id
+         AND t.outcome IN ('failed', 'error') AND t.excused_at IS NOT NULL)
+  ELSE 0 END AS excused_failures,
+  CASE WHEN state = 'failed' AND coverage_source_run_id IS NULL THEN
+    (SELECT group_concat(DISTINCT COALESCE(t.excused_reason, 'unknown')) FROM test_run_results t
+       WHERE t.test_request_run_id = test_request_runs.id
+         AND t.outcome IN ('failed', 'error') AND t.excused_at IS NOT NULL)
+  ELSE NULL END AS excused_reasons`;
+
+/** Upper bound on runs scanned per analytics read, keeping main-thread cost bounded regardless of window. */
+const ANALYTICS_RUN_SCAN_CAP = 20000;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_ANALYTICS_WINDOW_DAYS = 30;
@@ -15799,7 +15811,9 @@ function listFinishedRunsInWindow(
               ${CLASSIFIER_FAILURE_COUNT_COLUMNS}
        FROM test_request_runs
        WHERE project_id = @project_id AND state NOT IN ('running', 'queued')
-         AND finished_at IS NOT NULL AND finished_at >= @since`,
+         AND finished_at IS NOT NULL AND finished_at >= @since
+       ORDER BY finished_at DESC
+       LIMIT ${ANALYTICS_RUN_SCAN_CAP}`,
     )
     .all({
       project_id: projectId,
@@ -15864,6 +15878,29 @@ export function getPassRateTrend(
   return { project: projectId, windowDays: days, runKinds };
 }
 
+/** One run's queue-wait sample, or null for runs that don't count (not executed, or missing started_at/requested_at). */
+export function queueWaitSampleOf(
+  run: TestRunClassifierInput & {
+    requested_at: number | null;
+    started_at: number | null;
+  },
+  now: number = Date.now(),
+): { day: string; waitMs: number } | null {
+  if (run.started_at === null || run.requested_at === null) return null;
+  const { band } = classifyTestRequestRun(run, now);
+  if (
+    band !== 'executed_passed' &&
+    band !== 'executed_failed' &&
+    band !== 'executed_failed_all_excused' &&
+    band !== 'oom_or_timeout'
+  )
+    return null;
+  return {
+    day: utcDayOf(run.started_at),
+    waitMs: run.started_at - run.requested_at,
+  };
+}
+
 export interface QueueWaitDay extends DurationPercentiles {
   day: string;
 }
@@ -15877,19 +15914,11 @@ export function getQueueWaitDistribution(
   const days = clampAnalyticsWindowDays(windowDays);
   const samples = new Map<string, number[]>();
   for (const run of listFinishedRunsInWindow(projectId, days, now)) {
-    if (run.started_at === null || run.requested_at === null) continue;
-    const { band } = classifyTestRequestRun(run, now);
-    if (
-      band !== 'executed_passed' &&
-      band !== 'executed_failed' &&
-      band !== 'executed_failed_all_excused' &&
-      band !== 'oom_or_timeout'
-    )
-      continue;
-    const day = utcDayOf(run.started_at);
-    const list = samples.get(day) ?? [];
-    list.push(run.started_at - run.requested_at);
-    samples.set(day, list);
+    const wait = queueWaitSampleOf(run, now);
+    if (wait === null) continue;
+    const list = samples.get(wait.day) ?? [];
+    list.push(wait.waitMs);
+    samples.set(wait.day, list);
   }
   return {
     project: projectId,

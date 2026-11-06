@@ -13,6 +13,7 @@ import {
   getPassRateTrend,
   getQueueWaitDistribution,
   getSlowestAndRegressedTests,
+  queueWaitSampleOf,
   TEST_RUN_RESULTS_RETENTION_MS,
   type TestRunClassifierInput,
 } from '../queries.js';
@@ -209,6 +210,31 @@ describe('queue-wait distribution', () => {
     expect(days).toHaveLength(1);
     expect(days[0].sampleCount).toBe(1);
     expect(days[0].p50).toBe(1000);
+  });
+});
+
+describe('queueWaitSampleOf', () => {
+  it('excludes null started_at, null requested_at and reused runs', () => {
+    const base = { ...input(), requested_at: 1000, started_at: 3000 };
+    expect(queueWaitSampleOf(base, NOW)?.waitMs).toBe(2000);
+    expect(queueWaitSampleOf({ ...base, started_at: null }, NOW)).toBeNull();
+    expect(queueWaitSampleOf({ ...base, requested_at: null }, NOW)).toBeNull();
+    expect(
+      queueWaitSampleOf({ ...base, coverage_source_run_id: 'src' }, NOW),
+    ).toBeNull();
+  });
+});
+
+describe('all-excused runs and passRate', () => {
+  it('a run whose failures are all excused is in the denominator only', () => {
+    const t = Date.now() - 1000;
+    const r = insertRun({ state: 'failed', finishedAt: t });
+    insertFailedResult(r, 'flaky_confirm');
+    const day = getPassRateTrend('p1').runKinds.full[0];
+    expect(day.bands.executed_failed_all_excused).toBe(1);
+    expect(day.bands.executed_passed).toBe(0);
+    expect(day.passRate).toBe(0);
+    expect(getLaneHealthRollup('p1').passRate).toBe(0);
   });
 });
 
