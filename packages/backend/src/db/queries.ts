@@ -111,6 +111,12 @@ import type {
 } from './types';
 import { FLOW_IDS, DEFAULT_ARM, type FlowId } from '../orchestration/flowArm';
 import { deriveBranchSlug } from '../session/branchSlug';
+import {
+  insertTestSample,
+  pruneTestSamples,
+  verifyTestSamples,
+  type TestSampleVerificationRow,
+} from './testSampleStore';
 
 // ─── asOf reconstruction ────────────────────────────────────────────────────
 // Point-in-time reads for the gate-verify read path (see gate/gateItemVerifier.ts
@@ -11243,6 +11249,7 @@ export function recordTestPerfDigestSample(
   foreignConcurrentRunCount?: number | null,
   contentHash?: string | null,
   timedOut?: boolean,
+  runId?: string | null,
 ): TestPerfDigestSampleResult | null {
   if (oomKilled || timedOut) return null;
   const durationAdmitted =
@@ -11315,7 +11322,23 @@ export function recordTestPerfDigestSample(
     updated_at: sequencedAt,
   });
 
+  insertTestSample(db, {
+    testId,
+    projectId,
+    runId: runId ?? null,
+    sequencedAt,
+    outcome: outcomeAdmitted ? (outcome === 'passed' ? 'P' : 'F') : null,
+    durationMs: durationAdmitted ? durationMs : null,
+    contentHash: contentHash || null,
+  });
+  pruneTestSamples(db, testId);
+
   return { durations, outcomes, durationAdmitted };
+}
+
+/** Per-project count of digest elements the test_sample projection fails to reproduce; see verifyTestSamples. */
+export function verifyTestSampleDigestParity(): TestSampleVerificationRow[] {
+  return verifyTestSamples(db);
 }
 
 /**
@@ -11401,6 +11424,7 @@ export function ingestTestRunResultsTx(
         foreignConcurrentRunCount,
         contentHash,
         timedOut,
+        testRequestRunId,
       );
       if (result) digestResults.set(t.test_id, result);
     });
