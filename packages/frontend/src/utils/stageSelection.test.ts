@@ -201,15 +201,27 @@ describe('computeStages — stage set per Type', () => {
     }
   });
 
-  it('marks tests as not_started — no test data source exists yet', () => {
+  it.each([
+    [undefined, 'not_started', false],
+    [null, 'not_started', false],
+    ['withdrawn', 'not_started', false],
+    ['running', 'active', false],
+    ['queued', 'active', false],
+    ['passed', 'done', false],
+    ['failed-with-cause', 'error', true],
+  ] as const)('maps test run status %s to %s', (runStatus, status, demand) => {
     const stages = computeStages(
       makeTask({
         codeSession: makeCodeSession(),
         pr: makePr(),
         review: makeReview(),
       }),
+      [],
+      runStatus,
     );
-    expect(stages.find((s) => s.id === 'tests')?.status).toBe('not_started');
+    const tests = stages.find((s) => s.id === 'tests');
+    expect(tests?.status).toBe(status);
+    expect(tests?.demand).toBe(demand);
   });
 });
 

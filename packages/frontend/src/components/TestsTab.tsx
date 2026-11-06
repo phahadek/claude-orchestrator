@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { apiRequest } from '../api/projects';
+import { subscribeToTestRequestRunStatus } from '../hooks/testRequestRunStatusBus';
 import styles from './TestsTab.module.css';
 
 interface FlipRateFlag {
@@ -82,9 +83,23 @@ export function TestsTab({ projectId, sessionId }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [refreshTick, setRefreshTick] = useState(0);
+
+  useEffect(() => {
+    if (!projectId || !sessionId) return undefined;
+    return subscribeToTestRequestRunStatus((payload) => {
+      if (payload.projectId === projectId && payload.sessionId === sessionId) {
+        setRefreshTick((n) => n + 1);
+      }
+    });
+  }, [projectId, sessionId]);
+
   useEffect(() => {
     setData(null);
     setError(null);
+  }, [projectId, sessionId]);
+
+  useEffect(() => {
     if (!projectId || !sessionId) return;
     let cancelled = false;
     setLoading(true);
@@ -92,7 +107,10 @@ export function TestsTab({ projectId, sessionId }: Props) {
       `/api/test-request-runs/history?projectId=${encodeURIComponent(projectId)}&sessionId=${encodeURIComponent(sessionId)}`,
     )
       .then((res) => {
-        if (!cancelled) setData(res);
+        if (!cancelled) {
+          setData(res);
+          setError(null);
+        }
       })
       .catch((err) => {
         if (!cancelled) {
@@ -105,7 +123,7 @@ export function TestsTab({ projectId, sessionId }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [projectId, sessionId]);
+  }, [projectId, sessionId, refreshTick]);
 
   if (!projectId || !sessionId) {
     return (
