@@ -364,7 +364,8 @@ export function collectTestReportDeclaration(
     }
   });
   const claimed = new Set<string>();
-  let allDeclared = expectedReportCount > 0 && matched.length >= expectedReportCount;
+  let allDeclared =
+    expectedReportCount > 0 && matched.length >= expectedReportCount;
   for (const rel of matched) {
     let parsed: { claimedPaths: string[] } | null = null;
     try {
