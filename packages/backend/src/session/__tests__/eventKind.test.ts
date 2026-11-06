@@ -1,5 +1,65 @@
 import { describe, it, expect } from 'vitest';
-import { eventKind, isUsageLimitResult } from '../eventKind';
+import {
+  eventKind,
+  isUsageLimitResult,
+  isAuthFailureEvent,
+} from '../eventKind';
+
+describe('isAuthFailureEvent', () => {
+  const text =
+    'Failed to authenticate: OAuth session expired and could not be refreshed';
+
+  it('is true for a live is_error result carrying the auth failure text', () => {
+    expect(
+      isAuthFailureEvent({
+        type: 'result',
+        is_error: true,
+        subtype: 'success',
+        terminal_reason: 'api_error',
+        result: text,
+      }),
+    ).toBe(true);
+  });
+
+  it('is true for a synthetic assistant message carrying the auth failure text', () => {
+    expect(
+      isAuthFailureEvent({
+        type: 'assistant',
+        message: { model: '<synthetic>', content: [{ type: 'text', text }] },
+      }),
+    ).toBe(true);
+  });
+
+  it('is false for a non-synthetic assistant message with the same text', () => {
+    expect(
+      isAuthFailureEvent({
+        type: 'assistant',
+        message: { model: 'claude-x', content: [{ type: 'text', text }] },
+      }),
+    ).toBe(false);
+  });
+
+  it('is false for context-overflow, 429 usage-limit and normal results', () => {
+    expect(
+      isAuthFailureEvent({
+        type: 'result',
+        is_error: true,
+        result: 'Prompt is too long',
+      }),
+    ).toBe(false);
+    expect(
+      isAuthFailureEvent({
+        type: 'result',
+        is_error: true,
+        api_error_status: 429,
+        result: "You've hit your session limit",
+      }),
+    ).toBe(false);
+    expect(
+      isAuthFailureEvent({ type: 'result', is_error: false, result: 'Done' }),
+    ).toBe(false);
+  });
+});
 
 describe('isUsageLimitResult', () => {
   it('recognises a terminating result event carrying api_error_status: 429', () => {

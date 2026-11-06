@@ -131,6 +131,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Ops session reached a terminal state with its closing group missing the journal.setState -> "resolved" transition — the investigation journal is stuck and the task will not close; stage the missing transition manually.',
   ops_journal_terminal_incomplete:
     'Ops session reached a terminal state with its ops_journal entry still at an intermediate waypoint after one self-correct nudge — the investigation stopped short of its type-appropriate terminal (resolved/applied-pending-confirm) or an explicit blocked; review and redispatch to continue it.',
+  auth_failed:
+    'The CLI failed to authenticate (OAuth session expired and could not be refreshed) — session parked idle; resume once authentication is restored.',
   usage_limit_deferred:
     'Plan usage limit exhausted — launch deferred until the window resets. Will resume automatically.',
   api_overloaded_exhausted:

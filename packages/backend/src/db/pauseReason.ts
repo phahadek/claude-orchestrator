@@ -67,7 +67,8 @@ export type CanonicalPauseReason =
   | 'test_runner_unreachable'
   | 'migration_number_collision'
   | 'orchestrator_mcp_connect_failed'
-  | 'f2_verdict_missing';
+  | 'f2_verdict_missing'
+  | 'auth_failed';
 
 export interface PauseReasonStruct {
   reason: CanonicalPauseReason;
@@ -393,6 +394,11 @@ export const PAUSE_REASON_REGISTRY: Record<
     severity: 'recoverable',
     retry_strategy: 'automatic',
   },
+  auth_failed: {
+    source: 'session',
+    severity: 'recoverable',
+    retry_strategy: 'automatic',
+  },
   api_overloaded_exhausted: {
     source: 'session',
     severity: 'needs_attention',
@@ -629,7 +635,8 @@ const RECOVERY_ACTION_MAP: Record<
   depth_review_pending: 'none', // recoverable+automatic: clears itself within dispatchDepthReview's timeout ceiling
   planning_terminal_blocked_members: 'none', // fix is dispositioning stuck staged intents, not a task-level redispatch
   ops_terminal_group_incomplete: 'none', // fix is staging the missing transition manually, not a session action
-  usage_limit_deferred: 'none', // recoverable+automatic: resumes at the recorded resets_at
+  auth_failed: 'none', // recoverable+automatic: resumes once CLI auth is restored (resume driver is a separate task)
+  usage_limit_deferred: 'none', //recoverable+automatic: resumes at the recorded resets_at
   manual_verification_pending: 'none', // cleared only via the dedicated verify-manual-items route
   test_request_cycle_exceeded: 'none', // needs a human look, not a one-click redispatch/resume that would just resume the same loop
   test_report_acquisition_failed: 'none', // nothing auto-recovers it, but it also never blocks merge
