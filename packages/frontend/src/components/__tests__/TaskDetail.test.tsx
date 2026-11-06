@@ -468,7 +468,11 @@ describe('TaskDetail', () => {
                 depthReview: null,
                 planningSessions: [
                   { sessionId: 'g-1', sessionType: 'groom', status: 'done' },
-                  { sessionId: 'd-1', sessionType: 'design', status: 'running' },
+                  {
+                    sessionId: 'd-1',
+                    sessionType: 'design',
+                    status: 'running',
+                  },
                 ],
               }),
             }
