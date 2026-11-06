@@ -133,7 +133,9 @@ describe('test_sample backfill and verification', () => {
       `UPDATE test_sample SET content_hash='zz' WHERE sequenced_at=${BASE + 3}`,
     );
     expect(total()).toBe(1);
-    upd(`UPDATE test_sample SET content_hash='b' WHERE sequenced_at=${BASE + 3}`);
+    upd(
+      `UPDATE test_sample SET content_hash='b' WHERE sequenced_at=${BASE + 3}`,
+    );
     upd(
       `UPDATE test_sample SET sequenced_at=${BASE + 99} WHERE sequenced_at=${BASE + 2}`,
     );

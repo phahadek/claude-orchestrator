@@ -20,9 +20,7 @@ function sampleMicros(value: number): number {
 
 function weekStartMs(sequencedAt: number): number {
   const ms = Math.floor(sampleMicros(sequencedAt) / 1000);
-  return (
-    Math.floor((ms - WEEK_OFFSET_MS) / WEEK_MS) * WEEK_MS + WEEK_OFFSET_MS
-  );
+  return Math.floor((ms - WEEK_OFFSET_MS) / WEEK_MS) * WEEK_MS + WEEK_OFFSET_MS;
 }
 
 export interface TestSampleInput {
@@ -180,21 +178,20 @@ export function pruneTestSamples(
     const week = weekStartMs(r.sequenced_at);
     let b = buckets.get(week);
     if (!b) {
-      b =
-        (s.bucket.get(testId, week) as HistoryBucket | undefined) ?? {
-          test_id: testId,
-          project_id: r.project_id,
-          week_start: week,
-          pass_count: 0,
-          fail_count: 0,
-          transition_count: 0,
-          duration_count: 0,
-          duration_sum_ms: 0,
-          duration_min_ms: null,
-          duration_max_ms: null,
-          last_outcome: null,
-          last_content_hash: null,
-        };
+      b = (s.bucket.get(testId, week) as HistoryBucket | undefined) ?? {
+        test_id: testId,
+        project_id: r.project_id,
+        week_start: week,
+        pass_count: 0,
+        fail_count: 0,
+        transition_count: 0,
+        duration_count: 0,
+        duration_sum_ms: 0,
+        duration_min_ms: null,
+        duration_max_ms: null,
+        last_outcome: null,
+        last_content_hash: null,
+      };
       buckets.set(week, b);
     }
     if (r.outcome) {
