@@ -24,7 +24,10 @@ import {
   type MoveTaskTargetMilestone,
   type CreateTaskCommandFields,
 } from '../tasks/TaskWriteCommands';
-import { NotionClient } from '../notion/NotionClient';
+import {
+  NotionClient,
+  NotionPageEditPartialApplyError,
+} from '../notion/NotionClient';
 import type {
   TaskPropertiesPatch,
   PatchBodySectionOperation,
@@ -7087,6 +7090,7 @@ export async function triggerTestRequestExecution(
   const outcomesDigest =
     runId && runOutcomes
       ? buildTestResultDigestFromOutcomes(runOutcomes, {
+          runId,
           ...(unattributedView
             ? { unattributed: { view: unattributedView, knownCount: 0 } }
             : {}),
@@ -7115,6 +7119,7 @@ export async function triggerTestRequestExecution(
               filterResult,
               guardBlocked,
               unattributedView,
+              runId,
             )) ||
           outcomesDigest ||
           truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP);
@@ -10662,6 +10667,19 @@ export function createStagedIntentsRouter(
           );
           res.status(409).json({ error: err.message });
           return;
+        }
+        if (err instanceof NotionPageEditPartialApplyError) {
+          setStagedIntentAnnotation(
+            intent.id,
+            JSON.stringify({
+              blocked: true,
+              partiallyApplied: true,
+              writtenBlockIds: err.writtenBlockIds,
+              failedBlockId: err.failedBlockId,
+              reasons: [err.message],
+            }),
+          );
+          broadcastIntentById(intent.id);
         }
         const { reason, redriven } = await routeApplyTimeFailure(
           row,
