@@ -23,10 +23,14 @@ import {
   getTaskPauseReason,
   getDepthReviewVerdict,
   TERMINAL_SESSION_STATUSES,
+  getTaskPlanningSessionsByKind,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { typedGetSetting } from '../config/settings';
-import type { TaskAggregateRow } from '../db/queries';
+import type {
+  TaskAggregateRow,
+  TaskPlanningKindSessionRow,
+} from '../db/queries';
 import { planMove, MoveTaskError } from '../orchestration/moveTask';
 import {
   deriveDisplayStatus,
@@ -356,6 +360,8 @@ export interface TaskDetailFields {
     status: string;
     verdict: string | null;
   } | null;
+  /** One entry per planning session kind (latest session of that kind), ordered by the kind's first start. */
+  planningSessions: TaskPlanningKindSessionRow[];
 }
 
 /**
@@ -380,7 +386,11 @@ function buildTaskDetailFields(row: TaskAggregateRow): TaskDetailFields {
       }
     : null;
 
-  return { pr, depthReview };
+  return {
+    pr,
+    depthReview,
+    planningSessions: getTaskPlanningSessionsByKind(row.task_id),
+  };
 }
 
 // ── Row → TaskView mapping ───────────────────────────────────────────────────
