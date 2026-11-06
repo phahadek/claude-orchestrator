@@ -15,6 +15,7 @@ vi.mock('../github/mergeQueue', () => ({
 }));
 
 vi.mock('../db/queries.js', () => ({
+  recordPrQueueWait: vi.fn(),
   getPRs: vi.fn(),
   getPRByNumber: vi.fn(),
   updatePRState: vi.fn(),

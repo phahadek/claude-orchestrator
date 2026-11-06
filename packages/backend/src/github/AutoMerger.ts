@@ -321,10 +321,10 @@ export class AutoMerger {
     for (const queue of computeMergeQueues().values()) {
       const head = queue[0];
       if (head?.kind !== 'pr') continue;
-      const pr = getPRByNumber(head.prNumber, head.repo);
+      const pr = head.row;
       // run() checks pause_reason too, but filtering here avoids spawning the
       // active-set entry for a goroutine that would exit immediately.
-      if (!pr || isMergeBlockingPause(pr.pause_reason)) continue;
+      if (isMergeBlockingPause(pr.pause_reason)) continue;
       this.attempt(pr.pr_number, pr.repo);
     }
 

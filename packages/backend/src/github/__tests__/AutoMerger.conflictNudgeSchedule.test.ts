@@ -29,6 +29,9 @@ vi.mock('../mergeQueue', () => ({
 }));
 
 vi.mock('../../db/queries.js', () => ({
+  recordPrQueueWait: vi.fn(),
+  recordLocalBranchQueueWait: vi.fn(),
+  clearPrEnqueued: vi.fn(),
   getPRByNumber: vi.fn(),
   setHeadSha: vi.fn(),
   setPauseReason: vi.fn(),

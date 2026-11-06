@@ -33,6 +33,7 @@ vi.mock('./mergeQueue.js', async () => {
         projectId: 'proj-1',
         prNumber: p.pr_number,
         repo: p.repo,
+        row: p,
         enqueuedAt: 0,
       }));
       if (prs.length > 0) m.set('proj-1', prs);
@@ -50,6 +51,9 @@ vi.mock('../db/queries.js', () =>
     updateMergeState: vi.fn(),
     updatePRDraftStatus: vi.fn(),
     getApprovedOpenPRs: vi.fn().mockReturnValue([]),
+    recordPrQueueWait: vi.fn(),
+    recordLocalBranchQueueWait: vi.fn(),
+    clearPrEnqueued: vi.fn(),
     getApprovedLocalBranches: vi.fn().mockReturnValue([]),
     markLocalBranchMerged: vi.fn(),
     setLocalBranchPauseReason: vi.fn(),

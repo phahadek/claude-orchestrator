@@ -5,6 +5,7 @@ import {
   getApprovedLocalBranches,
   getApprovedOpenPRs,
 } from '../db/queries';
+import type { PullRequestRow } from '../db/types';
 
 export type MergeQueueEntry =
   | {
@@ -12,6 +13,7 @@ export type MergeQueueEntry =
       projectId: string;
       prNumber: number;
       repo: string;
+      row: PullRequestRow;
       enqueuedAt: number;
     }
   | { kind: 'local'; projectId: string; id: number; enqueuedAt: number };
@@ -41,6 +43,7 @@ export function computeMergeQueues(
       projectId: project.id,
       prNumber: pr.pr_number,
       repo: pr.repo,
+      row: pr,
       enqueuedAt: ensurePrEnqueued(pr.pr_number, pr.repo, now),
     });
   }
