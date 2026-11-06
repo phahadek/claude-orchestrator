@@ -9,7 +9,7 @@ const loadConfigMock = vi.hoisted(() => vi.fn());
 vi.mock('../../session/orchestrator-config.js', () => ({
   loadOrchestratorConfig: loadConfigMock,
 }));
-vi.mock('../../config/index.js', async (orig) => ({
+vi.mock('../../config', async (orig) => ({
   ...(await orig<object>()),
   getProjectById: () => ({ projectDir: '/base/checkout' }),
 }));
