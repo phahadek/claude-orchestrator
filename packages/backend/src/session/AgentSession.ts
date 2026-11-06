@@ -3253,7 +3253,10 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     if (this.worktreePath) {
       try {
         const cwd = this.worktreePath;
-        const branch = await gitAsync(['rev-parse', '--abbrev-ref', 'HEAD'], cwd);
+        const branch = await gitAsync(
+          ['rev-parse', '--abbrev-ref', 'HEAD'],
+          cwd,
+        );
         const localHead = await gitAsync(['rev-parse', 'HEAD'], cwd);
         const remoteHead =
           (
@@ -3271,12 +3274,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         }
         if (localHead && localHead !== remoteHead) {
           const aheadBehind = await gitAsync(
-            [
-              'rev-list',
-              '--left-right',
-              '--count',
-              `origin/${branch}...HEAD`,
-            ],
+            ['rev-list', '--left-right', '--count', `origin/${branch}...HEAD`],
             cwd,
           );
           const [behind, ahead] = aheadBehind.split(/\s+/).map(Number);
@@ -3357,7 +3355,10 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     // starts with fresh in-memory state, still sees the last signalled head.
     if (pr && this.worktreePath) {
       try {
-        const headSha = await gitAsync(['rev-parse', 'HEAD'], this.worktreePath);
+        const headSha = await gitAsync(
+          ['rev-parse', 'HEAD'],
+          this.worktreePath,
+        );
         setLastSignalledHeadSha(pr.pr_number, pr.repo, headSha);
       } catch {
         // non-fatal — leave last_signalled_head_sha unchanged
