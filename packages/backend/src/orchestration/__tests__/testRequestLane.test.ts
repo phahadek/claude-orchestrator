@@ -134,6 +134,7 @@ vi.mock('../../session/autofix-runner', async (importOriginal) => {
 });
 
 import { db } from '../../db/db';
+import { readRecentTestOutcomes } from '../../db/testSampleStore';
 import {
   runProjectTestRequest,
   admitTestRequest,
@@ -205,6 +206,8 @@ beforeEach(() => {
   db.prepare('DELETE FROM test_run_summaries').run();
   db.prepare('DELETE FROM test_request_runs').run();
   db.prepare('DELETE FROM test_perf_baselines').run();
+  db.prepare('DELETE FROM test_sample').run();
+  db.prepare('DELETE FROM test_sample_history').run();
   db.prepare('DELETE FROM projects').run();
   db.prepare(
     `DELETE FROM settings WHERE key IN ('test_request_max_concurrent', 'test_request_memory_ceiling_mb', 'test_request_per_run_memory_mb')`,
@@ -667,7 +670,8 @@ describe('runProjectTestRequest — coalescing', () => {
 
     const row = db
       .prepare(
-        `SELECT state, output, session_id, failure_reason FROM test_request_runs WHERE project_id = ? AND content_hash = ?`,
+        `SELECT r.state, o.output, r.session_id, r.failure_reason FROM test_request_runs r
+         LEFT JOIN test_request_run_output o ON o.run_id = r.id WHERE r.project_id = ? AND r.content_hash = ?`,
       )
       .get('proj-1', 'hash-c') as {
       state: string;
@@ -1798,7 +1802,8 @@ describe('recoverInterruptedTestRequestRuns', () => {
     expect(listRunningTestRequestRuns()).toHaveLength(0);
     const row = db
       .prepare(
-        `SELECT state, failure_reason, output FROM test_request_runs WHERE id = ?`,
+        `SELECT r.state, r.failure_reason, o.output FROM test_request_runs r
+         LEFT JOIN test_request_run_output o ON o.run_id = r.id WHERE r.id = ?`,
       )
       .get('run-1') as {
       state: string;
@@ -1847,7 +1852,8 @@ describe('recoverInterruptedTestRequestRuns', () => {
 
     const after = db
       .prepare(
-        `SELECT state, failure_reason, output FROM test_request_runs WHERE id = ?`,
+        `SELECT r.state, r.failure_reason, o.output FROM test_request_runs r
+         LEFT JOIN test_request_run_output o ON o.run_id = r.id WHERE r.id = ?`,
       )
       .get('run-queued-1') as {
       state: string;
@@ -3143,6 +3149,35 @@ describe('admitTestRequest — settled-run guard', () => {
     expect(replay.passed).toBe(true);
   });
 
+  it.each(['timeout', 'tool_infra_failure'] as const)(
+    'a settled filtered-pass row (state=passed, failure_reason=%s) replays without timedOut / isToolInfraFailure',
+    async (reason) => {
+      mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '' });
+      mockCollectStructuredTestResult.mockReturnValue(null);
+      mockRunTestCommands.mockResolvedValueOnce({
+        passed: true,
+        output: 'ok',
+      });
+      const projectId = `proj-fp-${reason}`;
+      const contentHash = `fp-hash-${reason}`;
+      const first = await runProjectTestRequest(
+        baseSpec({ projectId, contentHash }),
+      );
+      db.prepare(
+        `UPDATE test_request_runs SET failure_reason = ? WHERE id = ?`,
+      ).run(reason, first.runId);
+
+      const replay = await runProjectTestRequest(
+        baseSpec({ projectId, contentHash }),
+      );
+
+      expect(replay.unchangedReplay).toBe(true);
+      expect(replay.passed).toBe(true);
+      expect(replay.timedOut).toBe(false);
+      expect(replay.isToolInfraFailure).toBe(false);
+    },
+  );
+
   it('a settled passed row with test_report_acquisition_attempted=0 (no report glob configured) is still replayed as unchangedReplay — a null structured_result there is not a vacuousness signal', async () => {
     mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '' });
     mockCollectStructuredTestResult.mockReturnValue(null);
@@ -3566,7 +3601,10 @@ describe('admitTestRequest — per-command partial coverage', () => {
     });
     expect(res.passed).toBe(true);
     const row = db
-      .prepare(`SELECT * FROM test_request_runs WHERE id = ?`)
+      .prepare(
+        `SELECT r.*, o.output FROM test_request_runs r
+         LEFT JOIN test_request_run_output o ON o.run_id = r.id WHERE r.id = ?`,
+      )
       .get(res.runId) as {
       state: string;
       commands: string;
@@ -4176,7 +4214,8 @@ describe('structured_result acquisition', () => {
 
     const firstRowAfter = db
       .prepare(
-        `SELECT state, output, structured_result FROM test_request_runs WHERE id = ?`,
+        `SELECT r.state, o.output, r.structured_result FROM test_request_runs r
+         LEFT JOIN test_request_run_output o ON o.run_id = r.id WHERE r.id = ?`,
       )
       .get(first.runId) as {
       state: string;
@@ -5040,8 +5079,7 @@ describe('ingestTestRunResultsTx — skips baseline/flip-rate recompute for non-
       false,
       0,
       'seed-hash',
-      (id, sample) =>
-        computeTestPerfBaseline(id, [...sample.durations].reverse()),
+      (id) => computeTestPerfBaseline(id, listRecentValidTestDurations(id, 32)),
     );
   }
 
@@ -5085,8 +5123,8 @@ describe('ingestTestRunResultsTx — skips baseline/flip-rate recompute for non-
       expect(onDigestSample).toHaveBeenCalledTimes(1);
       const sample = onDigestSample.mock.calls[0][1];
       expect(sample.durationAdmitted).toBe(false);
-      expect(sample.durations).toEqual([42]);
-      expect(sample.outcomes.map((o: { o: string }) => o.o)).toEqual([
+      expect(listRecentValidTestDurations(testId, 32)).toEqual([42]);
+      expect(readRecentTestOutcomes(db, testId, 200).map((o) => o.o)).toEqual([
         'P',
         'F',
       ]);

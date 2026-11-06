@@ -9,7 +9,14 @@ vi.mock('../../db/db.js', async () => {
 
 import { db } from '../../db/db.js';
 import { spawnSync } from 'child_process';
-import { mkdirSync, writeFileSync, mkdtempSync, rmSync } from 'fs';
+import {
+  mkdirSync,
+  writeFileSync,
+  mkdtempSync,
+  rmSync,
+  readFileSync,
+  existsSync,
+} from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -23,6 +30,7 @@ import {
   extractPathToken,
   filesPathsEntryExistsInRepo,
   parseFilesPathsRawItems,
+  updateMilestoneBoardInManifest,
 } from '../groomLoad';
 import { toExternalId } from '../../tasks/taskId';
 import { bindingConstraintIdsForRegions } from '../constraintCatalog';
@@ -1282,5 +1290,73 @@ describe('parseFilesPathsRawItems — (new) marker', () => {
       '- src/a/b/new_module.py (new - new dispatch module)',
     );
     expect(item.isNew).toBe(true);
+  });
+});
+
+describe('updateMilestoneBoardInManifest', () => {
+  let root: string;
+  let manifestPath: string;
+  let prevEnv: string | undefined;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'groom-board-'));
+    mkdirSync(join(root, 'config', 'projects', 'proj'), { recursive: true });
+    manifestPath = join(root, 'config', 'projects', 'proj', 'grooming.json');
+    prevEnv = process.env.ORCHESTRATOR_CONFIG_DIR;
+    process.env.ORCHESTRATOR_CONFIG_DIR = join(root, 'config');
+  });
+
+  afterEach(() => {
+    if (prevEnv === undefined) delete process.env.ORCHESTRATOR_CONFIG_DIR;
+    else process.env.ORCHESTRATOR_CONFIG_DIR = prevEnv;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('rewrites the entry board and matching successor neighbour, leaving others untouched', () => {
+    const manifest = {
+      milestones: {
+        M16: { board: 'b16' },
+        M17: { board: 'old', neighbours: [{ id: 'M16', board: 'b16' }] },
+        M18: {
+          board: 'b18',
+          neighbours: [
+            { id: 'M17', board: 'old' },
+            { id: 'M17', board: 'other' },
+          ],
+        },
+      },
+    };
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+    updateMilestoneBoardInManifest(
+      join(root, 'proj'),
+      { canonicalShortId: 'M17', oldBoard: 'old', newBoard: 'new' },
+      'proj',
+    );
+    const expected = JSON.parse(JSON.stringify(manifest));
+    expected.milestones.M17.board = 'new';
+    expected.milestones.M18.neighbours[0].board = 'new';
+    expect(readFileSync(manifestPath, 'utf8')).toBe(
+      JSON.stringify(expected, null, 2) + '\n',
+    );
+  });
+
+  it('is a no-op with no manifest file', () => {
+    updateMilestoneBoardInManifest(
+      join(root, 'proj'),
+      { canonicalShortId: 'M17', oldBoard: 'old', newBoard: 'new' },
+      'proj',
+    );
+    expect(existsSync(manifestPath)).toBe(false);
+  });
+
+  it('is a no-op when the canonicalShortId is not registered', () => {
+    const raw = '{"milestones":{"M16":{"board":"b16"}}}';
+    writeFileSync(manifestPath, raw);
+    updateMilestoneBoardInManifest(
+      join(root, 'proj'),
+      { canonicalShortId: 'M17', oldBoard: 'old', newBoard: 'new' },
+      'proj',
+    );
+    expect(readFileSync(manifestPath, 'utf8')).toBe(raw);
   });
 });

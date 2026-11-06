@@ -110,8 +110,8 @@ function insertRun(o: {
   const id = `ta-run-${seq}`;
   db.prepare(
     `INSERT INTO test_request_runs
-       (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, coverage_source_run_id, nothing_exercised, run_kind)
-     VALUES (@id, 'p1', @hash, NULL, @state, '', @requested_at, @started_at, @finished_at, @failure_reason, @cov, @ne, @kind)`,
+       (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at, failure_reason, coverage_source_run_id, nothing_exercised, run_kind)
+     VALUES (@id, 'p1', @hash, NULL, @state, @requested_at, @started_at, @finished_at, @failure_reason, @cov, @ne, @kind)`,
   ).run({
     id,
     hash: `h-${seq}`,

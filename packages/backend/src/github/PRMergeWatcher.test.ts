@@ -3,6 +3,19 @@ import { mockDbQueries } from '../__tests__/helpers/mockDbQueries';
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
+vi.mock('./mergeQueue.js', () => ({
+  computeMergeQueues: () => new Map(),
+  checkPrQueueHead: vi.fn(
+    ():
+      | { allowed: true; waitMs: number }
+      | { allowed: false; headLabel: string } => ({
+      allowed: true,
+      waitMs: 0,
+    }),
+  ),
+  checkLocalBranchQueueHead: () => ({ allowed: true, waitMs: 0 }),
+}));
+
 vi.mock('../db/queries.js', () =>
   mockDbQueries({
     getAllOpenPRs: vi.fn().mockReturnValue([]),
@@ -121,6 +134,7 @@ vi.mock('../orchestration/testRequestLane.js', async (importOriginal) => {
 });
 
 import { PRMergeWatcher } from './PRMergeWatcher';
+import { checkPrQueueHead } from './mergeQueue';
 import { GitHubRateLimitError } from './types';
 import { __resetGitHubRateLimitForTests } from './rateLimitBackoff';
 import {
@@ -5064,6 +5078,46 @@ describe('PRMergeWatcher — merge-time combined-tree freshness (F2)', () => {
     );
     expect(github.categorizeMergeability).not.toHaveBeenCalled();
   });
+
+  it('starts no re-gate for a stale PR that is not the merge-queue head', async () => {
+    const { watcher, reviewOrchestrator } = setup();
+    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue({
+      id: 'run-old',
+      state: 'passed',
+      content_hash: 'combined-hash-old',
+    } as any);
+    vi.mocked(checkPrQueueHead).mockReturnValue({
+      allowed: false,
+      headLabel: 'PR #1',
+    });
+    try {
+      await watcher.poll();
+      await watcher.poll();
+      expect(reviewOrchestrator.enqueueReview).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(checkPrQueueHead).mockReturnValue({ allowed: true, waitMs: 0 });
+    }
+  });
+
+  it('requests a fresh re-gate for the head when base moved out-of-band (new combined hash)', async () => {
+    const { watcher, reviewOrchestrator } = setup();
+    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue({
+      id: 'run-old',
+      state: 'passed',
+      content_hash: COMBINED,
+    } as any);
+    await watcher.poll();
+    expect(reviewOrchestrator.enqueueReview).not.toHaveBeenCalled();
+
+    mockResolveCombinedTree.mockResolvedValue({
+      status: 'ok',
+      treeOid: 'tree-D',
+      baseSha: 'base-sha-2',
+      contentHash: 'combined-hash-after-base-moved',
+    });
+    await watcher.poll();
+    expect(reviewOrchestrator.enqueueReview).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
@@ -5078,8 +5132,8 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
     const id = `hist-run-${seq}`;
     db.prepare(
       `INSERT INTO test_request_runs
-         (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at)
-       VALUES (@id, 'proj-1', @content_hash, NULL, 'passed', '', 0, 0, 0)`,
+         (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at)
+       VALUES (@id, 'proj-1', @content_hash, NULL, 'passed', 0, 0, 0)`,
     ).run({ id, content_hash: `hist-hash-${seq}` });
     return id;
   }
@@ -5128,8 +5182,8 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
   ): void {
     db.prepare(
       `INSERT INTO test_request_runs
-         (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at)
-       VALUES (@id, 'proj-1', 'content-hash-x', NULL, 'failed', '', 0, 0, 0)`,
+         (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at)
+       VALUES (@id, 'proj-1', 'content-hash-x', NULL, 'failed', 0, 0, 0)`,
     ).run({ id: runId });
     for (const t of tests) {
       db.prepare(
@@ -5151,8 +5205,8 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
     const runId = `breadth-run-${seq}`;
     db.prepare(
       `INSERT INTO test_request_runs
-         (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, worktree_path)
-       VALUES (@id, 'proj-1', @content_hash, NULL, 'failed', '', 0, 0, 0, @worktree_path)`,
+         (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at, worktree_path)
+       VALUES (@id, 'proj-1', @content_hash, NULL, 'failed', 0, 0, 0, @worktree_path)`,
     ).run({
       id: runId,
       content_hash: `breadth-hash-${seq}`,
@@ -5197,6 +5251,8 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
     db.prepare('DELETE FROM test_run_results').run();
     db.prepare('DELETE FROM test_request_runs').run();
     db.prepare('DELETE FROM test_perf_baselines').run();
+    db.prepare('DELETE FROM test_sample').run();
+    db.prepare('DELETE FROM test_sample_history').run();
     vi.mocked(getProjectByGithubRepo).mockReturnValue({
       id: 'proj-1',
       projectDir: '/proj',

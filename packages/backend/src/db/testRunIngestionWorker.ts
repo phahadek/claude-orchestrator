@@ -24,7 +24,12 @@
 // test's digest would last-writer-wins and silently drop samples.
 import { parentPort, workerData } from 'worker_threads';
 import Database from 'better-sqlite3';
-import { insertTestSample, pruneTestSamples } from './testSampleStore';
+import {
+  insertTestSample,
+  pruneTestSamples,
+  readRecentTestDurations,
+  readRecentTestOutcomes,
+} from './testSampleStore';
 
 interface WorkerTestRow {
   test_id: string;
@@ -178,8 +183,6 @@ function insertTestRunSummary(
 }
 
 interface DigestSampleResult {
-  durations: number[];
-  outcomes: DigestOutcomeSample[];
   durationAdmitted: boolean;
 }
 
@@ -273,7 +276,7 @@ function recordTestPerfDigestSample(
   });
   pruneTestSamples(database, testId);
 
-  return { durations, outcomes, durationAdmitted };
+  return { durationAdmitted };
 }
 
 function median(sorted: number[]): number {
@@ -483,12 +486,20 @@ function run(): TestRunIngestionWorkerResult {
               computeTestPerfBaseline(
                 database,
                 item.test_id,
-                [...sample.durations].reverse(),
+                readRecentTestDurations(
+                  database,
+                  item.test_id,
+                  TEST_DURATION_DIGEST_CAPACITY,
+                ),
               );
             }
             logFlipRateFlagIfFlagged(
               item.test_id,
-              sample.outcomes,
+              readRecentTestOutcomes(
+                database,
+                item.test_id,
+                data.flipRateWindowN,
+              ),
               data.flipRateWindowN,
               data.flipRateThresholdK,
             );

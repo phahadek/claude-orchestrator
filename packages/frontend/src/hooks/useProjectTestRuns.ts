@@ -12,7 +12,8 @@ export type ProjectTestRunOutcome =
   | 'timed-out'
   | 'execution-failed'
   | 'running'
-  | 'queued';
+  | 'queued'
+  | 'cancelled';
 
 export type ProjectTestRunProducer =
   | 'session_request'
@@ -45,6 +46,8 @@ export interface ProjectTestRunEntry {
   outcomeCounts: ProjectTestRunOutcomeCounts | null;
   mergedDevSha: string | null;
   conflictOutcome: string | null;
+  failureReason?: string | null;
+  cancelledBy?: string | null;
   /** Declared nothing-exercised marker: every command declared and none claimed a changed path. */
   nothing_exercised?: boolean;
   /** JSON array of changed paths no command claimed; null when any command did not declare. */
@@ -122,4 +125,25 @@ export function useProjectTestRuns(
   }, [projectId]);
 
   return { runs, loading, error };
+}
+
+export type CancelTestRunResult = 'cancelled' | 'already-finished' | 'error';
+
+/** POSTs the device-authed cancel route; row state then arrives via the WS run broadcast. */
+export async function cancelTestRun(
+  runId: string,
+): Promise<CancelTestRunResult> {
+  try {
+    await apiRequest(
+      `/api/test-request-runs/${encodeURIComponent(runId)}/cancel`,
+      { method: 'POST' },
+    );
+    return 'cancelled';
+  } catch (err) {
+    const message = err instanceof Error ? err.message : '';
+    if (message === 'run already settled' || message.startsWith('409')) {
+      return 'already-finished';
+    }
+    return 'error';
+  }
 }

@@ -3,6 +3,7 @@ import path from 'path';
 import { Worker } from 'worker_threads';
 import { createHash, randomUUID } from 'crypto';
 import { db } from './db';
+import { hasInlineRunOutputColumn } from './schema';
 import { logger } from '../logger';
 import { recordEvent, hasTaskEditSinceTimestamp } from '../audit/AuditLog';
 import {
@@ -114,6 +115,8 @@ import { deriveBranchSlug } from '../session/branchSlug';
 import {
   insertTestSample,
   pruneTestSamples,
+  readRecentTestDurations,
+  readRecentTestOutcomes,
   verifyTestSamples,
   type TestSampleVerificationRow,
 } from './testSampleStore';
@@ -5316,6 +5319,63 @@ export function getApprovedOpenPRs(): PullRequestRow[] {
 }
 
 /**
+ * Stamps the persisted merge-queue enqueue time on first sight of a merge-ready
+ * PR; idempotent so the original position survives repeated polls and restarts.
+ */
+export function ensurePrEnqueued(
+  prNumber: number,
+  repo: string,
+  now: number,
+): number {
+  db.prepare(
+    `UPDATE pull_requests SET merge_queue_enqueued_at = ?
+     WHERE pr_number = ? AND repo = ? AND merge_queue_enqueued_at IS NULL`,
+  ).run(now, prNumber, repo);
+  const row = db
+    .prepare(
+      `SELECT merge_queue_enqueued_at AS t FROM pull_requests WHERE pr_number = ? AND repo = ?`,
+    )
+    .get(prNumber, repo) as { t: number | null } | undefined;
+  return row?.t ?? now;
+}
+
+export function ensureLocalBranchEnqueued(id: number, now: number): number {
+  db.prepare(
+    `UPDATE local_branches SET merge_queue_enqueued_at = ?
+     WHERE id = ? AND merge_queue_enqueued_at IS NULL`,
+  ).run(now, id);
+  const row = db
+    .prepare(
+      `SELECT merge_queue_enqueued_at AS t FROM local_branches WHERE id = ?`,
+    )
+    .get(id) as { t: number | null } | undefined;
+  return row?.t ?? now;
+}
+
+/** Clears the enqueue stamp so an ejected PR re-enters at the back, not the front. */
+export function clearPrEnqueued(prNumber: number, repo: string): void {
+  db.prepare(
+    `UPDATE pull_requests SET merge_queue_enqueued_at = NULL WHERE pr_number = ? AND repo = ?`,
+  ).run(prNumber, repo);
+}
+
+export function recordPrQueueWait(
+  prNumber: number,
+  repo: string,
+  waitMs: number,
+): void {
+  db.prepare(
+    `UPDATE pull_requests SET merge_queue_wait_ms = ? WHERE pr_number = ? AND repo = ?`,
+  ).run(waitMs, prNumber, repo);
+}
+
+export function recordLocalBranchQueueWait(id: number, waitMs: number): void {
+  db.prepare(
+    `UPDATE local_branches SET merge_queue_wait_ms = ? WHERE id = ?`,
+  ).run(waitMs, id);
+}
+
+/**
  * Sets the docs execution flow's never-auto-merged output gate at PR-open
  * time. Idempotent — a repeat call with the same value is a no-op.
  */
@@ -9854,8 +9914,8 @@ export function insertTestRequestRun(
   priorityGroup: string | null = null,
 ): void {
   const insertRun = db.prepare(
-    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, concurrent_run_count, run_origin, producer, run_kind, base_sha, worktree_path, commands, breadth_origin, runner_executed, task_id, priority_group)
-     VALUES (?, ?, ?, ?, ?, '', ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at, failure_reason, concurrent_run_count, run_origin, producer, run_kind, base_sha, worktree_path, commands, breadth_origin, runner_executed, task_id, priority_group)
+     VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const insertOutput = db.prepare(
     `INSERT OR REPLACE INTO test_request_run_output (run_id, output) VALUES (?, '')`,
@@ -9943,10 +10003,10 @@ export function insertCoverageTestRequestRun(
   const sourceOutput = getTestRequestRunOutput(source.id);
   const insertRun = db.prepare(
     `INSERT INTO test_request_runs (
-       id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at,
+       id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at,
        failure_reason, structured_result, oom_killed, test_report_acquisition_attempted,
        run_origin, producer, run_kind, base_sha, worktree_path, failed_command, commands, coverage_source_run_id, breadth_origin
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   db.transaction(() => {
     insertRun.run(
@@ -9955,7 +10015,6 @@ export function insertCoverageTestRequestRun(
       contentHash,
       sessionId,
       source.state,
-      sourceOutput,
       requestedAt,
       requestedAt,
       requestedAt,
@@ -9996,11 +10055,14 @@ export function withdrawTestRequestRun(id: string, supersededBy: string): void {
 
 /** Settles a still-queued run as an operator cancel: failed / 'cancelled', no verdict. */
 export function cancelQueuedTestRequestRun(id: string, output: string): void {
-  db.prepare(
+  const update = db.prepare(
     `UPDATE test_request_runs
-     SET state = 'failed', failure_reason = 'cancelled', finished_at = ?, output = ?
+     SET state = 'failed', failure_reason = 'cancelled', finished_at = ?
      WHERE id = ? AND state = 'queued'`,
-  ).run(Date.now(), output, id);
+  );
+  db.transaction(() => {
+    if (update.run(Date.now(), id).changes > 0) upsertRunOutput(id, output);
+  })();
 }
 
 /** Records the pre-test merge's result onto a run row. */
@@ -10093,12 +10155,11 @@ export function completeTestRequestRun(
   unclaimedPaths?: string | null,
 ): void {
   const update = db.prepare(
-    `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ?, failure_reason = ?, structured_result = ?, oom_killed = ?, test_report_acquisition_attempted = ?, failed_command = ?, command_stats = ?, nothing_exercised = ?, unclaimed_paths = ? WHERE id = ?`,
+    `UPDATE test_request_runs SET state = ?, finished_at = ?, failure_reason = ?, structured_result = ?, oom_killed = ?, test_report_acquisition_attempted = ?, failed_command = ?, command_stats = ?, nothing_exercised = ?, unclaimed_paths = ? WHERE id = ?`,
   );
   db.transaction(() => {
     update.run(
       state,
-      output,
       Date.now(),
       failureReason,
       structuredResult ?? null,
@@ -10123,31 +10184,28 @@ function upsertRunOutput(runId: string, output: string): void {
 
 /**
  * The run's captured output, fetched by primary key from the side table.
- * Falls back to the inline column while the background copy has not yet
- * reached the run.
  */
 export function getTestRequestRunOutput(runId: string): string {
   const side = db
     .prepare(`SELECT output FROM test_request_run_output WHERE run_id = ?`)
     .get(runId) as { output: string } | undefined;
-  if (side && side.output !== '') return side.output;
-  const inline = db
-    .prepare(`SELECT output FROM test_request_runs WHERE id = ?`)
-    .get(runId) as { output: string } | undefined;
-  return inline?.output ?? side?.output ?? '';
+  return side?.output ?? '';
 }
 
 const RUN_OUTPUT_COPY_BATCH = 200;
 
 /**
  * Copies one keyset batch of inline output into side rows for runs lacking
- * one (INSERT OR IGNORE — idempotent). Resumable: pass back `nextAfterId`.
- * `done` is true when no runs remain past the cursor.
+ * or whose side row is still empty (idempotent). Resumable: pass back
+ * `nextAfterId`. `done` is true when no runs remain past the cursor, or the
+ * inline column is already dropped.
  */
-export function copyTestRequestRunOutputBatch(
+function copyTestRequestRunOutputBatch(
   afterId: string | null,
   batchSize = RUN_OUTPUT_COPY_BATCH,
 ): { copied: number; nextAfterId: string | null; done: boolean } {
+  if (!hasInlineRunOutputColumn(db))
+    return { copied: 0, nextAfterId: afterId, done: true };
   return db.transaction(() => {
     const ids = db
       .prepare(
@@ -10158,8 +10216,10 @@ export function copyTestRequestRunOutputBatch(
       return { copied: 0, nextAfterId: afterId, done: true };
     const info = db
       .prepare(
-        `INSERT OR IGNORE INTO test_request_run_output (run_id, output)
-         SELECT id, output FROM test_request_runs WHERE id > ? AND id <= ?`,
+        `INSERT INTO test_request_run_output (run_id, output)
+         SELECT id, output FROM test_request_runs WHERE id > ? AND id <= ?
+         ON CONFLICT(run_id) DO UPDATE SET output = excluded.output
+         WHERE test_request_run_output.output = ''`,
       )
       .run(afterId ?? '', ids[ids.length - 1].id);
     return {
@@ -10168,18 +10228,6 @@ export function copyTestRequestRunOutputBatch(
       done: ids.length < batchSize,
     };
   })();
-}
-
-/** Runs whose non-empty inline output has no side row or a differing one — R2 requires 0. */
-export function countTestRequestRunOutputMismatches(): number {
-  const row = db
-    .prepare(
-      `SELECT COUNT(*) AS n FROM test_request_runs r
-       LEFT JOIN test_request_run_output o ON o.run_id = r.id
-       WHERE r.output != '' AND (o.run_id IS NULL OR o.output != r.output)`,
-    )
-    .get() as { n: number };
-  return row.n;
 }
 
 let runOutputCopyTimer: ReturnType<typeof setTimeout> | null = null;
@@ -10420,11 +10468,11 @@ export function failStaleRunnerExecutedTestRequestRun(
 ): boolean {
   const update = db.prepare(
     `UPDATE test_request_runs
-     SET state = 'failed', output = ?, finished_at = ?, failure_reason = 'runner_unreachable'
+     SET state = 'failed', finished_at = ?, failure_reason = 'runner_unreachable'
      WHERE id = ? AND runner_executed = 1 AND state IN ('queued', 'running') AND started_at <= ?`,
   );
   return db.transaction(() => {
-    const info = update.run(output, Date.now(), id, cutoff);
+    const info = update.run(Date.now(), id, cutoff);
     if (info.changes > 0) upsertRunOutput(id, output);
     return info.changes > 0;
   })();
@@ -11355,7 +11403,7 @@ export const TEST_DURATION_DIGEST_CAPACITY = 32;
 /** >= flip_rate_window_n's max bound (config/settings.ts) — every production caller of computeTestFlipRateFlag passes that setting as windowN. */
 export const TEST_OUTCOME_DIGEST_CAPACITY = 200;
 
-export interface DigestOutcomeSample {
+interface DigestOutcomeSample {
   o: 'P' | 'F';
   t: number;
   /** Tree identity (test_request_runs.content_hash) the sample was produced on — absent on legacy samples predating this field. */
@@ -11370,11 +11418,7 @@ export interface DigestOutcomeSample {
  * re-reading the row it was just written from.
  */
 export interface TestPerfDigestSampleResult {
-  /** Oldest-first, capped at TEST_DURATION_DIGEST_CAPACITY — same order as the stored ring. */
-  durations: number[];
-  /** Oldest-first, capped at TEST_OUTCOME_DIGEST_CAPACITY — same order as the stored ring. */
-  outcomes: DigestOutcomeSample[];
-  /** False when only the outcome ring advanced (a concurrent run) — durations/baseline are unchanged. */
+  /** False when only the outcome side advanced (a concurrent run) — durations/baseline are unchanged. */
   durationAdmitted: boolean;
 }
 
@@ -11549,13 +11593,15 @@ export function recordTestPerfDigestSample(
   });
   pruneTestSamples(db, testId);
 
-  return { durations, outcomes, durationAdmitted };
+  return { durationAdmitted };
 }
 
 /** Per-project count of digest elements the test_sample projection fails to reproduce; see verifyTestSamples. */
 export function verifyTestSampleDigestParity(): TestSampleVerificationRow[] {
   return verifyTestSamples(db);
 }
+
+let lastIngestSequenceEnd = 0;
 
 /**
  * Ingests one completed run's extracted test results: writes a
@@ -11605,7 +11651,10 @@ export function ingestTestRunResultsTx(
     else counts.other++;
   }
   const failing = tests.filter((t) => t.outcome !== 'passed');
-  const baseSequence = Date.now() * 1000;
+  // Strictly beyond any prior ingestion's range: test_sample's (test_id,
+  // sequenced_at) key would otherwise silently drop a same-ms sample.
+  const baseSequence = Math.max(Date.now() * 1000, lastIngestSequenceEnd);
+  lastIngestSequenceEnd = baseSequence + tests.length;
 
   const tx = db.transaction(() => {
     insertTestRunResults(
@@ -11803,30 +11852,16 @@ export function countTestRunResultsForRun(testRequestRunId: string): number {
 
 // ─── test_perf_baselines ────────────────────────────────────────────────────
 
-let _stmtGetTestPerfDigestDurations: Database.Statement | null = null;
-
 /**
- * Most recent `limit` *valid* (concurrent_run_count = 0 AND oom_killed = 0)
- * durations for a test_id, newest first — the sample pool
- * computeTestPerfBaseline draws its baseline window and recent-run guard
- * from. Reads the fixed-width digest ring on test_perf_baselines
- * (recordTestPerfDigestSample) rather than raw test_run_results rows —
- * `limit` must not exceed TEST_DURATION_DIGEST_CAPACITY or the result is
- * silently truncated to whatever the ring retained.
+ * Newest `limit` duration-bearing test_sample rows (clean solo runs only —
+ * recordTestPerfDigestSample's admission rule), newest first. `limit` must not
+ * exceed the test_sample duration retention (32).
  */
 export function listRecentValidTestDurations(
   testId: string,
   limit: number,
 ): number[] {
-  _stmtGetTestPerfDigestDurations ??= db.prepare<{ test_id: string }>(
-    `SELECT recent_durations FROM test_perf_baselines WHERE test_id = @test_id`,
-  );
-  const row = _stmtGetTestPerfDigestDurations.get({ test_id: testId }) as
-    | { recent_durations: string }
-    | undefined;
-  if (!row) return [];
-  const durations = parseDigestDurations(row.recent_durations);
-  return durations.slice(-limit).reverse();
+  return readRecentTestDurations(db, testId, limit);
 }
 
 let _stmtUpsertTestPerfBaseline: Database.Statement | null = null;
@@ -11886,8 +11921,6 @@ export interface TestFlipRateFlag {
   flagged: boolean;
 }
 
-let _stmtTestFlipRateDigest: Database.Statement | null = null;
-
 /**
  * Live pass<->fail flip-rate flag for one test id, recomputed from its last
  * `windowN` valid samples (concurrent_run_count = 0 and oom_killed = false —
@@ -11903,10 +11936,9 @@ let _stmtTestFlipRateDigest: Database.Statement | null = null;
  * flag clears on its own the moment a fresh ingestion's recomputation drops
  * the transition count back below K; there is no sticky marker to reset.
  *
- * Reads the fixed-width outcome-sequence digest on test_perf_baselines
- * (recordTestPerfDigestSample) rather than raw test_run_results rows.
- * `windowN` must not exceed TEST_OUTCOME_DIGEST_CAPACITY — see
- * flip_rate_window_n's .max() bound in config/settings.ts.
+ * Reads the newest outcome-bearing test_sample rows. `windowN` must not
+ * exceed the test_sample outcome retention (200) — see flip_rate_window_n's
+ * .max() bound in config/settings.ts.
  */
 export function computeTestFlipRateFlag(
   testId: string,
@@ -11918,40 +11950,12 @@ export function computeTestFlipRateFlag(
   // for every other caller (listFlaggedFlakyTests, the lane-health rollup).
   beforeMs: number = Number.MAX_SAFE_INTEGER,
 ): TestFlipRateFlag {
-  _stmtTestFlipRateDigest ??= db.prepare<{ test_id: string }>(
-    `SELECT recent_outcomes FROM test_perf_baselines WHERE test_id = @test_id`,
-  );
-  const row = _stmtTestFlipRateDigest.get({ test_id: testId }) as
-    | { recent_outcomes: string }
-    | undefined;
-  const all = row ? parseDigestOutcomes(row.recent_outcomes) : [];
-  return computeTestFlipRateFlagFromOutcomes(
+  const windowed = readRecentTestOutcomes(
+    db,
     testId,
-    all,
     windowN,
-    thresholdK,
-    beforeMs,
+    beforeMs === Number.MAX_SAFE_INTEGER ? undefined : beforeMs,
   );
-}
-
-/**
- * computeTestFlipRateFlag's transition-counting core, factored out so a
- * caller that already has a test's post-write outcome ring in memory (e.g.
- * ingestTestRunResultsTx's onDigestSample callback) can recompute the flag
- * without a recent_outcomes re-read.
- */
-export function computeTestFlipRateFlagFromOutcomes(
-  testId: string,
-  outcomes: DigestOutcomeSample[],
-  windowN: number,
-  thresholdK: number,
-  beforeMs: number = Number.MAX_SAFE_INTEGER,
-): TestFlipRateFlag {
-  const filtered =
-    beforeMs === Number.MAX_SAFE_INTEGER
-      ? outcomes
-      : outcomes.filter((s) => toDigestMicros(s.t) < toDigestMicros(beforeMs));
-  const windowed = filtered.slice(-windowN);
 
   let transitionCount = 0;
   for (let i = 1; i < windowed.length; i++) {
@@ -16104,7 +16108,9 @@ export function getLaneHealthRollup(
   const totalRuns = rows.length;
   const bandCounts = emptyBandCounts();
   for (const r of rows) bandCounts[classifyTestRequestRun(r).band] += 1;
-  const timedOut = rows.filter((r) => r.failure_reason === 'timeout').length;
+  const timedOut = rows.filter(
+    (r) => r.state === 'failed' && r.failure_reason === 'timeout',
+  ).length;
 
   const queueWaitSamples = rows
     .filter((r) => r.requested_at !== null)
