@@ -107,6 +107,9 @@ const SettingsSchema = z.object({
   // evaluateF2LaneFlakyDisposition (orchestration/testRequestLane.ts).
   flip_rate_breadth_n: z.coerce.number().int().min(1),
   flip_rate_breadth_window_hours: z.coerce.number().int().min(1),
+  // A test whose signature-matched breadth excusals span at least this many
+  // hours surfaces as one Decision Inbox item — see reconcileLongExcusedSignals.
+  long_excused_signal_hours: z.coerce.number().int().min(1),
   attribution_wait_deadline_minutes: z.coerce.number().int().min(1),
   // Above this many unattributed failing test ids in one run the digest
   // renders grouped-by-module output instead of per-test indicator lines.
@@ -245,6 +248,7 @@ export const SETTING_DEFAULTS: Settings = {
   flip_rate_threshold_k: 2,
   flip_rate_breadth_n: 3,
   flip_rate_breadth_window_hours: 24,
+  long_excused_signal_hours: 6,
   attribution_wait_deadline_minutes: 120,
   mass_breakage_threshold: 20,
   flaky_remediation_file_threshold: 2,

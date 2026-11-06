@@ -1013,6 +1013,26 @@ configureGateItemMirrorSink({
   retireMirror(intentId, reason) {
     withdrawGateVerifyMirror(intentId, reason);
   },
+  stageLongExcused({ project, testId, episodeStart, latestExcusedAt }) {
+    stageIntent(
+      'gate.verify',
+      {
+        origin: 'long-excused',
+        project,
+        testId,
+        episodeStart,
+        latestExcusedAt,
+      },
+      project,
+      null,
+      null,
+      `Long-excused base break: ${testId}`,
+      null,
+      null,
+      null,
+      null,
+    );
+  },
 });
 
 // Genuine gate.verify intent retire sink: when a gate item resolves through
