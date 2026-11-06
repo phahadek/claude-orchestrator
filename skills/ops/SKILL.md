@@ -151,6 +151,9 @@ unattended while still keeping a human on every close.
   - An **Operational** task that can't be completed via a sanctioned surface without new code is
     **blocked-pending-Code** (or was mis-declared Investigation). Stop, file, surface — don't
     excavate a code change solo.
+  - A workaround that hands the operator code to run (a script, a patched copy, a one-off tool) is
+    new code: file the fix as a 💻 task, wire Depends On, and wait. Never paste or ship an
+    untracked copy, however well tested.
   - An **Investigation** keeps *diagnosing* to root cause; it stops only to file (a Code / Operational
     task carrying the proven cause) when the remaining work is *doing*, not *understanding*. One that
     turns out to be a well-defined change dressed as a question → downgrade to **Operational** and do
@@ -294,6 +297,11 @@ conclusions.
   *not* — see the sanctioned-read-surface rule under Universal.) Never run session-level read-only
   GUCs over a pooled connection (they leak to other clients); for ad-hoc read SQL use the project's
   read-only role over the direct/unpooled path, and route every *write* through the audited CRUD.
+- **A service config reload goes through the deploy, not a hand restart.** An env or config file
+  change to a long-running service takes effect through the project's deploy path, which rolls the
+  service. Record it as pending the next deploy rather than restarting the service by hand. A hand
+  restart is break-glass, needs explicit operator approval, and must first confirm from source which
+  unit the restart verb actually targets.
 - **Operational execution is a *phase*, not per-action break-glass.** The break-glass framing above
   is for *one-off* actions; a task's *execution* is a sustained burst of them (one run: a price
   backfill + 8 per-market trade backfills + a re-match ≈ 10 prod actions). Metered one
