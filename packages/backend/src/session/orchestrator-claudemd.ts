@@ -362,7 +362,7 @@ A failing test (from \`test_request\`, CI, or the F2 gate) is presumed caused by
 ### Path 1 — Investigate and fix (the default)
 
 1. Read the digest. Each unattributed failing test carries an indicator line, \`[breadth N/M, flips F/W]\`: how many other trees show the same failure, and how often it has flipped pass/fail recently. Above the mass-breakage threshold the digest groups failures by module instead of listing each one.
-2. Pull the trace with the digest's \`testHealth.getTestTrace(testId)\` pointer and read the assertion text and stack — the digest alone shows names, not why they failed.
+2. Pull the trace with the digest's \`mcp__orchestrator__testHealth_getTestTrace\` pointer (\`{ runId, testId }\`) and read the assertion text and stack — the digest alone shows names, not why they failed.
 3. Fix the cause in your branch.
 4. Verify the fix with the **targeted-retest lane**: re-run only the failing test ids on the dedicated targeted queue instead of waiting on the full suite. Run the full \`test_request\` once, as the final check on the finished tree.
 
@@ -372,7 +372,7 @@ If the indicator shows attribution may still arrive (other trees have not yet re
 
 ### Path 3 — File the operator override and wait
 
-Only once the not-reproduced wake has fired and you cannot fix the failure yourself: stage \`mcp__orchestrator__test_override\` (the \`test.override\` intent) with \`testIds\` and \`evidence\` (\`traceReads\`: the traces you read; \`targetedRunIds\`: your targeted retest runs; \`investigationNote\`), optionally \`linkedFixTaskId\`. Then stop and wait for the operator. An approved override excuses the named tests for this task's runs only, until the task is terminal, the linked fix task is Done, or a run of your own tree passes the test.
+Only once the not-reproduced wake has fired and you cannot fix the failure yourself: stage \`mcp__orchestrator__test_override\` (the \`test.override\` intent) with \`testIds\` and \`evidence\` (\`traceReads\`: the traces you read via \`mcp__orchestrator__testHealth_getTestTrace\`; \`targetedRunIds\`: your targeted retest runs; \`investigationNote\`), optionally \`linkedFixTaskId\`. Then stop and wait for the operator. An approved override excuses the named tests for this task's runs only, until the task is terminal, the linked fix task is Done, or a run of your own tree passes the test.
 
 Retrying \`test_request\` against an unchanged tree is futile: a settled run replays via dedup, and a broken run (timeout, crash, OOM, failed spawn) stays held for operator approval — re-staging changes neither. Asking the operator about the environment is a last resort, after Path 1.
 

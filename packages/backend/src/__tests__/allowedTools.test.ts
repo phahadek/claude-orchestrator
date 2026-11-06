@@ -8,6 +8,8 @@ import {
   GROOM_ALLOWED_TOOLS,
   DESIGN_ALLOWED_TOOLS,
   OPS_ALLOWED_TOOLS,
+  INVESTIGATE_ALLOWED_TOOLS,
+  DEPTH_REVIEW_ALLOWED_TOOLS,
   PLANNING_DISALLOWED_TOOLS,
   NOTION_READ_MCP_TOOLS,
 } from '../config';
@@ -58,6 +60,7 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
   'pullRequest.getByTaskId',
   'gateSeed.getState',
   'testHealth.getFlakyHistory',
+  'testHealth.getTestTrace',
   'deploy.verdict',
   'gate.reclassify',
   'intent.dispositionStranded',
@@ -309,6 +312,22 @@ describe('ALLOWED_TOOLS — testHealth.getFlakyHistory grant', () => {
     expect(ALLOWED_TOOLS).toContain(
       'mcp__orchestrator__testHealth_getFlakyHistory',
     );
+  });
+});
+
+describe('testHealth.getTestTrace grant — coding sessions only', () => {
+  it('is allowed for coding sessions and absent from every other session type', () => {
+    const name = 'mcp__orchestrator__testHealth_getTestTrace';
+    expect(ALLOWED_TOOLS).toContain(name);
+    for (const set of [
+      GROOM_ALLOWED_TOOLS,
+      DESIGN_ALLOWED_TOOLS,
+      OPS_ALLOWED_TOOLS,
+      INVESTIGATE_ALLOWED_TOOLS,
+      DEPTH_REVIEW_ALLOWED_TOOLS,
+    ]) {
+      expect(set).not.toContain(name);
+    }
   });
 });
 

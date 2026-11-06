@@ -14,6 +14,7 @@ import { db } from '../../db/db';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { insertTestRequestRun } from '../../db/queries';
 import { typedGetSetting } from '../../config/settings';
 import { registerTestHealthReadTools } from './testHealthReadTools';
 
@@ -93,6 +94,128 @@ function entriesOf(result: ToolResult): Record<string, unknown>[] {
   if (typeof text !== 'string') throw new Error('expected text content');
   return (JSON.parse(text) as { entries: Record<string, unknown>[] }).entries;
 }
+
+function seedRun(
+  runId: string,
+  projectId: string,
+  tests: Array<{
+    id: string;
+    outcome: 'passed' | 'failed';
+    failureMessage?: string;
+    failureTraceExcerpt?: string;
+  }>,
+): void {
+  insertTestRequestRun(runId, projectId, 'hash-' + runId, null, 1700000000000);
+  const failed = tests.filter((t) => t.outcome === 'failed').length;
+  db.prepare(
+    'UPDATE test_request_runs SET structured_result = ? WHERE id = ?',
+  ).run(
+    JSON.stringify({
+      suites: [
+        {
+          name: 's',
+          tests: tests.map((t) => ({ ...t, name: t.id })),
+        },
+      ],
+      totals: { passed: tests.length - failed, failed, skipped: 0, errors: 0 },
+    }),
+    runId,
+  );
+}
+
+async function callTrace(args: Record<string, unknown>) {
+  const { client, close } = await connectedClient();
+  try {
+    const r = (await client.callTool({
+      name: 'testHealth.getTestTrace',
+      arguments: args,
+    })) as ToolResult;
+    return JSON.parse(r.content[0]?.text ?? '{}') as Record<string, unknown>;
+  } finally {
+    await close();
+  }
+}
+
+describe('testHealth.getTestTrace', () => {
+  beforeEach(() => {
+    db.prepare('DELETE FROM test_request_runs').run();
+  });
+
+  it('returns message and trace for a failing test', async () => {
+    seedRun('r1', PROJECT_ID, [
+      {
+        id: 't1',
+        outcome: 'failed',
+        failureMessage: 'expected 1 got 2',
+        failureTraceExcerpt: 'at foo.ts:1',
+      },
+    ]);
+    const out = await callTrace({ runId: 'r1', testId: 't1' });
+    expect(out).toMatchObject({
+      status: 'ok',
+      message: 'expected 1 got 2',
+      trace: 'at foo.ts:1',
+      truncated: false,
+      messageLength: 16,
+      traceLength: 11,
+    });
+  });
+
+  it('cuts an over-long message to head and tail within 8192 chars total', async () => {
+    const message = 'H'.repeat(6000) + 'T'.repeat(6000);
+    const trace = 'x'.repeat(2000);
+    seedRun('r2', PROJECT_ID, [
+      {
+        id: 't1',
+        outcome: 'failed',
+        failureMessage: message,
+        failureTraceExcerpt: trace,
+      },
+    ]);
+    const out = await callTrace({ runId: 'r2', testId: 't1' });
+    expect(out.status).toBe('ok');
+    expect(out.truncated).toBe(true);
+    expect(out.messageLength).toBe(12000);
+    expect(out.traceLength).toBe(2000);
+    const m = out.message as string;
+    expect(m).toContain('truncated');
+    expect(m.startsWith('HHH')).toBe(true);
+    expect(m.endsWith('TTT')).toBe(true);
+    expect(m.length + (out.trace as string).length).toBeLessThanOrEqual(8192);
+  });
+
+  it('returns no_detail for a failed test with nothing stored', async () => {
+    seedRun('r3', PROJECT_ID, [{ id: 't1', outcome: 'failed' }]);
+    expect((await callTrace({ runId: 'r3', testId: 't1' })).status).toBe(
+      'no_detail',
+    );
+  });
+
+  it('returns not_failing for a passing or absent test', async () => {
+    seedRun('r4', PROJECT_ID, [
+      { id: 'ok', outcome: 'passed' },
+      { id: 'bad', outcome: 'failed', failureMessage: 'm' },
+    ]);
+    expect((await callTrace({ runId: 'r4', testId: 'ok' })).status).toBe(
+      'not_failing',
+    );
+    expect((await callTrace({ runId: 'r4', testId: 'nope' })).status).toBe(
+      'not_failing',
+    );
+  });
+
+  it('returns run_not_found for an unknown run and for another project', async () => {
+    seedRun('r5', 'other-proj', [
+      { id: 't1', outcome: 'failed', failureMessage: 'm' },
+    ]);
+    expect((await callTrace({ runId: 'missing', testId: 't1' })).status).toBe(
+      'run_not_found',
+    );
+    expect((await callTrace({ runId: 'r5', testId: 't1' })).status).toBe(
+      'run_not_found',
+    );
+  });
+});
 
 describe('testHealth.getFlakyHistory', () => {
   it('rejects a call with no testIds', async () => {

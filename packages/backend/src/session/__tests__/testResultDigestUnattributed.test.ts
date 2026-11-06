@@ -51,9 +51,63 @@ describe('unattributed digest rendering', () => {
     for (const l of lines) {
       expect(l).toContain('breadth 2/3');
       expect(l).toContain('flips 1/20');
-      expect(l).toContain('testHealth.getTestTrace(runId=run1');
+      expect(l).not.toContain('getTestTrace');
     }
     expect(d).not.toContain('Mass breakage');
+    expect(d.match(/testHealth_getTestTrace/g)).toHaveLength(1);
+    expect(d).toContain(
+      '_Failure detail: call mcp__orchestrator__testHealth_getTestTrace with { runId: "run1", testId: "<a test id above>" }',
+    );
+    expect(d).not.toContain('testHealth.getTestTrace(');
+  });
+
+  it('emits no pointer when no listed failure has stored detail', () => {
+    const tests = failing(3).map((t) => ({ ...t, failure_message: null }));
+    const d = buildTestResultDigestFromOutcomes(outcomes(tests), {
+      unattributed: { view: view(tests), knownCount: 0 },
+    })!;
+    expect(d).not.toContain('getTestTrace');
+  });
+
+  it('emits one pointer on the grouped, plain and base-filter renderings', () => {
+    const many = failing(25);
+    const grouped = buildTestResultDigestFromOutcomes(outcomes(many), {
+      unattributed: { view: view(many), knownCount: 0 },
+    })!;
+    expect(grouped.match(/testHealth_getTestTrace/g)).toHaveLength(1);
+
+    const tests = failing(3);
+    const plain = buildTestResultDigestFromOutcomes(outcomes(tests), {
+      runId: 'run9',
+    })!;
+    expect(plain.match(/testHealth_getTestTrace/g)).toHaveLength(1);
+    expect(plain).toContain('runId: "run9"');
+    expect(buildTestResultDigestFromOutcomes(outcomes(tests))!).not.toContain(
+      'getTestTrace',
+    );
+
+    const result = {
+      outcome: 'filtered_partial' as const,
+      passed: false,
+      excludedTests: [],
+      flakyExcludedTests: [],
+      remainingTests: tests,
+      baseRun: null,
+    };
+    const plainFilter = renderBaseAttributableFilterDigest(
+      result,
+      [],
+      undefined,
+      'run7',
+    );
+    expect(plainFilter.match(/testHealth_getTestTrace/g)).toHaveLength(1);
+    expect(plainFilter).toContain('runId: "run7"');
+    const unattrFilter = renderBaseAttributableFilterDigest(
+      result,
+      [],
+      view(tests),
+    );
+    expect(unattrFilter.match(/testHealth_getTestTrace/g)).toHaveLength(1);
   });
 
   it('renders grouped output above the threshold with no per-test lines', () => {
