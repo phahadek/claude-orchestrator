@@ -29,7 +29,16 @@ const { projectFixture, runtimeSettingsFixture, orchestratorConfigFixture } =
     },
   }));
 
+vi.mock('../mergeQueue', () => ({
+  computeMergeQueues: () => new Map(),
+  checkPrQueueHead: () => ({ allowed: true, waitMs: 0 }),
+  checkLocalBranchQueueHead: () => ({ allowed: true, waitMs: 0 }),
+}));
+
 vi.mock('../../db/queries', () => ({
+  recordPrQueueWait: vi.fn(),
+  recordLocalBranchQueueWait: vi.fn(),
+  clearPrEnqueued: vi.fn(),
   getPRByNumber: vi.fn(),
   setHeadSha: vi.fn(),
   setPauseReason: vi.fn(),

@@ -57,6 +57,7 @@ import {
   CI_LOG_EXCERPT_CAP,
 } from './reviewUtils';
 import { sendConflictNudge } from './conflictNudge';
+import { checkPrQueueHead } from './mergeQueue';
 import { resolveCombinedTree } from '../orchestration/combinedTree';
 import { isTerminalStalePR } from './pollUtils';
 import {
@@ -856,6 +857,8 @@ export class PRMergeWatcher extends EventEmitter {
     combinedHash: string,
   ): void {
     if (!this.reviewOrchestrator || !pr.session_id) return;
+    // Only the project's merge-queue head spends suite runs; the rest wait.
+    if (!checkPrQueueHead(pr.pr_number, pr.repo).allowed) return;
     const key = this.prKey(pr);
     if (this.regateRequestedFor.get(key) === combinedHash) return;
     if (this.reviewOrchestrator.isReviewInFlight(pr.pr_number, pr.repo)) return;

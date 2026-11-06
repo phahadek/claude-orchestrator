@@ -8,7 +8,21 @@ vi.mock('../routes/tasks.js', () => ({
   emitTaskUpdated: vi.fn(),
 }));
 
+vi.mock('../github/mergeQueue', () => ({
+  computeMergeQueues: () => new Map(),
+  checkPrQueueHead: vi.fn(
+    ():
+      | { allowed: true; waitMs: number }
+      | { allowed: false; headLabel: string } => ({
+      allowed: true,
+      waitMs: 0,
+    }),
+  ),
+  checkLocalBranchQueueHead: () => ({ allowed: true, waitMs: 0 }),
+}));
+
 vi.mock('../db/queries.js', () => ({
+  recordPrQueueWait: vi.fn(),
   getPRs: vi.fn(),
   getPRByNumber: vi.fn(),
   updatePRState: vi.fn(),
@@ -123,6 +137,7 @@ vi.mock('../session/orchestrator-config.js', () => ({
 
 import { createPrsRouter, setPRBroadcast } from '../routes/prs.js';
 import * as queries from '../db/queries.js';
+import { checkPrQueueHead } from '../github/mergeQueue.js';
 import * as auditLog from '../audit/AuditLog.js';
 import type { PullRequest } from '../github/types.js';
 import { GitHubApiError } from '../github/types.js';
@@ -914,6 +929,40 @@ describe('POST /api/prs/:prNumber/merge', () => {
     expect(vi.mocked(sessionManager.sendOrResume)).toHaveBeenCalledWith(
       'session-xyz',
       'PR #42 has merge conflicts with the base branch. Rebase onto `dev`, resolve the conflicts, and push the fixed branch.',
+    );
+  });
+
+  it('returns 409 and never calls mergePR when the PR is queued behind another entry', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    vi.mocked(checkPrQueueHead).mockReturnValueOnce({
+      allowed: false,
+      headLabel: 'PR #7',
+    });
+    const github = makeMockGitHub();
+    const res = await supertest(
+      buildApp(github, makeMockPRReviewService(), makeMockSessionManager()),
+    )
+      .post('/api/prs/owner/repo/42/merge')
+      .send({ commitTitle: 'feat: add something (#42)' });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toContain('PR #7');
+    expect(github.mergePR).not.toHaveBeenCalled();
+  });
+
+  it('records queue wait time when the head PR merges', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    vi.mocked(checkPrQueueHead).mockReturnValueOnce({
+      allowed: true,
+      waitMs: 1234,
+    });
+    const res = await supertest(buildApp())
+      .post('/api/prs/owner/repo/42/merge')
+      .send({ commitTitle: 'feat: add something (#42)' });
+    expect(res.status).toBe(200);
+    expect(vi.mocked(queries.recordPrQueueWait)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      1234,
     );
   });
 

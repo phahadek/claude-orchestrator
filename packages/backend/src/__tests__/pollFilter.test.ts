@@ -7,6 +7,11 @@ vi.mock('../db/queries.js', () =>
   mockDbQueries({
     getAllOpenPRs: vi.fn(),
     getApprovedOpenPRs: vi.fn(),
+    ensurePrEnqueued: vi.fn((_n: number, _r: string, now: number) => now),
+    ensureLocalBranchEnqueued: vi.fn((_i: number, now: number) => now),
+    recordPrQueueWait: vi.fn(),
+    recordLocalBranchQueueWait: vi.fn(),
+    clearPrEnqueued: vi.fn(),
     getApprovedLocalBranches: vi.fn().mockReturnValue([]),
     getOrphanMergeablePRs: vi.fn().mockReturnValue([]),
     getStaleAutoMergeFailedPRs: vi.fn().mockReturnValue([]),

@@ -5317,6 +5317,63 @@ export function getApprovedOpenPRs(): PullRequestRow[] {
 }
 
 /**
+ * Stamps the persisted merge-queue enqueue time on first sight of a merge-ready
+ * PR; idempotent so the original position survives repeated polls and restarts.
+ */
+export function ensurePrEnqueued(
+  prNumber: number,
+  repo: string,
+  now: number,
+): number {
+  db.prepare(
+    `UPDATE pull_requests SET merge_queue_enqueued_at = ?
+     WHERE pr_number = ? AND repo = ? AND merge_queue_enqueued_at IS NULL`,
+  ).run(now, prNumber, repo);
+  const row = db
+    .prepare(
+      `SELECT merge_queue_enqueued_at AS t FROM pull_requests WHERE pr_number = ? AND repo = ?`,
+    )
+    .get(prNumber, repo) as { t: number | null } | undefined;
+  return row?.t ?? now;
+}
+
+export function ensureLocalBranchEnqueued(id: number, now: number): number {
+  db.prepare(
+    `UPDATE local_branches SET merge_queue_enqueued_at = ?
+     WHERE id = ? AND merge_queue_enqueued_at IS NULL`,
+  ).run(now, id);
+  const row = db
+    .prepare(
+      `SELECT merge_queue_enqueued_at AS t FROM local_branches WHERE id = ?`,
+    )
+    .get(id) as { t: number | null } | undefined;
+  return row?.t ?? now;
+}
+
+/** Clears the enqueue stamp so an ejected PR re-enters at the back, not the front. */
+export function clearPrEnqueued(prNumber: number, repo: string): void {
+  db.prepare(
+    `UPDATE pull_requests SET merge_queue_enqueued_at = NULL WHERE pr_number = ? AND repo = ?`,
+  ).run(prNumber, repo);
+}
+
+export function recordPrQueueWait(
+  prNumber: number,
+  repo: string,
+  waitMs: number,
+): void {
+  db.prepare(
+    `UPDATE pull_requests SET merge_queue_wait_ms = ? WHERE pr_number = ? AND repo = ?`,
+  ).run(waitMs, prNumber, repo);
+}
+
+export function recordLocalBranchQueueWait(id: number, waitMs: number): void {
+  db.prepare(
+    `UPDATE local_branches SET merge_queue_wait_ms = ? WHERE id = ?`,
+  ).run(waitMs, id);
+}
+
+/**
  * Sets the docs execution flow's never-auto-merged output gate at PR-open
  * time. Idempotent — a repeat call with the same value is a no-op.
  */

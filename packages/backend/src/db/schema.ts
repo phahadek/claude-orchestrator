@@ -3534,6 +3534,19 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
+  // Per-project serialized merge queue: the queue is derived from merge-ready
+  // rows ordered by this persisted enqueue timestamp, so a restart rebuilds it.
+  // merge_queue_wait_ms records enqueue -> merge for later batching analysis.
+  for (const table of ['pull_requests', 'local_branches']) {
+    for (const col of ['merge_queue_enqueued_at', 'merge_queue_wait_ms']) {
+      try {
+        target.exec(`ALTER TABLE ${table} ADD COLUMN ${col} INTEGER`);
+      } catch {
+        /* already exists */
+      }
+    }
+  }
+
   // dropped_at: mirrors delivered_at's shape but marks an inbox item that
   // deliverUndeliveredInboxItems discarded for a terminal/archived session
   // rather than delivered — see the enqueue-before-guard task. Keeping it a
