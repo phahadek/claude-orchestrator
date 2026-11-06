@@ -21,8 +21,8 @@ describe('getRegressedTestsForProject short-circuit', () => {
   it('never prepares the three-way join when test_perf_baselines has no regressed rows', () => {
     db.prepare(
       `INSERT INTO test_request_runs
-         (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at)
-       VALUES ('run-1', 'proj-1', 'hash-1', NULL, 'passed', '', 0, 0, 100)`,
+         (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at)
+       VALUES ('run-1', 'proj-1', 'hash-1', NULL, 'passed', 0, 0, 100)`,
     ).run();
     db.prepare(
       `INSERT INTO test_run_results

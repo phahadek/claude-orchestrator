@@ -2153,6 +2153,14 @@ function extractTaskId(kind: string, payload: unknown): string | null {
     return `${p.taskId}::${p.section.trim()}`;
   }
   if (kind === 'gate.verify') {
+    const long = payload as {
+      origin?: unknown;
+      testId?: unknown;
+      project?: unknown;
+    } | null;
+    if (long?.origin === 'long-excused' && typeof long.testId === 'string') {
+      return `long-excused:${String(long.project)}:${long.testId}`;
+    }
     const gateItemId = (payload as { gateItemId?: unknown } | null)?.gateItemId;
     // Reuses the `gate-item:<id>` shape already established elsewhere for a
     // gate-verify session's own task_id sentinel (gateItemVerifier.ts,
@@ -2344,7 +2352,21 @@ interface GateVerifyIntentPayload {
    * (see commitGateVerifyAutoCommit): it carries `reclassify` and no
    * disposition, and its approval only calls proposeGateItemReclassification.
    */
-  origin?: 'mirror' | 'consent' | 'unresolved-source' | 'reclassify';
+  origin?:
+    | 'mirror'
+    | 'consent'
+    | 'unresolved-source'
+    | 'reclassify'
+    | 'long-excused';
+  /**
+   * `origin: 'long-excused'` only: the test that has stayed breadth-excused,
+   * and the excused_at of its episode's first excusal (the episode identity —
+   * a dismissal is terminal for that episode). Such an intent carries no
+   * `gateItemId` and is acknowledge-only on apply/dismiss.
+   */
+  testId?: string;
+  project?: string;
+  episodeStart?: number;
 }
 /**
  * Payload for the notion.pageEdit staged intent — the Notion
@@ -2947,6 +2969,14 @@ function validateGateVerifyPayload(
   projectId: string,
 ): asserts payload is GateVerifyIntentPayload {
   const p = payload as Partial<GateVerifyIntentPayload> | null;
+  if (p?.origin === 'long-excused') {
+    if (typeof p.testId !== 'string' || p.testId === '') {
+      throw new Error(
+        '[stagedIntents] gate.verify rejected: a long-excused intent requires a testId',
+      );
+    }
+    return;
+  }
   const gateItemId = p?.gateItemId;
   if (typeof gateItemId !== 'string' || !GATE_ITEM_UUID_RE.test(gateItemId)) {
     throw new GateVerifyPayloadValidationError(gateItemId);
@@ -5707,6 +5737,10 @@ async function applyIntent(
     }
     case 'gate.verify': {
       const payload = intent.payload as GateVerifyIntentPayload;
+      if (payload.origin === 'long-excused') {
+        // Acknowledge-only: routes to no gate item.
+        return { ok: true, acknowledged: true };
+      }
       if (payload.origin === 'consent') {
         throw new Error(
           `[stagedIntents] gate.verify apply: a consent mirror for "${payload.gateItemId}" is dispositioned via the gate approve/reject endpoints, not intent apply`,

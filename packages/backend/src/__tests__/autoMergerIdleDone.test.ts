@@ -39,7 +39,18 @@ const { projectFixture, runtimeSettingsFixture } = vi.hoisted(() => ({
   },
 }));
 
+vi.mock('../github/mergeQueue', () => ({
+  computeMergeQueues: () => new Map(),
+  checkPrQueueHead: () => ({ allowed: true, waitMs: 0 }),
+  checkLocalBranchQueueHead: () => ({ allowed: true, waitMs: 0 }),
+}));
+
 vi.mock('../db/queries.js', () => ({
+  ensurePrEnqueued: vi.fn((_n: number, _r: string, now: number) => now),
+  ensureLocalBranchEnqueued: vi.fn((_i: number, now: number) => now),
+  recordPrQueueWait: vi.fn(),
+  recordLocalBranchQueueWait: vi.fn(),
+  clearPrEnqueued: vi.fn(),
   getPRByNumber: vi.fn(),
   setPauseReason: vi.fn(),
   updateMergeState: vi.fn(),

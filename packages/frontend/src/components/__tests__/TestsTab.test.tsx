@@ -1,7 +1,14 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import {
+  render,
+  screen,
+  waitFor,
+  act,
+  fireEvent,
+} from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { TestsTab } from '../TestsTab';
 import { apiRequest } from '../../api/projects';
+import { publishTestRequestRunStatus } from '../../hooks/testRequestRunStatusBus';
 
 vi.mock('../../api/projects', () => ({
   apiRequest: vi.fn(),
@@ -72,6 +79,45 @@ describe('TestsTab', () => {
     );
   });
 
+  it('renders unexercised paths, coverage-unknown for NULL, and nothing for an empty list', async () => {
+    const base = {
+      sessionId: 'sess-1',
+      contentHash: 'h',
+      startedAt: 1000,
+      finishedAt: 2000,
+      durationMs: 1000,
+      concurrentRunCount: 0,
+      outcome: 'passed',
+      nextAction: 'ok',
+      testResults: [],
+    };
+    vi.mocked(apiRequest).mockResolvedValue({
+      cycleCount: 3,
+      cycleLimit: 5,
+      runs: [
+        {
+          ...base,
+          id: 'run-a',
+          unclaimed_paths: JSON.stringify(['web/app.ts', 'docs/x.md']),
+        },
+        { ...base, id: 'run-b', unclaimed_paths: null },
+        { ...base, id: 'run-c', unclaimed_paths: '[]' },
+      ],
+    });
+
+    render(<TestsTab projectId="proj-1" sessionId="sess-1" />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('test-run-unexercised-run-a')).toBeTruthy(),
+    );
+    expect(
+      screen.getByTestId('test-run-unexercised-run-a').textContent,
+    ).toContain('web/app.ts');
+    expect(screen.getByTestId('test-run-coverage-unknown-run-b')).toBeTruthy();
+    expect(screen.queryByTestId('test-run-unexercised-run-c')).toBeNull();
+    expect(screen.queryByTestId('test-run-coverage-unknown-run-c')).toBeNull();
+  });
+
   it('renders a not-yet-run empty state when there is no session', () => {
     render(<TestsTab projectId="proj-1" sessionId={null} />);
     expect(apiRequest).not.toHaveBeenCalled();
@@ -122,5 +168,88 @@ describe('TestsTab', () => {
       'PR pipeline (full)',
     );
     expect(screen.queryByTestId('test-run-source-run-own')).not.toBeTruthy();
+  });
+
+  it('shows cancel only on queued/running rows, renders cancelled distinctly, and handles 409', async () => {
+    const base = {
+      sessionId: 'sess-1',
+      contentHash: 'h',
+      startedAt: 1000,
+      finishedAt: null,
+      durationMs: null,
+      concurrentRunCount: 0,
+      nextAction: 'next',
+      testResults: [],
+    };
+    vi.mocked(apiRequest).mockImplementation((url: RequestInfo) =>
+      String(url).includes('/cancel')
+        ? Promise.reject(new Error('run already settled'))
+        : Promise.resolve({
+            cycleCount: 1,
+            cycleLimit: 5,
+            runs: [
+              { ...base, id: 'q', outcome: 'queued' },
+              { ...base, id: 'r', outcome: 'running' },
+              { ...base, id: 'p', outcome: 'passed', finishedAt: 2000 },
+              {
+                ...base,
+                id: 'c',
+                outcome: 'failed-with-no-report-acquired',
+                failureReason: 'cancelled',
+                cancelledBy: 'dev-1',
+                finishedAt: 2000,
+              },
+            ],
+          }),
+    );
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    render(<TestsTab projectId="proj-1" sessionId="sess-1" />);
+    await waitFor(() => expect(screen.getByTestId('tests-tab')).toBeTruthy());
+
+    expect(screen.getByTestId('test-run-cancel-q')).toBeTruthy();
+    expect(screen.getByTestId('test-run-cancel-r')).toBeTruthy();
+    expect(screen.queryByTestId('test-run-cancel-p')).toBeNull();
+    expect(screen.queryByTestId('test-run-cancel-c')).toBeNull();
+    expect(screen.getByTestId('test-run-outcome-c').textContent).toBe(
+      'Cancelled',
+    );
+    expect(screen.getByTestId('test-run-cancelled-by-c').textContent).toContain(
+      'dev-1',
+    );
+
+    fireEvent.click(screen.getByTestId('test-run-cancel-q'));
+    await waitFor(() =>
+      expect(screen.getByTestId('tests-tab-cancel-notice').textContent).toBe(
+        'That run already finished.',
+      ),
+    );
+    expect(apiRequest).toHaveBeenCalledWith('/api/test-request-runs/q/cancel', {
+      method: 'POST',
+    });
+  });
+
+  it('refetches history on a matching run-status payload only', async () => {
+    vi.mocked(apiRequest).mockResolvedValue({
+      cycleCount: 0,
+      cycleLimit: 5,
+      runs: [],
+    });
+    render(<TestsTab projectId="proj-1" sessionId="sess-1" />);
+    await waitFor(() => expect(apiRequest).toHaveBeenCalledTimes(1));
+
+    const payload = {
+      runId: 'r',
+      projectId: 'proj-1',
+      contentHash: 'h',
+      status: 'running' as const,
+      sessionId: 'other',
+      startedAt: 1,
+    };
+    act(() => publishTestRequestRunStatus(payload));
+    expect(apiRequest).toHaveBeenCalledTimes(1);
+
+    act(() => publishTestRequestRunStatus({ ...payload, sessionId: 'sess-1' }));
+    await waitFor(() => expect(apiRequest).toHaveBeenCalledTimes(2));
   });
 });

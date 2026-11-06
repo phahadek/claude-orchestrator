@@ -3,6 +3,7 @@ import path from 'path';
 import { Worker } from 'worker_threads';
 import { createHash, randomUUID } from 'crypto';
 import { db } from './db';
+import { hasInlineRunOutputColumn } from './schema';
 import { logger } from '../logger';
 import { recordEvent, hasTaskEditSinceTimestamp } from '../audit/AuditLog';
 import {
@@ -114,6 +115,8 @@ import { deriveBranchSlug } from '../session/branchSlug';
 import {
   insertTestSample,
   pruneTestSamples,
+  readRecentTestDurations,
+  readRecentTestOutcomes,
   verifyTestSamples,
   type TestSampleVerificationRow,
 } from './testSampleStore';
@@ -5316,6 +5319,63 @@ export function getApprovedOpenPRs(): PullRequestRow[] {
 }
 
 /**
+ * Stamps the persisted merge-queue enqueue time on first sight of a merge-ready
+ * PR; idempotent so the original position survives repeated polls and restarts.
+ */
+export function ensurePrEnqueued(
+  prNumber: number,
+  repo: string,
+  now: number,
+): number {
+  db.prepare(
+    `UPDATE pull_requests SET merge_queue_enqueued_at = ?
+     WHERE pr_number = ? AND repo = ? AND merge_queue_enqueued_at IS NULL`,
+  ).run(now, prNumber, repo);
+  const row = db
+    .prepare(
+      `SELECT merge_queue_enqueued_at AS t FROM pull_requests WHERE pr_number = ? AND repo = ?`,
+    )
+    .get(prNumber, repo) as { t: number | null } | undefined;
+  return row?.t ?? now;
+}
+
+export function ensureLocalBranchEnqueued(id: number, now: number): number {
+  db.prepare(
+    `UPDATE local_branches SET merge_queue_enqueued_at = ?
+     WHERE id = ? AND merge_queue_enqueued_at IS NULL`,
+  ).run(now, id);
+  const row = db
+    .prepare(
+      `SELECT merge_queue_enqueued_at AS t FROM local_branches WHERE id = ?`,
+    )
+    .get(id) as { t: number | null } | undefined;
+  return row?.t ?? now;
+}
+
+/** Clears the enqueue stamp so an ejected PR re-enters at the back, not the front. */
+export function clearPrEnqueued(prNumber: number, repo: string): void {
+  db.prepare(
+    `UPDATE pull_requests SET merge_queue_enqueued_at = NULL WHERE pr_number = ? AND repo = ?`,
+  ).run(prNumber, repo);
+}
+
+export function recordPrQueueWait(
+  prNumber: number,
+  repo: string,
+  waitMs: number,
+): void {
+  db.prepare(
+    `UPDATE pull_requests SET merge_queue_wait_ms = ? WHERE pr_number = ? AND repo = ?`,
+  ).run(waitMs, prNumber, repo);
+}
+
+export function recordLocalBranchQueueWait(id: number, waitMs: number): void {
+  db.prepare(
+    `UPDATE local_branches SET merge_queue_wait_ms = ? WHERE id = ?`,
+  ).run(waitMs, id);
+}
+
+/**
  * Sets the docs execution flow's never-auto-merged output gate at PR-open
  * time. Idempotent — a repeat call with the same value is a no-op.
  */
@@ -9854,8 +9914,8 @@ export function insertTestRequestRun(
   priorityGroup: string | null = null,
 ): void {
   const insertRun = db.prepare(
-    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, concurrent_run_count, run_origin, producer, run_kind, base_sha, worktree_path, commands, breadth_origin, runner_executed, task_id, priority_group)
-     VALUES (?, ?, ?, ?, ?, '', ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at, failure_reason, concurrent_run_count, run_origin, producer, run_kind, base_sha, worktree_path, commands, breadth_origin, runner_executed, task_id, priority_group)
+     VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const insertOutput = db.prepare(
     `INSERT OR REPLACE INTO test_request_run_output (run_id, output) VALUES (?, '')`,
@@ -9943,10 +10003,10 @@ export function insertCoverageTestRequestRun(
   const sourceOutput = getTestRequestRunOutput(source.id);
   const insertRun = db.prepare(
     `INSERT INTO test_request_runs (
-       id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at,
+       id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at,
        failure_reason, structured_result, oom_killed, test_report_acquisition_attempted,
        run_origin, producer, run_kind, base_sha, worktree_path, failed_command, commands, coverage_source_run_id, breadth_origin
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   db.transaction(() => {
     insertRun.run(
@@ -9955,7 +10015,6 @@ export function insertCoverageTestRequestRun(
       contentHash,
       sessionId,
       source.state,
-      sourceOutput,
       requestedAt,
       requestedAt,
       requestedAt,
@@ -9996,11 +10055,14 @@ export function withdrawTestRequestRun(id: string, supersededBy: string): void {
 
 /** Settles a still-queued run as an operator cancel: failed / 'cancelled', no verdict. */
 export function cancelQueuedTestRequestRun(id: string, output: string): void {
-  db.prepare(
+  const update = db.prepare(
     `UPDATE test_request_runs
-     SET state = 'failed', failure_reason = 'cancelled', finished_at = ?, output = ?
+     SET state = 'failed', failure_reason = 'cancelled', finished_at = ?
      WHERE id = ? AND state = 'queued'`,
-  ).run(Date.now(), output, id);
+  );
+  db.transaction(() => {
+    if (update.run(Date.now(), id).changes > 0) upsertRunOutput(id, output);
+  })();
 }
 
 /** Records the pre-test merge's result onto a run row. */
@@ -10093,12 +10155,11 @@ export function completeTestRequestRun(
   unclaimedPaths?: string | null,
 ): void {
   const update = db.prepare(
-    `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ?, failure_reason = ?, structured_result = ?, oom_killed = ?, test_report_acquisition_attempted = ?, failed_command = ?, command_stats = ?, nothing_exercised = ?, unclaimed_paths = ? WHERE id = ?`,
+    `UPDATE test_request_runs SET state = ?, finished_at = ?, failure_reason = ?, structured_result = ?, oom_killed = ?, test_report_acquisition_attempted = ?, failed_command = ?, command_stats = ?, nothing_exercised = ?, unclaimed_paths = ? WHERE id = ?`,
   );
   db.transaction(() => {
     update.run(
       state,
-      output,
       Date.now(),
       failureReason,
       structuredResult ?? null,
@@ -10123,31 +10184,28 @@ function upsertRunOutput(runId: string, output: string): void {
 
 /**
  * The run's captured output, fetched by primary key from the side table.
- * Falls back to the inline column while the background copy has not yet
- * reached the run.
  */
 export function getTestRequestRunOutput(runId: string): string {
   const side = db
     .prepare(`SELECT output FROM test_request_run_output WHERE run_id = ?`)
     .get(runId) as { output: string } | undefined;
-  if (side && side.output !== '') return side.output;
-  const inline = db
-    .prepare(`SELECT output FROM test_request_runs WHERE id = ?`)
-    .get(runId) as { output: string } | undefined;
-  return inline?.output ?? side?.output ?? '';
+  return side?.output ?? '';
 }
 
 const RUN_OUTPUT_COPY_BATCH = 200;
 
 /**
  * Copies one keyset batch of inline output into side rows for runs lacking
- * one (INSERT OR IGNORE — idempotent). Resumable: pass back `nextAfterId`.
- * `done` is true when no runs remain past the cursor.
+ * or whose side row is still empty (idempotent). Resumable: pass back
+ * `nextAfterId`. `done` is true when no runs remain past the cursor, or the
+ * inline column is already dropped.
  */
-export function copyTestRequestRunOutputBatch(
+function copyTestRequestRunOutputBatch(
   afterId: string | null,
   batchSize = RUN_OUTPUT_COPY_BATCH,
 ): { copied: number; nextAfterId: string | null; done: boolean } {
+  if (!hasInlineRunOutputColumn(db))
+    return { copied: 0, nextAfterId: afterId, done: true };
   return db.transaction(() => {
     const ids = db
       .prepare(
@@ -10158,8 +10216,10 @@ export function copyTestRequestRunOutputBatch(
       return { copied: 0, nextAfterId: afterId, done: true };
     const info = db
       .prepare(
-        `INSERT OR IGNORE INTO test_request_run_output (run_id, output)
-         SELECT id, output FROM test_request_runs WHERE id > ? AND id <= ?`,
+        `INSERT INTO test_request_run_output (run_id, output)
+         SELECT id, output FROM test_request_runs WHERE id > ? AND id <= ?
+         ON CONFLICT(run_id) DO UPDATE SET output = excluded.output
+         WHERE test_request_run_output.output = ''`,
       )
       .run(afterId ?? '', ids[ids.length - 1].id);
     return {
@@ -10168,18 +10228,6 @@ export function copyTestRequestRunOutputBatch(
       done: ids.length < batchSize,
     };
   })();
-}
-
-/** Runs whose non-empty inline output has no side row or a differing one — R2 requires 0. */
-export function countTestRequestRunOutputMismatches(): number {
-  const row = db
-    .prepare(
-      `SELECT COUNT(*) AS n FROM test_request_runs r
-       LEFT JOIN test_request_run_output o ON o.run_id = r.id
-       WHERE r.output != '' AND (o.run_id IS NULL OR o.output != r.output)`,
-    )
-    .get() as { n: number };
-  return row.n;
 }
 
 let runOutputCopyTimer: ReturnType<typeof setTimeout> | null = null;
@@ -10420,11 +10468,11 @@ export function failStaleRunnerExecutedTestRequestRun(
 ): boolean {
   const update = db.prepare(
     `UPDATE test_request_runs
-     SET state = 'failed', output = ?, finished_at = ?, failure_reason = 'runner_unreachable'
+     SET state = 'failed', finished_at = ?, failure_reason = 'runner_unreachable'
      WHERE id = ? AND runner_executed = 1 AND state IN ('queued', 'running') AND started_at <= ?`,
   );
   return db.transaction(() => {
-    const info = update.run(output, Date.now(), id, cutoff);
+    const info = update.run(Date.now(), id, cutoff);
     if (info.changes > 0) upsertRunOutput(id, output);
     return info.changes > 0;
   })();
@@ -11355,7 +11403,7 @@ export const TEST_DURATION_DIGEST_CAPACITY = 32;
 /** >= flip_rate_window_n's max bound (config/settings.ts) — every production caller of computeTestFlipRateFlag passes that setting as windowN. */
 export const TEST_OUTCOME_DIGEST_CAPACITY = 200;
 
-export interface DigestOutcomeSample {
+interface DigestOutcomeSample {
   o: 'P' | 'F';
   t: number;
   /** Tree identity (test_request_runs.content_hash) the sample was produced on — absent on legacy samples predating this field. */
@@ -11370,11 +11418,7 @@ export interface DigestOutcomeSample {
  * re-reading the row it was just written from.
  */
 export interface TestPerfDigestSampleResult {
-  /** Oldest-first, capped at TEST_DURATION_DIGEST_CAPACITY — same order as the stored ring. */
-  durations: number[];
-  /** Oldest-first, capped at TEST_OUTCOME_DIGEST_CAPACITY — same order as the stored ring. */
-  outcomes: DigestOutcomeSample[];
-  /** False when only the outcome ring advanced (a concurrent run) — durations/baseline are unchanged. */
+  /** False when only the outcome side advanced (a concurrent run) — durations/baseline are unchanged. */
   durationAdmitted: boolean;
 }
 
@@ -11549,13 +11593,15 @@ export function recordTestPerfDigestSample(
   });
   pruneTestSamples(db, testId);
 
-  return { durations, outcomes, durationAdmitted };
+  return { durationAdmitted };
 }
 
 /** Per-project count of digest elements the test_sample projection fails to reproduce; see verifyTestSamples. */
 export function verifyTestSampleDigestParity(): TestSampleVerificationRow[] {
   return verifyTestSamples(db);
 }
+
+let lastIngestSequenceEnd = 0;
 
 /**
  * Ingests one completed run's extracted test results: writes a
@@ -11605,7 +11651,10 @@ export function ingestTestRunResultsTx(
     else counts.other++;
   }
   const failing = tests.filter((t) => t.outcome !== 'passed');
-  const baseSequence = Date.now() * 1000;
+  // Strictly beyond any prior ingestion's range: test_sample's (test_id,
+  // sequenced_at) key would otherwise silently drop a same-ms sample.
+  const baseSequence = Math.max(Date.now() * 1000, lastIngestSequenceEnd);
+  lastIngestSequenceEnd = baseSequence + tests.length;
 
   const tx = db.transaction(() => {
     insertTestRunResults(
@@ -11803,30 +11852,16 @@ export function countTestRunResultsForRun(testRequestRunId: string): number {
 
 // ─── test_perf_baselines ────────────────────────────────────────────────────
 
-let _stmtGetTestPerfDigestDurations: Database.Statement | null = null;
-
 /**
- * Most recent `limit` *valid* (concurrent_run_count = 0 AND oom_killed = 0)
- * durations for a test_id, newest first — the sample pool
- * computeTestPerfBaseline draws its baseline window and recent-run guard
- * from. Reads the fixed-width digest ring on test_perf_baselines
- * (recordTestPerfDigestSample) rather than raw test_run_results rows —
- * `limit` must not exceed TEST_DURATION_DIGEST_CAPACITY or the result is
- * silently truncated to whatever the ring retained.
+ * Newest `limit` duration-bearing test_sample rows (clean solo runs only —
+ * recordTestPerfDigestSample's admission rule), newest first. `limit` must not
+ * exceed the test_sample duration retention (32).
  */
 export function listRecentValidTestDurations(
   testId: string,
   limit: number,
 ): number[] {
-  _stmtGetTestPerfDigestDurations ??= db.prepare<{ test_id: string }>(
-    `SELECT recent_durations FROM test_perf_baselines WHERE test_id = @test_id`,
-  );
-  const row = _stmtGetTestPerfDigestDurations.get({ test_id: testId }) as
-    | { recent_durations: string }
-    | undefined;
-  if (!row) return [];
-  const durations = parseDigestDurations(row.recent_durations);
-  return durations.slice(-limit).reverse();
+  return readRecentTestDurations(db, testId, limit);
 }
 
 let _stmtUpsertTestPerfBaseline: Database.Statement | null = null;
@@ -11886,8 +11921,6 @@ export interface TestFlipRateFlag {
   flagged: boolean;
 }
 
-let _stmtTestFlipRateDigest: Database.Statement | null = null;
-
 /**
  * Live pass<->fail flip-rate flag for one test id, recomputed from its last
  * `windowN` valid samples (concurrent_run_count = 0 and oom_killed = false —
@@ -11903,10 +11936,9 @@ let _stmtTestFlipRateDigest: Database.Statement | null = null;
  * flag clears on its own the moment a fresh ingestion's recomputation drops
  * the transition count back below K; there is no sticky marker to reset.
  *
- * Reads the fixed-width outcome-sequence digest on test_perf_baselines
- * (recordTestPerfDigestSample) rather than raw test_run_results rows.
- * `windowN` must not exceed TEST_OUTCOME_DIGEST_CAPACITY — see
- * flip_rate_window_n's .max() bound in config/settings.ts.
+ * Reads the newest outcome-bearing test_sample rows. `windowN` must not
+ * exceed the test_sample outcome retention (200) — see flip_rate_window_n's
+ * .max() bound in config/settings.ts.
  */
 export function computeTestFlipRateFlag(
   testId: string,
@@ -11918,40 +11950,12 @@ export function computeTestFlipRateFlag(
   // for every other caller (listFlaggedFlakyTests, the lane-health rollup).
   beforeMs: number = Number.MAX_SAFE_INTEGER,
 ): TestFlipRateFlag {
-  _stmtTestFlipRateDigest ??= db.prepare<{ test_id: string }>(
-    `SELECT recent_outcomes FROM test_perf_baselines WHERE test_id = @test_id`,
-  );
-  const row = _stmtTestFlipRateDigest.get({ test_id: testId }) as
-    | { recent_outcomes: string }
-    | undefined;
-  const all = row ? parseDigestOutcomes(row.recent_outcomes) : [];
-  return computeTestFlipRateFlagFromOutcomes(
+  const windowed = readRecentTestOutcomes(
+    db,
     testId,
-    all,
     windowN,
-    thresholdK,
-    beforeMs,
+    beforeMs === Number.MAX_SAFE_INTEGER ? undefined : beforeMs,
   );
-}
-
-/**
- * computeTestFlipRateFlag's transition-counting core, factored out so a
- * caller that already has a test's post-write outcome ring in memory (e.g.
- * ingestTestRunResultsTx's onDigestSample callback) can recompute the flag
- * without a recent_outcomes re-read.
- */
-export function computeTestFlipRateFlagFromOutcomes(
-  testId: string,
-  outcomes: DigestOutcomeSample[],
-  windowN: number,
-  thresholdK: number,
-  beforeMs: number = Number.MAX_SAFE_INTEGER,
-): TestFlipRateFlag {
-  const filtered =
-    beforeMs === Number.MAX_SAFE_INTEGER
-      ? outcomes
-      : outcomes.filter((s) => toDigestMicros(s.t) < toDigestMicros(beforeMs));
-  const windowed = filtered.slice(-windowN);
 
   let transitionCount = 0;
   for (let i = 1; i < windowed.length; i++) {
@@ -12248,10 +12252,13 @@ export function countDistinctOtherOriginPassesSince(
   testId: string,
   sinceMs: number,
   ownTree: BreadthOwnTree,
+  opts: { untilMs?: number; projectId?: string } = {},
 ): number {
   _stmtOtherTreePasses ??= db.prepare<{
     test_id: string;
     since_ms: number;
+    until_ms: number;
+    project_id: string | null;
     own_sessions: string;
     own_worktrees: string;
   }>(`
@@ -12271,6 +12278,8 @@ export function countDistinctOtherOriginPassesSince(
     WHERE t.test_id = @test_id
       AND t.outcome = 'passed'
       AND t.created_at > @since_ms
+      AND t.created_at <= @until_ms
+      AND (@project_id IS NULL OR o.project_id = @project_id)
       AND o.worktree_path IS NOT NULL
       AND o.worktree_path NOT IN (SELECT value FROM json_each(@own_worktrees))
       AND (o.session_id IS NULL
@@ -12280,10 +12289,41 @@ export function countDistinctOtherOriginPassesSince(
   const row = _stmtOtherTreePasses.get({
     test_id: testId,
     since_ms: sinceMs,
+    until_ms: opts.untilMs ?? Number.MAX_SAFE_INTEGER,
+    project_id: opts.projectId ?? null,
     own_sessions: JSON.stringify(ownTree.sessionIds),
     own_worktrees: JSON.stringify(ownTree.worktreePaths),
   }) as { n: number };
   return row.n;
+}
+
+let _stmtBreadthSignatureExcusals: Database.Statement | null = null;
+
+/**
+ * Distinct excusal times per (project, test) written by the signature-match
+ * breadth rule ('breadth_signature'). Legacy 'breadth_corpus' rows are never
+ * read: the long-excused signal counts only the new provenance.
+ */
+export function listBreadthSignatureExcusalTimes(): Array<{
+  project_id: string;
+  test_id: string;
+  excused_at: number;
+}> {
+  _stmtBreadthSignatureExcusals ??= db.prepare(`
+    SELECT DISTINCT r.project_id AS project_id, t.test_id AS test_id,
+           t.excused_at AS excused_at
+    FROM test_run_results t
+    JOIN test_request_runs r ON r.id = t.test_request_run_id
+    WHERE t.excused_reason = 'breadth_signature'
+      AND t.excused_at IS NOT NULL
+      AND r.project_id IS NOT NULL
+    ORDER BY r.project_id, t.test_id, t.excused_at
+  `);
+  return _stmtBreadthSignatureExcusals.all() as Array<{
+    project_id: string;
+    test_id: string;
+    excused_at: number;
+  }>;
 }
 
 /**
@@ -14639,7 +14679,8 @@ export type GateVerifyMirrorOrigin =
   | 'mirror'
   | 'consent'
   | 'unresolved-source'
-  | 'reclassify';
+  | 'reclassify'
+  | 'long-excused';
 
 export function findActiveGateVerifyMirrorForItem(
   gateItemId: string,
@@ -14661,6 +14702,32 @@ export function findActiveGateVerifyMirrorForItem(
     gate_item_id: gateItemId,
     origin,
   }) as StagedIntentRow | undefined;
+}
+
+let _stmtLongExcusedIntentsForTest: Database.Statement | undefined;
+
+/**
+ * Every gate.verify 'long-excused' intent ever staged for (project, test), in
+ * any state — the caller finds the live one (dedup) and any prior one for the
+ * current episode (an operator dismissal is terminal for its episode).
+ */
+export function listLongExcusedIntentsForTest(
+  projectId: string,
+  testId: string,
+): StagedIntentRow[] {
+  _stmtLongExcusedIntentsForTest ??= db.prepare<{
+    project_id: string;
+    test_id: string;
+  }>(
+    `SELECT * FROM staged_intent
+     WHERE kind = 'gate.verify' AND project_id = @project_id
+       AND json_extract(payload, '$.origin') = 'long-excused'
+       AND json_extract(payload, '$.testId') = @test_id`,
+  );
+  return _stmtLongExcusedIntentsForTest.all({
+    project_id: projectId,
+    test_id: testId,
+  }) as StagedIntentRow[];
 }
 
 let _stmtHasLiveGateVerifyIntentForItem: Database.Statement | undefined;
@@ -15687,6 +15754,322 @@ export function percentilesOf(samples: number[]): DurationPercentiles {
   };
 }
 
+/** How long test_run_results rows are retained before TestRunResultsPruner deletes them. */
+export const TEST_RUN_RESULTS_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
+
+type TestRunBand =
+  | 'executed_passed'
+  | 'executed_failed'
+  | 'executed_failed_all_excused'
+  | 'oom_or_timeout'
+  | 'no_verdict'
+  | 'nothing_exercised'
+  | 'reused';
+
+export interface TestRunClassifierInput {
+  state: string;
+  failure_reason: string | null;
+  oom_killed: number;
+  coverage_source_run_id: string | null;
+  nothing_exercised: number;
+  finished_at: number | null;
+  /** Failing test_run_results rows with no excusal. */
+  unexcused_failures: number;
+  /** Failing test_run_results rows that carry an excusal. */
+  excused_failures: number;
+}
+
+export interface TestRunClassification {
+  band: TestRunBand;
+  /**
+   * False only for a failed run whose results are past retention and so
+   * can't tell excused from charged ("failed, excusal not retained"). The
+   * run is then charged as executed_failed.
+   */
+  excusalRetained: boolean;
+}
+
+const NO_VERDICT_REASONS: ReadonlySet<string> = new Set([
+  'cancelled',
+  'interrupted_queued',
+  'interrupted_running',
+]);
+
+/** The one assignment of a finished test_request_run to a single band. */
+export function classifyTestRequestRun(
+  run: TestRunClassifierInput,
+  now: number = Date.now(),
+): TestRunClassification {
+  const retained = { excusalRetained: true };
+  // coverage_source_run_id, not runner_executed (0 on every row).
+  if (run.coverage_source_run_id !== null)
+    return { band: 'reused', ...retained };
+  if (run.failure_reason !== null && NO_VERDICT_REASONS.has(run.failure_reason))
+    return { band: 'no_verdict', ...retained };
+  if (run.state === 'passed' && run.nothing_exercised === 1)
+    return { band: 'nothing_exercised', ...retained };
+  // A passed run with oom_killed set (e.g. a retried per-test OOM) still
+  // executed and verified green; only non-passed runs can be oom_or_timeout.
+  if (
+    run.state !== 'passed' &&
+    (run.failure_reason === 'timeout' ||
+      run.failure_reason === 'oom_killed' ||
+      run.oom_killed === 1)
+  )
+    return { band: 'oom_or_timeout', ...retained };
+  if (run.state === 'passed') return { band: 'executed_passed', ...retained };
+  if (run.unexcused_failures > 0)
+    return { band: 'executed_failed', ...retained };
+  if (run.excused_failures > 0)
+    return { band: 'executed_failed_all_excused', ...retained };
+  const pastRetention =
+    run.finished_at !== null &&
+    now - run.finished_at > TEST_RUN_RESULTS_RETENTION_MS;
+  return { band: 'executed_failed', excusalRetained: !pastRetention };
+}
+
+type TestRunBandCounts = Record<TestRunBand, number>;
+
+function emptyBandCounts(): TestRunBandCounts {
+  return {
+    executed_passed: 0,
+    executed_failed: 0,
+    executed_failed_all_excused: 0,
+    oom_or_timeout: 0,
+    no_verdict: 0,
+    nothing_exercised: 0,
+    reused: 0,
+  };
+}
+
+/** executed_passed ÷ (executed_passed + executed_failed + executed_failed_all_excused + oom_or_timeout); null with no denominator. */
+function passRateOfBands(counts: TestRunBandCounts): number | null {
+  const denominator =
+    counts.executed_passed +
+    counts.executed_failed +
+    counts.executed_failed_all_excused +
+    counts.oom_or_timeout;
+  return denominator > 0 ? counts.executed_passed / denominator : null;
+}
+
+// Failure rows only matter for a failed, non-reused run (the sole bands that
+// read them); gating keeps passed/reused runs from paying for the subqueries.
+// Each subquery is served by idx_test_run_results_run_id.
+const CLASSIFIER_FAILURE_COUNT_COLUMNS = `
+  CASE WHEN state = 'failed' AND coverage_source_run_id IS NULL THEN
+    (SELECT COUNT(*) FROM test_run_results t
+       WHERE t.test_request_run_id = test_request_runs.id
+         AND t.outcome IN ('failed', 'error') AND t.excused_at IS NULL)
+  ELSE 0 END AS unexcused_failures,
+  CASE WHEN state = 'failed' AND coverage_source_run_id IS NULL THEN
+    (SELECT COUNT(*) FROM test_run_results t
+       WHERE t.test_request_run_id = test_request_runs.id
+         AND t.outcome IN ('failed', 'error') AND t.excused_at IS NOT NULL)
+  ELSE 0 END AS excused_failures,
+  CASE WHEN state = 'failed' AND coverage_source_run_id IS NULL THEN
+    (SELECT json_group_array(reason) FROM (
+       SELECT DISTINCT COALESCE(t.excused_reason, 'unknown') AS reason FROM test_run_results t
+       WHERE t.test_request_run_id = test_request_runs.id
+         AND t.outcome IN ('failed', 'error') AND t.excused_at IS NOT NULL))
+  ELSE NULL END AS excused_reasons`;
+
+/** Upper bound on runs scanned per analytics read, keeping main-thread cost bounded regardless of window. */
+const ANALYTICS_RUN_SCAN_CAP = 20000;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_ANALYTICS_WINDOW_DAYS = 30;
+const MAX_ANALYTICS_WINDOW_DAYS = 90;
+
+export function clampAnalyticsWindowDays(days: number | undefined): number {
+  if (days === undefined || !Number.isFinite(days) || days < 1)
+    return DEFAULT_ANALYTICS_WINDOW_DAYS;
+  return Math.min(MAX_ANALYTICS_WINDOW_DAYS, Math.floor(days));
+}
+
+function utcDayOf(ms: number): string {
+  return new Date(Math.floor(ms / DAY_MS) * DAY_MS).toISOString().slice(0, 10);
+}
+
+interface AnalyticsRunRow extends TestRunClassifierInput {
+  run_kind: string;
+  requested_at: number | null;
+  started_at: number | null;
+  excused_reasons: string | null;
+}
+
+function listFinishedRunsInWindow(
+  projectId: string,
+  windowDays: number,
+  now: number,
+): AnalyticsRunRow[] {
+  return db
+    .prepare<{ project_id: string; since: number }>(
+      `SELECT state, failure_reason, oom_killed, coverage_source_run_id, nothing_exercised,
+              run_kind, requested_at, started_at, finished_at,
+              ${CLASSIFIER_FAILURE_COUNT_COLUMNS}
+       FROM test_request_runs
+       WHERE project_id = @project_id AND state NOT IN ('running', 'queued')
+         AND finished_at IS NOT NULL AND finished_at >= @since
+       ORDER BY finished_at DESC
+       LIMIT ${ANALYTICS_RUN_SCAN_CAP}`,
+    )
+    .all({
+      project_id: projectId,
+      since: now - windowDays * DAY_MS,
+    }) as AnalyticsRunRow[];
+}
+
+interface PassRateTrendDay {
+  day: string;
+  bands: TestRunBandCounts;
+  /** Failed runs whose excusal aged out of test_run_results retention (charged as executed_failed). */
+  failedExcusalNotRetained: number;
+  /** Runs per excused_reason across executed_failed_all_excused runs. */
+  excusedBySource: Record<string, number>;
+  passRate: number | null;
+}
+
+export interface PassRateTrend {
+  project: string;
+  windowDays: number;
+  runKinds: Record<string, PassRateTrendDay[]>;
+}
+
+export function getPassRateTrend(
+  projectId: string,
+  windowDays?: number,
+  now: number = Date.now(),
+): PassRateTrend {
+  const days = clampAnalyticsWindowDays(windowDays);
+  const byKind = new Map<string, Map<string, PassRateTrendDay>>();
+  for (const run of listFinishedRunsInWindow(projectId, days, now)) {
+    const { band, excusalRetained } = classifyTestRequestRun(run, now);
+    const kindDays = byKind.get(run.run_kind) ?? new Map();
+    byKind.set(run.run_kind, kindDays);
+    const day = utcDayOf(run.finished_at as number);
+    let bucket = kindDays.get(day);
+    if (!bucket) {
+      bucket = {
+        day,
+        bands: emptyBandCounts(),
+        failedExcusalNotRetained: 0,
+        excusedBySource: {},
+        passRate: null,
+      };
+      kindDays.set(day, bucket);
+    }
+    bucket.bands[band] += 1;
+    if (!excusalRetained) bucket.failedExcusalNotRetained += 1;
+    if (band === 'executed_failed_all_excused') {
+      const reasons: string[] = run.excused_reasons
+        ? JSON.parse(run.excused_reasons)
+        : ['unknown'];
+      for (const reason of reasons) {
+        bucket.excusedBySource[reason] =
+          (bucket.excusedBySource[reason] ?? 0) + 1;
+      }
+    }
+  }
+  const runKinds: Record<string, PassRateTrendDay[]> = {};
+  for (const [kind, kindDays] of byKind) {
+    runKinds[kind] = [...kindDays.values()]
+      .map((d) => ({ ...d, passRate: passRateOfBands(d.bands) }))
+      .sort((a, b) => a.day.localeCompare(b.day));
+  }
+  return { project: projectId, windowDays: days, runKinds };
+}
+
+/** One run's queue-wait sample, or null for runs that don't count (not executed, or missing started_at/requested_at). */
+export function queueWaitSampleOf(
+  run: TestRunClassifierInput & {
+    requested_at: number | null;
+    started_at: number | null;
+  },
+  now: number = Date.now(),
+): { day: string; waitMs: number } | null {
+  if (run.started_at === null || run.requested_at === null) return null;
+  const { band } = classifyTestRequestRun(run, now);
+  if (
+    band !== 'executed_passed' &&
+    band !== 'executed_failed' &&
+    band !== 'executed_failed_all_excused' &&
+    band !== 'oom_or_timeout'
+  )
+    return null;
+  return {
+    day: utcDayOf(run.started_at),
+    waitMs: run.started_at - run.requested_at,
+  };
+}
+
+export interface QueueWaitDay extends DurationPercentiles {
+  day: string;
+}
+
+/** Per-UTC-day queue-wait (started_at − requested_at) over executed runs; reused, no_verdict, nothing_exercised and null-started_at runs are excluded. */
+export function getQueueWaitDistribution(
+  projectId: string,
+  windowDays?: number,
+  now: number = Date.now(),
+): { project: string; windowDays: number; days: QueueWaitDay[] } {
+  const days = clampAnalyticsWindowDays(windowDays);
+  const samples = new Map<string, number[]>();
+  for (const run of listFinishedRunsInWindow(projectId, days, now)) {
+    const wait = queueWaitSampleOf(run, now);
+    if (wait === null) continue;
+    const list = samples.get(wait.day) ?? [];
+    list.push(wait.waitMs);
+    samples.set(wait.day, list);
+  }
+  return {
+    project: projectId,
+    windowDays: days,
+    days: [...samples.entries()]
+      .map(([day, list]) => ({ day, ...percentilesOf(list) }))
+      .sort((a, b) => a.day.localeCompare(b.day)),
+  };
+}
+
+export interface BaselineTestSummary {
+  testId: string;
+  name: string;
+  medianDurationMs: number;
+  lastDurationMs: number;
+  sampleCount: number;
+}
+
+/** Slowest and regressed tests from the narrow baseline scalars only — never the recent_* blobs. */
+export function getSlowestAndRegressedTests(
+  projectId: string,
+  limit = 20,
+): { slowest: BaselineTestSummary[]; regressed: BaselineTestSummary[] } {
+  const cap = Math.min(100, Math.max(1, Math.floor(limit)));
+  const read = (where: string): BaselineTestSummary[] =>
+    (
+      db
+        .prepare<{ project_id: string; cap: number }>(
+          `SELECT test_id, name, median_duration_ms, last_duration_ms, sample_count
+           FROM test_perf_baselines
+           WHERE project_id = @project_id ${where}
+           ORDER BY median_duration_ms DESC LIMIT @cap`,
+        )
+        .all({ project_id: projectId, cap }) as Array<{
+        test_id: string;
+        name: string;
+        median_duration_ms: number;
+        last_duration_ms: number;
+        sample_count: number;
+      }>
+    ).map((r) => ({
+      testId: r.test_id,
+      name: r.name,
+      medianDurationMs: r.median_duration_ms,
+      lastDurationMs: r.last_duration_ms,
+      sampleCount: r.sample_count,
+    }));
+  return { slowest: read(''), regressed: read('AND is_regressed = 1') };
+}
+
 /**
  * Project-scoped lane-health rollup over test_request_runs: pass rate,
  * timeout rate, and — critically — queue-wait vs execution-time kept as
@@ -15705,23 +16088,29 @@ export function getLaneHealthRollup(
   // can't also be covered by that index.
   const rows = db
     .prepare<{ project_id: string; limit: number }>(
-      `SELECT state, requested_at, started_at, finished_at, failure_reason
+      `SELECT state, requested_at, started_at, finished_at, failure_reason,
+              oom_killed, coverage_source_run_id, nothing_exercised,
+              ${CLASSIFIER_FAILURE_COUNT_COLUMNS}
        FROM test_request_runs
        WHERE project_id = @project_id AND state NOT IN ('running', 'queued')
        ORDER BY finished_at DESC, rowid DESC
        LIMIT @limit`,
     )
-    .all({ project_id: projectId, limit }) as Array<{
-    state: TestRequestRunState;
-    requested_at: number | null;
-    started_at: number;
-    finished_at: number | null;
-    failure_reason: TestRequestFailureReason | null;
-  }>;
+    .all({ project_id: projectId, limit }) as Array<
+    TestRunClassifierInput & {
+      state: TestRequestRunState;
+      requested_at: number | null;
+      started_at: number;
+      failure_reason: TestRequestFailureReason | null;
+    }
+  >;
 
   const totalRuns = rows.length;
-  const passed = rows.filter((r) => r.state === 'passed').length;
-  const timedOut = rows.filter((r) => r.failure_reason === 'timeout').length;
+  const bandCounts = emptyBandCounts();
+  for (const r of rows) bandCounts[classifyTestRequestRun(r).band] += 1;
+  const timedOut = rows.filter(
+    (r) => r.state === 'failed' && r.failure_reason === 'timeout',
+  ).length;
 
   const queueWaitSamples = rows
     .filter((r) => r.requested_at !== null)
@@ -15735,7 +16124,7 @@ export function getLaneHealthRollup(
   return {
     project: projectId,
     totalRuns,
-    passRate: totalRuns > 0 ? passed / totalRuns : null,
+    passRate: passRateOfBands(bandCounts),
     timeoutRate: totalRuns > 0 ? timedOut / totalRuns : null,
     queueWaitMs: percentilesOf(queueWaitSamples),
     executionTimeMs: percentilesOf(executionTimeSamples),

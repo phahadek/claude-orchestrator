@@ -3,6 +3,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
 vi.mock('../db/queries.js', () => ({
+  ensurePrEnqueued: vi.fn((_n: number, _r: string, now: number) => now),
+  ensureLocalBranchEnqueued: vi.fn((_i: number, now: number) => now),
+  recordPrQueueWait: vi.fn(),
+  recordLocalBranchQueueWait: vi.fn(),
+  clearPrEnqueued: vi.fn(),
   getAllOpenPRs: vi.fn().mockReturnValue([]),
   getApprovedOpenPRs: vi.fn().mockReturnValue([]),
   getApprovedLocalBranches: vi.fn().mockReturnValue([]),

@@ -19,7 +19,9 @@ import {
   clearTerminalPRFlags,
   setPauseReason,
   getDepthReviewVerdict,
+  recordPrQueueWait,
 } from '../db/queries';
+import { checkPrQueueHead } from '../github/mergeQueue';
 import { parsePauseReasonSet } from '../db/pauseReason';
 import { recordEvent } from '../audit/AuditLog';
 import { GitHubApiError } from '../github/types';
@@ -507,6 +509,14 @@ export function createPrsRouter(
         }
       }
 
+      const queueDecision = checkPrQueueHead(prNumber, repo);
+      if (!queueDecision.allowed) {
+        res.status(409).json({
+          error: `Merge queue: ${queueDecision.headLabel} is ahead of this PR and must merge (or be ejected) first.`,
+        });
+        return;
+      }
+
       try {
         // Draft → ready: flip before merging (GitHub returns 405 on draft PRs).
         if (prRow?.draft === 1) {
@@ -530,6 +540,7 @@ export function createPrsRouter(
         }
 
         const result = await github.mergePR(prNumber, commitTitle, repo);
+        recordPrQueueWait(prNumber, repo, queueDecision.waitMs);
 
         // Delegate all post-merge handling (state transition, autofix-sha
         // cleanup, origin-branch deletion, session/task completion, broadcast)

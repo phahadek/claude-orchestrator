@@ -41,14 +41,17 @@ function insertRun(
   const runId = `run-${seq}`;
   db.prepare(
     `INSERT INTO test_request_runs
-       (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, structured_result)
-     VALUES (@id, @project_id, @content_hash, NULL, 'passed', 'ok', 0, 0, 0, @structured_result)`,
+       (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at, structured_result)
+     VALUES (@id, @project_id, @content_hash, NULL, 'passed', 0, 0, 0, @structured_result)`,
   ).run({
     id: runId,
     project_id: opts.projectId,
     content_hash: `hash-${seq}`,
     structured_result: opts.structuredResult,
   });
+  db.prepare(
+    `INSERT INTO test_request_run_output (run_id, output) VALUES (?, 'ok')`,
+  ).run(runId);
   return runId;
 }
 
@@ -70,7 +73,8 @@ function getRun(
 ): { structured_result: string | null; output: string; state: string } {
   return db
     .prepare(
-      `SELECT structured_result, output, state FROM test_request_runs WHERE id = ?`,
+      `SELECT r.structured_result, o.output, r.state FROM test_request_runs r
+       JOIN test_request_run_output o ON o.run_id = r.id WHERE r.id = ?`,
     )
     .get(runId) as {
     structured_result: string | null;

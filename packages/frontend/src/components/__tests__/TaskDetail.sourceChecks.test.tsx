@@ -58,14 +58,18 @@ describe('TaskDetail source checks', () => {
     expect(expandedMatch![1]).toContain('flex: 1');
   });
 
-  it('TaskDetail.module.css reviewBody uses max-height cap (no flex:1 dead space)', () => {
+  it('TaskDetail.module.css reviewBody has no max-height cap and expanded reviewSection claims flex:1', () => {
     const cssPath = path.join(__dirname, '../TaskDetail.module.css');
     const css = fs.readFileSync(cssPath, 'utf-8');
     const reviewBodyMatch = css.match(/\.reviewBody\s*\{([^}]+)\}/);
     expect(reviewBodyMatch).toBeTruthy();
-    const reviewBodyBlock = reviewBodyMatch![1];
-    expect(reviewBodyBlock).not.toContain('flex: 1');
-    expect(reviewBodyBlock).toContain('max-height');
+    expect(reviewBodyMatch![1]).not.toContain('max-height');
+    expect(css).not.toMatch(/\.reviewBody\s*\{[^}]*max-height/);
+    const expandedMatch = css.match(
+      /\.reviewSection\[data-expanded='true'\]\s*\{([^}]+)\}/,
+    );
+    expect(expandedMatch).toBeTruthy();
+    expect(expandedMatch![1]).toContain('flex: 1');
   });
 
   // ── Planning + code sections share height (no unshrinkable 200px floors) ──
@@ -96,5 +100,17 @@ describe('TaskDetail source checks', () => {
     expect(expandedMatch![1]).toContain('min-height: 0');
     const planningBodyMatch = css.match(/\.planningBody\s*\{([^}]+)\}/);
     expect(planningBodyMatch![1]).toContain('min-height: 0');
+  });
+
+  // ── Tests tab scrolls inside TaskDetail's overflow-hidden body ──
+
+  it('TestsTab.module.css container is a flex scroll container', () => {
+    const cssPath = path.join(__dirname, '../TestsTab.module.css');
+    const css = fs.readFileSync(cssPath, 'utf-8');
+    const match = css.match(/\.container\s*\{([^}]+)\}/);
+    expect(match).toBeTruthy();
+    expect(match![1]).toContain('flex: 1');
+    expect(match![1]).toContain('min-height: 0');
+    expect(match![1]).toContain('overflow-y: auto');
   });
 });

@@ -23,6 +23,27 @@ const { projectFixture, runtimeSettingsFixture } = vi.hoisted(() => ({
   },
 }));
 
+vi.mock('./mergeQueue.js', async () => {
+  const q = await import('../db/queries.js');
+  return {
+    computeMergeQueues: () => {
+      const m = new Map<string, unknown[]>();
+      const prs = q.getApprovedOpenPRs().map((p) => ({
+        kind: 'pr',
+        projectId: 'proj-1',
+        prNumber: p.pr_number,
+        repo: p.repo,
+        row: p,
+        enqueuedAt: 0,
+      }));
+      if (prs.length > 0) m.set('proj-1', prs);
+      return m;
+    },
+    checkPrQueueHead: () => ({ allowed: true, waitMs: 0 }),
+    checkLocalBranchQueueHead: () => ({ allowed: true, waitMs: 0 }),
+  };
+});
+
 vi.mock('../db/queries.js', () =>
   mockDbQueries({
     getPRByNumber: vi.fn(),
@@ -30,6 +51,9 @@ vi.mock('../db/queries.js', () =>
     updateMergeState: vi.fn(),
     updatePRDraftStatus: vi.fn(),
     getApprovedOpenPRs: vi.fn().mockReturnValue([]),
+    recordPrQueueWait: vi.fn(),
+    recordLocalBranchQueueWait: vi.fn(),
+    clearPrEnqueued: vi.fn(),
     getApprovedLocalBranches: vi.fn().mockReturnValue([]),
     markLocalBranchMerged: vi.fn(),
     setLocalBranchPauseReason: vi.fn(),

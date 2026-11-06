@@ -28,7 +28,10 @@ import { recordEvent } from '../audit/AuditLog';
 import { normalizePath } from '../config';
 import { logger } from '../logger';
 import { extractMilestoneToken } from './milestoneToken';
-import { registerMilestoneInManifest } from '../groom/groomLoad';
+import {
+  registerMilestoneInManifest,
+  updateMilestoneBoardInManifest,
+} from '../groom/groomLoad';
 
 export interface ProjectMilestone {
   id: string;
@@ -198,6 +201,42 @@ function registerMilestoneInGroomingManifest(
   }
 }
 
+function syncManifestAfterMilestoneUpdate(
+  before: MilestoneRow,
+  after: MilestoneRow,
+  patch: MilestonePatch,
+): void {
+  if (
+    patch.canonical_short_id !== undefined &&
+    patch.canonical_short_id !== before.canonical_short_id
+  ) {
+    logger.warn(
+      `[ProjectService] milestone ${before.id} canonical_short_id changed ${before.canonical_short_id} -> ${patch.canonical_short_id}; grooming manifest keys are not renamed`,
+    );
+  }
+  if (
+    patch.source_id === undefined ||
+    patch.source_id === before.source_id ||
+    !patch.source_id ||
+    !after.canonical_short_id
+  ) {
+    return;
+  }
+  const project = getProjectRowById(after.project_id);
+  if (!project) return;
+  try {
+    updateMilestoneBoardInManifest(project.project_dir, {
+      canonicalShortId: after.canonical_short_id,
+      oldBoard: before.source_id,
+      newBoard: patch.source_id,
+    });
+  } catch (err) {
+    logger.warn(
+      `[ProjectService] failed to update milestone ${after.canonical_short_id} board in grooming manifest: ${String(err)}`,
+    );
+  }
+}
+
 export const ProjectService = {
   list(): Project[] {
     const rows = listProjectRows();
@@ -286,7 +325,9 @@ export const ProjectService = {
     id: string,
     patch: MilestonePatch,
   ): ProjectMilestone | undefined {
+    const before = getMilestoneById(id);
     const row = updateMilestone(id, patch);
+    if (before && row) syncManifestAfterMilestoneUpdate(before, row, patch);
     return row ? rowToMilestone(row) : undefined;
   },
 

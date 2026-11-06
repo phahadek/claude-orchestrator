@@ -78,8 +78,8 @@ function addFailedRun(testIds: string[]): string {
   const id = 'run-parity';
   db.prepare(
     `INSERT INTO test_request_runs
-       (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, worktree_path, structured_result)
-     VALUES (?, 'proj-1', 'hash-parity', 'SA', 'failed', '', 0, ?, ?, ?, ?)`,
+       (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at, worktree_path, structured_result)
+     VALUES (?, 'proj-1', 'hash-parity', 'SA', 'failed', 0, ?, ?, ?, ?)`,
   ).run(
     id,
     NOW - MIN,
