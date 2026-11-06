@@ -7,6 +7,9 @@ import { getTaskBackend } from '../tasks/TaskBackend';
 import { yieldToEventLoop } from '../utils/concurrency';
 import { getProjectDeployedSha } from '../deploy/deployService';
 import {
+  countDistinctOtherOriginPassesSince,
+  listBreadthSignatureExcusalTimes,
+  listLongExcusedIntentsForTest,
   countLivePlanningSessions,
   countLiveVerifySessions,
   getArm,
@@ -883,7 +886,10 @@ export async function reattachOutstandingGateVerifications(): Promise<void> {
  * retired here, alongside `'mirror'`/`'consent'`, by the same level-triggered
  * scan — see isUnresolvedSourceStillLive below.
  */
-type GateItemMirrorOrigin = Exclude<GateVerifyMirrorOrigin, 'reclassify'>;
+type GateItemMirrorOrigin = Exclude<
+  GateVerifyMirrorOrigin,
+  'reclassify' | 'long-excused'
+>;
 
 export interface GateItemMirrorSink {
   /**
@@ -898,6 +904,13 @@ export interface GateItemMirrorSink {
   stageMirror(item: GateItem, origin: GateItemMirrorOrigin): void;
   /** Retire (withdraw) a live mirror intent whose backing gate_item has left the state that earned it a mirror. */
   retireMirror(intentId: string, reason: string): void;
+  /** Stage the session-less 'long-excused' signal for a (project, test) whose breadth excusal has outlasted `long_excused_signal_hours`. */
+  stageLongExcused?(signal: {
+    project: string;
+    testId: string;
+    episodeStart: number;
+    latestExcusedAt: number;
+  }): void;
 }
 
 let configuredMirrorSink: GateItemMirrorSink | null = null;
@@ -1094,7 +1107,114 @@ export function reconcileHumanObservationMirrors(): GateItemMirrorReconcileResul
     }
   }
 
+  reconcileLongExcusedSignals(sink, retired);
+
   return { staged, retired };
+}
+
+const NO_OWN_TREE = { sessionIds: [], worktreePaths: [] };
+
+function payloadOf(row: { payload: string }): {
+  testId?: string;
+  episodeStart?: number;
+} {
+  try {
+    return JSON.parse(row.payload) as { testId?: string; episodeStart?: number };
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Derives each (project, test)'s excusal episode from its 'breadth_signature'
+ * excused_at rows (never legacy 'breadth_corpus'), opens one session-less
+ * 'long-excused' gate.verify mirror when the episode spans
+ * `long_excused_signal_hours` with fewer than `flip_rate_breadth_n` distinct
+ * other origins having passed since its first excusal, and withdraws it once
+ * that many pass after the latest excusal. An episode starts after the last
+ * gap between consecutive excusals that already held N other-origin passes.
+ * A prior intent of any state for the same episodeStart (e.g. a dismissal)
+ * blocks re-opening until a new episode begins.
+ */
+function reconcileLongExcusedSignals(
+  sink: GateItemMirrorSink,
+  retired: string[],
+): void {
+  const breadthN = typedGetSetting('flip_rate_breadth_n');
+  const spanMs = typedGetSetting('long_excused_signal_hours') * 3_600_000;
+
+  const groups = new Map<
+    string,
+    { project: string; testId: string; times: number[] }
+  >();
+  for (const r of listBreadthSignatureExcusalTimes()) {
+    const key = `${r.project_id}\u0000${r.test_id}`;
+    const g = groups.get(key) ?? {
+      project: r.project_id,
+      testId: r.test_id,
+      times: [],
+    };
+    g.times.push(r.excused_at);
+    groups.set(key, g);
+  }
+
+  const cleared = new Set<string>();
+  for (const [key, g] of groups) {
+    const latest = g.times[g.times.length - 1];
+    const opts = { projectId: g.project };
+    if (
+      countDistinctOtherOriginPassesSince(g.testId, latest, NO_OWN_TREE, opts) >=
+      breadthN
+    ) {
+      cleared.add(key);
+      continue;
+    }
+    let episodeStart = latest;
+    for (let i = g.times.length - 2; i >= 0; i--) {
+      const passesBetween = countDistinctOtherOriginPassesSince(
+        g.testId,
+        g.times[i],
+        NO_OWN_TREE,
+        { ...opts, untilMs: g.times[i + 1] },
+      );
+      if (passesBetween >= breadthN) break;
+      episodeStart = g.times[i];
+    }
+    if (latest - episodeStart < spanMs) continue;
+    if (
+      countDistinctOtherOriginPassesSince(
+        g.testId,
+        episodeStart,
+        NO_OWN_TREE,
+        opts,
+      ) >= breadthN
+    ) {
+      continue;
+    }
+    const prior = listLongExcusedIntentsForTest(g.project, g.testId);
+    if (prior.some((row) => payloadOf(row).episodeStart === episodeStart)) {
+      continue;
+    }
+    sink.stageLongExcused?.({
+      project: g.project,
+      testId: g.testId,
+      episodeStart,
+      latestExcusedAt: latest,
+    });
+  }
+
+  for (const mirror of listActiveGateVerifyMirrors('long-excused')) {
+    const { testId } = payloadOf(mirror);
+    const key = `${mirror.project_id}\u0000${testId}`;
+    if (groups.has(key) && !cleared.has(key)) continue;
+    sink.retireMirror(
+      mirror.id,
+      groups.has(key)
+        ? 'other origins passed the test after its latest excusal'
+        : 'no breadth excusals remain for the test',
+    );
+    retired.push(mirror.id);
+  }
 }
 
 /**

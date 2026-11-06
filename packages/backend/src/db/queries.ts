@@ -12221,10 +12221,13 @@ export function countDistinctOtherOriginPassesSince(
   testId: string,
   sinceMs: number,
   ownTree: BreadthOwnTree,
+  opts: { untilMs?: number; projectId?: string } = {},
 ): number {
   _stmtOtherTreePasses ??= db.prepare<{
     test_id: string;
     since_ms: number;
+    until_ms: number;
+    project_id: string | null;
     own_sessions: string;
     own_worktrees: string;
   }>(`
@@ -12244,6 +12247,8 @@ export function countDistinctOtherOriginPassesSince(
     WHERE t.test_id = @test_id
       AND t.outcome = 'passed'
       AND t.created_at > @since_ms
+      AND t.created_at <= @until_ms
+      AND (@project_id IS NULL OR o.project_id = @project_id)
       AND o.worktree_path IS NOT NULL
       AND o.worktree_path NOT IN (SELECT value FROM json_each(@own_worktrees))
       AND (o.session_id IS NULL
@@ -12253,10 +12258,41 @@ export function countDistinctOtherOriginPassesSince(
   const row = _stmtOtherTreePasses.get({
     test_id: testId,
     since_ms: sinceMs,
+    until_ms: opts.untilMs ?? Number.MAX_SAFE_INTEGER,
+    project_id: opts.projectId ?? null,
     own_sessions: JSON.stringify(ownTree.sessionIds),
     own_worktrees: JSON.stringify(ownTree.worktreePaths),
   }) as { n: number };
   return row.n;
+}
+
+let _stmtBreadthSignatureExcusals: Database.Statement | null = null;
+
+/**
+ * Distinct excusal times per (project, test) written by the signature-match
+ * breadth rule ('breadth_signature'). Legacy 'breadth_corpus' rows are never
+ * read: the long-excused signal counts only the new provenance.
+ */
+export function listBreadthSignatureExcusalTimes(): Array<{
+  project_id: string;
+  test_id: string;
+  excused_at: number;
+}> {
+  _stmtBreadthSignatureExcusals ??= db.prepare(`
+    SELECT DISTINCT r.project_id AS project_id, t.test_id AS test_id,
+           t.excused_at AS excused_at
+    FROM test_run_results t
+    JOIN test_request_runs r ON r.id = t.test_request_run_id
+    WHERE t.excused_reason = 'breadth_signature'
+      AND t.excused_at IS NOT NULL
+      AND r.project_id IS NOT NULL
+    ORDER BY r.project_id, t.test_id, t.excused_at
+  `);
+  return _stmtBreadthSignatureExcusals.all() as Array<{
+    project_id: string;
+    test_id: string;
+    excused_at: number;
+  }>;
 }
 
 /**
@@ -14612,7 +14648,8 @@ export type GateVerifyMirrorOrigin =
   | 'mirror'
   | 'consent'
   | 'unresolved-source'
-  | 'reclassify';
+  | 'reclassify'
+  | 'long-excused';
 
 export function findActiveGateVerifyMirrorForItem(
   gateItemId: string,
@@ -14634,6 +14671,32 @@ export function findActiveGateVerifyMirrorForItem(
     gate_item_id: gateItemId,
     origin,
   }) as StagedIntentRow | undefined;
+}
+
+let _stmtLongExcusedIntentsForTest: Database.Statement | undefined;
+
+/**
+ * Every gate.verify 'long-excused' intent ever staged for (project, test), in
+ * any state — the caller finds the live one (dedup) and any prior one for the
+ * current episode (an operator dismissal is terminal for its episode).
+ */
+export function listLongExcusedIntentsForTest(
+  projectId: string,
+  testId: string,
+): StagedIntentRow[] {
+  _stmtLongExcusedIntentsForTest ??= db.prepare<{
+    project_id: string;
+    test_id: string;
+  }>(
+    `SELECT * FROM staged_intent
+     WHERE kind = 'gate.verify' AND project_id = @project_id
+       AND json_extract(payload, '$.origin') = 'long-excused'
+       AND json_extract(payload, '$.testId') = @test_id`,
+  );
+  return _stmtLongExcusedIntentsForTest.all({
+    project_id: projectId,
+    test_id: testId,
+  }) as StagedIntentRow[];
 }
 
 let _stmtHasLiveGateVerifyIntentForItem: Database.Statement | undefined;
