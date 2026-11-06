@@ -3,6 +3,9 @@ import { mockDbQueries } from '../../__tests__/helpers/mockDbQueries';
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
+const hoisted = vi.hoisted(() => ({ gitExec: vi.fn(), syncExec: vi.fn() }));
+const { gitExec } = hoisted;
+
 vi.mock('child_process', () => ({
   spawn: vi.fn().mockReturnValue({
     stdout: { on: vi.fn() },
@@ -13,13 +16,22 @@ vi.mock('child_process', () => ({
     pid: 12345,
     exitCode: null,
   }),
-  execSync: vi.fn(),
-  execFile: vi.fn((...args: unknown[]) => {
-    (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
-      stdout: '',
-      stderr: '',
-    });
-  }),
+  execSync: hoisted.syncExec,
+  execFile: vi.fn(
+    (
+      file: string,
+      args: string[],
+      opts: unknown,
+      cb: (err: unknown, out?: unknown) => void,
+    ) => {
+      try {
+        const out = hoisted.gitExec(`${file} ${args.join(' ')}`, opts);
+        cb(null, { stdout: out == null ? '' : String(out), stderr: '' });
+      } catch (e) {
+        cb(e);
+      }
+    },
+  ),
   exec: vi.fn((...args: unknown[]) => {
     (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
       stdout: '',
@@ -120,7 +132,6 @@ vi.mock('../../utils/eventFilters', () => ({
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
-import { execSync } from 'child_process';
 import { AgentSession, isPreReviewBlocked } from '../AgentSession';
 import { getPRBySessionId, setLastSignalledHeadSha } from '../../db/queries';
 import { logger } from '../../logger';
@@ -190,8 +201,13 @@ function emitEmbeddedUserToolResult(
   });
 }
 
-function emitResult(session: AgentSession) {
+async function emitResult(session: AgentSession) {
   sendEvent(session, { type: 'result', stop_reason: 'end_turn' });
+  await flushAsync();
+}
+
+function flushAsync(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 const BLOCKED_PR = {
@@ -226,7 +242,7 @@ function makeMutablePR(overrides: Record<string, unknown> = {}) {
 }
 
 function mockCleanWorktreeAt(sha: string) {
-  vi.mocked(execSync).mockImplementation((cmd: string) => {
+  vi.mocked(gitExec).mockImplementation((cmd: string) => {
     if (cmd.includes('rev-parse --abbrev-ref'))
       return Buffer.from('feature/foo\n');
     if (cmd.includes('rev-parse HEAD')) return Buffer.from(`${sha}\n`);
@@ -286,13 +302,14 @@ describe('git push detection via embedded user-event tool_result (pre-review, no
     mockCleanWorktreeAt(HEAD_SHA);
   });
 
-  it('fires handlePushDetected for a plain git push', () => {
+  it('fires handlePushDetected for a plain git push', async () => {
     const session = makeSession();
     const pushDetectedEvents: unknown[] = [];
     session.on('push_detected', (e: unknown) => pushDetectedEvents.push(e));
 
     emitToolUse(session, 'git push origin feature/foo', 'toolu_1', 'msg_1');
     emitEmbeddedUserToolResult(session, 'toolu_1', 'Everything up-to-date');
+    await flushAsync();
 
     expect(pushDetectedEvents).toHaveLength(1);
     expect(pushDetectedEvents[0]).toMatchObject({
@@ -300,7 +317,7 @@ describe('git push detection via embedded user-event tool_result (pre-review, no
     });
   });
 
-  it('fires handlePushDetected for a piped/redirected push', () => {
+  it('fires handlePushDetected for a piped/redirected push', async () => {
     const session = makeSession();
     const pushDetectedEvents: unknown[] = [];
     session.on('push_detected', (e: unknown) => pushDetectedEvents.push(e));
@@ -312,6 +329,7 @@ describe('git push detection via embedded user-event tool_result (pre-review, no
       'msg_2',
     );
     emitEmbeddedUserToolResult(session, 'toolu_2', 'Everything up-to-date');
+    await flushAsync();
 
     expect(pushDetectedEvents).toHaveLength(1);
   });
@@ -325,18 +343,18 @@ describe('turn-complete push signal for pre-review blocked PRs (no review_sessio
     mockCleanWorktreeAt(HEAD_SHA);
   });
 
-  it('signals push_detected on turn complete when PR is blocked_* with no review session', () => {
+  it('signals push_detected on turn complete when PR is blocked_* with no review session', async () => {
     vi.mocked(getPRBySessionId).mockReturnValue(BLOCKED_PR as any);
     const session = makeSession();
     const pushDetectedEvents: unknown[] = [];
     session.on('push_detected', (e: unknown) => pushDetectedEvents.push(e));
 
-    emitResult(session);
+    await emitResult(session);
 
     expect(pushDetectedEvents).toHaveLength(1);
   });
 
-  it('does not signal when PR has no review session and is not in a blocked state', () => {
+  it('does not signal when PR has no review session and is not in a blocked state', async () => {
     vi.mocked(getPRBySessionId).mockReturnValue({
       ...BLOCKED_PR,
       pre_review_stage: null,
@@ -346,7 +364,7 @@ describe('turn-complete push signal for pre-review blocked PRs (no review_sessio
     const pushDetectedEvents: unknown[] = [];
     session.on('push_detected', (e: unknown) => pushDetectedEvents.push(e));
 
-    emitResult(session);
+    await emitResult(session);
 
     expect(pushDetectedEvents).toHaveLength(0);
   });
@@ -360,7 +378,7 @@ describe('no duplicate push_detected when both the immediate and turn-complete p
     mockCleanWorktreeAt(HEAD_SHA);
   });
 
-  it('dedupes via the persisted last_signalled_head_sha when the immediate push detection already signalled this HEAD', () => {
+  it('dedupes via the persisted last_signalled_head_sha when the immediate push detection already signalled this HEAD', async () => {
     makeMutablePR();
     const session = makeSession();
     const pushDetectedEvents: unknown[] = [];
@@ -369,9 +387,10 @@ describe('no duplicate push_detected when both the immediate and turn-complete p
     // Immediate path fires first (embedded tool_result), persisting last_signalled_head_sha.
     emitToolUse(session, 'git push origin feature/foo', 'toolu_3', 'msg_3');
     emitEmbeddedUserToolResult(session, 'toolu_3', 'Everything up-to-date');
+    await flushAsync();
 
     // Turn-complete path fires afterward for the same unchanged HEAD.
-    emitResult(session);
+    await emitResult(session);
 
     expect(pushDetectedEvents).toHaveLength(1);
   });
@@ -385,7 +404,7 @@ describe('turn-complete push signal reads the persisted last_signalled_head_sha,
     mockCleanWorktreeAt(HEAD_SHA);
   });
 
-  it('a freshly constructed AgentSession (simulating a resume) whose worktree HEAD already equals the persisted last-signalled head does not emit push_detected on result', () => {
+  it('a freshly constructed AgentSession (simulating a resume) whose worktree HEAD already equals the persisted last-signalled head does not emit push_detected on result', async () => {
     // The PR row already carries last_signalled_head_sha = HEAD_SHA from a
     // prior session instance's emission — a resumed session constructs a
     // brand-new AgentSession with no in-memory memory of that, so this can
@@ -397,7 +416,7 @@ describe('turn-complete push signal reads the persisted last_signalled_head_sha,
     const pushDetectedEvents: unknown[] = [];
     session.on('push_detected', (e: unknown) => pushDetectedEvents.push(e));
 
-    emitResult(session);
+    await emitResult(session);
 
     expect(pushDetectedEvents).toHaveLength(0);
     expect(
@@ -410,13 +429,13 @@ describe('turn-complete push signal reads the persisted last_signalled_head_sha,
     ).toBe(true);
   });
 
-  it('a genuine new commit (HEAD differs from the persisted head) still emits push_detected exactly once and updates the persisted head', () => {
+  it('a genuine new commit (HEAD differs from the persisted head) still emits push_detected exactly once and updates the persisted head', async () => {
     const pr = makeMutablePR({ last_signalled_head_sha: 'old-sha-0000000' });
     const session = makeSession();
     const pushDetectedEvents: unknown[] = [];
     session.on('push_detected', (e: unknown) => pushDetectedEvents.push(e));
 
-    emitResult(session);
+    await emitResult(session);
 
     expect(pushDetectedEvents).toHaveLength(1);
     expect(pr.last_signalled_head_sha).toBe(HEAD_SHA);

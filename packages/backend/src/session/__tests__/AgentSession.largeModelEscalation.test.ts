@@ -970,7 +970,8 @@ describe('AgentSession — overflow escalation window', () => {
                 duration_ms: 100,
                 usage: { input_tokens: 0, output_tokens: 0 },
               });
-              observed.afterOverflow = holder.session!.isOverflowEscalationPending;
+              observed.afterOverflow =
+                holder.session!.isOverflowEscalationPending;
               return Promise.resolve(1);
             }
             observed.atEscalatedSpawn =

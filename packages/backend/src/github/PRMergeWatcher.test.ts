@@ -9,6 +9,7 @@ vi.mock('../db/queries.js', () =>
     updatePRState: vi.fn(),
     updateMergeState: vi.fn(),
     setPauseReason: vi.fn(),
+    clearPauseReasonEntry: vi.fn(),
     setCiRemediationAttemptedSha: vi.fn(),
     getPRByNumber: vi.fn().mockReturnValue(null),
     getSession: vi.fn().mockReturnValue(null),
@@ -21,6 +22,7 @@ vi.mock('../db/queries.js', () =>
     setPendingPush: vi.fn(),
     getSetting: vi.fn().mockReturnValue(null),
     getLatestTestRequestRun: vi.fn().mockReturnValue(undefined),
+    getLatestTestRequestRunForSession: vi.fn().mockReturnValue(undefined),
     getTestRequestRunOutput: vi.fn(
       () =>
         (
@@ -82,6 +84,11 @@ vi.mock('../audit/AuditLog.js', () => ({
   recordEvent: vi.fn(),
 }));
 
+const mockResolveCombinedTree = vi.fn();
+vi.mock('../orchestration/combinedTree.js', () => ({
+  resolveCombinedTree: (...args: unknown[]) => mockResolveCombinedTree(...args),
+}));
+
 vi.mock('../session/analyzeGating.js', () => ({
   computeWholeTreeContentHash: vi.fn().mockResolvedValue('content-hash-x'),
   computeTriggerContentHash: vi.fn().mockResolvedValue(null),
@@ -117,10 +124,15 @@ import { PRMergeWatcher } from './PRMergeWatcher';
 import { GitHubRateLimitError } from './types';
 import { __resetGitHubRateLimitForTests } from './rateLimitBackoff';
 import {
+  pauseReasonFromCanonical,
+  serializePauseReasonSet,
+} from '../db/pauseReason';
+import {
   getAllOpenPRs,
   updatePRState,
   updateMergeState,
   setPauseReason,
+  clearPauseReasonEntry,
   setCiRemediationAttemptedSha,
   getPRByNumber,
   getSession,
@@ -130,6 +142,7 @@ import {
   setHeadSha,
   clearTerminalPRFlags,
   getLatestTestRequestRun,
+  getLatestTestRequestRunForSession,
   markSessionDone,
   updateSessionStatus,
   setSessionTerminalCompletionReason,
@@ -4707,6 +4720,109 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
     );
   });
 
+  describe('unexercised_paths advisory', () => {
+    async function pollWithRun(
+      unclaimed_paths: string | null,
+      pauseReason: string | null = null,
+    ) {
+      const pr = makePRRow({
+        head_sha: 'sha-pass',
+        session_id: 'coding-session',
+        pause_reason: pauseReason,
+      });
+      vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+      vi.mocked(getSession).mockReturnValue({
+        worktree_path: '/wt/unexercised',
+      } as any);
+      const github = makeMockGitHub();
+      mockCategorizeClean(github);
+      vi.mocked(getProjectByGithubRepo).mockReturnValue({
+        id: 'proj-1',
+        projectDir: '/proj',
+      } as any);
+      vi.mocked(loadOrchestratorConfig).mockReturnValue({
+        ci_check_name: [],
+        test: ['npm test'],
+        test_report_glob: '**/junit.xml',
+        test_timeout_sec: 300,
+        autofix: [],
+        verify: [],
+        allowed_tools: [],
+        bash_rules: [],
+        bootstrap_script: '',
+      } as any);
+      vi.mocked(getLatestTestRequestRun).mockReturnValue({
+        id: 'run-unclaimed',
+        project_id: 'proj-1',
+        content_hash: 'content-hash-x',
+        state: 'passed',
+        output: 'ok',
+        structured_result: JSON.stringify({
+          suites: [
+            {
+              name: 's',
+              tests: [
+                { id: 't1', name: 'ok', outcome: 'passed', durationMs: 1 },
+              ],
+            },
+          ],
+          totals: { passed: 1, failed: 0, skipped: 0, errors: 0 },
+        }),
+        test_report_acquisition_attempted: 1,
+        unclaimed_paths,
+        started_at: 1000,
+        finished_at: 2000,
+      } as any);
+      const autoMerger = makeMockAutoMerger();
+      const watcher = new PRMergeWatcher(
+        github,
+        makeMockSessions(),
+        makeMockNotion(),
+        () => {},
+      );
+      watcher.setAutoMerger(autoMerger);
+      await watcher.poll();
+      return { autoMerger };
+    }
+
+    it('sets the advisory pause and re-kicks AutoMerger for a non-empty list', async () => {
+      const { autoMerger } = await pollWithRun('["web/a.ts"]');
+      expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+        42,
+        'owner/repo',
+        'unexercised_paths',
+        'web/a.ts',
+      );
+      expect(autoMerger.attempt).toHaveBeenCalledWith(42, 'owner/repo');
+    });
+
+    it('clears only its own entry when a later run claims every path', async () => {
+      const existing = serializePauseReasonSet([
+        {
+          ...pauseReasonFromCanonical('unexercised_paths', 'web/a.ts'),
+          set_at: 1,
+        },
+      ]);
+      await pollWithRun('[]', existing);
+      expect(vi.mocked(clearPauseReasonEntry)).toHaveBeenCalledWith(
+        42,
+        'owner/repo',
+        'unexercised_paths',
+      );
+    });
+
+    it('renders no signal for an empty list and sets nothing for NULL', async () => {
+      await pollWithRun('[]');
+      await pollWithRun(null);
+      expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+        42,
+        'owner/repo',
+        'unexercised_paths',
+        expect.anything(),
+      );
+    });
+  });
+
   it('does not set test_report_acquisition_failed when structured_result was cleared by the extraction drain but a durable test_run_summaries row exists for the run', async () => {
     const pr = makePRRow({
       head_sha: 'sha-pass',
@@ -4847,6 +4963,108 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
 });
 
 // ── f2-only lane-side flaky auto-disposition ──────────────────────────────────
+
+describe('PRMergeWatcher — merge-time combined-tree freshness (F2)', () => {
+  const COMBINED = 'combined-hash-new';
+
+  function setup() {
+    const pr = makePRRow({
+      head_sha: 'sha-head',
+      session_id: 'coding-session',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    vi.mocked((github as any).categorizeMergeability).mockResolvedValue({
+      category: 'clean',
+      mergeState: 'clean',
+      rawMergeableState: 'clean',
+      failingChecks: [],
+    });
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+      baseBranch: 'dev',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+    return { watcher, github, reviewOrchestrator };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveCombinedTree.mockReset();
+    mockResolveCombinedTree.mockResolvedValue({
+      status: 'ok',
+      treeOid: 'tree-C',
+      baseSha: 'base-sha',
+      contentHash: COMBINED,
+    });
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/wt/session',
+    } as any);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue(undefined);
+    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue(undefined);
+  });
+
+  afterEach(() => {
+    mockResolveCombinedTree.mockReset();
+  });
+
+  it('merges (does not re-gate) when a verdict exists for the recomputed combined tree', async () => {
+    const { watcher, github, reviewOrchestrator } = setup();
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-1',
+      project_id: 'proj-1',
+      content_hash: COMBINED,
+      state: 'passed',
+      run_kind: 'full',
+    } as any);
+
+    await watcher.poll();
+
+    expect(vi.mocked(getLatestTestRequestRun)).toHaveBeenCalledWith(
+      'proj-1',
+      COMBINED,
+      'full',
+    );
+    expect(reviewOrchestrator.enqueueReview).not.toHaveBeenCalled();
+    expect(github.categorizeMergeability).toHaveBeenCalled();
+  });
+
+  it('declines the tick and requests exactly one re-gate when the combined tree no longer matches the certified tree', async () => {
+    const { watcher, github, reviewOrchestrator } = setup();
+    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue({
+      id: 'run-old',
+      state: 'passed',
+      content_hash: 'combined-hash-old',
+    } as any);
+
+    await watcher.poll();
+    await watcher.poll();
+
+    expect(reviewOrchestrator.enqueueReview).toHaveBeenCalledTimes(1);
+    expect(reviewOrchestrator.enqueueReview).toHaveBeenCalledWith(
+      expect.objectContaining({ prNumber: 42, headSha: 'sha-head' }),
+    );
+    expect(github.categorizeMergeability).not.toHaveBeenCalled();
+  });
+});
 
 describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
   let seq = 0;

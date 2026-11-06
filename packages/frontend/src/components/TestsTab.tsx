@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { apiRequest } from '../api/projects';
+import { subscribeToTestRequestRunStatus } from '../hooks/testRequestRunStatusBus';
 import styles from './TestsTab.module.css';
 
 interface FlipRateFlag {
@@ -63,6 +64,17 @@ const OUTCOME_LABELS: Record<TestRunOutcome, string> = {
   running: 'Running…',
 };
 
+function parseUnclaimedPaths(raw: string | null | undefined): string[] | null {
+  if (raw == null) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    return parsed.filter((p): p is string => typeof p === 'string');
+  } catch {
+    return null;
+  }
+}
+
 function formatDuration(ms: number | null): string {
   if (ms == null) return '—';
   if (ms < 1000) return `${ms}ms`;
@@ -72,6 +84,14 @@ function formatDuration(ms: number | null): string {
 function formatTimestamp(ms: number | null): string {
   if (ms == null) return '—';
   return new Date(ms).toLocaleString();
+}
+
+function isPassed(outcome: TestRunOutcome): boolean {
+  return (
+    outcome === 'passed' ||
+    outcome === 'passed-scoped' ||
+    outcome === 'passed-targeted'
+  );
 }
 
 interface Props {
@@ -84,9 +104,23 @@ export function TestsTab({ projectId, sessionId }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [refreshTick, setRefreshTick] = useState(0);
+
+  useEffect(() => {
+    if (!projectId || !sessionId) return undefined;
+    return subscribeToTestRequestRunStatus((payload) => {
+      if (payload.projectId === projectId && payload.sessionId === sessionId) {
+        setRefreshTick((n) => n + 1);
+      }
+    });
+  }, [projectId, sessionId]);
+
   useEffect(() => {
     setData(null);
     setError(null);
+  }, [projectId, sessionId]);
+
+  useEffect(() => {
     if (!projectId || !sessionId) return;
     let cancelled = false;
     setLoading(true);
@@ -94,7 +128,10 @@ export function TestsTab({ projectId, sessionId }: Props) {
       `/api/test-request-runs/history?projectId=${encodeURIComponent(projectId)}&sessionId=${encodeURIComponent(sessionId)}`,
     )
       .then((res) => {
-        if (!cancelled) setData(res);
+        if (!cancelled) {
+          setData(res);
+          setError(null);
+        }
       })
       .catch((err) => {
         if (!cancelled) {
@@ -107,7 +144,7 @@ export function TestsTab({ projectId, sessionId }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [projectId, sessionId]);
+  }, [projectId, sessionId, refreshTick]);
 
   if (!projectId || !sessionId) {
     return (
@@ -192,6 +229,36 @@ export function TestsTab({ projectId, sessionId }: Props) {
               )}
             </div>
             <div className={styles.nextAction}>{run.nextAction}</div>
+
+            {isPassed(run.outcome) &&
+              (() => {
+                const unclaimed = parseUnclaimedPaths(run.unclaimed_paths);
+                if (unclaimed === null) {
+                  return (
+                    <p
+                      className={styles.runMeta}
+                      data-testid={`test-run-coverage-unknown-${run.id}`}
+                    >
+                      Coverage unknown — not every test command declared the
+                      paths it covers.
+                    </p>
+                  );
+                }
+                if (unclaimed.length === 0) return null;
+                return (
+                  <div
+                    className={styles.runMeta}
+                    data-testid={`test-run-unexercised-${run.id}`}
+                  >
+                    Unexercised paths (changed, but claimed by no test command):
+                    <ul>
+                      {unclaimed.map((p) => (
+                        <li key={p}>{p}</li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })()}
 
             {run.outcome === 'failed-with-no-report-acquired' && (
               <p

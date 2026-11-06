@@ -32,7 +32,14 @@ let mockProc: ReturnType<typeof createMockProc>;
 
 vi.mock('child_process', () => ({
   spawn: vi.fn(() => mockProc.proc),
-  execFile: vi.fn(),
+  execFile: vi.fn(
+    (
+      _file: string,
+      _args: string[],
+      _opts: unknown,
+      cb: (err: unknown) => void,
+    ) => cb(new Error('git unavailable')),
+  ),
 }));
 
 // Mock DB queries — these would hit a real SQLite db otherwise

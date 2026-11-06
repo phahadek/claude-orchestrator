@@ -88,6 +88,35 @@ export async function detectMergeConflict(
   }
 }
 
+export type MergeTreeResult =
+  | { status: 'ok'; treeOid: string }
+  | { status: 'conflict'; detail: string }
+  | { status: 'error'; detail: string };
+
+/**
+ * Checkout-free merge of `theirRef` into `oursRef`: returns the merged tree
+ * OID (the tree a squash merge would land) without touching any worktree,
+ * index or ref.
+ */
+export async function mergeTreeOid(
+  cwd: string,
+  oursRef: string,
+  theirRef: string,
+): Promise<MergeTreeResult> {
+  try {
+    const { stdout } = await gitExec(
+      ['merge-tree', '--write-tree', oursRef, theirRef],
+      cwd,
+    );
+    return { status: 'ok', treeOid: stdout.trim().split('\n')[0] };
+  } catch (e) {
+    const f = execFailure(e);
+    return f.code === 1
+      ? { status: 'conflict', detail: f.text }
+      : { status: 'error', detail: f.text };
+  }
+}
+
 type PreTestMergeOutcome =
   | 'up_to_date'
   | 'merged'

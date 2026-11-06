@@ -25,10 +25,27 @@ function createMockProc() {
 
 let mockProc: ReturnType<typeof createMockProc>;
 
+const hoisted = vi.hoisted(() => ({ gitExec: vi.fn(), syncExec: vi.fn() }));
+const { gitExec } = hoisted;
+
 vi.mock('child_process', () => ({
   spawn: vi.fn(() => mockProc.proc),
-  execSync: vi.fn(),
-  execFile: vi.fn(),
+  execSync: hoisted.syncExec,
+  execFile: vi.fn(
+    (
+      file: string,
+      args: string[],
+      opts: unknown,
+      cb: (err: unknown, out?: unknown) => void,
+    ) => {
+      try {
+        const out = hoisted.gitExec(`${file} ${args.join(' ')}`, opts);
+        cb(null, { stdout: out == null ? '' : String(out), stderr: '' });
+      } catch (e) {
+        cb(e);
+      }
+    },
+  ),
 }));
 
 vi.mock('../db/queries', () => ({
@@ -76,14 +93,13 @@ vi.mock('../session/sessionRecovery', () => ({
 }));
 
 import { AgentSession, MAX_REBASE_NUDGES } from '../session/AgentSession';
-import { execSync } from 'child_process';
 import { getPRBySessionId, setPauseReason } from '../db/queries';
 import type { ISessionManager } from '../session/SessionAuditor';
 import type { TaskBackend } from '../tasks/TaskBackend';
 
-/** Make execSync return diverged-branch state for every handlePushDetected call. */
+/** Make git return diverged-branch state for every handlePushDetected call. */
 function mockDivergedBranch() {
-  vi.mocked(execSync).mockImplementation((cmd) => {
+  vi.mocked(gitExec).mockImplementation((cmd) => {
     const c = String(cmd);
     if (c.includes('rev-parse --abbrev-ref HEAD'))
       return Buffer.from('feature/my-task');
