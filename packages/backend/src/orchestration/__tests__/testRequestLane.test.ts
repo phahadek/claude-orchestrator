@@ -5248,9 +5248,9 @@ describe('ingestTestRunResults — flip-rate recompute reads test_perf_baselines
     spy.restore();
 
     const reads = spy.calls.filter((c) => c.method === 'get');
-    // recordTestPerfDigestSample's own digest fetch — the only read against
-    // test_perf_baselines this whole ingestion performs.
-    expect(reads).toHaveLength(1);
+    // The digest fetch is gone: ingestion performs no read against
+    // test_perf_baselines at all.
+    expect(reads).toHaveLength(0);
   });
 });
 
