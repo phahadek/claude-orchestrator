@@ -1068,12 +1068,15 @@ export class PRMergeWatcher extends EventEmitter {
                   ? renderBaseAttributableFilterDigest(
                       gate.result,
                       gate.guardBlocked,
+                      undefined,
+                      testResult.id,
                     )
                   : null;
               const testOutput = getTestRequestRunOutput(testResult.id);
               const digest = buildTestResultDigestFromOutcomes(
                 readRunTestOutcomes(testResult),
                 {
+                  runId: testResult.id,
                   runFailure: {
                     failedCommand: testResult.failed_command,
                     outputTail: testOutput ? tailOfLog(testOutput, 1000) : '',

@@ -1381,6 +1381,42 @@ describe('loadOrchestratorConfig: verify/autofix/analyze vs allowed_tools reconc
     ]);
   });
 
+  it('parses scheduled_audit and scheduled_audit_disallowed_licenses, defaulting both to empty', () => {
+    expect(loadOrchestratorConfig(tmpDir).scheduled_audit).toEqual([]);
+    writeConfig(['allowed_tools:', '  - Bash(dotnet:*)'].join('\n'));
+    const empty = loadOrchestratorConfig(tmpDir);
+    expect(empty.scheduled_audit).toEqual([]);
+    expect(empty.scheduled_audit_disallowed_licenses).toEqual([]);
+
+    writeConfig(
+      [
+        'scheduled_audit:',
+        '  - npm audit --json',
+        '  - command: license-checker --json',
+        'scheduled_audit_disallowed_licenses:',
+        '  - GPL',
+      ].join('\n'),
+    );
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.scheduled_audit).toEqual([
+      'npm audit --json',
+      { command: 'license-checker --json' },
+    ]);
+    expect(config.scheduled_audit_disallowed_licenses).toEqual(['GPL']);
+  });
+
+  it('applies the allowed-tools check to scheduled_audit', () => {
+    writeConfig(['scheduled_audit:', '  - golangci-lint run'].join('\n'));
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(validateGateCommandsAgainstAllowedTools(config)).toEqual([
+      {
+        field: 'scheduled_audit',
+        command: 'golangci-lint run',
+        binary: 'golangci-lint',
+      },
+    ]);
+  });
+
   it('passes when a binary is covered by the base allowlist alone, with no project allowed_tools', () => {
     writeConfig(['verify:', '  - git status'].join('\n'));
 

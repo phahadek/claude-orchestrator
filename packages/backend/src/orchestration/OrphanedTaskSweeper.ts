@@ -34,6 +34,7 @@ import {
   isSurfacedParkedIdle,
 } from '../session/sessionPredicates';
 import { isUsageAdmitted } from './usageAdmission';
+import { isAuthAdmitted } from './authAdmission';
 import { yieldToEventLoop } from '../utils/concurrency';
 import {
   recordEvent,
@@ -716,6 +717,12 @@ export class OrphanedTaskSweeper {
     // nudge count and pause_reason untouched — so the next sweep tick (after
     // the persisted usage_deferral expires) retries with a clean slate.
     if (!isUsageAdmitted().allowed) {
+      return;
+    }
+
+    // CLI auth is lapsed account-wide: same reasoning — a nudge would only
+    // get an auth error back. Skip without touching nudge counts.
+    if (!isAuthAdmitted().allowed) {
       return;
     }
 

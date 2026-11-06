@@ -45,6 +45,11 @@ const TESTHEALTH_GETFLAKYHISTORY_TOOL = orchestratorMcpToolName(
 // tool — a direct call straight to DeployOrchestrator.reportAgenticVerdict(),
 // never a staged intent, so it isn't in PLANNING_INTENT_KINDS.ops (see
 // config.ts's OPS_MCP_TOOLS comment).
+// testHealth.getTestTrace is registered unconditionally but CLI-allowed for
+// coding sessions only, so it is never in a planning workflow's allow-list.
+const TESTHEALTH_GETTESTTRACE_TOOL = orchestratorMcpToolName(
+  'testHealth.getTestTrace',
+);
 const DEPLOY_VERDICT_TOOL = orchestratorMcpToolName('deploy.verdict');
 // gate.reclassify / intent.dispositionStranded are also direct calls, never
 // staged intents (see config.ts's OPS_MCP_TOOLS comment) — same precedent as
@@ -125,7 +130,10 @@ const WORKFLOWS: {
       ...TASK_READ_TOOLS,
       ...TIER_B_READ_TOOLS,
     ],
-    alwaysRegisteredNotAllowed: [GATESEED_GETSTATE_TOOL],
+    alwaysRegisteredNotAllowed: [
+      GATESEED_GETSTATE_TOOL,
+      TESTHEALTH_GETTESTTRACE_TOOL,
+    ],
   },
   {
     name: 'design',
@@ -139,7 +147,10 @@ const WORKFLOWS: {
       ...TASK_READ_TOOLS,
       ...TIER_B_READ_TOOLS,
     ],
-    alwaysRegisteredNotAllowed: [GATESEED_GETSTATE_TOOL],
+    alwaysRegisteredNotAllowed: [
+      GATESEED_GETSTATE_TOOL,
+      TESTHEALTH_GETTESTTRACE_TOOL,
+    ],
   },
   {
     name: 'ops',
@@ -155,7 +166,7 @@ const WORKFLOWS: {
       ...TASK_READ_TOOLS,
       ...TIER_B_READ_TOOLS,
     ],
-    alwaysRegisteredNotAllowed: [],
+    alwaysRegisteredNotAllowed: [TESTHEALTH_GETTESTTRACE_TOOL],
   },
 ];
 
