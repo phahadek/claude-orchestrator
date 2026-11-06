@@ -16104,7 +16104,9 @@ export function getLaneHealthRollup(
   const totalRuns = rows.length;
   const bandCounts = emptyBandCounts();
   for (const r of rows) bandCounts[classifyTestRequestRun(r).band] += 1;
-  const timedOut = rows.filter((r) => r.failure_reason === 'timeout').length;
+  const timedOut = rows.filter(
+    (r) => r.state === 'failed' && r.failure_reason === 'timeout',
+  ).length;
 
   const queueWaitSamples = rows
     .filter((r) => r.requested_at !== null)
