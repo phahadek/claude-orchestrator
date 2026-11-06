@@ -36,8 +36,8 @@ function insertTestRequestRun(state: 'passed' | 'failed' = 'passed'): string {
   const id = `run-${seq}`;
   db.prepare(
     `INSERT INTO test_request_runs
-       (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, worktree_path)
-     VALUES (@id, 'proj-1', @content_hash, NULL, @state, '', 0, 0, 0, @worktree_path)`,
+       (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at, worktree_path)
+     VALUES (@id, 'proj-1', @content_hash, NULL, @state, 0, 0, 0, @worktree_path)`,
   ).run({
     id,
     content_hash: `hash-${seq}`,

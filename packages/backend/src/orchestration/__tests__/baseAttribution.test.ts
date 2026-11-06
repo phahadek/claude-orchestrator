@@ -40,8 +40,8 @@ function insertRunWithFailure(opts: {
   const runId = `run-${seq}`;
   db.prepare(
     `INSERT INTO test_request_runs
-       (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, worktree_path)
-     VALUES (@id, 'proj-1', @content_hash, NULL, 'failed', '', 0, 0, 0, @worktree_path)`,
+       (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at, worktree_path)
+     VALUES (@id, 'proj-1', @content_hash, NULL, 'failed', 0, 0, 0, @worktree_path)`,
   ).run({
     id: runId,
     content_hash: opts.contentHash,
@@ -168,8 +168,8 @@ describe('isRunFailureBreadthAttributable', () => {
     const runId = `run-${seq}`;
     db.prepare(
       `INSERT INTO test_request_runs
-         (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at)
-       VALUES (@id, 'proj-1', 'hash-clean', NULL, 'passed', '', 0, 0, 0)`,
+         (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at)
+       VALUES (@id, 'proj-1', 'hash-clean', NULL, 'passed', 0, 0, 0)`,
     ).run({ id: runId });
 
     expect(
@@ -182,8 +182,8 @@ describe('isRunFailureBreadthAttributable', () => {
     const runId = `run-${seq}`;
     db.prepare(
       `INSERT INTO test_request_runs
-         (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at)
-       VALUES (@id, 'proj-1', 'hash-mixed', NULL, 'failed', '', 0, 0, 0)`,
+         (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at)
+       VALUES (@id, 'proj-1', 'hash-mixed', NULL, 'failed', 0, 0, 0)`,
     ).run({ id: runId });
     db.prepare(
       `INSERT INTO test_run_results

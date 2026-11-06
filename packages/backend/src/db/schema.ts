@@ -3807,6 +3807,7 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
   backfillParkedIdleFromMachinePark(target);
+  dropInlineRunOutputColumn(target);
 
   // park_kind: discriminates parked_at's five writers into two shapes —
   // 'reclaimed' (AgentSession.reclaimProcess: only "no live process, don't
@@ -4287,4 +4288,53 @@ export function runStructuredResultExtractedClearBackfill(
   target
     .prepare(`INSERT INTO schema_backfills (name, applied_at) VALUES (?, ?)`)
     .run(STRUCTURED_RESULT_EXTRACTED_CLEAR_BACKFILL_MARKER, Date.now());
+}
+
+export function hasInlineRunOutputColumn(target: Database.Database): boolean {
+  const cols = target.prepare(`PRAGMA table_info(test_request_runs)`).all() as {
+    name: string;
+  }[];
+  return cols.some((c) => c.name === 'output');
+}
+
+/** Runs whose non-empty inline output has no side row or a byte-different one; 0 once the column is gone. */
+export function countRunOutputMismatches(target: Database.Database): number {
+  if (!hasInlineRunOutputColumn(target)) return 0;
+  const row = target
+    .prepare(
+      `SELECT COUNT(*) AS n FROM test_request_runs r
+       LEFT JOIN test_request_run_output o ON o.run_id = r.id
+       WHERE r.output != '' AND (o.run_id IS NULL OR o.output != r.output)`,
+    )
+    .get() as { n: number };
+  return row.n;
+}
+
+const DROP_INLINE_RUN_OUTPUT_MARKER = 'test_request_runs_output_drop_v1';
+
+/**
+ * Drops test_request_runs.output once every non-empty inline output is
+ * byte-equal in test_request_run_output. A non-zero mismatch count logs and
+ * leaves no marker, so the next boot retries (the background copy keeps
+ * filling the side table meanwhile).
+ */
+export function dropInlineRunOutputColumn(target: Database.Database): void {
+  const marker = target
+    .prepare(`SELECT 1 FROM schema_backfills WHERE name = ?`)
+    .get(DROP_INLINE_RUN_OUTPUT_MARKER);
+  if (marker) return;
+  if (hasInlineRunOutputColumn(target)) {
+    const mismatches = countRunOutputMismatches(target);
+    if (mismatches !== 0) {
+      logger.warn(
+        `[schema] test_request_runs.output drop skipped: ${mismatches} run(s) lack a byte-equal side row; will retry next boot`,
+      );
+      return;
+    }
+    target.exec(`ALTER TABLE test_request_runs DROP COLUMN output`);
+    target.exec(`PRAGMA incremental_vacuum`);
+  }
+  target
+    .prepare(`INSERT INTO schema_backfills (name, applied_at) VALUES (?, ?)`)
+    .run(DROP_INLINE_RUN_OUTPUT_MARKER, Date.now());
 }

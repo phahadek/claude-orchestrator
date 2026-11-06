@@ -40,8 +40,8 @@ function insertRun(db: Database.Database, projectId: string): string {
   const runId = `run-${seq}`;
   db.prepare(
     `INSERT INTO test_request_runs
-       (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at)
-     VALUES (@id, @project_id, @content_hash, NULL, 'passed', '', 0, 0, 0)`,
+       (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at)
+     VALUES (@id, @project_id, @content_hash, NULL, 'passed', 0, 0, 0)`,
   ).run({ id: runId, project_id: projectId, content_hash: `hash-${seq}` });
   return runId;
 }

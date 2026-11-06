@@ -75,7 +75,8 @@ function spec(contentHash: string) {
 function row(contentHash: string) {
   return db
     .prepare(
-      `SELECT state, output, failure_reason FROM test_request_runs WHERE content_hash = ?`,
+      `SELECT r.state, o.output, r.failure_reason FROM test_request_runs r
+       LEFT JOIN test_request_run_output o ON o.run_id = r.id WHERE r.content_hash = ?`,
     )
     .get(contentHash) as Record<string, unknown>;
 }
