@@ -35,6 +35,13 @@ function mockHealth(
           { day: '2026-11-01', p50: 100, p90: 400, p99: 500, sampleCount: 3 },
         ],
       } as never;
+    if (path.includes('lane-occupancy'))
+      return {
+        project: 'p',
+        windowDays,
+        bucketMs: 3600000,
+        lanes: [],
+      } as never;
     if (path.includes('slow-and-regressed'))
       return {
         slowest: [
@@ -172,9 +179,11 @@ describe('TestsView tabs', () => {
         return (
           path.includes('slow-and-regressed')
             ? { slowest: [], regressed: [] }
-            : path.includes('queue-wait')
-              ? { project: 'p', windowDays: 30, days: [] }
-              : { project: 'p', windowDays: 30, runKinds: {} }
+            : path.includes('lane-occupancy')
+              ? { project: 'p', windowDays: 30, bucketMs: 3600000, lanes: [] }
+              : path.includes('queue-wait')
+                ? { project: 'p', windowDays: 30, days: [] }
+                : { project: 'p', windowDays: 30, runKinds: {} }
         ) as never;
       }
       return {
