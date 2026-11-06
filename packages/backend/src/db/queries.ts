@@ -9907,6 +9907,15 @@ export function withdrawTestRequestRun(id: string, supersededBy: string): void {
   ).run(Date.now(), supersededBy, id);
 }
 
+/** Settles a still-queued run as an operator cancel: failed / 'cancelled', no verdict. */
+export function cancelQueuedTestRequestRun(id: string, output: string): void {
+  db.prepare(
+    `UPDATE test_request_runs
+     SET state = 'failed', failure_reason = 'cancelled', finished_at = ?, output = ?
+     WHERE id = ? AND state = 'queued'`,
+  ).run(Date.now(), output, id);
+}
+
 /** Records the pre-test merge's result onto a run row. */
 export function recordTestRequestRunMerge(
   id: string,
@@ -10536,6 +10545,7 @@ export function getLatestTestRequestRun(
        FROM test_request_runs
        WHERE project_id = @project_id AND content_hash = @content_hash AND state NOT IN ('running', 'queued')
          AND failure_reason IS NOT 'superseded'
+         AND failure_reason IS NOT 'cancelled'
          AND (@run_kind IS NULL OR run_kind = @run_kind)
          AND (@base_sha_provided = 0 OR base_sha IS @base_sha)
          AND (
@@ -10640,7 +10650,7 @@ export function getLatestFinishedTestRequestRunForSession(
     `SELECT id
      FROM test_request_runs
      WHERE project_id = @project_id AND session_id = @session_id AND state NOT IN ('running', 'queued')
-       AND (failure_reason IS NULL OR failure_reason != 'superseded')
+       AND (failure_reason IS NULL OR failure_reason NOT IN ('superseded', 'cancelled'))
      ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
   );
   const finished = _stmtLatestFinishedTestRequestRunIdForSession.get({
@@ -10688,14 +10698,14 @@ export function getAuthoritativeTestRunForPr(
            AND worktree_path = @worktree_path
            AND run_kind = 'full'
            AND state NOT IN ('running', 'queued')
-           AND (failure_reason IS NULL OR failure_reason != 'superseded')
+           AND (failure_reason IS NULL OR failure_reason NOT IN ('superseded', 'cancelled'))
          UNION ALL
          SELECT rowid FROM test_request_runs
          WHERE project_id = @project_id AND session_id IS NULL
            AND worktree_path = @worktree_path
            AND run_kind = 'full'
            AND state NOT IN ('running', 'queued')
-           AND (failure_reason IS NULL OR failure_reason != 'superseded')
+           AND (failure_reason IS NULL OR failure_reason NOT IN ('superseded', 'cancelled'))
        )
        ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
     )

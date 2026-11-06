@@ -148,6 +148,7 @@ import {
   rebindWorktreeContentHash,
   testRequestLaneEvents,
   getRunIngestionPromise,
+  cancelTestRequestRun,
 } from '../testRequestLane';
 import {
   Semaphore,
@@ -5955,5 +5956,134 @@ describe('resolveAutoLaunchMilestoneId', () => {
     expect(
       resolveAutoLaunchMilestoneId({ autoLaunchMilestoneId: null, boards: [] }),
     ).toBeNull();
+  });
+});
+
+describe('operator cancel', () => {
+  function abortableRunTestCommands() {
+    mockRunTestCommands.mockImplementation(
+      (
+        _wt: string,
+        _cmds: string[],
+        _timeout: number,
+        _log: unknown,
+        opts?: { signal?: AbortSignal },
+      ) =>
+        new Promise((resolve) => {
+          opts?.signal?.addEventListener('abort', () =>
+            resolve({ passed: false, output: 'aborted', cancelled: true }),
+          );
+        }),
+    );
+  }
+
+  it('cancelling a running run settles it failed/cancelled, releases the slot, and grants the next waiter', async () => {
+    typedSetSetting('test_request_max_concurrent', 1);
+    abortableRunTestCommands();
+    const first = admitTestRequest(
+      baseSpec({ contentHash: 'c-run-1', worktreePath: '/tmp/wt-c1' }),
+    );
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
+    const second = admitTestRequest(
+      baseSpec({ contentHash: 'c-run-2', worktreePath: '/tmp/wt-c2' }),
+    );
+    expect(second.status).toBe('queued');
+    mockRunTestCommands.mockResolvedValueOnce({ passed: true, output: 'ok' });
+
+    expect(cancelTestRequestRun(first.runId, 'device-1')).toBe('aborted');
+    const result = await first.result;
+
+    expect(result.cancelled).toBe(true);
+    expect(result.cancelledBy).toBe('device-1');
+    const row = getTestRequestRunById(first.runId);
+    expect(row?.state).toBe('failed');
+    expect(row?.failure_reason).toBe('cancelled');
+    expect((await second.result).passed).toBe(true);
+    expect(
+      db
+        .prepare(
+          `SELECT actor_id, actor_type FROM audit_log WHERE event_type = 'test_run_cancelled'`,
+        )
+        .all(),
+    ).toEqual([{ actor_id: 'device-1', actor_type: 'operator' }]);
+    expect(cancelTestRequestRun(first.runId, 'device-1')).toBe('settled');
+  });
+
+  it('cancelling a queued run settles it cancelled (not superseded) and the waiter receives cancelled', async () => {
+    typedSetSetting('test_request_max_concurrent', 1);
+    abortableRunTestCommands();
+    const first = admitTestRequest(
+      baseSpec({ contentHash: 'q-run-1', worktreePath: '/tmp/wt-q1' }),
+    );
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
+    const queued = admitTestRequest(
+      baseSpec({ contentHash: 'q-run-2', worktreePath: '/tmp/wt-q2' }),
+    );
+
+    expect(cancelTestRequestRun(queued.runId, 'device-2')).toBe('withdrawn');
+    const result = await queued.result;
+
+    expect(result.cancelled).toBe(true);
+    expect(result.cancelledBy).toBe('device-2');
+    expect(result.superseded).toBeUndefined();
+    const row = getTestRequestRunById(queued.runId);
+    expect(row?.failure_reason).toBe('cancelled');
+    expect(row?.superseded_by).toBeNull();
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    cancelTestRequestRun(first.runId, 'device-2');
+    await first.result;
+  });
+
+  it('every caller joined to a cancelled run receives cancelled', async () => {
+    abortableRunTestCommands();
+    const spec = baseSpec({ contentHash: 'j-run', worktreePath: '/tmp/wt-j' });
+    const a = admitTestRequest(spec);
+    const b = admitTestRequest(spec);
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
+
+    cancelTestRequestRun(a.runId, 'device-3');
+    const [ra, rb] = await Promise.all([a.result, b.result]);
+
+    expect(rb.runId).toBe(ra.runId);
+    expect(rb.joined).toBe(true);
+    expect(ra.cancelled).toBe(true);
+    expect(rb.cancelled).toBe(true);
+  });
+
+  it('a cancelled run is never replayed and never triggers the test.request hold', async () => {
+    abortableRunTestCommands();
+    const spec = baseSpec({ contentHash: 'r-run', worktreePath: '/tmp/wt-r' });
+    const first = admitTestRequest(spec);
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
+    cancelTestRequestRun(first.runId, 'device-4');
+    await first.result;
+
+    expect(getLatestTestRequestRun('proj-1', 'r-run')).toBeUndefined();
+    expect(
+      checkTestRequestHold({
+        projectId: 'proj-1',
+        sessionId: null,
+        contentHash: 'r-run',
+        runKind: 'full',
+        baseSha: null,
+      }),
+    ).toEqual({ held: false });
+
+    mockRunTestCommands.mockResolvedValueOnce({ passed: true, output: 'ok' });
+    const again = await runProjectTestRequest(spec);
+    expect(again.unchangedReplay).toBe(false);
+    expect(again.passed).toBe(true);
+  });
+
+  it('reports not_found for an unknown run', () => {
+    expect(cancelTestRequestRun('nope', 'device-5')).toBe('not_found');
   });
 });

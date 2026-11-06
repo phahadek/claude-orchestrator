@@ -22,6 +22,8 @@ export interface RunnerResultPackage {
   timedOut?: boolean;
   spawnFailed?: boolean;
   teardownVerificationFailed?: boolean;
+  /** The run was aborted by operator cancel before completing. */
+  cancelled?: boolean;
   startedAt: number;
   finishedAt: number;
   /**

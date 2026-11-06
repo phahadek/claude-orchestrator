@@ -224,6 +224,7 @@ import { truncateForDelivery } from '../session/test-runner';
 import {
   admitTestRequest,
   checkTestRequestHold,
+  cancelTestRequestRun,
   type TestRequestAdmission,
   type TestRequestAdmissionStatus,
   type TestRequestRunResult,
@@ -6956,6 +6957,9 @@ export async function triggerTestRequestExecution(
   // charged against the session's test_request_cycle budget either. See
   // testRequestLane.ts's same-worktree/PR-driven supersession.
   const superseded = !!(result as TestRequestRunResult).superseded;
+  // An operator-cancelled run is no verdict either, but unlike the cases
+  // above it is not refunded against the session's cycle budget.
+  const cancelled = !!(result as TestRequestRunResult).cancelled;
 
   // Filter a raw failure against the cross-SHA failure-breadth corpus
   // before anything downstream (commit annotation, audit event, session
@@ -6966,7 +6970,7 @@ export async function triggerTestRequestExecution(
   // orchestration/baseAttributableFilter.ts.
   let filterResult: BaseAttributableFilterResult | null = null;
   let guardBlocked: FailingTest[] = [];
-  if (runId && !result.passed && !executionFailed) {
+  if (runId && !result.passed && !executionFailed && !cancelled) {
     const project = getProjectById(intent.projectId);
     const run = getTestRequestRunById(runId);
     if (project && run && inputs.ok) {
@@ -7029,11 +7033,14 @@ export async function triggerTestRequestExecution(
       intentId: intent.id,
       disposition: superseded
         ? 'test_request_superseded'
-        : 'test_request_completed',
+        : cancelled
+          ? 'test_request_cancelled'
+          : 'test_request_completed',
       passed: result.passed,
       joined,
       unchangedReplay,
       superseded,
+      cancelled,
       provenance: 'auto',
       ...(filterResult && filterResult.outcome !== 'unfiltered'
         ? { baseAttributableFilterOutcome: filterResult.outcome }
@@ -7091,17 +7098,19 @@ export async function triggerTestRequestExecution(
       : null;
   const baseOutput = superseded
     ? `[test.request] This run was withdrawn before it executed — a newer request (or a PR merge/close/push) superseded it. Nothing to act on here; the tree this ran against is no longer current.`
-    : executionFailed
-      ? `[test.request] The test run could not be executed — the test runner process failed to start, so no test result exists. This is an infrastructure failure, not a test failure; it does not indicate your changes are broken. A further request against this same tree will be held for operator approval rather than auto-run again — re-staging will not change that.\n\n${truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP)}`
-      : (filterResult &&
-          filterResult.outcome !== 'unfiltered' &&
-          renderBaseAttributableFilterDigest(
-            filterResult,
-            guardBlocked,
-            unattributedView,
-          )) ||
-        outcomesDigest ||
-        truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP);
+    : cancelled
+      ? `[test.request] An operator cancelled this test run, so it produced no result. This is not a test failure. Do not re-request it without a new reason (for example, a new commit).`
+      : executionFailed
+        ? `[test.request] The test run could not be executed — the test runner process failed to start, so no test result exists. This is an infrastructure failure, not a test failure; it does not indicate your changes are broken. A further request against this same tree will be held for operator approval rather than auto-run again — re-staging will not change that.\n\n${truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP)}`
+        : (filterResult &&
+            filterResult.outcome !== 'unfiltered' &&
+            renderBaseAttributableFilterDigest(
+              filterResult,
+              guardBlocked,
+              unattributedView,
+            )) ||
+          outcomesDigest ||
+          truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP);
   const output = appendAwaitingDispositionInstruction(
     baseOutput,
     awaitingDisposition,
@@ -7227,6 +7236,8 @@ function describeTestRequestFailure(
     case 'interrupted_running':
     case 'interrupted_queued':
       return 'was interrupted by a backend restart';
+    case 'cancelled':
+      return 'was cancelled by an operator';
     default:
       return 'crashed';
   }
@@ -9938,6 +9949,37 @@ export function createStagedIntentsRouter(
     }
     res.json({ run: row ? testRequestRunRowToApi(row) : null });
   });
+
+  // ── POST /api/test-request-runs/:id/cancel ────────────────────────────────
+  // Operator cancel: withdraws a queued run or aborts an executing one (see
+  // cancelTestRequestRun). Device-authed, so a dispatched session cannot reach it.
+  router.post(
+    '/test-request-runs/:id/cancel',
+    requireDeviceAuth,
+    (req: Request, res: Response) => {
+      const device = (req as Request & { device?: { id: string } }).device;
+      if (!device) {
+        res
+          .status(401)
+          .json({ error: 'unauthorized', code: 'device_not_enrolled' });
+        return;
+      }
+      const outcome = cancelTestRequestRun(String(req.params.id), device.id);
+      switch (outcome) {
+        case 'not_found':
+          res.status(404).json({ error: 'test request run not found' });
+          return;
+        case 'settled':
+          res.status(409).json({ error: 'run already settled' });
+          return;
+        case 'noop':
+          res.json({ action: 'noop' });
+          return;
+        default:
+          res.json({ action: outcome });
+      }
+    },
+  );
 
   // ── GET /api/test-request-runs/history ────────────────────────────────────
   // Run-history feed for the task detail panel's Tests tab: every
