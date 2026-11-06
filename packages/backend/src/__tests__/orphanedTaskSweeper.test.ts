@@ -72,6 +72,10 @@ vi.mock('../orchestration/usageAdmission.js', () => ({
   isUsageAdmitted: vi.fn(() => ({ allowed: true })),
 }));
 
+vi.mock('../orchestration/authAdmission.js', () => ({
+  isAuthAdmitted: vi.fn(() => ({ allowed: true })),
+}));
+
 import fs from 'node:fs';
 import {
   getLatestCodeSessionByNotionTaskId,
