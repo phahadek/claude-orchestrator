@@ -28,6 +28,12 @@ const history = {
 };
 
 function route(url: string) {
+  if (url.includes('pass-rate-trend')) {
+    return Promise.resolve({ project: 'p1', windowDays: 30, runKinds: {} });
+  }
+  if (url.includes('test-analytics/queue-wait')) {
+    return Promise.resolve({ project: 'p1', windowDays: 30, days: [] });
+  }
   if (url.includes('slow-and-regressed')) {
     return Promise.resolve({
       slowest: [baseline('slow1')],
