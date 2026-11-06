@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { computeStages, selectAutoStage, STAGE_ORDER } from './stageSelection';
+import {
+  computeStages,
+  selectAutoStage,
+  taskTypeFamily,
+  type PlanningKindSession,
+  type TypeFamily,
+} from './stageSelection';
+import { isTaskTypeCompatibleWithSessionType } from '@claude-orchestrator/backend/src/session/sessionPredicates';
 import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
 
 function makeTask(overrides?: Partial<TaskView>): TaskView {
@@ -83,11 +90,115 @@ function makePr(
   };
 }
 
-describe('computeStages', () => {
-  it('always returns all five fixed stages, even with no content', () => {
+const ids = (task: TaskView, planning: PlanningKindSession[] = []) =>
+  computeStages(task, planning).map((s) => s.id);
+
+describe('computeStages — stage set per Type', () => {
+  const CODE_SET = [
+    'planning:groom',
+    'implementation',
+    'tests',
+    'review',
+    'pr',
+  ];
+
+  it('Code: not-started grooming chip, then the four code stages', () => {
     const stages = computeStages(makeTask());
-    expect(stages.map((s) => s.id)).toEqual(STAGE_ORDER);
+    expect(stages.map((s) => s.id)).toEqual(CODE_SET);
     expect(stages.every((s) => s.status === 'not_started')).toBe(true);
+  });
+
+  it('unknown or missing Type falls back to Code', () => {
+    expect(ids(makeTask({ taskType: 'Mystery' }))).toEqual(CODE_SET);
+    expect(ids(makeTask({ taskType: undefined as unknown as string }))).toEqual(
+      CODE_SET,
+    );
+  });
+
+  it('Design and Planning: planning chips only', () => {
+    expect(ids(makeTask({ taskType: '📐 Design' }))).toEqual([
+      'planning:groom',
+    ]);
+    expect(ids(makeTask({ taskType: '📋 Planning' }))).toEqual([
+      'planning:groom',
+    ]);
+  });
+
+  it('Docs: PR chip only when the task has a PR', () => {
+    expect(ids(makeTask({ taskType: '📝 Docs' }))).toEqual(['planning:groom']);
+    expect(ids(makeTask({ taskType: '📝 Docs', pr: makePr() }))).toEqual([
+      'planning:groom',
+      'pr',
+    ]);
+  });
+
+  it('Testing is ops family: no Implementation/Review', () => {
+    expect(ids(makeTask({ taskType: '🧪 Testing', pr: makePr() }))).toEqual([
+      'planning:groom',
+      'pr',
+    ]);
+    expect(ids(makeTask({ taskType: '🧪 Testing' }))).toEqual([
+      'planning:groom',
+    ]);
+  });
+
+  it('one chip per planning kind in given order, labelled by kind', () => {
+    const stages = computeStages(makeTask(), [
+      { sessionId: 'a', sessionType: 'groom', status: 'done' },
+      { sessionId: 'b', sessionType: 'design', status: 'running' },
+      { sessionId: 'c', sessionType: 'split', status: 'done' },
+      { sessionId: 'd', sessionType: 'docs', status: 'done' },
+    ]);
+    expect(stages.slice(0, 4).map((s) => [s.id, s.label, s.status])).toEqual([
+      ['planning:groom', 'Grooming', 'done'],
+      ['planning:design', 'Design', 'active'],
+      ['planning:split', 'Split', 'done'],
+      ['planning:docs', 'Docs', 'done'],
+    ]);
+  });
+
+  it('task.planningSession overrides its own kind chip status', () => {
+    const stages = computeStages(
+      makeTask({
+        planningSession: makePlanningSession({
+          sessionType: 'design',
+          status: 'needs_permission',
+        }),
+      }),
+      [
+        { sessionId: 'a', sessionType: 'groom', status: 'done' },
+        { sessionId: 'b', sessionType: 'design', status: 'done' },
+      ],
+    );
+    expect(stages[0].status).toBe('done');
+    expect(stages[1].status).toBe('waiting');
+    expect(stages[1].demand).toBe(true);
+  });
+
+  it('agrees with isTaskTypeCompatibleWithSessionType families', () => {
+    const samples: Record<TypeFamily, string[]> = {
+      code: ['💻 Code'],
+      planning: ['📐 Design', '📋 Planning'],
+      ops: ['🔧 Operational', '🔎 Investigation', '🧪 Testing'],
+      docs: ['📝 Docs', '🎨 Assets'],
+    };
+    const sessionTypeFor: Record<TypeFamily, string> = {
+      code: 'standard',
+      planning: 'design',
+      ops: 'ops',
+      docs: 'docs',
+    };
+    const families = Object.keys(samples) as TypeFamily[];
+    for (const family of families) {
+      for (const type of samples[family]) {
+        expect(taskTypeFamily(type)).toBe(family);
+        for (const other of families) {
+          expect(
+            isTaskTypeCompatibleWithSessionType(type, sessionTypeFor[other]),
+          ).toBe(other === family);
+        }
+      }
+    }
   });
 
   it('marks tests as not_started — no test data source exists yet', () => {
@@ -155,13 +266,26 @@ describe('selectAutoStage — precedence', () => {
     const stages = computeStages(task);
     const demandStages = stages.filter((s) => s.demand).map((s) => s.id);
     expect(demandStages).toEqual(
-      expect.arrayContaining(['planning', 'implementation', 'review', 'pr']),
+      expect.arrayContaining([
+        'planning:design',
+        'implementation',
+        'review',
+        'pr',
+      ]),
     );
-    expect(selectAutoStage(stages)).toBe('planning');
+    expect(selectAutoStage(stages)).toBe('planning:design');
   });
 
-  it('defaults to planning for a brand-new task with no content anywhere', () => {
+  it('picks the earliest demand chip in rendered order among planning chips', () => {
+    const stages = computeStages(makeTask({ taskType: '📐 Design' }), [
+      { sessionId: 'a', sessionType: 'groom', status: 'error' },
+      { sessionId: 'b', sessionType: 'design', status: 'needs_permission' },
+    ]);
+    expect(selectAutoStage(stages)).toBe('planning:groom');
+  });
+
+  it('defaults to the first planning chip for a brand-new task', () => {
     const stages = computeStages(makeTask());
-    expect(selectAutoStage(stages)).toBe('planning');
+    expect(selectAutoStage(stages)).toBe('planning:groom');
   });
 });

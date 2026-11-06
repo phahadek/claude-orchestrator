@@ -311,6 +311,79 @@ export function clearReportFiles(
   }
 }
 
+/** What a run's commands declared about the changed paths they took, from root-level JUnit properties. */
+export interface TestReportDeclaration {
+  /** True only when every expected command report exists and carries orchestrator.declares. */
+  allDeclared: boolean;
+  /** Union of every orchestrator.claimed_path across the reports. */
+  claimedPaths: string[];
+}
+
+/**
+ * Reads the root-level `<properties>` of one report: everything before the
+ * first `<testsuite` element (JUnit places root properties ahead of suites).
+ * Returns null when the report does not declare.
+ */
+function parseReportDeclaration(
+  xml: string,
+): { claimedPaths: string[] } | null {
+  const firstSuite = xml.search(/<testsuite\b/);
+  const rootText = firstSuite === -1 ? xml : xml.slice(0, firstSuite);
+  let declares = false;
+  const claimedPaths: string[] = [];
+  const propRe = /<property\b([^>]*?)(?:\/>|>[\s\S]*?<\/property>)/g;
+  let match: RegExpExecArray | null;
+  while ((match = propRe.exec(rootText)) !== null) {
+    const attrs = parseXmlAttrs(match[1]);
+    if (attrs.name === 'orchestrator.declares' && attrs.value === '1') {
+      declares = true;
+    } else if (attrs.name === 'orchestrator.claimed_path' && attrs.value) {
+      claimedPaths.push(attrs.value);
+    }
+  }
+  return declares ? { claimedPaths } : null;
+}
+
+/**
+ * Collects the declarations of the same fresh report files
+ * collectStructuredTestResult would merge. A missing report (fewer files than
+ * `expectedReportCount`) or any non-declaring report means not allDeclared.
+ */
+export function collectTestReportDeclaration(
+  worktreePath: string,
+  reportGlob: string,
+  expectedReportCount = 1,
+  startedAt?: number,
+): TestReportDeclaration {
+  const matched = matchReportFiles(worktreePath, reportGlob).filter((rel) => {
+    if (startedAt === undefined) return true;
+    try {
+      return statSync(path.join(worktreePath, rel)).mtimeMs >= startedAt;
+    } catch {
+      return false;
+    }
+  });
+  const claimed = new Set<string>();
+  let allDeclared =
+    expectedReportCount > 0 && matched.length >= expectedReportCount;
+  for (const rel of matched) {
+    let parsed: { claimedPaths: string[] } | null;
+    try {
+      parsed = parseReportDeclaration(
+        readFileSync(path.join(worktreePath, rel), 'utf8'),
+      );
+    } catch {
+      parsed = null;
+    }
+    if (!parsed) {
+      allDeclared = false;
+      continue;
+    }
+    for (const p of parsed.claimedPaths) claimed.add(p);
+  }
+  return { allDeclared, claimedPaths: [...claimed].sort() };
+}
+
 /**
  * Glob-matches report files under `worktreePath`, parses each as JUnit XML,
  * and merges every matched file's suites into one normalized

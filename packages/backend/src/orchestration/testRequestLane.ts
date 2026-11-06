@@ -58,9 +58,11 @@ import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import {
   runTestCommands,
   collectStructuredTestResultOffMainThread,
+  collectTestReportDeclaration,
   clearReportFiles,
   type TestCommandResult,
 } from '../session/test-runner';
+import type { TestReportDeclaration } from '../session/testReportCollector';
 import {
   validateRunnerResultPackage,
   type RunnerResultPackage,
@@ -204,6 +206,8 @@ export interface TestRequestRunSpec {
   contentHash: string;
   worktreePath: string;
   commands: string[];
+  /** The lane's expanded changed-files list the scoped commands were built from; used to compute unclaimed_paths at settle. */
+  changedFiles?: string[];
   timeoutSec: number;
   maxRssMb: number;
   /** Originating session, persisted onto the run row for per-request attribution. */
@@ -1700,6 +1704,26 @@ export function checkTestRequestHold(params: {
   };
 }
 
+/**
+ * The settle-time nothing-exercised marker: set only when every command
+ * declared and none claimed a changed path. unclaimed_paths is the changed
+ * files no command claimed (JSON), NULL when any command did not declare.
+ */
+export function resolveNothingExercised(
+  declaration: TestReportDeclaration | undefined,
+  changedFiles: string[] | undefined,
+): { nothingExercised: boolean; unclaimedPaths: string | null } {
+  if (!declaration?.allDeclared) {
+    return { nothingExercised: false, unclaimedPaths: null };
+  }
+  const claimed = new Set(declaration.claimedPaths);
+  const unclaimed = (changedFiles ?? []).filter((f) => !claimed.has(f));
+  return {
+    nothingExercised: claimed.size === 0,
+    unclaimedPaths: JSON.stringify(unclaimed),
+  };
+}
+
 /** A caller-facing snapshot of an in-flight lane entry — see findQueuedOrRunningTestRequest. */
 export interface QueuedOrRunningTestRequest {
   runId: string;
@@ -1805,6 +1829,7 @@ const localRunnerExecutor: LaneRunnerExecutor = async ({
       ? await withCheckoutTestRunLock(checkoutDir, runCommands)
       : await runCommands();
   let structuredResult: StructuredTestResult | null = null;
+  let declaration: TestReportDeclaration | undefined;
   if (testReportGlob) {
     try {
       // Only commands that actually ran and are report-producers (members of
@@ -1834,6 +1859,12 @@ const localRunnerExecutor: LaneRunnerExecutor = async ({
         expectedReports,
         startedAt,
       );
+      declaration = collectTestReportDeclaration(
+        spec.worktreePath,
+        testReportGlob,
+        expectedReports,
+        startedAt,
+      );
     } catch (err) {
       logger.warn(
         `[testRequestLane] structured_result acquisition failed for run ${runId}:`,
@@ -1858,6 +1889,7 @@ const localRunnerExecutor: LaneRunnerExecutor = async ({
     finishedAt: Date.now(),
     runnerConcurrentRunCount: concurrentRunCount,
     structuredResult,
+    declaration,
     commandStats: raw.commandStats,
   };
 };
@@ -2263,6 +2295,9 @@ async function executeTestRequestRun(
     const structuredResultJson = structuredResult
       ? JSON.stringify(structuredResult)
       : null;
+    const exercise = result.passed
+      ? resolveNothingExercised(pkg.declaration, spec.changedFiles)
+      : { nothingExercised: false, unclaimedPaths: null };
     completeTestRequestRun(
       runId,
       result.passed ? 'passed' : 'failed',
@@ -2275,6 +2310,8 @@ async function executeTestRequestRun(
       acquisitionAttempted,
       result.passed ? null : (result.failedCommand ?? null),
       pkg.commandStats ? JSON.stringify(pkg.commandStats) : null,
+      exercise.nothingExercised,
+      exercise.unclaimedPaths,
     );
     clearSupersededStructuredResults(spec.projectId, spec.contentHash, runId);
     broadcastRunStatus({
