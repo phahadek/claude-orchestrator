@@ -39,6 +39,8 @@ interface TestRunHistoryEntry {
   concurrentRunCount: number | null;
   outcome: TestRunOutcome;
   nextAction: string;
+  nothing_exercised?: boolean;
+  unclaimed_paths?: string | null;
   testResults: TestResultEntry[];
   testResultsTruncated: boolean;
   totalTestResultCount: number;
@@ -163,7 +165,9 @@ export function TestsTab({ projectId, sessionId }: Props) {
                 className={`${styles.outcomeBadge} ${styles[`outcome--${run.outcome}`]}`}
                 data-testid={`test-run-outcome-${run.id}`}
               >
-                {OUTCOME_LABELS[run.outcome]}
+                {run.nothing_exercised
+                  ? 'nothing exercised'
+                  : OUTCOME_LABELS[run.outcome]}
               </span>
               {run.isPrPipelineRun && (
                 <span

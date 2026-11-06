@@ -1132,7 +1132,9 @@ export class PRMergeWatcher extends EventEmitter {
         : null;
       const reportAcquired =
         reportOutcomes !== null &&
-        (reportOutcomes.source !== 'none' || reportOutcomes.parseFailed);
+        (reportOutcomes.source !== 'none' ||
+          reportOutcomes.parseFailed ||
+          reportOutcomes.nothingExercised === true);
       if (
         testResult &&
         testResult.test_report_acquisition_attempted === 1 &&

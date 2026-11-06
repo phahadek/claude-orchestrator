@@ -27,6 +27,7 @@ import {
   parseJUnitXml,
   clearReportFiles,
   collectStructuredTestResult,
+  collectTestReportDeclaration,
 } from './testReportCollector';
 
 export {
@@ -35,6 +36,7 @@ export {
   parseJUnitXml,
   clearReportFiles,
   collectStructuredTestResult,
+  collectTestReportDeclaration,
 };
 
 export interface CommandStat {
