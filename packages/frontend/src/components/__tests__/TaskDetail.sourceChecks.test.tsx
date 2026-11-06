@@ -101,4 +101,16 @@ describe('TaskDetail source checks', () => {
     const planningBodyMatch = css.match(/\.planningBody\s*\{([^}]+)\}/);
     expect(planningBodyMatch![1]).toContain('min-height: 0');
   });
+
+  // ── Tests tab scrolls inside TaskDetail's overflow-hidden body ──
+
+  it('TestsTab.module.css container is a flex scroll container', () => {
+    const cssPath = path.join(__dirname, '../TestsTab.module.css');
+    const css = fs.readFileSync(cssPath, 'utf-8');
+    const match = css.match(/\.container\s*\{([^}]+)\}/);
+    expect(match).toBeTruthy();
+    expect(match![1]).toContain('flex: 1');
+    expect(match![1]).toContain('min-height: 0');
+    expect(match![1]).toContain('overflow-y: auto');
+  });
 });
