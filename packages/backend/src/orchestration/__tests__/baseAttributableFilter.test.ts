@@ -56,8 +56,16 @@ vi.mock('../../db/queries', () => ({
   }),
   computeTestFailureBreadthFlag: mockComputeTestFailureBreadthFlag,
   resolveBreadthOwnTree: mockResolveBreadthOwnTree,
+  getPRBySessionId: () => null,
   getActiveTestOverrideTestIds: () => new Set<string>(),
   markTestResultExcused: mockMarkTestResultExcused,
+}));
+
+const { mockGetChangedFiles } = vi.hoisted(() => ({
+  mockGetChangedFiles: vi.fn(async (): Promise<string[]> => []),
+}));
+vi.mock('../../session/autofix-runner', () => ({
+  getChangedFiles: mockGetChangedFiles,
 }));
 
 const { mockTypedGetSetting } = vi.hoisted(() => ({
@@ -192,6 +200,7 @@ describe('filterBaseAttributableFailures', () => {
       3,
       expect.any(Number),
       { sessionIds: ['sess-1'], worktreePaths: ['/wt/own'] },
+      null,
     );
   });
 
@@ -328,7 +337,7 @@ describe('filterBaseAttributableFailures', () => {
     expect(mockMarkTestResultExcused).toHaveBeenCalledWith(
       'run-42',
       'suite.testA',
-      'breadth_corpus',
+      'breadth_signature',
     );
   });
 
@@ -624,7 +633,7 @@ describe('filterVerifyFailureByBaseHealth', () => {
     expect(mockMarkTestResultExcused).toHaveBeenCalledWith(
       'verify-run',
       't1',
-      'breadth_corpus',
+      'breadth_signature',
     );
     expect(mockMarkTestResultExcused).not.toHaveBeenCalledWith(
       'verify-run',
@@ -634,8 +643,75 @@ describe('filterVerifyFailureByBaseHealth', () => {
   });
 });
 
+describe('diff-touched exemption on the message-less path', () => {
+  const failing = (extra: Record<string, unknown>) => [
+    { test_id: 'src/foo.test.ts.t1', name: 't1', ...extra },
+  ];
+
+  it('does not breadth-excuse a message-less failure in a confidently touched test file', async () => {
+    stubBreadthFlags(new Set(['src/foo.test.ts.t1']));
+    mockGetChangedFiles.mockResolvedValueOnce(['src/foo.test.ts']);
+    mockGetFailingTestIdsForRun.mockReturnValue(failing({}));
+    const { result } = await filterBaseAttributableFailuresForF2Gate(
+      PROJECT,
+      makeRun({ worktree_path: '/wt/own' }),
+      'task-1',
+    );
+    expect(result.outcome).toBe('unfiltered');
+  });
+
+  it('still excuses a message-less failure when the test file is untouched', async () => {
+    stubBreadthFlags(new Set(['src/foo.test.ts.t1']));
+    mockGetChangedFiles.mockResolvedValueOnce(['src/other.ts']);
+    mockGetFailingTestIdsForRun.mockReturnValue(failing({}));
+    const { result } = await filterBaseAttributableFailuresForF2Gate(
+      PROJECT,
+      makeRun({ worktree_path: '/wt/own' }),
+      'task-1',
+    );
+    expect(result.outcome).toBe('filtered_pass');
+  });
+
+  it('excuses an unmappable (non-confident) message-less test as before', async () => {
+    stubBreadthFlags(new Set(['bare']));
+    mockGetChangedFiles.mockResolvedValueOnce(['bare.ts']);
+    mockGetFailingTestIdsForRun.mockReturnValue([
+      { test_id: 'bare', name: 'bare' },
+    ]);
+    const { result } = await filterBaseAttributableFailuresForF2Gate(
+      PROJECT,
+      makeRun({ worktree_path: '/wt/own' }),
+      'task-1',
+    );
+    expect(result.outcome).toBe('filtered_pass');
+  });
+
+  it('a failure with a message skips the diff exemption and passes the message to the breadth query', async () => {
+    stubBreadthFlags(new Set(['src/foo.test.ts.t1']));
+    mockGetChangedFiles.mockResolvedValue(['src/foo.test.ts']);
+    mockGetFailingTestIdsForRun.mockReturnValue(
+      failing({ failure_message: 'Unexpected [183]' }),
+    );
+    const { result } = await filterBaseAttributableFailuresForF2Gate(
+      PROJECT,
+      makeRun({ worktree_path: '/wt/own' }),
+      'task-1',
+    );
+    expect(result.outcome).toBe('filtered_pass');
+    expect(mockComputeTestFailureBreadthFlag).toHaveBeenCalledWith(
+      'src/foo.test.ts.t1',
+      24,
+      3,
+      expect.any(Number),
+      expect.anything(),
+      'Unexpected [183]',
+    );
+    mockGetChangedFiles.mockResolvedValue([]);
+  });
+});
+
 describe('masking-guard layer is retired (static)', () => {
-  it('no source on the attribution/F2/lane path references applyF2GateMaskingGuards or isTestIdTouchedByChangedFiles', () => {
+  it('no source on the attribution/F2/lane path references applyF2GateMaskingGuards', () => {
     const root = path.resolve(__dirname, '../..');
     const files = [
       'orchestration/baseAttributableFilter.ts',
@@ -652,7 +728,6 @@ describe('masking-guard layer is retired (static)', () => {
         .replace(/\/\*[\s\S]*?\*\//g, '')
         .replace(/\/\/.*$/gm, '');
       expect(code, f).not.toContain('applyF2GateMaskingGuards');
-      expect(code, f).not.toContain('isTestIdTouchedByChangedFiles');
     }
   });
 });
