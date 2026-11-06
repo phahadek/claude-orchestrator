@@ -119,7 +119,7 @@ export class AuthLapseProbe {
   }
 
   private credentialsChanged(): boolean {
-    let mtime: number | null = null;
+    let mtime: number | null;
     try {
       mtime = fs.statSync(
         this.options.credentialsPath ?? claudeCredentialsPath(),
