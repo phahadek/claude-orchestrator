@@ -5088,9 +5088,10 @@ describe('ingestTestRunResultsTx — skips baseline/flip-rate recompute for non-
       const sample = onDigestSample.mock.calls[0][1];
       expect(sample.durationAdmitted).toBe(false);
       expect(listRecentValidTestDurations(testId, 32)).toEqual([42]);
-      expect(
-        readRecentTestOutcomes(db, testId, 200).map((o) => o.o),
-      ).toEqual(['P', 'F']);
+      expect(readRecentTestOutcomes(db, testId, 200).map((o) => o.o)).toEqual([
+        'P',
+        'F',
+      ]);
       const after = getTestPerfBaseline(testId)!;
       expect(after.median_duration_ms).toBe(before.median_duration_ms);
       expect(after.sample_count).toBe(before.sample_count);
