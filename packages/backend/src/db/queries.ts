@@ -10049,9 +10049,11 @@ export function completeTestRequestRun(
   acquisitionAttempted?: boolean,
   failedCommand?: string | null,
   commandStats?: string | null,
+  nothingExercised?: boolean,
+  unclaimedPaths?: string | null,
 ): void {
   const update = db.prepare(
-    `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ?, failure_reason = ?, structured_result = ?, oom_killed = ?, test_report_acquisition_attempted = ?, failed_command = ?, command_stats = ? WHERE id = ?`,
+    `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ?, failure_reason = ?, structured_result = ?, oom_killed = ?, test_report_acquisition_attempted = ?, failed_command = ?, command_stats = ?, nothing_exercised = ?, unclaimed_paths = ? WHERE id = ?`,
   );
   db.transaction(() => {
     update.run(
@@ -10064,6 +10066,8 @@ export function completeTestRequestRun(
       acquisitionAttempted === undefined ? null : acquisitionAttempted ? 1 : 0,
       failedCommand ?? null,
       commandStats ?? null,
+      nothingExercised ? 1 : 0,
+      unclaimedPaths ?? null,
       id,
     );
     upsertRunOutput(id, output);
@@ -10297,7 +10301,7 @@ export function clearAwaitingDisposition(id: string): void {
   ).run(id);
 }
 
-const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at, failure_reason, structured_result, command_stats, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha, foreign_concurrent_run_count, worktree_path, superseded_by, failed_command, commands, coverage_source_run_id, awaiting_disposition_at, runner_executed`;
+const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at, failure_reason, structured_result, command_stats, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha, foreign_concurrent_run_count, worktree_path, superseded_by, failed_command, commands, coverage_source_run_id, awaiting_disposition_at, runner_executed, nothing_exercised, unclaimed_paths`;
 
 const AWAITING_DISPOSITION_COLUMNS = TEST_REQUEST_RUN_COLUMNS.split(', ')
   .map((c) => `test_request_runs.${c}`)
@@ -10331,6 +10335,7 @@ export function listSettledPassedTestRequestRunsForCoverage(
          AND (
            structured_result IS NOT NULL
            OR test_report_acquisition_attempted IS NOT 1
+           OR nothing_exercised = 1
            OR EXISTS (
              SELECT 1 FROM test_run_summaries
              WHERE test_run_summaries.test_request_run_id = test_request_runs.id
@@ -10609,6 +10614,7 @@ export function getLatestTestRequestRun(
            OR state != 'passed'
            OR structured_result IS NOT NULL
            OR test_report_acquisition_attempted IS NOT 1
+           OR nothing_exercised = 1
            OR EXISTS (
              SELECT 1 FROM test_run_summaries
              WHERE test_run_summaries.test_request_run_id = test_request_runs.id
@@ -10832,6 +10838,7 @@ export function listTestRequestRunsForProject(
               r.structured_result, r.command_stats, r.concurrent_run_count, r.oom_killed,
               r.test_report_acquisition_attempted, r.run_origin, r.producer,
               r.run_kind, r.base_sha, r.merged_dev_sha, r.conflict_outcome,
+              r.nothing_exercised, r.unclaimed_paths,
               s.passed_count, s.failed_count, s.skipped_count, s.error_count,
               s.other_count, s.total_count
        FROM test_request_runs r

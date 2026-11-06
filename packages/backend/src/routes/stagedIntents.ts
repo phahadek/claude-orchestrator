@@ -6777,6 +6777,7 @@ async function resolveTestRequestExecutionInputs(intent: StagedIntent): Promise<
       worktreePath: string;
       commands: string[];
       runKind: 'scoped' | 'full';
+      changedFiles: string[];
       timeoutSec: number;
       maxRssMb: number;
     }
@@ -6818,12 +6819,13 @@ async function resolveTestRequestExecutionInputs(intent: StagedIntent): Promise<
       reason: `could not resolve the session's changed files: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
-  const { commands, runKind } = resolved;
+  const { commands, runKind, changedFiles } = resolved;
   return {
     ok: true,
     worktreePath,
     commands,
     runKind,
+    changedFiles,
     timeoutSec: config.test_timeout_sec,
     maxRssMb: config.test_max_rss_mb,
   };
@@ -6847,19 +6849,23 @@ async function resolveTestCommandsForDiff(
   config: OrchestratorConfig,
   worktreePath: string,
   baseBranch: string,
-): Promise<{ commands: string[]; runKind: 'scoped' | 'full' }> {
+): Promise<{
+  commands: string[];
+  runKind: 'scoped' | 'full';
+  changedFiles: string[];
+}> {
   if (!config.test_scoped?.length)
-    return { commands: config.test, runKind: 'full' };
+    return { commands: config.test, runKind: 'full', changedFiles: [] };
   const diffPaths = await getChangedFiles(worktreePath, baseBranch);
   if (matchesPathDiff(config.test_full_run_paths, diffPaths)) {
-    return { commands: config.test, runKind: 'full' };
+    return { commands: config.test, runKind: 'full', changedFiles: diffPaths };
   }
   const scoped = config.test_scoped
     .map((cmd) => expandAutofixCommand(cmd, diffPaths))
     .filter((cmd): cmd is string => cmd !== null);
   return scoped.length > 0
-    ? { commands: scoped, runKind: 'scoped' }
-    : { commands: config.test, runKind: 'full' };
+    ? { commands: scoped, runKind: 'scoped', changedFiles: diffPaths }
+    : { commands: config.test, runKind: 'full', changedFiles: diffPaths };
 }
 
 /**
@@ -6911,6 +6917,7 @@ export async function triggerTestRequestExecution(
           worktreePath: inputs.worktreePath,
           commands: inputs.commands,
           runKind: inputs.runKind,
+          changedFiles: inputs.changedFiles,
           baseSha: null,
           timeoutSec: inputs.timeoutSec,
           maxRssMb: inputs.maxRssMb,
@@ -7378,6 +7385,7 @@ async function maybeAutoApproveTestRequest(
     worktreePath: inputs.worktreePath,
     commands: inputs.commands,
     runKind: inputs.runKind,
+    changedFiles: inputs.changedFiles,
     baseSha: null,
     timeoutSec: inputs.timeoutSec,
     maxRssMb: inputs.maxRssMb,
@@ -10012,6 +10020,8 @@ export function createStagedIntentsRouter(
             concurrentRunCount: run.concurrent_run_count,
             outcome: classification.outcome,
             nextAction: classification.nextAction,
+            nothing_exercised: run.nothing_exercised === 1,
+            unclaimed_paths: run.unclaimed_paths ?? null,
             testResults: testResults.map((t) => ({
               testId: t.test_id,
               name: t.name,
@@ -10078,6 +10088,8 @@ export function createStagedIntentsRouter(
           outcomeCounts,
           mergedDevSha: run.merged_dev_sha ?? null,
           conflictOutcome: run.conflict_outcome ?? null,
+          nothing_exercised: run.nothing_exercised === 1,
+          unclaimed_paths: run.unclaimed_paths ?? null,
         };
       }),
     });
