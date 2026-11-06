@@ -17,6 +17,7 @@ import {
   insertAnalyzeContentCacheResult,
   addAutofixSha,
   getTestRequestRunById,
+  getTestRequestRunOutput,
   updateTestRequestRunState,
   getFailingTestIdsForRun,
   getUnexcusedFailingTestIdsForRun,
@@ -418,7 +419,7 @@ export class PreReviewPipeline {
               isWorkerCrash && run
                 ? buildWorkerCrashMessage(
                     detectCrashSignature(
-                      run.output,
+                      getTestRequestRunOutput(run.id),
                       config.test_crash_signatures ?? [],
                     ) ?? { matchedLines: [] },
                   )
@@ -496,15 +497,16 @@ export class PreReviewPipeline {
               continue;
             }
             if (followed.state === 'passed' || followed.state === 'failed') {
+              const followedOutput = getTestRequestRunOutput(followed.id);
               const toolInfra =
                 followed.failure_reason === 'tool_infra_failure';
               outcome = outcomeFromRun(followed, {
                 passed: followed.state === 'passed',
                 failedCommand: followed.failed_command ?? undefined,
-                output: followed.output,
+                output: followedOutput,
                 isToolInfraFailure: toolInfra,
                 toolFailureReason: toolInfra
-                  ? tailOfLog(followed.output)
+                  ? tailOfLog(followedOutput)
                   : undefined,
               });
             }

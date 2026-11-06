@@ -9760,32 +9760,39 @@ export function insertTestRequestRun(
   taskId: string | null = null,
   priorityGroup: string | null = null,
 ): void {
-  db.prepare(
+  const insertRun = db.prepare(
     `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, concurrent_run_count, run_origin, producer, run_kind, base_sha, worktree_path, commands, breadth_origin, runner_executed, task_id, priority_group)
      VALUES (?, ?, ?, ?, ?, '', ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    id,
-    projectId,
-    contentHash,
-    sessionId,
-    state,
-    requestedAt,
-    // A queued row has no real start yet — requestedAt is its placeholder
-    // until markTestRequestRunRunning overwrites it with the real value once
-    // the semaphore permit is actually acquired.
-    state === 'queued' ? requestedAt : Date.now(),
-    concurrentRunCount ?? null,
-    runOrigin ?? null,
-    producer ?? null,
-    runKind,
-    baseSha ?? null,
-    worktreePath ?? null,
-    commands ? JSON.stringify(commands) : null,
-    resolveRunBreadthOrigin(projectId, contentHash, sessionId, worktreePath),
-    runnerExecuted ? 1 : 0,
-    taskId,
-    priorityGroup,
   );
+  const insertOutput = db.prepare(
+    `INSERT OR REPLACE INTO test_request_run_output (run_id, output) VALUES (?, '')`,
+  );
+  db.transaction(() => {
+    insertOutput.run(id);
+    insertRun.run(
+      id,
+      projectId,
+      contentHash,
+      sessionId,
+      state,
+      requestedAt,
+      // A queued row has no real start yet — requestedAt is its placeholder
+      // until markTestRequestRunRunning overwrites it with the real value once
+      // the semaphore permit is actually acquired.
+      state === 'queued' ? requestedAt : Date.now(),
+      concurrentRunCount ?? null,
+      runOrigin ?? null,
+      producer ?? null,
+      runKind,
+      baseSha ?? null,
+      worktreePath ?? null,
+      commands ? JSON.stringify(commands) : null,
+      resolveRunBreadthOrigin(projectId, contentHash, sessionId, worktreePath),
+      runnerExecuted ? 1 : 0,
+      taskId,
+      priorityGroup,
+    );
+  })();
 }
 
 /**
@@ -9840,36 +9847,41 @@ export function insertCoverageTestRequestRun(
   requestedAt: number,
   source: TestRequestRunRow,
 ): void {
-  db.prepare(
+  const sourceOutput = getTestRequestRunOutput(source.id);
+  const insertRun = db.prepare(
     `INSERT INTO test_request_runs (
        id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at,
        failure_reason, structured_result, oom_killed, test_report_acquisition_attempted,
        run_origin, producer, run_kind, base_sha, worktree_path, failed_command, commands, coverage_source_run_id, breadth_origin
      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    newId,
-    projectId,
-    contentHash,
-    sessionId,
-    source.state,
-    source.output,
-    requestedAt,
-    requestedAt,
-    requestedAt,
-    source.failure_reason,
-    source.structured_result,
-    source.oom_killed,
-    source.test_report_acquisition_attempted,
-    runOrigin,
-    producer,
-    runKind,
-    baseSha,
-    worktreePath,
-    source.failed_command,
-    JSON.stringify(requestedCommands),
-    source.id,
-    resolveRunBreadthOrigin(projectId, contentHash, sessionId, worktreePath),
   );
+  db.transaction(() => {
+    insertRun.run(
+      newId,
+      projectId,
+      contentHash,
+      sessionId,
+      source.state,
+      sourceOutput,
+      requestedAt,
+      requestedAt,
+      requestedAt,
+      source.failure_reason,
+      source.structured_result,
+      source.oom_killed,
+      source.test_report_acquisition_attempted,
+      runOrigin,
+      producer,
+      runKind,
+      baseSha,
+      worktreePath,
+      source.failed_command,
+      JSON.stringify(requestedCommands),
+      source.id,
+      resolveRunBreadthOrigin(projectId, contentHash, sessionId, worktreePath),
+    );
+    upsertRunOutput(newId, sourceOutput);
+  })();
 }
 
 /**
@@ -9976,20 +9988,117 @@ export function completeTestRequestRun(
   failedCommand?: string | null,
   commandStats?: string | null,
 ): void {
-  db.prepare(
+  const update = db.prepare(
     `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ?, failure_reason = ?, structured_result = ?, oom_killed = ?, test_report_acquisition_attempted = ?, failed_command = ?, command_stats = ? WHERE id = ?`,
-  ).run(
-    state,
-    output,
-    Date.now(),
-    failureReason,
-    structuredResult ?? null,
-    oomKilled ? 1 : 0,
-    acquisitionAttempted === undefined ? null : acquisitionAttempted ? 1 : 0,
-    failedCommand ?? null,
-    commandStats ?? null,
-    id,
   );
+  db.transaction(() => {
+    update.run(
+      state,
+      output,
+      Date.now(),
+      failureReason,
+      structuredResult ?? null,
+      oomKilled ? 1 : 0,
+      acquisitionAttempted === undefined ? null : acquisitionAttempted ? 1 : 0,
+      failedCommand ?? null,
+      commandStats ?? null,
+      id,
+    );
+    upsertRunOutput(id, output);
+  })();
+}
+
+function upsertRunOutput(runId: string, output: string): void {
+  db.prepare(
+    `INSERT INTO test_request_run_output (run_id, output) VALUES (?, ?)
+     ON CONFLICT(run_id) DO UPDATE SET output = excluded.output`,
+  ).run(runId, output);
+}
+
+/**
+ * The run's captured output, fetched by primary key from the side table.
+ * Falls back to the inline column while the background copy has not yet
+ * reached the run.
+ */
+export function getTestRequestRunOutput(runId: string): string {
+  const side = db
+    .prepare(`SELECT output FROM test_request_run_output WHERE run_id = ?`)
+    .get(runId) as { output: string } | undefined;
+  if (side && side.output !== '') return side.output;
+  const inline = db
+    .prepare(`SELECT output FROM test_request_runs WHERE id = ?`)
+    .get(runId) as { output: string } | undefined;
+  return inline?.output ?? side?.output ?? '';
+}
+
+const RUN_OUTPUT_COPY_BATCH = 200;
+
+/**
+ * Copies one keyset batch of inline output into side rows for runs lacking
+ * one (INSERT OR IGNORE — idempotent). Resumable: pass back `nextAfterId`.
+ * `done` is true when no runs remain past the cursor.
+ */
+export function copyTestRequestRunOutputBatch(
+  afterId: string | null,
+  batchSize = RUN_OUTPUT_COPY_BATCH,
+): { copied: number; nextAfterId: string | null; done: boolean } {
+  return db.transaction(() => {
+    const ids = db
+      .prepare(
+        `SELECT id FROM test_request_runs WHERE id > ? ORDER BY id LIMIT ?`,
+      )
+      .all(afterId ?? '', batchSize) as { id: string }[];
+    if (ids.length === 0) return { copied: 0, nextAfterId: afterId, done: true };
+    const info = db
+      .prepare(
+        `INSERT OR IGNORE INTO test_request_run_output (run_id, output)
+         SELECT id, output FROM test_request_runs WHERE id > ? AND id <= ?`,
+      )
+      .run(afterId ?? '', ids[ids.length - 1].id);
+    return {
+      copied: info.changes,
+      nextAfterId: ids[ids.length - 1].id,
+      done: ids.length < batchSize,
+    };
+  })();
+}
+
+/** Runs whose non-empty inline output has no side row or a differing one — R2 requires 0. */
+export function countTestRequestRunOutputMismatches(): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM test_request_runs r
+       LEFT JOIN test_request_run_output o ON o.run_id = r.id
+       WHERE r.output != '' AND (o.run_id IS NULL OR o.output != r.output)`,
+    )
+    .get() as { n: number };
+  return row.n;
+}
+
+let runOutputCopyTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Starts the paced background copy (never blocks boot); stops itself when done. */
+export function startTestRequestRunOutputCopy(
+  intervalMs = 1000,
+  initialDelayMs = 60_000,
+): void {
+  if (runOutputCopyTimer) return;
+  let cursor: string | null = null;
+  const tick = (): void => {
+    runOutputCopyTimer = null;
+    try {
+      const r = copyTestRequestRunOutputBatch(cursor);
+      cursor = r.nextAfterId;
+      if (r.done) return;
+    } catch (err) {
+      logger.warn(`[queries] test_request_run_output copy failed: ${err}`);
+      return;
+    }
+    runOutputCopyTimer = setTimeout(tick, intervalMs);
+    runOutputCopyTimer.unref?.();
+  };
+  runOutputCopyTimer = setTimeout(tick, initialDelayMs);
+  runOutputCopyTimer.unref?.();
 }
 
 /**
@@ -10125,7 +10234,7 @@ export function clearAwaitingDisposition(id: string): void {
   ).run(id);
 }
 
-const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, command_stats, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha, foreign_concurrent_run_count, worktree_path, superseded_by, failed_command, commands, coverage_source_run_id, awaiting_disposition_at, runner_executed`;
+const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at, failure_reason, structured_result, command_stats, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha, foreign_concurrent_run_count, worktree_path, superseded_by, failed_command, commands, coverage_source_run_id, awaiting_disposition_at, runner_executed`;
 
 const AWAITING_DISPOSITION_COLUMNS = TEST_REQUEST_RUN_COLUMNS.split(', ')
   .map((c) => `test_request_runs.${c}`)
@@ -10201,14 +10310,16 @@ export function failStaleRunnerExecutedTestRequestRun(
   output: string,
   cutoff: number,
 ): boolean {
-  const info = db
-    .prepare(
-      `UPDATE test_request_runs
-       SET state = 'failed', output = ?, finished_at = ?, failure_reason = 'runner_unreachable'
-       WHERE id = ? AND runner_executed = 1 AND state IN ('queued', 'running') AND started_at <= ?`,
-    )
-    .run(output, Date.now(), id, cutoff);
-  return info.changes > 0;
+  const update = db.prepare(
+    `UPDATE test_request_runs
+     SET state = 'failed', output = ?, finished_at = ?, failure_reason = 'runner_unreachable'
+     WHERE id = ? AND runner_executed = 1 AND state IN ('queued', 'running') AND started_at <= ?`,
+  );
+  return db.transaction(() => {
+    const info = update.run(output, Date.now(), id, cutoff);
+    if (info.changes > 0) upsertRunOutput(id, output);
+    return info.changes > 0;
+  })();
 }
 
 /** Every run still `running` — used by the boot-time crash-recovery sweep. */
@@ -10653,7 +10764,7 @@ export function listTestRequestRunsForProject(
 ): ProjectTestRunHistoryRow[] {
   const rows = db
     .prepare<{ project_id: string; limit: number }>(
-      `SELECT r.id, r.project_id, r.content_hash, r.session_id, r.state, r.output,
+      `SELECT r.id, r.project_id, r.content_hash, r.session_id, r.state,
               r.requested_at, r.started_at, r.finished_at, r.failure_reason,
               r.structured_result, r.command_stats, r.concurrent_run_count, r.oom_killed,
               r.test_report_acquisition_attempted, r.run_origin, r.producer,

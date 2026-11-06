@@ -7,6 +7,7 @@ import { sweepStaleTaskPauseReasons } from './projects/milestoneResolver';
 import {
   clearTaskPauseReasonsByReason,
   clearGroomAttributedTaskPauseReasons,
+  startTestRequestRunOutputCopy,
 } from './db/queries';
 import { runGitConfigIntegrityCheck } from './orchestration/gitConfigIntegrity';
 import {
@@ -329,6 +330,9 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   });
   await tracker.runStep('test_request_run_recovery', () =>
     recoverInterruptedTestRequestRuns(),
+  );
+  await tracker.runStep('test_request_run_output_copy_schedule', () =>
+    startTestRequestRunOutputCopy(),
   );
   await tracker.runStep('dependency_cache_build_recovery', () =>
     recoverInterruptedDependencyCacheBuilds(),

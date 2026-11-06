@@ -121,6 +121,7 @@ import {
   listLiveGateVerifyIntentsForMilestoneAndDisposition,
   recordReadinessRetryAttempt,
   resetReadinessRetryCount,
+  getTestRequestRunOutput,
 } from '../db/queries';
 import type { OpsReconciliationAssertion } from '../db/types';
 import { DependencyResolver } from '../notion/DependencyResolver';
@@ -2016,7 +2017,7 @@ function testRequestRunRowToApi(
         : row.state === 'passed'
           ? 'passed'
           : 'failed-with-cause',
-    output: row.state === 'failed' ? row.output : undefined,
+    output: row.state === 'failed' ? getTestRequestRunOutput(row.id) : undefined,
     sessionId: row.session_id,
     requestedAt: row.requested_at ?? undefined,
     startedAt: row.started_at,
