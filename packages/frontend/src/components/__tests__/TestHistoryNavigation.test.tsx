@@ -34,6 +34,14 @@ function route(url: string) {
   if (url.includes('test-analytics/queue-wait')) {
     return Promise.resolve({ project: 'p1', windowDays: 30, days: [] });
   }
+  if (url.includes('lane-occupancy')) {
+    return Promise.resolve({
+      project: 'p1',
+      windowDays: 30,
+      bucketMs: 3600000,
+      lanes: [],
+    });
+  }
   if (url.includes('slow-and-regressed')) {
     return Promise.resolve({
       slowest: [baseline('slow1')],

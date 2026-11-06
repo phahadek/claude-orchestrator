@@ -9,6 +9,8 @@ function health(path: string) {
     return { project: 'proj-1', windowDays: 30, runKinds: {} };
   if (path.includes('queue-wait'))
     return { project: 'proj-1', windowDays: 30, days: [] };
+  if (path.includes('lane-occupancy'))
+    return { project: 'proj-1', windowDays: 30, bucketMs: 3600000, lanes: [] };
   return { slowest: [], regressed: [] };
 }
 
@@ -17,7 +19,7 @@ describe('useProjectTestHealth', () => {
     vi.restoreAllMocks();
   });
 
-  it('fetches the three Health endpoints with the window', async () => {
+  it('fetches the four Health endpoints with the window', async () => {
     const spy = vi
       .spyOn(projectsApi, 'apiRequest')
       .mockImplementation(async (path) => health(String(path)) as never);
@@ -25,9 +27,12 @@ describe('useProjectTestHealth', () => {
     const { result } = renderHook(() => useProjectTestHealth('proj-1', 30));
 
     await waitFor(() => expect(result.current.passRate).not.toBeNull());
-    expect(spy).toHaveBeenCalledTimes(3);
+    expect(spy).toHaveBeenCalledTimes(4);
     expect(spy).toHaveBeenCalledWith(
       '/api/milestones/proj-1/test-analytics/pass-rate-trend?window=30',
+    );
+    expect(spy).toHaveBeenCalledWith(
+      '/api/milestones/proj-1/test-analytics/lane-occupancy?window=30',
     );
   });
 
@@ -37,7 +42,7 @@ describe('useProjectTestHealth', () => {
       .mockImplementation(async (path) => health(String(path)) as never);
 
     renderHook(() => useProjectTestHealth('proj-1'));
-    await waitFor(() => expect(spy).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(4));
 
     act(() => {
       publishTestRequestRunStatus({
@@ -50,6 +55,6 @@ describe('useProjectTestHealth', () => {
       });
     });
 
-    await waitFor(() => expect(spy).toHaveBeenCalledTimes(6));
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(8));
   });
 });

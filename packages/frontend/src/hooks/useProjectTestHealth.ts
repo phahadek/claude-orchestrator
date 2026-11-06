@@ -58,7 +58,27 @@ interface SlowAndRegressed {
   regressed: BaselineTestSummary[];
 }
 
+export interface LaneOccupancyBucket {
+  t: number;
+  peakRunning: number;
+  peakQueued: number;
+}
+
+export interface LaneOccupancyLane {
+  lane: 'full' | 'targeted';
+  capacity: number;
+  buckets: LaneOccupancyBucket[];
+}
+
+interface LaneOccupancy {
+  project: string;
+  windowDays: number;
+  bucketMs: number;
+  lanes: LaneOccupancyLane[];
+}
+
 export interface UseProjectTestHealthResult {
+  laneOccupancy: LaneOccupancy | null;
   passRate: PassRateTrend | null;
   queueWait: QueueWaitDistribution | null;
   slowAndRegressed: SlowAndRegressed | null;
@@ -80,6 +100,9 @@ export function useProjectTestHealth(
   );
   const [slowAndRegressed, setSlowAndRegressed] =
     useState<SlowAndRegressed | null>(null);
+  const [laneOccupancy, setLaneOccupancy] = useState<LaneOccupancy | null>(
+    null,
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [invalidationKey, setInvalidationKey] = useState(0);
@@ -90,6 +113,7 @@ export function useProjectTestHealth(
       setPassRate(null);
       setQueueWait(null);
       setSlowAndRegressed(null);
+      setLaneOccupancy(null);
       setError(null);
       setLoading(false);
       return;
@@ -102,9 +126,11 @@ export function useProjectTestHealth(
       apiRequest<PassRateTrend>(`${base}/pass-rate-trend?window=${window}`),
       apiRequest<QueueWaitDistribution>(`${base}/queue-wait?window=${window}`),
       apiRequest<SlowAndRegressed>(`${base}/slow-and-regressed`),
+      apiRequest<LaneOccupancy>(`${base}/lane-occupancy?window=${window}`),
     ])
-      .then(([trend, wait, slow]) => {
+      .then(([trend, wait, slow, occupancy]) => {
         if (requestIdRef.current !== requestId) return;
+        setLaneOccupancy(occupancy);
         setPassRate(trend);
         setQueueWait(wait);
         setSlowAndRegressed(slow);
@@ -137,5 +163,12 @@ export function useProjectTestHealth(
     });
   }, [projectId]);
 
-  return { passRate, queueWait, slowAndRegressed, loading, error };
+  return {
+    laneOccupancy,
+    passRate,
+    queueWait,
+    slowAndRegressed,
+    loading,
+    error,
+  };
 }
