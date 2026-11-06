@@ -1761,12 +1761,10 @@ describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
       2000,
     );
     // One `.all()` call resolves the candidate test-id set from
-    // test_perf_baselines (project_id, updated_at, test_id) — recomputing
-    // each candidate's flip-rate window (computeTestFlipRateFlag) reads its
-    // single digest row via `.get()`, not `.all()`, so with a single test id
-    // (test-a) carrying new rows, exactly 1 `.all()` call fires, not one per
-    // test in the project.
-    expect(allSpy).toHaveBeenCalledTimes(1);
+    // test_perf_baselines (project_id, updated_at, test_id), plus exactly one
+    // `.all()` for the single candidate's (test-a) test_sample window read —
+    // not one per test in the project.
+    expect(allSpy).toHaveBeenCalledTimes(2);
     allSpy.mockRestore();
 
     expect(result.itemsProcessed).toBe(1);

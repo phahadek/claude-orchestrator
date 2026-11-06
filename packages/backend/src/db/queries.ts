@@ -11555,6 +11555,8 @@ export function verifyTestSampleDigestParity(): TestSampleVerificationRow[] {
   return verifyTestSamples(db);
 }
 
+let lastIngestSequenceEnd = 0;
+
 /**
  * Ingests one completed run's extracted test results: writes a
  * test_run_summaries row (outcome counts + total duration), writes a
@@ -11603,7 +11605,10 @@ export function ingestTestRunResultsTx(
     else counts.other++;
   }
   const failing = tests.filter((t) => t.outcome !== 'passed');
-  const baseSequence = Date.now() * 1000;
+  // Strictly beyond any prior ingestion's range: test_sample's (test_id,
+  // sequenced_at) key would otherwise silently drop a same-ms sample.
+  const baseSequence = Math.max(Date.now() * 1000, lastIngestSequenceEnd);
+  lastIngestSequenceEnd = baseSequence + tests.length;
 
   const tx = db.transaction(() => {
     insertTestRunResults(
