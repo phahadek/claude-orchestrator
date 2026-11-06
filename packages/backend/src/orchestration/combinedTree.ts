@@ -110,9 +110,13 @@ export async function resolveCombinedTree(args: {
       ['rev-parse', '--verify', `refs/remotes/origin/${baseBranch}^{commit}`],
       { cwd: repoDir },
     ).catch(() =>
-      execFileAsync('git', ['rev-parse', '--verify', `${baseBranch}^{commit}`], {
-        cwd: repoDir,
-      }),
+      execFileAsync(
+        'git',
+        ['rev-parse', '--verify', `${baseBranch}^{commit}`],
+        {
+          cwd: repoDir,
+        },
+      ),
     );
     baseSha = remote.stdout.trim();
   } catch (e) {
