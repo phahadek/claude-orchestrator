@@ -8,7 +8,11 @@
 
 import { describe, it, expect } from 'vitest';
 import { classifyTestRunOutcome } from '../testRequestLane';
-import { insertTestRequestRun, ingestTestRunResultsTx } from '../../db/queries';
+import {
+  insertTestRequestRun,
+  completeTestRequestRun,
+  ingestTestRunResultsTx,
+} from '../../db/queries';
 import type { TestRequestRunRow } from '../../db/types';
 
 function makeRun(
@@ -20,7 +24,6 @@ function makeRun(
     content_hash: 'hash-1',
     session_id: 'session-1',
     state: 'passed',
-    output: '',
     requested_at: 1000,
     started_at: 1000,
     finished_at: 2000,
@@ -126,13 +129,18 @@ describe('classifyTestRunOutcome', () => {
   });
 
   it('classifies a failed run with failure_reason=worker_crash as crashed-worker, naming the extracted node id in nextAction', () => {
+    insertTestRequestRun('crash-run-1', 'proj-1', 'hash-crash-1', null, 1);
+    completeTestRequestRun(
+      'crash-run-1',
+      'failed',
+      "[gw3] node down: Not properly terminated\nworker gw3 crashed while running 'tests/foo.py::test_bar'",
+    );
     const result = classifyTestRunOutcome(
       makeRun({
+        id: 'crash-run-1',
         state: 'failed',
         structured_result: null,
         failure_reason: 'worker_crash',
-        output:
-          "[gw3] node down: Not properly terminated\nworker gw3 crashed while running 'tests/foo.py::test_bar'",
       }),
       ['node down: Not properly terminated'],
     );

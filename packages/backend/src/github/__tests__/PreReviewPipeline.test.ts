@@ -21,6 +21,7 @@ const mockUpsertAnalyzeResult = vi.fn();
 const mockGetAnalyzeResult = vi.fn().mockReturnValue(null);
 const mockDeleteAnalyzeResult = vi.fn();
 const mockGetTestRequestRunById = vi.fn().mockReturnValue(undefined);
+let lastRunOutput = '';
 const mockUpdateTestRequestRunState = vi.fn();
 const mockAddAutofixSha = vi.fn();
 const mockGetAnalyzeContentCacheResult = vi.fn().mockReturnValue(undefined);
@@ -49,8 +50,12 @@ vi.mock('../../db/queries', () => ({
   upsertAnalyzeResult: (...args: unknown[]) => mockUpsertAnalyzeResult(...args),
   getAnalyzeResult: (...args: unknown[]) => mockGetAnalyzeResult(...args),
   deleteAnalyzeResult: (...args: unknown[]) => mockDeleteAnalyzeResult(...args),
-  getTestRequestRunById: (...args: unknown[]) =>
-    mockGetTestRequestRunById(...args),
+  getTestRequestRunById: (...args: unknown[]) => {
+    const row = mockGetTestRequestRunById(...args);
+    lastRunOutput = row?.output ?? '';
+    return row;
+  },
+  getTestRequestRunOutput: () => lastRunOutput,
   updateTestRequestRunState: (...args: unknown[]) =>
     mockUpdateTestRequestRunState(...args),
   getAnalyzeContentCacheResult: (...args: unknown[]) =>
