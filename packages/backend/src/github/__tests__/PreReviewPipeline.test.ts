@@ -1770,6 +1770,40 @@ describe('PreReviewPipeline — verify gate superseded-run handling', () => {
     },
   );
 
+  it('stops on a cancelled verify: no re-admission, no out-of-lane verify, test_cancelled pause, session told', async () => {
+    mockAdmitTestRequest.mockReturnValue(
+      lane({
+        passed: false,
+        output: '',
+        cancelled: true,
+        cancelledBy: 'dev-1',
+      }),
+    );
+    const sm = makeSessionManager();
+    const result = await new PreReviewPipeline(sm).run(
+      makeJob(),
+      makeProject(),
+    );
+    expect(result.passed).toBe(false);
+    expect(mockAdmitTestRequest).toHaveBeenCalledTimes(1);
+    expect(mockRunVerifyAsGate).not.toHaveBeenCalled();
+    expect(mockSetPauseReason).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'test_cancelled',
+      expect.any(String),
+    );
+    expectNoTimeoutPause();
+    expect(sm.sendOrResume).toHaveBeenCalledWith(
+      SESSION_ID,
+      expect.stringContaining('operator cancelled'),
+    );
+    expect(sm.emit).not.toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({ type: 'pipeline_stage_failed' }),
+    );
+  });
+
   it('still pauses gate_timeout_infra_failure when the followed run timed out', async () => {
     mockAdmitTestRequest.mockReturnValue(superseded('run-new'));
     mockGetTestRequestRunById.mockImplementation((id: string) =>

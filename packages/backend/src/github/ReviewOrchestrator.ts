@@ -1130,6 +1130,27 @@ export class ReviewOrchestrator {
     };
   }
 
+  /** An operator cancelled the verify run: no verdict, no re-admission, no out-of-lane fallback. */
+  private async handleLocalBranchVerifyCancelled(
+    job: LocalBranchJob,
+  ): Promise<void> {
+    setLocalBranchPauseReason(
+      job.localBranchId,
+      'test_cancelled',
+      'verify run cancelled by operator',
+    );
+    try {
+      await this.sessionManager.sendOrResume(
+        job.sessionId,
+        '## Test Run Cancelled\n\nAn operator cancelled the verify test run for this branch, so it produced no result. Do not re-request it without a new reason (for example, a new commit).',
+      );
+    } catch (e) {
+      logger.warn(
+        `[ReviewOrchestrator] operator-cancel routing failed for local branch ${job.localBranchId}: ${e}`,
+      );
+    }
+  }
+
   /**
    * Runs verify for a local branch through the governed test lane
    * (run_kind 'verify', content-hash cached, semaphore-bounded, recorded in
@@ -1208,6 +1229,11 @@ export class ReviewOrchestrator {
         expectedToolVersions: config.expected_tool_versions,
       }).result;
 
+      if (laneResult.cancelled) {
+        await this.handleLocalBranchVerifyCancelled(job);
+        return null;
+      }
+
       if (!laneResult.superseded) {
         const { result } = fromRun(getTestRequestRunById(laneResult.runId), {
           passed: laneResult.passed,
@@ -1234,6 +1260,10 @@ export class ReviewOrchestrator {
         visited.add(by);
         const followed = getTestRequestRunById(by);
         if (!followed) break;
+        if (followed.failure_reason === 'cancelled') {
+          await this.handleLocalBranchVerifyCancelled(job);
+          return null;
+        }
         if (
           followed.state === 'failed' &&
           followed.failure_reason === 'superseded'

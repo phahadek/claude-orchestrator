@@ -1264,6 +1264,8 @@ export type TestRequestFailureReason =
   | 'interrupted_queued'
   | 'interrupted_running'
   | 'superseded'
+  /** Operator cancelled the run (queued withdraw or running abort): no verdict, never replayed, never triggers the hold. */
+  | 'cancelled'
   | 'tool_infra_failure'
   /**
    * A timed-out run whose output matched a project-declared

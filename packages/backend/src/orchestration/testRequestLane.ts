@@ -112,6 +112,7 @@ import {
   listQueuedTestRequestRunsForWorktree,
   rebindTestRequestRunContentHash,
   withdrawTestRequestRun,
+  cancelQueuedTestRequestRun,
   ingestTestRunResultsOffMainThread,
   listSettledPassedTestRequestRunsForCoverage,
   insertCoverageTestRequestRun,
@@ -319,6 +320,10 @@ export interface TestRequestRunResult extends TestCommandResult {
   superseded?: boolean;
   /** The newer run's id, or a PR-driven marker ('pr_merged' | 'pr_closed' | 'head_moved'). Present only when `superseded` is true. */
   supersededBy?: string;
+  /** True when an operator cancelled this run (queued withdraw or running abort) — no verdict. Every caller joined to the run receives it. */
+  cancelled?: boolean;
+  /** Operator actor who cancelled the run. Present only when `cancelled` is true. */
+  cancelledBy?: string;
 }
 
 /** A caller's live standing in the lane: running now, or queued behind others. */
@@ -366,6 +371,8 @@ function failureReasonFor(
   // itself failed, which is the more actionable/alarming fact regardless of
   // what triggered the teardown attempt in the first place.
   if (result.teardownVerificationFailed) return 'teardown_failed';
+  // The abort itself drives the timeout/OOM-looking exit; it is no verdict.
+  if (result.cancelled) return 'cancelled';
   // Checked ahead of the generic 'timeout': a timeout whose output matches a
   // project-declared crash signature is a worker crash the suite stalled
   // behind, not a hung/wedged process — see workerCrashDetection.ts.
@@ -769,6 +776,8 @@ export function __resetProjectSemaphoresForTest(): void {
   executingByWorktree.clear();
   inFlightRuns.clear();
   pendingBySession.clear();
+  abortControllersByRun.clear();
+  cancelActorByRun.clear();
 }
 
 /**
@@ -864,6 +873,69 @@ export function withdrawQueuedRunsForWorktree(
   return count;
 }
 
+const CANCELLED = 'cancelled';
+/** Per-run abort handle, held from permit grant until the run settles. */
+const abortControllersByRun = new Map<string, AbortController>();
+/** Operator actor for an in-progress cancel, read when the run settles. */
+const cancelActorByRun = new Map<string, string>();
+
+export type CancelTestRequestRunOutcome =
+  | 'withdrawn'
+  | 'aborted'
+  | 'noop'
+  | 'settled'
+  | 'not_found';
+
+/**
+ * Operator cancel, acting on the run's current state: a queued run is
+ * withdrawn from the lane queue and settled failed / 'cancelled'; an
+ * executing run is aborted (its executor escalates and settles it through
+ * the normal path). Abort is a no-op once escalation has begun. A run that
+ * already settled reports 'settled'. Cancel targets the execution, so every
+ * caller joined to it receives the cancelled result.
+ */
+export function cancelTestRequestRun(
+  runId: string,
+  actor: string,
+): CancelTestRequestRunOutcome {
+  const run = getTestRequestRunById(runId);
+  if (!run) return 'not_found';
+  if (run.state !== 'queued' && run.state !== 'running') return 'settled';
+
+  cancelActorByRun.set(runId, actor);
+  if (getQueueForRunKind(run.run_kind).withdraw(runId, CANCELLED)) {
+    const output = '[testRequestLane] cancelled by operator while queued';
+    cancelQueuedTestRequestRun(runId, output);
+    broadcastRunStatus({
+      runId,
+      projectId: run.project_id,
+      contentHash: run.content_hash,
+      status: 'cancelled',
+      sessionId: run.session_id,
+      requestedAt: run.requested_at ?? undefined,
+      startedAt: run.started_at,
+      finishedAt: Date.now(),
+    });
+    recordEvent({
+      event_type: 'test_run_cancelled',
+      actor_type: 'operator',
+      actor_id: actor,
+      project_id: run.project_id,
+      task_id: run.task_id ?? null,
+      payload: { runId, phase: 'queued' },
+    });
+    return 'withdrawn';
+  }
+
+  const controller = abortControllersByRun.get(runId);
+  if (controller && !controller.signal.aborted) {
+    controller.abort();
+    return 'aborted';
+  }
+  cancelActorByRun.delete(runId);
+  return 'noop';
+}
+
 /**
  * Rebinds the executing run and every still-queued same-hash sibling for
  * (projectId, worktreePath) from oldHash to newHash after a successful
@@ -923,6 +995,7 @@ interface InFlightEntry {
       runId: string;
       superseded?: boolean;
       supersededBy?: string;
+      cancelledBy?: string;
     }
   >;
 }
@@ -1600,7 +1673,11 @@ export function checkTestRequestHold(params: {
     baseSha,
     true,
   );
-  if (!withCrashRows || withCrashRows.failure_reason === 'superseded') {
+  if (
+    !withCrashRows ||
+    withCrashRows.failure_reason === 'superseded' ||
+    withCrashRows.failure_reason === 'cancelled'
+  ) {
     return { held: false };
   }
 
@@ -1703,6 +1780,8 @@ interface LaneExecutorCtx {
   startedAt: number;
   concurrentRunCount: number;
   testReportGlob: string | undefined;
+  /** Aborted on operator cancel; a local executor escalates the in-flight command and starts no more. */
+  signal: AbortSignal;
 }
 
 type LaneRunnerExecutor = (
@@ -1727,6 +1806,7 @@ const localRunnerExecutor: LaneRunnerExecutor = async ({
   startedAt,
   concurrentRunCount,
   testReportGlob,
+  signal,
 }) => {
   const runCommands = () =>
     runTestCommands(
@@ -1740,6 +1820,7 @@ const localRunnerExecutor: LaneRunnerExecutor = async ({
         failFast: spec.failFast ?? false,
         runId,
         env: spec.env,
+        signal,
       },
     );
   // A worktree with no bootstrap_script resolves modules through the project
@@ -1805,6 +1886,7 @@ const localRunnerExecutor: LaneRunnerExecutor = async ({
     timedOut: raw.timedOut,
     spawnFailed: raw.spawnFailed,
     teardownVerificationFailed: raw.teardownVerificationFailed,
+    cancelled: raw.cancelled,
     startedAt,
     finishedAt: Date.now(),
     runnerConcurrentRunCount: concurrentRunCount,
@@ -1950,12 +2032,27 @@ async function executeTestRequestRun(
     runId: string;
     superseded?: boolean;
     supersededBy?: string;
+    cancelledBy?: string;
   }
 > {
   let release: () => void;
   try {
     release = await permitPromise;
   } catch (err) {
+    if (
+      err instanceof LaneRunWithdrawnError &&
+      err.supersededBy === CANCELLED
+    ) {
+      const cancelledBy = cancelActorByRun.get(runId) ?? 'operator';
+      cancelActorByRun.delete(runId);
+      return {
+        passed: false,
+        output: '[testRequestLane] cancelled by operator while queued',
+        runId,
+        cancelled: true,
+        cancelledBy,
+      };
+    }
     if (err instanceof LaneRunWithdrawnError) {
       // The durable row/broadcast/audit event were already written by
       // whichever withdrawStaleSameWorktreeRuns/withdrawQueuedRunsForWorktree
@@ -1977,6 +2074,8 @@ async function executeTestRequestRun(
   // Pre-test merge of latest dev into the owner's worktree, strictly before
   // the content-hash check and the lane's executor — so a remote runner's
   // packed snapshot is always the merged tree.
+  const abortController = new AbortController();
+  abortControllersByRun.set(runId, abortController);
   const mergeNote = await runPreTestMerge(spec, runId);
 
   const semaphore = getQueueForRunKind(spec.runKind ?? 'full');
@@ -2125,6 +2224,7 @@ async function executeTestRequestRun(
       startedAt,
       concurrentRunCount,
       testReportGlob,
+      signal: abortController.signal,
     });
     const pkgProblems = validateRunnerResultPackage(rawPkg);
     if (pkgProblems.length > 0) {
@@ -2141,12 +2241,58 @@ async function executeTestRequestRun(
       spawnFailed: pkg.spawnFailed,
       teardownVerificationFailed: pkg.teardownVerificationFailed,
       failedCommand: pkg.failedCommand,
+      cancelled: pkg.cancelled === true,
     };
     const oomKilled = pkg.oomKilled;
     const structuredResult = pkg.structuredResult;
     const runConcurrentRunCount = pkg.runnerConcurrentRunCount;
     if (runConcurrentRunCount !== concurrentRunCount) {
       setTestRequestRunConcurrentCount(runId, runConcurrentRunCount);
+    }
+    const cancelledBy = result.cancelled
+      ? (cancelActorByRun.get(runId) ?? 'operator')
+      : undefined;
+    cancelActorByRun.delete(runId);
+    if (result.cancelled && !result.teardownVerificationFailed) {
+      // Operator abort: settles through the normal path (row, broadcast,
+      // audit, slot release in finally) but yields no verdict — no result
+      // ingestion, and no clearing of earlier runs' structured results.
+      completeTestRequestRun(
+        runId,
+        'failed',
+        result.output,
+        'cancelled',
+        null,
+        false,
+        acquisitionAttempted,
+        result.failedCommand ?? null,
+        pkg.commandStats ? JSON.stringify(pkg.commandStats) : null,
+      );
+      broadcastRunStatus({
+        runId,
+        projectId: spec.projectId,
+        contentHash: spec.contentHash,
+        status: 'cancelled',
+        sessionId: spec.sessionId,
+        requestedAt,
+        startedAt,
+        finishedAt: Date.now(),
+      });
+      recordEvent({
+        event_type: 'test_run_cancelled',
+        actor_type: 'operator',
+        actor_id: cancelledBy ?? null,
+        project_id: spec.projectId,
+        task_id: spec.taskId ?? null,
+        payload: { runId, phase: 'running' },
+      });
+      emitSettled({
+        projectId: spec.projectId,
+        contentHash: spec.contentHash,
+        runKind: spec.runKind ?? 'full',
+        state: 'failed',
+      });
+      return { ...result, runId, cancelled: true, cancelledBy };
     }
     const structuredResultJson = structuredResult
       ? JSON.stringify(structuredResult)
@@ -2245,7 +2391,7 @@ async function executeTestRequestRun(
         );
       },
     );
-    return { ...result, runId };
+    return { ...result, runId, ...(cancelledBy ? { cancelledBy } : {}) };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const output = `[testRequestLane] execution error: ${message}`;
@@ -2282,6 +2428,8 @@ async function executeTestRequestRun(
     });
     return { passed: false, output, runId };
   } finally {
+    abortControllersByRun.delete(runId);
+    cancelActorByRun.delete(runId);
     release();
   }
 }
@@ -2590,6 +2738,7 @@ type TestRunOutcome =
   | 'environment-failure'
   | 'timed-out'
   | 'execution-failed'
+  | 'cancelled'
   | 'running'
   | 'queued';
 
@@ -2618,6 +2767,8 @@ const TEST_RUN_NEXT_ACTIONS: Record<TestRunOutcome, string> = {
     'The test run exceeded its time limit — investigate a hang or split the run.',
   'execution-failed':
     'The test runner could not be started (e.g. spawn failure) — no test ever ran. This is an infrastructure failure, not a test result; retry.',
+  cancelled:
+    'An operator cancelled this run — it is not a test result. Do not re-request it without a new reason.',
   running: 'Run is still in progress — wait for it to finish.',
   queued: 'Run is queued — waiting for a lane concurrency slot to open.',
 };
@@ -2638,6 +2789,8 @@ export function classifyTestRunOutcome(
         : run.run_kind === 'targeted'
           ? 'passed-targeted'
           : 'passed';
+  } else if (run.failure_reason === 'cancelled') {
+    outcome = 'cancelled';
   } else if (
     run.failure_reason === 'execution_failed' ||
     run.failure_reason === 'interrupted_queued' ||
