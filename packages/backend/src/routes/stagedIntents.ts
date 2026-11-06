@@ -24,7 +24,10 @@ import {
   type MoveTaskTargetMilestone,
   type CreateTaskCommandFields,
 } from '../tasks/TaskWriteCommands';
-import { NotionClient } from '../notion/NotionClient';
+import {
+  NotionClient,
+  NotionPageEditPartialApplyError,
+} from '../notion/NotionClient';
 import type {
   TaskPropertiesPatch,
   PatchBodySectionOperation,
@@ -10606,6 +10609,19 @@ export function createStagedIntentsRouter(
           );
           res.status(409).json({ error: err.message });
           return;
+        }
+        if (err instanceof NotionPageEditPartialApplyError) {
+          setStagedIntentAnnotation(
+            intent.id,
+            JSON.stringify({
+              blocked: true,
+              partiallyApplied: true,
+              writtenBlockIds: err.writtenBlockIds,
+              failedBlockId: err.failedBlockId,
+              reasons: [err.message],
+            }),
+          );
+          broadcastIntentById(intent.id);
         }
         const { reason, redriven } = await routeApplyTimeFailure(
           row,

@@ -50,7 +50,10 @@ vi.mock('../../db/db', async () => {
 
 import { db } from '../../db/db';
 import { createStagedIntentsRouter } from '../stagedIntents';
-import { NotionPageEditStaleBaseError } from '../../notion/NotionClient';
+import {
+  NotionPageEditStaleBaseError,
+  NotionPageEditPartialApplyError,
+} from '../../notion/NotionClient';
 
 function makeApp() {
   const app = express();
@@ -135,6 +138,41 @@ describe('notion.pageEdit', () => {
       .get(staged.body.id) as { state: string };
     // Never committed — routed back to a revisable state instead of mis-applying.
     expect(row.state).not.toBe('committed');
+  });
+
+  it('a partial-apply failure records the written and failed block ids on the intent annotation', async () => {
+    mockApplyPageEdit.mockRejectedValue(
+      new NotionPageEditPartialApplyError(
+        'notion:doc-page-1',
+        ['blk-1', 'blk-2'],
+        'blk-3',
+        'validation_error',
+      ),
+    );
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'notion.pageEdit',
+      projectId: 'proj-a',
+      payload: {
+        page_id: 'notion:doc-page-1',
+        content_updates: [{ old_str: 'old text', new_str: 'new text' }],
+      },
+    });
+    const applied = await agent
+      .post(`/api/staged-intents/${staged.body.id}/apply`)
+      .send({});
+    expect(applied.status).toBe(500);
+
+    const row = db
+      .prepare('SELECT state, annotation FROM staged_intent WHERE id = ?')
+      .get(staged.body.id) as { state: string; annotation: string | null };
+    expect(row.state).not.toBe('committed');
+    const annotation = JSON.parse(row.annotation ?? '{}');
+    expect(annotation.partiallyApplied).toBe(true);
+    expect(annotation.writtenBlockIds).toEqual(['blk-1', 'blk-2']);
+    expect(annotation.failedBlockId).toBe('blk-3');
   });
 
   it('applying against a non-Notion-backed project refuses without calling NotionClient', async () => {
