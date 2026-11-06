@@ -138,6 +138,29 @@ describe('getLaneHealthRollup', () => {
     expect(result.passRate).toBe(0.5);
   });
 
+  it('does not count a filtered-pass (passed + timeout reason) row toward timeoutRate, but still counts a failed timeout', () => {
+    insertRun({
+      projectId: 'proj-fp',
+      state: 'passed',
+      requestedAt: 1000,
+      startedAt: 1000,
+      finishedAt: 1100,
+      failureReason: 'timeout',
+    });
+    insertRun({
+      projectId: 'proj-fp',
+      state: 'failed',
+      requestedAt: 2000,
+      startedAt: 2000,
+      finishedAt: 2100,
+      failureReason: 'timeout',
+    });
+
+    const result = getLaneHealthRollup('proj-fp');
+    expect(result.timeoutRate).toBe(1 / 2);
+    expect(result.passRate).toBe(1 / 2);
+  });
+
   it('excludes still-running runs from every aggregate', () => {
     db.prepare(
       `INSERT INTO test_request_runs

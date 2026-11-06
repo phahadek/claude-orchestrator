@@ -3143,6 +3143,35 @@ describe('admitTestRequest — settled-run guard', () => {
     expect(replay.passed).toBe(true);
   });
 
+  it.each(['timeout', 'tool_infra_failure'] as const)(
+    'a settled filtered-pass row (state=passed, failure_reason=%s) replays without timedOut / isToolInfraFailure',
+    async (reason) => {
+      mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '' });
+      mockCollectStructuredTestResult.mockReturnValue(null);
+      mockRunTestCommands.mockResolvedValueOnce({
+        passed: true,
+        output: 'ok',
+      });
+      const projectId = `proj-fp-${reason}`;
+      const contentHash = `fp-hash-${reason}`;
+      const first = await runProjectTestRequest(
+        baseSpec({ projectId, contentHash }),
+      );
+      db.prepare(
+        `UPDATE test_request_runs SET failure_reason = ? WHERE id = ?`,
+      ).run(reason, first.runId);
+
+      const replay = await runProjectTestRequest(
+        baseSpec({ projectId, contentHash }),
+      );
+
+      expect(replay.unchangedReplay).toBe(true);
+      expect(replay.passed).toBe(true);
+      expect(replay.timedOut).toBe(false);
+      expect(replay.isToolInfraFailure).toBe(false);
+    },
+  );
+
   it('a settled passed row with test_report_acquisition_attempted=0 (no report glob configured) is still replayed as unchangedReplay — a null structured_result there is not a vacuousness signal', async () => {
     mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '' });
     mockCollectStructuredTestResult.mockReturnValue(null);

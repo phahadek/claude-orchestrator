@@ -1166,10 +1166,12 @@ function buildCoverageResult(
   return {
     passed: source.state === 'passed',
     output: getTestRequestRunOutput(source.id),
-    timedOut: source.failure_reason === 'timeout',
+    timedOut: source.state === 'failed' && source.failure_reason === 'timeout',
     oomKilled: !!source.oom_killed,
     failedCommand: source.failed_command ?? undefined,
-    isToolInfraFailure: source.failure_reason === 'tool_infra_failure',
+    isToolInfraFailure:
+      source.state === 'failed' &&
+      source.failure_reason === 'tool_infra_failure',
     runId,
     joined,
     unchangedReplay: !joined,
@@ -1378,10 +1380,13 @@ export function admitTestRequest(
     const replayResult: TestRequestRunResult = {
       passed: settled.state === 'passed',
       output: getTestRequestRunOutput(settled.id),
-      timedOut: settled.failure_reason === 'timeout',
+      timedOut:
+        settled.state === 'failed' && settled.failure_reason === 'timeout',
       oomKilled: !!settled.oom_killed,
       failedCommand: settled.failed_command ?? undefined,
-      isToolInfraFailure: settled.failure_reason === 'tool_infra_failure',
+      isToolInfraFailure:
+        settled.state === 'failed' &&
+        settled.failure_reason === 'tool_infra_failure',
       runId: settled.id,
       joined: false,
       unchangedReplay: true,
