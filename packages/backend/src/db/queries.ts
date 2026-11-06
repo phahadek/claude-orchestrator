@@ -16174,6 +16174,143 @@ export function getQueueWaitDistribution(
   };
 }
 
+const HOUR_MS = 60 * 60 * 1000;
+
+export interface LaneRunInterval {
+  requested_at: number | null;
+  started_at: number | null;
+  finished_at: number | null;
+  coverage_source_run_id: string | null;
+}
+
+export interface LaneOccupancyBucket {
+  /** Bucket start, epoch ms. */
+  t: number;
+  peakRunning: number;
+  peakQueued: number;
+}
+
+/**
+ * Peak running / queued counts per bucket over [windowStart, windowEnd).
+ * Queued = [requested_at, started_at ?? finished_at ?? windowEnd); running =
+ * [started_at, finished_at ?? windowEnd), omitted for reused (coverage) runs and
+ * runs that never started.
+ */
+export function computeLaneOccupancy(
+  runs: LaneRunInterval[],
+  windowStart: number,
+  windowEnd: number,
+  bucketMs: number = HOUR_MS,
+): LaneOccupancyBucket[] {
+  const events: Array<{ at: number; running: number; queued: number }> = [];
+  const addInterval = (
+    from: number,
+    to: number,
+    kind: 'running' | 'queued',
+  ) => {
+    if (to <= from) return;
+    const dRun = kind === 'running' ? 1 : 0;
+    const dQ = kind === 'queued' ? 1 : 0;
+    events.push({ at: from, running: dRun, queued: dQ });
+    events.push({ at: to, running: -dRun, queued: -dQ });
+  };
+  for (const run of runs) {
+    if (run.requested_at === null) continue;
+    const queuedEnd = run.started_at ?? run.finished_at ?? windowEnd;
+    addInterval(run.requested_at, queuedEnd, 'queued');
+    if (run.started_at !== null && run.coverage_source_run_id === null) {
+      addInterval(run.started_at, run.finished_at ?? windowEnd, 'running');
+    }
+  }
+  // Ends sort before starts at the same instant so back-to-back runs don't double-count.
+  events.sort(
+    (a, b) => a.at - b.at || a.running + a.queued - (b.running + b.queued),
+  );
+
+  const buckets: LaneOccupancyBucket[] = [];
+  let running = 0;
+  let queued = 0;
+  let i = 0;
+  while (i < events.length && events[i].at < windowStart) {
+    running += events[i].running;
+    queued += events[i].queued;
+    i += 1;
+  }
+  for (let t = windowStart; t < windowEnd; t += bucketMs) {
+    let peakRunning = running;
+    let peakQueued = queued;
+    const bucketEnd = t + bucketMs;
+    while (i < events.length && events[i].at < bucketEnd) {
+      running += events[i].running;
+      queued += events[i].queued;
+      peakRunning = Math.max(peakRunning, running);
+      peakQueued = Math.max(peakQueued, queued);
+      i += 1;
+    }
+    buckets.push({ t, peakRunning, peakQueued });
+  }
+  return buckets;
+}
+
+interface LaneOccupancyLane {
+  lane: 'full' | 'targeted';
+  capacity: number;
+  buckets: LaneOccupancyBucket[];
+}
+
+export interface LaneOccupancy {
+  project: string;
+  windowDays: number;
+  bucketMs: number;
+  lanes: LaneOccupancyLane[];
+}
+
+/** In-flight lane occupancy over the window: the targeted lane is its own queue; every other run_kind shares the full lane. */
+export function getLaneOccupancy(
+  projectId: string,
+  windowDays: number | undefined,
+  capacities: { full: number; targeted: number },
+  now: number = Date.now(),
+): LaneOccupancy {
+  const days = clampAnalyticsWindowDays(windowDays);
+  const windowEnd = Math.ceil(now / HOUR_MS) * HOUR_MS;
+  const windowStart = windowEnd - days * DAY_MS;
+  const rows = db
+    .prepare<{ project_id: string; since: number; until: number }>(
+      `SELECT run_kind, requested_at, started_at, finished_at, coverage_source_run_id
+       FROM test_request_runs
+       WHERE project_id = @project_id AND requested_at IS NOT NULL
+         AND requested_at < @until
+         AND (finished_at IS NULL OR finished_at >= @since)
+       ORDER BY requested_at DESC
+       LIMIT ${ANALYTICS_RUN_SCAN_CAP}`,
+    )
+    .all({
+      project_id: projectId,
+      since: windowStart,
+      until: windowEnd,
+    }) as Array<LaneRunInterval & { run_kind: string }>;
+  const targeted = rows.filter((r) => r.run_kind === 'targeted');
+  const full = rows.filter((r) => r.run_kind !== 'targeted');
+  return {
+    project: projectId,
+    windowDays: days,
+    bucketMs: HOUR_MS,
+    lanes: [
+      {
+        lane: 'full',
+        capacity: capacities.full,
+        buckets: computeLaneOccupancy(full, windowStart, windowEnd),
+      },
+      {
+        lane: 'targeted',
+        capacity: capacities.targeted,
+        buckets: computeLaneOccupancy(targeted, windowStart, windowEnd),
+      },
+    ],
+  };
+}
+
 export interface BaselineTestSummary {
   testId: string;
   name: string;

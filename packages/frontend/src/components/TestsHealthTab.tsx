@@ -7,6 +7,7 @@ import {
   type PassRateTrendDay,
   type QueueWaitDay,
 } from '../hooks/useProjectTestHealth';
+import { LaneOccupancyPanel } from './LaneOccupancyPanel';
 import styles from './TestsHealthTab.module.css';
 
 const EXCUSAL_HORIZON_DAYS = 14;
@@ -302,8 +303,14 @@ interface Props {
 
 export function TestsHealthTab({ projectId, onSelectTest }: Props) {
   const [windowDays, setWindowDays] = useState(DEFAULT_HEALTH_WINDOW_DAYS);
-  const { passRate, queueWait, slowAndRegressed, loading, error } =
-    useProjectTestHealth(projectId, windowDays);
+  const {
+    passRate,
+    queueWait,
+    slowAndRegressed,
+    laneOccupancy,
+    loading,
+    error,
+  } = useProjectTestHealth(projectId, windowDays);
 
   const kinds = passRate ? Object.keys(passRate.runKinds).sort() : [];
 
@@ -363,6 +370,8 @@ export function TestsHealthTab({ projectId, onSelectTest }: Props) {
         <h3 className={styles.panelTitle}>Queue wait</h3>
         {queueWait && <QueueWaitChart days={queueWait.days} />}
       </section>
+
+      {laneOccupancy && <LaneOccupancyPanel lanes={laneOccupancy.lanes} />}
 
       <section className={styles.panel} data-testid="health-slow-panel">
         <h3 className={styles.panelTitle}>Slowest &amp; regressed tests</h3>

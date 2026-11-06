@@ -7,6 +7,7 @@ import {
   getLaneHealthRollup,
   getPassRateTrend,
   getQueueWaitDistribution,
+  getLaneOccupancy,
   getSlowestAndRegressedTests,
   listFlowHealthRegressionSnapshotHistory,
   getGateVerifyAutoCommitPolicy,
@@ -15,6 +16,7 @@ import {
   updateMilestone,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
+import { typedGetSetting } from '../config/settings';
 import { FLOW_IDS, isFlowId } from '../orchestration/flowArm';
 import { ProjectService } from '../projects/ProjectService';
 import { checkMilestoneRegistered } from '../groom/groomLoad';
@@ -287,6 +289,18 @@ export function createMilestonesRouter(): Router {
     (req: Request, res: Response) => {
       res.json(
         getQueueWaitDistribution(String(req.params.project), windowDaysOf(req)),
+      );
+    },
+  );
+
+  router.get(
+    '/milestones/:project/test-analytics/lane-occupancy',
+    (req: Request, res: Response) => {
+      res.json(
+        getLaneOccupancy(String(req.params.project), windowDaysOf(req), {
+          full: typedGetSetting('test_request_max_concurrent'),
+          targeted: typedGetSetting('test_targeted_max_concurrent'),
+        }),
       );
     },
   );
