@@ -7174,6 +7174,33 @@ export function closePauseInterval(sessionId: string): void {
   ).run(Date.now(), sessionId);
 }
 
+/** Session ids whose latest open pause interval is the auth_failed park. */
+export function listAuthParkedSessionIds(): string[] {
+  const rows = db
+    .prepare(
+      `SELECT session_id, pause_reason FROM session_pause_intervals
+       WHERE resumed_at IS NULL ORDER BY paused_at ASC, id ASC`,
+    )
+    .all() as Array<{ session_id: string; pause_reason: string }>;
+  const ids = new Set<string>();
+  for (const row of rows) {
+    if (parsePauseReason(row.pause_reason)?.reason === 'auth_failed') {
+      ids.add(row.session_id);
+    }
+  }
+  return [...ids];
+}
+
+/** Every session row of a task (dash-insensitive id match), any status. */
+export function getAllSessionsForTask(taskId: string): Session[] {
+  return db
+    .prepare<{ task_id: string }>(
+      `SELECT * FROM sessions
+       WHERE REPLACE(COALESCE(task_id, ''), '-', '') = @task_id`,
+    )
+    .all({ task_id: taskId.replace(/-/g, '') }) as Session[];
+}
+
 export function getPauseIntervalsBySession(
   sessionId: string,
 ): SessionPauseInterval[] {

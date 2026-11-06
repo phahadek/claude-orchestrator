@@ -13,6 +13,8 @@ export interface LaneWaiterKey {
   projectId: string;
   group: ExecutionGroup;
   rankKey: (number | string)[];
+  /** Tie-break among equal rankKey: 0 runs ahead of 1. Absent means 0. */
+  tier?: number;
   requestedAt: number;
 }
 
@@ -69,6 +71,8 @@ function compareWaiters(a: Waiter, b: Waiter): number {
   if (g !== 0) return g;
   const k = compareKeyParts(a.key.rankKey, b.key.rankKey);
   if (k !== 0) return k;
+  const t = (a.key.tier ?? 0) - (b.key.tier ?? 0);
+  if (t !== 0) return t;
   if (a.key.requestedAt !== b.key.requestedAt)
     return a.key.requestedAt - b.key.requestedAt;
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;

@@ -433,6 +433,7 @@ const queuedRunMeta = new Map<
   {
     taskId: string | null;
     requestedAt: number;
+    runKind: TestRunKind;
     /** Owning session whose worktree the pre-test merge mutates; null for a run that never merges. */
     mergeSessionId: string | null;
     worktreePath: string;
@@ -586,15 +587,28 @@ function resolveExecutionRanks(
   });
 }
 
+/** 0 for scoped runs, or for full/verify runs aged past the cap; 1 otherwise. The targeted lane has no tier. */
+function runKindTier(
+  runKind: TestRunKind,
+  requestedAt: number,
+): number | undefined {
+  if (runKind === 'targeted') return undefined;
+  if (runKind === 'scoped') return 0;
+  const capMs = typedGetSetting('test_lane_long_run_age_cap_min') * 60_000;
+  return Date.now() - requestedAt >= capMs ? 0 : 1;
+}
+
 function toWaiterKey(
   projectId: string,
   rank: ExecutionRank,
   requestedAt: number,
+  runKind: TestRunKind,
 ): LaneWaiterKey {
   return {
     projectId,
     group: rank.group,
     rankKey: executionRankKey(rank),
+    tier: runKindTier(runKind, requestedAt),
     requestedAt,
   };
 }
@@ -611,7 +625,11 @@ function rerankQueuedRuns(
   const out = new Map<string, LaneWaiterKey>();
   runIds.forEach((id, i) => {
     const meta = metas[i];
-    if (meta) out.set(id, toWaiterKey(projectId, ranks[i], meta.requestedAt));
+    if (meta)
+      out.set(
+        id,
+        toWaiterKey(projectId, ranks[i], meta.requestedAt, meta.runKind),
+      );
   });
   return out;
 }
@@ -1520,12 +1538,13 @@ export function admitTestRequest(
   queuedRunMeta.set(runId, {
     taskId,
     requestedAt,
+    runKind,
     mergeSessionId:
       spec.sessionId && spec.runOrigin == null ? spec.sessionId : null,
     worktreePath: spec.worktreePath,
   });
   const permitPromise = semaphore
-    .acquire(runId, toWaiterKey(spec.projectId, rank, requestedAt))
+    .acquire(runId, toWaiterKey(spec.projectId, rank, requestedAt, runKind))
     .then((release) => {
       if (taskId) {
         try {
