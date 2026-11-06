@@ -108,6 +108,16 @@ describe('replaceFlaggedFlakyTestsRollupOffMainThread', () => {
       recent_outcomes: JSON.stringify(outcomes),
       updated_at: opts.createdAt,
     });
+    db.prepare(
+      `INSERT OR IGNORE INTO test_sample
+         (test_id, project_id, run_id, sequenced_at, outcome, duration_ms, content_hash)
+       VALUES (?, ?, NULL, ?, ?, NULL, NULL)`,
+    ).run(
+      opts.testId,
+      opts.projectId,
+      opts.createdAt,
+      opts.outcome === 'passed' ? 'P' : 'F',
+    );
   }
 
   it('recomputes the rollup via a worker thread that opens its own connection', async () => {

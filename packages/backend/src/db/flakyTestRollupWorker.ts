@@ -28,6 +28,7 @@
 // test_run_results rows, since a passing test no longer gets a row there.
 import { parentPort, workerData } from 'worker_threads';
 import Database from 'better-sqlite3';
+import { readRecentTestOutcomes } from './testSampleStore';
 
 interface FlakyTestRollupWorkerData {
   dbPath: string;
@@ -128,33 +129,13 @@ function pruneGhostFlaggedFlakyTests(
   return result.changes as number;
 }
 
-interface DigestOutcomeSample {
-  o: 'P' | 'F';
-  t: number;
-}
-
-function parseDigestOutcomes(json: string): DigestOutcomeSample[] {
-  try {
-    const parsed = JSON.parse(json);
-    return Array.isArray(parsed) ? (parsed as DigestOutcomeSample[]) : [];
-  } catch {
-    return [];
-  }
-}
-
 function computeTestFlipRateFlag(
   database: Database.Database,
   testId: string,
   windowN: number,
   thresholdK: number,
 ): TestFlipRateFlag {
-  const row = database
-    .prepare(
-      `SELECT recent_outcomes FROM test_perf_baselines WHERE test_id = ?`,
-    )
-    .get(testId) as { recent_outcomes: string } | undefined;
-  const all = row ? parseDigestOutcomes(row.recent_outcomes) : [];
-  const windowed = all.slice(-windowN);
+  const windowed = readRecentTestOutcomes(database, testId, windowN);
 
   let transitionCount = 0;
   for (let i = 1; i < windowed.length; i++) {

@@ -114,6 +114,8 @@ beforeEach(() => {
   db.prepare('DELETE FROM test_run_summaries').run();
   db.prepare('DELETE FROM test_request_runs').run();
   db.prepare('DELETE FROM test_perf_baselines').run();
+  db.prepare('DELETE FROM test_sample').run();
+  db.prepare('DELETE FROM test_sample_history').run();
   db.prepare('DELETE FROM projects').run();
   insertProject({
     id: 'proj-1',

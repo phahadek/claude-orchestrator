@@ -143,6 +143,8 @@ beforeEach(() => {
   db.prepare('DELETE FROM test_run_results').run();
   db.prepare('DELETE FROM test_request_runs').run();
   db.prepare('DELETE FROM test_perf_baselines').run();
+  db.prepare('DELETE FROM test_sample').run();
+  db.prepare('DELETE FROM test_sample_history').run();
   seq = 0;
   // Breadth is evaluated as of call time — pin it just past the fixtures.
   vi.useFakeTimers({ toFake: ['Date'] });

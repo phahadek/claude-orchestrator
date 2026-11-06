@@ -115,6 +115,8 @@ import { deriveBranchSlug } from '../session/branchSlug';
 import {
   insertTestSample,
   pruneTestSamples,
+  readRecentTestDurations,
+  readRecentTestOutcomes,
   verifyTestSamples,
   type TestSampleVerificationRow,
 } from './testSampleStore';
@@ -11401,7 +11403,7 @@ export const TEST_DURATION_DIGEST_CAPACITY = 32;
 /** >= flip_rate_window_n's max bound (config/settings.ts) — every production caller of computeTestFlipRateFlag passes that setting as windowN. */
 export const TEST_OUTCOME_DIGEST_CAPACITY = 200;
 
-export interface DigestOutcomeSample {
+interface DigestOutcomeSample {
   o: 'P' | 'F';
   t: number;
   /** Tree identity (test_request_runs.content_hash) the sample was produced on — absent on legacy samples predating this field. */
@@ -11416,11 +11418,7 @@ export interface DigestOutcomeSample {
  * re-reading the row it was just written from.
  */
 export interface TestPerfDigestSampleResult {
-  /** Oldest-first, capped at TEST_DURATION_DIGEST_CAPACITY — same order as the stored ring. */
-  durations: number[];
-  /** Oldest-first, capped at TEST_OUTCOME_DIGEST_CAPACITY — same order as the stored ring. */
-  outcomes: DigestOutcomeSample[];
-  /** False when only the outcome ring advanced (a concurrent run) — durations/baseline are unchanged. */
+  /** False when only the outcome side advanced (a concurrent run) — durations/baseline are unchanged. */
   durationAdmitted: boolean;
 }
 
@@ -11595,13 +11593,15 @@ export function recordTestPerfDigestSample(
   });
   pruneTestSamples(db, testId);
 
-  return { durations, outcomes, durationAdmitted };
+  return { durationAdmitted };
 }
 
 /** Per-project count of digest elements the test_sample projection fails to reproduce; see verifyTestSamples. */
 export function verifyTestSampleDigestParity(): TestSampleVerificationRow[] {
   return verifyTestSamples(db);
 }
+
+let lastIngestSequenceEnd = 0;
 
 /**
  * Ingests one completed run's extracted test results: writes a
@@ -11651,7 +11651,10 @@ export function ingestTestRunResultsTx(
     else counts.other++;
   }
   const failing = tests.filter((t) => t.outcome !== 'passed');
-  const baseSequence = Date.now() * 1000;
+  // Strictly beyond any prior ingestion's range: test_sample's (test_id,
+  // sequenced_at) key would otherwise silently drop a same-ms sample.
+  const baseSequence = Math.max(Date.now() * 1000, lastIngestSequenceEnd);
+  lastIngestSequenceEnd = baseSequence + tests.length;
 
   const tx = db.transaction(() => {
     insertTestRunResults(
@@ -11849,30 +11852,16 @@ export function countTestRunResultsForRun(testRequestRunId: string): number {
 
 // ─── test_perf_baselines ────────────────────────────────────────────────────
 
-let _stmtGetTestPerfDigestDurations: Database.Statement | null = null;
-
 /**
- * Most recent `limit` *valid* (concurrent_run_count = 0 AND oom_killed = 0)
- * durations for a test_id, newest first — the sample pool
- * computeTestPerfBaseline draws its baseline window and recent-run guard
- * from. Reads the fixed-width digest ring on test_perf_baselines
- * (recordTestPerfDigestSample) rather than raw test_run_results rows —
- * `limit` must not exceed TEST_DURATION_DIGEST_CAPACITY or the result is
- * silently truncated to whatever the ring retained.
+ * Newest `limit` duration-bearing test_sample rows (clean solo runs only —
+ * recordTestPerfDigestSample's admission rule), newest first. `limit` must not
+ * exceed the test_sample duration retention (32).
  */
 export function listRecentValidTestDurations(
   testId: string,
   limit: number,
 ): number[] {
-  _stmtGetTestPerfDigestDurations ??= db.prepare<{ test_id: string }>(
-    `SELECT recent_durations FROM test_perf_baselines WHERE test_id = @test_id`,
-  );
-  const row = _stmtGetTestPerfDigestDurations.get({ test_id: testId }) as
-    | { recent_durations: string }
-    | undefined;
-  if (!row) return [];
-  const durations = parseDigestDurations(row.recent_durations);
-  return durations.slice(-limit).reverse();
+  return readRecentTestDurations(db, testId, limit);
 }
 
 let _stmtUpsertTestPerfBaseline: Database.Statement | null = null;
@@ -11932,8 +11921,6 @@ export interface TestFlipRateFlag {
   flagged: boolean;
 }
 
-let _stmtTestFlipRateDigest: Database.Statement | null = null;
-
 /**
  * Live pass<->fail flip-rate flag for one test id, recomputed from its last
  * `windowN` valid samples (concurrent_run_count = 0 and oom_killed = false —
@@ -11949,10 +11936,9 @@ let _stmtTestFlipRateDigest: Database.Statement | null = null;
  * flag clears on its own the moment a fresh ingestion's recomputation drops
  * the transition count back below K; there is no sticky marker to reset.
  *
- * Reads the fixed-width outcome-sequence digest on test_perf_baselines
- * (recordTestPerfDigestSample) rather than raw test_run_results rows.
- * `windowN` must not exceed TEST_OUTCOME_DIGEST_CAPACITY — see
- * flip_rate_window_n's .max() bound in config/settings.ts.
+ * Reads the newest outcome-bearing test_sample rows. `windowN` must not
+ * exceed the test_sample outcome retention (200) — see flip_rate_window_n's
+ * .max() bound in config/settings.ts.
  */
 export function computeTestFlipRateFlag(
   testId: string,
@@ -11964,40 +11950,12 @@ export function computeTestFlipRateFlag(
   // for every other caller (listFlaggedFlakyTests, the lane-health rollup).
   beforeMs: number = Number.MAX_SAFE_INTEGER,
 ): TestFlipRateFlag {
-  _stmtTestFlipRateDigest ??= db.prepare<{ test_id: string }>(
-    `SELECT recent_outcomes FROM test_perf_baselines WHERE test_id = @test_id`,
-  );
-  const row = _stmtTestFlipRateDigest.get({ test_id: testId }) as
-    | { recent_outcomes: string }
-    | undefined;
-  const all = row ? parseDigestOutcomes(row.recent_outcomes) : [];
-  return computeTestFlipRateFlagFromOutcomes(
+  const windowed = readRecentTestOutcomes(
+    db,
     testId,
-    all,
     windowN,
-    thresholdK,
-    beforeMs,
+    beforeMs === Number.MAX_SAFE_INTEGER ? undefined : beforeMs,
   );
-}
-
-/**
- * computeTestFlipRateFlag's transition-counting core, factored out so a
- * caller that already has a test's post-write outcome ring in memory (e.g.
- * ingestTestRunResultsTx's onDigestSample callback) can recompute the flag
- * without a recent_outcomes re-read.
- */
-export function computeTestFlipRateFlagFromOutcomes(
-  testId: string,
-  outcomes: DigestOutcomeSample[],
-  windowN: number,
-  thresholdK: number,
-  beforeMs: number = Number.MAX_SAFE_INTEGER,
-): TestFlipRateFlag {
-  const filtered =
-    beforeMs === Number.MAX_SAFE_INTEGER
-      ? outcomes
-      : outcomes.filter((s) => toDigestMicros(s.t) < toDigestMicros(beforeMs));
-  const windowed = filtered.slice(-windowN);
 
   let transitionCount = 0;
   for (let i = 1; i < windowed.length; i++) {

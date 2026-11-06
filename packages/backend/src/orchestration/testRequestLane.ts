@@ -102,7 +102,7 @@ import {
   ingestTestRunResultsTx,
   upsertTestPerfBaseline,
   computeTestFlipRateFlag,
-  computeTestFlipRateFlagFromOutcomes,
+  listRecentValidTestDurations,
   computeTestFailureBreadthFlag,
   type BreadthOwnTree,
   getFailingTestIdsForRun,
@@ -2696,7 +2696,10 @@ async function dispatchIngestion(
         (testId, sample) => {
           sampledTests.set(testId, sample);
           if (sample.durationAdmitted) {
-            computeTestPerfBaseline(testId, [...sample.durations].reverse());
+            computeTestPerfBaseline(
+              testId,
+              listRecentValidTestDurations(testId, 32),
+            );
           }
         },
         run.failure_reason === 'timeout',
@@ -3015,10 +3018,8 @@ export function computeTestPerfBaseline(
 
 /**
  * Re-evaluates the flip-rate flag for every test id that got a recorded
- * digest sample from this ingestion, from the post-push outcome ring
- * ingestTestRunResultsTx's onDigestSample callback already captured — never
- * a fresh recent_outcomes read, since the in-memory state is byte-identical
- * to what a re-read would return. The flag is never persisted (see
+ * sample from this ingestion, reading its newest test_sample outcome rows
+ * via computeTestFlipRateFlag. The flag is never persisted (see
  * computeTestFlipRateFlag) — this just surfaces the freshly recomputed state
  * to the log, since a fresh ingestion is exactly the moment a test's window
  * (and therefore its flag) can change.
@@ -3028,13 +3029,8 @@ function recomputeFlipRateFlags(
 ): void {
   const windowN = typedGetSetting('flip_rate_window_n');
   const thresholdK = typedGetSetting('flip_rate_threshold_k');
-  for (const [testId, sample] of sampledTests) {
-    const flag = computeTestFlipRateFlagFromOutcomes(
-      testId,
-      sample.outcomes,
-      windowN,
-      thresholdK,
-    );
+  for (const testId of sampledTests.keys()) {
+    const flag = computeTestFlipRateFlag(testId, windowN, thresholdK);
     if (flag.flagged) {
       logger.info(
         `[testRequestLane] test ${testId} flagged flaky: ${flag.transitionCount} transitions in last ${flag.sampleCount} valid samples`,

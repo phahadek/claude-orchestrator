@@ -134,6 +134,7 @@ vi.mock('../../session/autofix-runner', async (importOriginal) => {
 });
 
 import { db } from '../../db/db';
+import { readRecentTestOutcomes } from '../../db/testSampleStore';
 import {
   runProjectTestRequest,
   admitTestRequest,
@@ -205,6 +206,8 @@ beforeEach(() => {
   db.prepare('DELETE FROM test_run_summaries').run();
   db.prepare('DELETE FROM test_request_runs').run();
   db.prepare('DELETE FROM test_perf_baselines').run();
+  db.prepare('DELETE FROM test_sample').run();
+  db.prepare('DELETE FROM test_sample_history').run();
   db.prepare('DELETE FROM projects').run();
   db.prepare(
     `DELETE FROM settings WHERE key IN ('test_request_max_concurrent', 'test_request_memory_ceiling_mb', 'test_request_per_run_memory_mb')`,
@@ -5076,8 +5079,7 @@ describe('ingestTestRunResultsTx — skips baseline/flip-rate recompute for non-
       false,
       0,
       'seed-hash',
-      (id, sample) =>
-        computeTestPerfBaseline(id, [...sample.durations].reverse()),
+      (id) => computeTestPerfBaseline(id, listRecentValidTestDurations(id, 32)),
     );
   }
 
@@ -5121,8 +5123,8 @@ describe('ingestTestRunResultsTx — skips baseline/flip-rate recompute for non-
       expect(onDigestSample).toHaveBeenCalledTimes(1);
       const sample = onDigestSample.mock.calls[0][1];
       expect(sample.durationAdmitted).toBe(false);
-      expect(sample.durations).toEqual([42]);
-      expect(sample.outcomes.map((o: { o: string }) => o.o)).toEqual([
+      expect(listRecentValidTestDurations(testId, 32)).toEqual([42]);
+      expect(readRecentTestOutcomes(db, testId, 200).map((o) => o.o)).toEqual([
         'P',
         'F',
       ]);
