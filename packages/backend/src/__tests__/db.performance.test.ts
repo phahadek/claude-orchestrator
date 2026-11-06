@@ -1866,26 +1866,15 @@ describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
         // test_perf_baselines digest — replicate recordTestPerfDigestSample's
         // upsert directly against this file-backed connection (this test
         // opens its own connection, not the app's shared `db` singleton).
-        const existing = fileDb
-          .prepare(
-            `SELECT recent_outcomes FROM test_perf_baselines WHERE test_id = 'test-wm'`,
-          )
-          .get() as { recent_outcomes: string } | undefined;
-        const outcomes = existing ? JSON.parse(existing.recent_outcomes) : [];
-        outcomes.push({ o: outcome === 'passed' ? 'P' : 'F', t: createdAt });
         fileDb
           .prepare(
             `INSERT INTO test_perf_baselines
-               (test_id, project_id, name, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, recent_outcomes, recent_durations, updated_at)
-             VALUES ('test-wm', 'proj-wm', 'suite > wm', 0, 0, 0, 1, 0, @recent_outcomes, '[]', @updated_at)
+               (test_id, project_id, name, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, updated_at)
+             VALUES ('test-wm', 'proj-wm', 'suite > wm', 0, 0, 0, 1, 0, @updated_at)
              ON CONFLICT(test_id) DO UPDATE SET
-               recent_outcomes = excluded.recent_outcomes,
                updated_at = excluded.updated_at`,
           )
-          .run({
-            recent_outcomes: JSON.stringify(outcomes),
-            updated_at: createdAt,
-          });
+          .run({ updated_at: createdAt });
         fileDb
           .prepare(
             `INSERT OR IGNORE INTO test_sample

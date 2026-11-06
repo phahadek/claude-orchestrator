@@ -11397,47 +11397,10 @@ function insertTestRunSummary(
 // newest-last and trimmed to a fixed capacity on every write, so neither
 // grows with ingestion volume.
 
-/** >= the largest window any caller of listRecentValidTestDurations passes (computeTestPerfBaseline's BASELINE_WINDOW_SAMPLES + MIN_CONSECUTIVE_REGRESSED_SAMPLES = 23). */
-export const TEST_DURATION_DIGEST_CAPACITY = 32;
-
-/** >= flip_rate_window_n's max bound (config/settings.ts) — every production caller of computeTestFlipRateFlag passes that setting as windowN. */
-export const TEST_OUTCOME_DIGEST_CAPACITY = 200;
-
-interface DigestOutcomeSample {
-  o: 'P' | 'F';
-  t: number;
-  /** Tree identity (test_request_runs.content_hash) the sample was produced on — absent on legacy samples predating this field. */
-  h?: string;
-}
-
-/**
- * recordTestPerfDigestSample's post-push digest state for one test — the
- * same recent_outcomes/recent_durations arrays it just wrote, handed back so
- * a caller inside the same ingestion (ingestTestRunResultsTx) can drive
- * computeTestPerfBaseline/recomputeFlipRateFlags from memory instead of
- * re-reading the row it was just written from.
- */
+/** recordTestPerfDigestSample's per-test result, handed back to the in-transaction caller (ingestTestRunResultsTx). */
 export interface TestPerfDigestSampleResult {
   /** False when only the outcome side advanced (a concurrent run) — durations/baseline are unchanged. */
   durationAdmitted: boolean;
-}
-
-function parseDigestOutcomes(json: string): DigestOutcomeSample[] {
-  try {
-    const parsed = JSON.parse(json);
-    return Array.isArray(parsed) ? (parsed as DigestOutcomeSample[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-function parseDigestDurations(json: string): number[] {
-  try {
-    const parsed = JSON.parse(json);
-    return Array.isArray(parsed) ? (parsed as number[]) : [];
-  } catch {
-    return [];
-  }
 }
 
 /**
@@ -11465,7 +11428,6 @@ function toDigestMicros(value: number): number {
   return value < MS_VS_US_THRESHOLD ? value * 1000 : value;
 }
 
-let _stmtGetTestPerfDigest: Database.Statement | null = null;
 let _stmtUpsertTestPerfDigest: Database.Statement | null = null;
 
 /**
@@ -11517,57 +11479,21 @@ export function recordTestPerfDigestSample(
   const outcomeAdmitted = outcome === 'passed' || outcome === 'failed';
   if (!durationAdmitted && !outcomeAdmitted) return null;
 
-  _stmtGetTestPerfDigest ??= db.prepare<{ test_id: string }>(
-    `SELECT recent_outcomes, recent_durations FROM test_perf_baselines WHERE test_id = @test_id`,
-  );
-  const existing = _stmtGetTestPerfDigest.get({ test_id: testId }) as
-    | { recent_outcomes: string; recent_durations: string }
-    | undefined;
-
-  const outcomes = existing
-    ? parseDigestOutcomes(existing.recent_outcomes)
-    : [];
-  if (outcomeAdmitted) {
-    const sample: DigestOutcomeSample = {
-      o: outcome === 'passed' ? 'P' : 'F',
-      t: sequencedAt,
-    };
-    if (contentHash) sample.h = contentHash;
-    outcomes.push(sample);
-    if (outcomes.length > TEST_OUTCOME_DIGEST_CAPACITY) {
-      outcomes.splice(0, outcomes.length - TEST_OUTCOME_DIGEST_CAPACITY);
-    }
-  }
-
-  const durations = existing
-    ? parseDigestDurations(existing.recent_durations)
-    : [];
-  if (durationAdmitted) {
-    durations.push(durationMs);
-    if (durations.length > TEST_DURATION_DIGEST_CAPACITY) {
-      durations.splice(0, durations.length - TEST_DURATION_DIGEST_CAPACITY);
-    }
-  }
-
   _stmtUpsertTestPerfDigest ??= db.prepare<{
     test_id: string;
     project_id: string;
     name: string;
     last_duration_ms: number;
-    recent_outcomes: string;
-    recent_durations: string;
     markers: string | null;
     updated_at: number;
   }>(`
     INSERT INTO test_perf_baselines
-      (test_id, project_id, name, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, recent_outcomes, recent_durations, markers, updated_at)
+      (test_id, project_id, name, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, markers, updated_at)
     VALUES
-      (@test_id, @project_id, @name, 0, 0, 0, @last_duration_ms, 0, @recent_outcomes, @recent_durations, @markers, @updated_at)
+      (@test_id, @project_id, @name, 0, 0, 0, @last_duration_ms, 0, @markers, @updated_at)
     ON CONFLICT(test_id) DO UPDATE SET
       project_id = excluded.project_id,
       name = excluded.name,
-      recent_outcomes = excluded.recent_outcomes,
-      recent_durations = excluded.recent_durations,
       markers = COALESCE(excluded.markers, test_perf_baselines.markers),
       updated_at = excluded.updated_at
   `);
@@ -11576,8 +11502,6 @@ export function recordTestPerfDigestSample(
     project_id: projectId,
     name,
     last_duration_ms: durationAdmitted ? durationMs : 0,
-    recent_outcomes: JSON.stringify(outcomes),
-    recent_durations: JSON.stringify(durations),
     markers: markers && markers.length > 0 ? JSON.stringify(markers) : null,
     updated_at: sequencedAt,
   });
@@ -11864,13 +11788,74 @@ export function listRecentValidTestDurations(
   return readRecentTestDurations(db, testId, limit);
 }
 
+/** Passed, duration-bearing test_sample rows one run wrote, with the test's last-known name. */
+export function listPassedDurationSamplesForRun(
+  runId: string,
+): { test_id: string; name: string; duration_ms: number }[] {
+  return db
+    .prepare(
+      `SELECT s.test_id AS test_id, COALESCE(b.name, '') AS name, s.duration_ms AS duration_ms
+       FROM test_sample s
+       LEFT JOIN test_perf_baselines b ON b.test_id = s.test_id
+       WHERE s.run_id = ? AND s.outcome = 'P' AND s.duration_ms IS NOT NULL`,
+    )
+    .all(runId) as { test_id: string; name: string; duration_ms: number }[];
+}
+
+const PRE_SESSION_BASELINE_CHUNK = 500;
+
+/**
+ * Median duration per test over duration-bearing test_sample rows that
+ * predate the session: rows of runs by a different session (a NULL
+ * session_id counts as different) or with a NULL run_id (backfill). The
+ * judged run's own rows are always excluded. Tests with no such row are
+ * absent from the result.
+ */
+export function getPreSessionDurationMedians(
+  testIds: string[],
+  sessionId: string,
+  excludeRunId: string,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (let i = 0; i < testIds.length; i += PRE_SESSION_BASELINE_CHUNK) {
+    const chunk = testIds.slice(i, i + PRE_SESSION_BASELINE_CHUNK);
+    const rows = db
+      .prepare(
+        `SELECT s.test_id AS test_id, s.duration_ms AS duration_ms
+         FROM test_sample s
+         LEFT JOIN test_request_runs r ON r.id = s.run_id
+         WHERE s.test_id IN (${chunk.map(() => '?').join(',')})
+           AND s.duration_ms IS NOT NULL
+           AND (s.run_id IS NULL OR (s.run_id != ? AND r.session_id IS NOT ?))`,
+      )
+      .all(...chunk, excludeRunId, sessionId) as {
+      test_id: string;
+      duration_ms: number;
+    }[];
+    const byTest = new Map<string, number[]>();
+    for (const r of rows) {
+      const list = byTest.get(r.test_id);
+      if (list) list.push(r.duration_ms);
+      else byTest.set(r.test_id, [r.duration_ms]);
+    }
+    for (const [testId, list] of byTest) {
+      list.sort((a, b) => a - b);
+      const mid = list.length >> 1;
+      out.set(
+        testId,
+        list.length % 2 ? list[mid] : (list[mid - 1] + list[mid]) / 2,
+      );
+    }
+  }
+  return out;
+}
+
 let _stmtUpsertTestPerfBaseline: Database.Statement | null = null;
 
 /**
  * Recomputes (not appends) the median/MAD summary columns for a test_id's
- * already-existing digest row. Never touches recent_outcomes/
- * recent_durations/project_id/name/updated_at — those are owned exclusively
- * by recordTestPerfDigestSample, whose caller-assigned `updated_at` value
+ * already-existing identity row. Never touches project_id/name/updated_at —
+ * those are owned exclusively by recordTestPerfDigestSample, whose caller-assigned `updated_at` value
  * the flip-rate rollup candidate scan depends on staying monotonic; a second
  * Date.now() writer here could regress it.
  */
@@ -15756,6 +15741,165 @@ export function percentilesOf(samples: number[]): DurationPercentiles {
 
 /** How long test_run_results rows are retained before TestRunResultsPruner deletes them. */
 export const TEST_RUN_RESULTS_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
+
+interface TestHistorySample {
+  sequencedAt: number;
+  outcome: 'P' | 'F' | null;
+  durationMs: number | null;
+  contentHash: string | null;
+}
+
+interface TestHistoryBucket {
+  weekStart: number;
+  passCount: number;
+  failCount: number;
+  transitionCount: number;
+  durationCount: number;
+  durationSumMs: number;
+  durationMinMs: number | null;
+  durationMaxMs: number | null;
+}
+
+interface TestHistoryFailure {
+  testRequestRunId: string;
+  outcome: string;
+  durationMs: number;
+  failureMessage: string | null;
+  failureTraceExcerpt: string | null;
+  createdAt: number;
+}
+
+export interface TestHistory {
+  testId: string;
+  name: string | null;
+  outcomeSamples: TestHistorySample[];
+  durationSamples: TestHistorySample[];
+  weeklyBuckets: TestHistoryBucket[];
+  failures: TestHistoryFailure[];
+  failureRetentionMs: number;
+  failureHorizonMs: number;
+}
+
+interface TestSampleReadRow {
+  sequenced_at: number;
+  outcome: 'P' | 'F' | null;
+  duration_ms: number | null;
+  content_hash: string | null;
+}
+
+function toHistorySample(r: TestSampleReadRow): TestHistorySample {
+  return {
+    sequencedAt: r.sequenced_at,
+    outcome: r.outcome,
+    durationMs: r.duration_ms,
+    contentHash: r.content_hash,
+  };
+}
+
+/**
+ * Per-test history for one (project, test_id): newest outcome- and
+ * duration-bearing test_sample rows (oldest-first in sequenced_at order),
+ * test_sample_history weekly buckets, and test_run_results failure detail
+ * within its retention window. Never reads the digest recent_* blobs.
+ */
+export function getTestHistory(
+  projectId: string,
+  testId: string,
+  now: number = Date.now(),
+): TestHistory {
+  const outcomeSamples = (
+    db
+      .prepare(
+        `SELECT sequenced_at, outcome, duration_ms, content_hash FROM test_sample
+         WHERE project_id = ? AND test_id = ? AND outcome IS NOT NULL
+         ORDER BY sequenced_at DESC LIMIT 200`,
+      )
+      .all(projectId, testId) as TestSampleReadRow[]
+  )
+    .reverse()
+    .map(toHistorySample);
+  const durationSamples = (
+    db
+      .prepare(
+        `SELECT sequenced_at, outcome, duration_ms, content_hash FROM test_sample
+         WHERE project_id = ? AND test_id = ? AND duration_ms IS NOT NULL
+         ORDER BY sequenced_at DESC LIMIT 32`,
+      )
+      .all(projectId, testId) as TestSampleReadRow[]
+  )
+    .reverse()
+    .map(toHistorySample);
+  const weeklyBuckets = (
+    db
+      .prepare(
+        `SELECT week_start, pass_count, fail_count, transition_count,
+                duration_count, duration_sum_ms, duration_min_ms, duration_max_ms
+         FROM test_sample_history
+         WHERE project_id = ? AND test_id = ? ORDER BY week_start ASC`,
+      )
+      .all(projectId, testId) as Array<{
+      week_start: number;
+      pass_count: number;
+      fail_count: number;
+      transition_count: number;
+      duration_count: number;
+      duration_sum_ms: number;
+      duration_min_ms: number | null;
+      duration_max_ms: number | null;
+    }>
+  ).map((b) => ({
+    weekStart: b.week_start,
+    passCount: b.pass_count,
+    failCount: b.fail_count,
+    transitionCount: b.transition_count,
+    durationCount: b.duration_count,
+    durationSumMs: b.duration_sum_ms,
+    durationMinMs: b.duration_min_ms,
+    durationMaxMs: b.duration_max_ms,
+  }));
+  const horizon = now - TEST_RUN_RESULTS_RETENTION_MS;
+  const failures = (
+    db
+      .prepare(
+        `SELECT test_request_run_id, outcome, duration_ms, failure_message,
+                failure_trace_excerpt, created_at
+         FROM test_run_results
+         WHERE project_id = ? AND test_id = ? AND created_at >= ?
+           AND (failure_message IS NOT NULL OR failure_trace_excerpt IS NOT NULL)
+         ORDER BY created_at DESC LIMIT 50`,
+      )
+      .all(projectId, testId, horizon) as Array<{
+      test_request_run_id: string;
+      outcome: string;
+      duration_ms: number;
+      failure_message: string | null;
+      failure_trace_excerpt: string | null;
+      created_at: number;
+    }>
+  ).map((r) => ({
+    testRequestRunId: r.test_request_run_id,
+    outcome: r.outcome,
+    durationMs: r.duration_ms,
+    failureMessage: r.failure_message,
+    failureTraceExcerpt: r.failure_trace_excerpt,
+    createdAt: r.created_at,
+  }));
+  const nameRow = db
+    .prepare(
+      `SELECT name FROM test_perf_baselines WHERE project_id = ? AND test_id = ?`,
+    )
+    .get(projectId, testId) as { name: string } | undefined;
+  return {
+    testId,
+    name: nameRow?.name ?? null,
+    outcomeSamples,
+    durationSamples,
+    weeklyBuckets,
+    failures,
+    failureRetentionMs: TEST_RUN_RESULTS_RETENTION_MS,
+    failureHorizonMs: horizon,
+  };
+}
 
 type TestRunBand =
   | 'executed_passed'

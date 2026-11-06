@@ -166,6 +166,10 @@ export interface OrchestratorConfig {
   test: string[];
   /** Per-command timeout in seconds for test commands. Default 300. */
   test_timeout_sec: number;
+  /** Per-test slow-test ceiling in seconds for the slow-test pushback; 0 disables. Default 5. Read from the base checkout only. */
+  slow_test_ceiling_sec: number;
+  /** Exact test ids exempt from the slow-test pushback. Default []. */
+  slow_test_allow: string[];
   /** Max RSS in MB for any single test command subprocess. 0 = disabled. Default 0. */
   test_max_rss_mb: number;
   /** Stop running subsequent test commands after the first failure. Default true. */
@@ -366,6 +370,8 @@ const DEFAULTS: OrchestratorConfig = {
   required_files: [],
   test: [],
   test_timeout_sec: 300,
+  slow_test_ceiling_sec: 5,
+  slow_test_allow: [],
   test_max_rss_mb: 0,
   test_fail_fast: true,
   test_report_format: undefined,
@@ -704,6 +710,17 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
         parsed.test_timeout_sec > 0
           ? parsed.test_timeout_sec
           : DEFAULTS.test_timeout_sec,
+      slow_test_ceiling_sec:
+        typeof parsed.slow_test_ceiling_sec === 'number' &&
+        Number.isFinite(parsed.slow_test_ceiling_sec) &&
+        parsed.slow_test_ceiling_sec >= 0
+          ? parsed.slow_test_ceiling_sec
+          : DEFAULTS.slow_test_ceiling_sec,
+      slow_test_allow: Array.isArray(parsed.slow_test_allow)
+        ? (parsed.slow_test_allow as unknown[]).filter(
+            (v): v is string => typeof v === 'string',
+          )
+        : DEFAULTS.slow_test_allow,
       test_max_rss_mb:
         typeof parsed.test_max_rss_mb === 'number' &&
         Number.isFinite(parsed.test_max_rss_mb) &&

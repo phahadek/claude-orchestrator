@@ -23,6 +23,16 @@ function record(
   concurrent: number,
   t = BASE + i,
 ) {
+  model.outcomes.push({
+    o: outcome === 'passed' ? 'P' : 'F',
+    t,
+    ...(hash ? { h: hash } : {}),
+  });
+  model.outcomes.splice(0, Math.max(0, model.outcomes.length - 200));
+  if (concurrent === 0) {
+    model.durations.push(100 + i);
+    model.durations.splice(0, Math.max(0, model.durations.length - 32));
+  }
   recordTestPerfDigestSample(
     't1',
     'p1',
@@ -40,24 +50,14 @@ function record(
   );
 }
 
-interface DigestRow {
-  recent_outcomes: string;
-  recent_durations: string;
-}
-
-function digest(): {
+// In-test model of the retired digest rings (newest-last, capped 200 / 32).
+const model: {
   outcomes: Array<{ o: string; t: number; h?: string }>;
   durations: number[];
-} {
-  const row = db
-    .prepare(
-      `SELECT recent_outcomes, recent_durations FROM test_perf_baselines WHERE test_id = 't1'`,
-    )
-    .get() as DigestRow;
-  return {
-    outcomes: JSON.parse(row.recent_outcomes),
-    durations: JSON.parse(row.recent_durations),
-  };
+} = { outcomes: [], durations: [] };
+
+function digest() {
+  return model;
 }
 
 function digestFlip(windowN: number, k: number, beforeMs?: number) {
@@ -74,6 +74,8 @@ function digestFlip(windowN: number, k: number, beforeMs?: number) {
 }
 
 beforeEach(() => {
+  model.outcomes = [];
+  model.durations = [];
   db.exec(
     `DELETE FROM test_sample; DELETE FROM test_sample_history; DELETE FROM test_perf_baselines;`,
   );
@@ -109,15 +111,9 @@ describe('test_sample readers match the digest', () => {
     );
   });
 
-  it('only the dual-write digest writers and the verifier read the digest blobs', () => {
+  it('only the migration code (schema.ts, testSampleStore.ts) references the digest blobs', () => {
     const root = path.resolve(__dirname, '..', '..');
-    const allowed = new Set([
-      'db/queries.ts',
-      'db/testRunIngestionWorker.ts',
-      'db/testSampleStore.ts',
-      'db/schema.ts',
-      'db/types.ts',
-    ]);
+    const allowed = new Set(['db/testSampleStore.ts', 'db/schema.ts']);
     const offenders: string[] = [];
     const walk = (dir: string) => {
       for (const e of fs.readdirSync(dir, { withFileTypes: true })) {

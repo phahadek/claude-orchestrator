@@ -299,15 +299,12 @@ describe('ingestTestRunResultsOffMainThread', () => {
       );
       expect(result2.alreadyExtracted).toBe(false);
 
-      const row = db
+      const outcomes = db
         .prepare(
-          `SELECT recent_outcomes FROM test_perf_baselines WHERE test_id = ?`,
+          `SELECT outcome AS o, sequenced_at AS t FROM test_sample
+           WHERE test_id = ? AND outcome IS NOT NULL ORDER BY sequenced_at`,
         )
-        .get('shared-test') as { recent_outcomes: string };
-      const outcomes = JSON.parse(row.recent_outcomes) as {
-        o: 'P' | 'F';
-        t: number;
-      }[];
+        .all('shared-test') as { o: 'P' | 'F'; t: number }[];
 
       expect(outcomes).toHaveLength(2);
       expect(outcomes[0].o).toBe('P');

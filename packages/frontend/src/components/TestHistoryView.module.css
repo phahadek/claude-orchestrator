@@ -1,0 +1,52 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 16px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  font-size: 0.7rem;
+}
+
+.pass {
+  color: var(--success, #2a9d4a);
+}
+
+.fail {
+  color: var(--danger, #d33);
+}
+
+.durations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.horizon,
+.meta,
+.empty {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.error {
+  font-size: 0.85rem;
+  color: var(--danger, #d33);
+}
+
+pre {
+  white-space: pre-wrap;
+  font-size: 0.75rem;
+}

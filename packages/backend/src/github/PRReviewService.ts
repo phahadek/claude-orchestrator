@@ -21,6 +21,12 @@ import {
 import type { FailingTestForRun } from '../db/queries';
 import { isTestIdTouchedByChangedFiles } from '../session/test-runner';
 import { supersedeReviewSession } from './reviewSessionSupersede';
+import {
+  evaluateLatestCleanSlowTestVerdict,
+  loadSlowTestConfig,
+  type SlowTestConfig,
+  type SlowTestVerdict,
+} from '../orchestration/slowTestVerdict';
 export { supersedeReviewSession } from './reviewSessionSupersede';
 import type {
   OpsPrIntentPayload,
@@ -494,6 +500,62 @@ ${lines.join('\n')}
 `;
 }
 
+/**
+ * Renders the slow-test evidence section: one line per flagged test, 'None'
+ * when nothing is flagged, or the not-evaluated line when no clean run
+ * exists. Empty string when the check is disabled for the project.
+ */
+export function buildSlowTestsSection(
+  verdict: SlowTestVerdict | null,
+  config: SlowTestConfig | null,
+): string {
+  if (!config || !(config.slow_test_ceiling_sec > 0)) return '';
+  let body: string;
+  if (!verdict) {
+    body = 'no clean run on this tree; slow-test check not evaluated';
+  } else if (verdict.flagged.length === 0) {
+    body = 'None';
+  } else {
+    body = verdict.flagged
+      .map(
+        (f) =>
+          `- ${f.testId} (${f.kind}) — added ${(f.addedMs / 1000).toFixed(1)}s, ceiling ${config.slow_test_ceiling_sec}s`,
+      )
+      .join('\n');
+  }
+  return `\n## Slow Tests
+Tests on the session's latest clean test run that are new, or touched and slower, by more than the per-test ceiling.
+${body}
+Whether a slow test blocks this PR is your judgment; \`slow_test_allow\` in the project's .claude-orchestrator.yml is the reviewed way to mark a test intentionally slow.
+`;
+}
+
+function collectSlowTestsSection(
+  projectId: string,
+  sessionId: string | null | undefined,
+  worktreePath: string | null,
+  diffText: string,
+): string {
+  if (!sessionId) return '';
+  try {
+    const config = loadSlowTestConfig(projectId);
+    if (!config) return '';
+    const verdict = evaluateLatestCleanSlowTestVerdict(
+      projectId,
+      sessionId,
+      worktreePath,
+      parseDiffFiles(diffText),
+      config,
+    );
+    return buildSlowTestsSection(verdict, config);
+  } catch (err) {
+    logger.warn(
+      `[PRReviewService] slow-test evidence failed: ${err instanceof Error ? err.message : err}`,
+    );
+    return '';
+  }
+}
+
 export class PRReviewService {
   constructor(
     private github: GitHubClient,
@@ -721,6 +783,12 @@ export class PRReviewService {
             followUpGateChargedFailures,
             parseDiffFiles(diff),
           ),
+          collectSlowTestsSection(
+            projectId,
+            prRow.session_id,
+            followUpWorktreePath,
+            diff,
+          ),
           REVIEW_JSON_SCHEMA_BLOCK,
         ].join('\n');
         const delivered = this.sessionManager.send(
@@ -852,6 +920,12 @@ export class PRReviewService {
         prIntent,
         testRun,
         gateChargedFailures,
+        collectSlowTestsSection(
+          projectId,
+          prRow.session_id,
+          sessionWorktreePath,
+          diffData.diff,
+        ),
       );
 
       // Guard: determine whether the stored session is still resumable before
@@ -1661,6 +1735,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     prIntent?: OpsPrIntentPayload | null,
     testRun?: TestRequestRunRow | null,
     gateChargedFailures: FailingTestForRun[] = [],
+    slowTestsSection = '',
   ): string {
     const prIntentSection = prIntent
       ? `\n## Approved PR Intent (Ops)
@@ -1689,7 +1764,7 @@ ${diff.diff}
 
 ## Task Specification
 ${taskBody}
-${gateChargedFailuresSection}
+${gateChargedFailuresSection}${slowTestsSection}
 ${prIntentSection}
 ${testRunSection}
 ## Your task
