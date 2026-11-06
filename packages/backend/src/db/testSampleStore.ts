@@ -227,6 +227,77 @@ export function pruneTestSamples(
   s.deleteBelow.run(testId, cutoff);
 }
 
+// ─── readers ────────────────────────────────────────────────────────────────
+
+export interface TestSampleOutcome {
+  o: 'P' | 'F';
+  t: number;
+  h?: string;
+}
+
+const readStmtCache = new WeakMap<
+  Database.Database,
+  { outcomes: Database.Statement; durations: Database.Statement }
+>();
+
+function readStmts(database: Database.Database) {
+  let s = readStmtCache.get(database);
+  if (!s) {
+    s = {
+      outcomes: database.prepare(
+        `SELECT outcome, sequenced_at, content_hash FROM test_sample
+         WHERE test_id = ? AND outcome IS NOT NULL AND sequenced_at < ?
+         ORDER BY sequenced_at DESC LIMIT ?`,
+      ),
+      durations: database.prepare(
+        `SELECT duration_ms FROM test_sample
+         WHERE test_id = ? AND duration_ms IS NOT NULL
+         ORDER BY sequenced_at DESC LIMIT ?`,
+      ),
+    };
+    readStmtCache.set(database, s);
+  }
+  return s;
+}
+
+/**
+ * Newest `limit` outcome-bearing rows, returned oldest-first (the shape of the
+ * legacy recent_outcomes ring). `beforeMs`, when given, excludes rows at/after
+ * that epoch-millisecond cutoff (compared in microseconds).
+ */
+export function readRecentTestOutcomes(
+  database: Database.Database,
+  testId: string,
+  limit: number,
+  beforeMs?: number,
+): TestSampleOutcome[] {
+  const before =
+    beforeMs === undefined ? Number.MAX_SAFE_INTEGER : sampleMicros(beforeMs);
+  const rows = readStmts(database).outcomes.all(testId, before, limit) as Array<{
+    outcome: 'P' | 'F';
+    sequenced_at: number;
+    content_hash: string | null;
+  }>;
+  return rows.reverse().map((r) => {
+    const s: TestSampleOutcome = { o: r.outcome, t: r.sequenced_at };
+    if (r.content_hash) s.h = r.content_hash;
+    return s;
+  });
+}
+
+/** Newest `limit` duration-bearing rows, newest first. */
+export function readRecentTestDurations(
+  database: Database.Database,
+  testId: string,
+  limit: number,
+): number[] {
+  return (
+    readStmts(database).durations.all(testId, limit) as Array<{
+      duration_ms: number;
+    }>
+  ).map((r) => r.duration_ms);
+}
+
 // ─── boot backfill ──────────────────────────────────────────────────────────
 
 export const TEST_SAMPLE_BACKFILL_MARKER = 'test_sample_backfill_v1';
