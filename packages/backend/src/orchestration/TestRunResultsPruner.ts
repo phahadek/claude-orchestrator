@@ -4,13 +4,14 @@ import {
   getJobBootSchedule,
   pruneTestRunResultsOlderThan,
   verifyTestSampleDigestParity,
+  TEST_RUN_RESULTS_RETENTION_MS,
 } from '../db/queries';
 
 const JOB_NAME = 'test_run_results_pruner';
 const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 // Every reader of raw non-passing rows is windowed far shorter (24h default);
 // 14 days is a safe margin.
-const RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
+const RETENTION_MS = TEST_RUN_RESULTS_RETENTION_MS;
 const BATCH_SIZE = 5000;
 
 export class TestRunResultsPruner {

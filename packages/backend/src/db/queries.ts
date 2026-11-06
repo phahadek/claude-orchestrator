@@ -12305,10 +12305,13 @@ export function countDistinctOtherOriginPassesSince(
   testId: string,
   sinceMs: number,
   ownTree: BreadthOwnTree,
+  opts: { untilMs?: number; projectId?: string } = {},
 ): number {
   _stmtOtherTreePasses ??= db.prepare<{
     test_id: string;
     since_ms: number;
+    until_ms: number;
+    project_id: string | null;
     own_sessions: string;
     own_worktrees: string;
   }>(`
@@ -12328,6 +12331,8 @@ export function countDistinctOtherOriginPassesSince(
     WHERE t.test_id = @test_id
       AND t.outcome = 'passed'
       AND t.created_at > @since_ms
+      AND t.created_at <= @until_ms
+      AND (@project_id IS NULL OR o.project_id = @project_id)
       AND o.worktree_path IS NOT NULL
       AND o.worktree_path NOT IN (SELECT value FROM json_each(@own_worktrees))
       AND (o.session_id IS NULL
@@ -12337,10 +12342,41 @@ export function countDistinctOtherOriginPassesSince(
   const row = _stmtOtherTreePasses.get({
     test_id: testId,
     since_ms: sinceMs,
+    until_ms: opts.untilMs ?? Number.MAX_SAFE_INTEGER,
+    project_id: opts.projectId ?? null,
     own_sessions: JSON.stringify(ownTree.sessionIds),
     own_worktrees: JSON.stringify(ownTree.worktreePaths),
   }) as { n: number };
   return row.n;
+}
+
+let _stmtBreadthSignatureExcusals: Database.Statement | null = null;
+
+/**
+ * Distinct excusal times per (project, test) written by the signature-match
+ * breadth rule ('breadth_signature'). Legacy 'breadth_corpus' rows are never
+ * read: the long-excused signal counts only the new provenance.
+ */
+export function listBreadthSignatureExcusalTimes(): Array<{
+  project_id: string;
+  test_id: string;
+  excused_at: number;
+}> {
+  _stmtBreadthSignatureExcusals ??= db.prepare(`
+    SELECT DISTINCT r.project_id AS project_id, t.test_id AS test_id,
+           t.excused_at AS excused_at
+    FROM test_run_results t
+    JOIN test_request_runs r ON r.id = t.test_request_run_id
+    WHERE t.excused_reason = 'breadth_signature'
+      AND t.excused_at IS NOT NULL
+      AND r.project_id IS NOT NULL
+    ORDER BY r.project_id, t.test_id, t.excused_at
+  `);
+  return _stmtBreadthSignatureExcusals.all() as Array<{
+    project_id: string;
+    test_id: string;
+    excused_at: number;
+  }>;
 }
 
 /**
@@ -14696,7 +14732,8 @@ export type GateVerifyMirrorOrigin =
   | 'mirror'
   | 'consent'
   | 'unresolved-source'
-  | 'reclassify';
+  | 'reclassify'
+  | 'long-excused';
 
 export function findActiveGateVerifyMirrorForItem(
   gateItemId: string,
@@ -14718,6 +14755,32 @@ export function findActiveGateVerifyMirrorForItem(
     gate_item_id: gateItemId,
     origin,
   }) as StagedIntentRow | undefined;
+}
+
+let _stmtLongExcusedIntentsForTest: Database.Statement | undefined;
+
+/**
+ * Every gate.verify 'long-excused' intent ever staged for (project, test), in
+ * any state — the caller finds the live one (dedup) and any prior one for the
+ * current episode (an operator dismissal is terminal for its episode).
+ */
+export function listLongExcusedIntentsForTest(
+  projectId: string,
+  testId: string,
+): StagedIntentRow[] {
+  _stmtLongExcusedIntentsForTest ??= db.prepare<{
+    project_id: string;
+    test_id: string;
+  }>(
+    `SELECT * FROM staged_intent
+     WHERE kind = 'gate.verify' AND project_id = @project_id
+       AND json_extract(payload, '$.origin') = 'long-excused'
+       AND json_extract(payload, '$.testId') = @test_id`,
+  );
+  return _stmtLongExcusedIntentsForTest.all({
+    project_id: projectId,
+    test_id: testId,
+  }) as StagedIntentRow[];
 }
 
 let _stmtHasLiveGateVerifyIntentForItem: Database.Statement | undefined;
@@ -15744,6 +15807,322 @@ export function percentilesOf(samples: number[]): DurationPercentiles {
   };
 }
 
+/** How long test_run_results rows are retained before TestRunResultsPruner deletes them. */
+export const TEST_RUN_RESULTS_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
+
+type TestRunBand =
+  | 'executed_passed'
+  | 'executed_failed'
+  | 'executed_failed_all_excused'
+  | 'oom_or_timeout'
+  | 'no_verdict'
+  | 'nothing_exercised'
+  | 'reused';
+
+export interface TestRunClassifierInput {
+  state: string;
+  failure_reason: string | null;
+  oom_killed: number;
+  coverage_source_run_id: string | null;
+  nothing_exercised: number;
+  finished_at: number | null;
+  /** Failing test_run_results rows with no excusal. */
+  unexcused_failures: number;
+  /** Failing test_run_results rows that carry an excusal. */
+  excused_failures: number;
+}
+
+export interface TestRunClassification {
+  band: TestRunBand;
+  /**
+   * False only for a failed run whose results are past retention and so
+   * can't tell excused from charged ("failed, excusal not retained"). The
+   * run is then charged as executed_failed.
+   */
+  excusalRetained: boolean;
+}
+
+const NO_VERDICT_REASONS: ReadonlySet<string> = new Set([
+  'cancelled',
+  'interrupted_queued',
+  'interrupted_running',
+]);
+
+/** The one assignment of a finished test_request_run to a single band. */
+export function classifyTestRequestRun(
+  run: TestRunClassifierInput,
+  now: number = Date.now(),
+): TestRunClassification {
+  const retained = { excusalRetained: true };
+  // coverage_source_run_id, not runner_executed (0 on every row).
+  if (run.coverage_source_run_id !== null)
+    return { band: 'reused', ...retained };
+  if (run.failure_reason !== null && NO_VERDICT_REASONS.has(run.failure_reason))
+    return { band: 'no_verdict', ...retained };
+  if (run.state === 'passed' && run.nothing_exercised === 1)
+    return { band: 'nothing_exercised', ...retained };
+  // A passed run with oom_killed set (e.g. a retried per-test OOM) still
+  // executed and verified green; only non-passed runs can be oom_or_timeout.
+  if (
+    run.state !== 'passed' &&
+    (run.failure_reason === 'timeout' ||
+      run.failure_reason === 'oom_killed' ||
+      run.oom_killed === 1)
+  )
+    return { band: 'oom_or_timeout', ...retained };
+  if (run.state === 'passed') return { band: 'executed_passed', ...retained };
+  if (run.unexcused_failures > 0)
+    return { band: 'executed_failed', ...retained };
+  if (run.excused_failures > 0)
+    return { band: 'executed_failed_all_excused', ...retained };
+  const pastRetention =
+    run.finished_at !== null &&
+    now - run.finished_at > TEST_RUN_RESULTS_RETENTION_MS;
+  return { band: 'executed_failed', excusalRetained: !pastRetention };
+}
+
+type TestRunBandCounts = Record<TestRunBand, number>;
+
+function emptyBandCounts(): TestRunBandCounts {
+  return {
+    executed_passed: 0,
+    executed_failed: 0,
+    executed_failed_all_excused: 0,
+    oom_or_timeout: 0,
+    no_verdict: 0,
+    nothing_exercised: 0,
+    reused: 0,
+  };
+}
+
+/** executed_passed ÷ (executed_passed + executed_failed + executed_failed_all_excused + oom_or_timeout); null with no denominator. */
+function passRateOfBands(counts: TestRunBandCounts): number | null {
+  const denominator =
+    counts.executed_passed +
+    counts.executed_failed +
+    counts.executed_failed_all_excused +
+    counts.oom_or_timeout;
+  return denominator > 0 ? counts.executed_passed / denominator : null;
+}
+
+// Failure rows only matter for a failed, non-reused run (the sole bands that
+// read them); gating keeps passed/reused runs from paying for the subqueries.
+// Each subquery is served by idx_test_run_results_run_id.
+const CLASSIFIER_FAILURE_COUNT_COLUMNS = `
+  CASE WHEN state = 'failed' AND coverage_source_run_id IS NULL THEN
+    (SELECT COUNT(*) FROM test_run_results t
+       WHERE t.test_request_run_id = test_request_runs.id
+         AND t.outcome IN ('failed', 'error') AND t.excused_at IS NULL)
+  ELSE 0 END AS unexcused_failures,
+  CASE WHEN state = 'failed' AND coverage_source_run_id IS NULL THEN
+    (SELECT COUNT(*) FROM test_run_results t
+       WHERE t.test_request_run_id = test_request_runs.id
+         AND t.outcome IN ('failed', 'error') AND t.excused_at IS NOT NULL)
+  ELSE 0 END AS excused_failures,
+  CASE WHEN state = 'failed' AND coverage_source_run_id IS NULL THEN
+    (SELECT json_group_array(reason) FROM (
+       SELECT DISTINCT COALESCE(t.excused_reason, 'unknown') AS reason FROM test_run_results t
+       WHERE t.test_request_run_id = test_request_runs.id
+         AND t.outcome IN ('failed', 'error') AND t.excused_at IS NOT NULL))
+  ELSE NULL END AS excused_reasons`;
+
+/** Upper bound on runs scanned per analytics read, keeping main-thread cost bounded regardless of window. */
+const ANALYTICS_RUN_SCAN_CAP = 20000;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_ANALYTICS_WINDOW_DAYS = 30;
+const MAX_ANALYTICS_WINDOW_DAYS = 90;
+
+export function clampAnalyticsWindowDays(days: number | undefined): number {
+  if (days === undefined || !Number.isFinite(days) || days < 1)
+    return DEFAULT_ANALYTICS_WINDOW_DAYS;
+  return Math.min(MAX_ANALYTICS_WINDOW_DAYS, Math.floor(days));
+}
+
+function utcDayOf(ms: number): string {
+  return new Date(Math.floor(ms / DAY_MS) * DAY_MS).toISOString().slice(0, 10);
+}
+
+interface AnalyticsRunRow extends TestRunClassifierInput {
+  run_kind: string;
+  requested_at: number | null;
+  started_at: number | null;
+  excused_reasons: string | null;
+}
+
+function listFinishedRunsInWindow(
+  projectId: string,
+  windowDays: number,
+  now: number,
+): AnalyticsRunRow[] {
+  return db
+    .prepare<{ project_id: string; since: number }>(
+      `SELECT state, failure_reason, oom_killed, coverage_source_run_id, nothing_exercised,
+              run_kind, requested_at, started_at, finished_at,
+              ${CLASSIFIER_FAILURE_COUNT_COLUMNS}
+       FROM test_request_runs
+       WHERE project_id = @project_id AND state NOT IN ('running', 'queued')
+         AND finished_at IS NOT NULL AND finished_at >= @since
+       ORDER BY finished_at DESC
+       LIMIT ${ANALYTICS_RUN_SCAN_CAP}`,
+    )
+    .all({
+      project_id: projectId,
+      since: now - windowDays * DAY_MS,
+    }) as AnalyticsRunRow[];
+}
+
+interface PassRateTrendDay {
+  day: string;
+  bands: TestRunBandCounts;
+  /** Failed runs whose excusal aged out of test_run_results retention (charged as executed_failed). */
+  failedExcusalNotRetained: number;
+  /** Runs per excused_reason across executed_failed_all_excused runs. */
+  excusedBySource: Record<string, number>;
+  passRate: number | null;
+}
+
+export interface PassRateTrend {
+  project: string;
+  windowDays: number;
+  runKinds: Record<string, PassRateTrendDay[]>;
+}
+
+export function getPassRateTrend(
+  projectId: string,
+  windowDays?: number,
+  now: number = Date.now(),
+): PassRateTrend {
+  const days = clampAnalyticsWindowDays(windowDays);
+  const byKind = new Map<string, Map<string, PassRateTrendDay>>();
+  for (const run of listFinishedRunsInWindow(projectId, days, now)) {
+    const { band, excusalRetained } = classifyTestRequestRun(run, now);
+    const kindDays = byKind.get(run.run_kind) ?? new Map();
+    byKind.set(run.run_kind, kindDays);
+    const day = utcDayOf(run.finished_at as number);
+    let bucket = kindDays.get(day);
+    if (!bucket) {
+      bucket = {
+        day,
+        bands: emptyBandCounts(),
+        failedExcusalNotRetained: 0,
+        excusedBySource: {},
+        passRate: null,
+      };
+      kindDays.set(day, bucket);
+    }
+    bucket.bands[band] += 1;
+    if (!excusalRetained) bucket.failedExcusalNotRetained += 1;
+    if (band === 'executed_failed_all_excused') {
+      const reasons: string[] = run.excused_reasons
+        ? JSON.parse(run.excused_reasons)
+        : ['unknown'];
+      for (const reason of reasons) {
+        bucket.excusedBySource[reason] =
+          (bucket.excusedBySource[reason] ?? 0) + 1;
+      }
+    }
+  }
+  const runKinds: Record<string, PassRateTrendDay[]> = {};
+  for (const [kind, kindDays] of byKind) {
+    runKinds[kind] = [...kindDays.values()]
+      .map((d) => ({ ...d, passRate: passRateOfBands(d.bands) }))
+      .sort((a, b) => a.day.localeCompare(b.day));
+  }
+  return { project: projectId, windowDays: days, runKinds };
+}
+
+/** One run's queue-wait sample, or null for runs that don't count (not executed, or missing started_at/requested_at). */
+export function queueWaitSampleOf(
+  run: TestRunClassifierInput & {
+    requested_at: number | null;
+    started_at: number | null;
+  },
+  now: number = Date.now(),
+): { day: string; waitMs: number } | null {
+  if (run.started_at === null || run.requested_at === null) return null;
+  const { band } = classifyTestRequestRun(run, now);
+  if (
+    band !== 'executed_passed' &&
+    band !== 'executed_failed' &&
+    band !== 'executed_failed_all_excused' &&
+    band !== 'oom_or_timeout'
+  )
+    return null;
+  return {
+    day: utcDayOf(run.started_at),
+    waitMs: run.started_at - run.requested_at,
+  };
+}
+
+export interface QueueWaitDay extends DurationPercentiles {
+  day: string;
+}
+
+/** Per-UTC-day queue-wait (started_at − requested_at) over executed runs; reused, no_verdict, nothing_exercised and null-started_at runs are excluded. */
+export function getQueueWaitDistribution(
+  projectId: string,
+  windowDays?: number,
+  now: number = Date.now(),
+): { project: string; windowDays: number; days: QueueWaitDay[] } {
+  const days = clampAnalyticsWindowDays(windowDays);
+  const samples = new Map<string, number[]>();
+  for (const run of listFinishedRunsInWindow(projectId, days, now)) {
+    const wait = queueWaitSampleOf(run, now);
+    if (wait === null) continue;
+    const list = samples.get(wait.day) ?? [];
+    list.push(wait.waitMs);
+    samples.set(wait.day, list);
+  }
+  return {
+    project: projectId,
+    windowDays: days,
+    days: [...samples.entries()]
+      .map(([day, list]) => ({ day, ...percentilesOf(list) }))
+      .sort((a, b) => a.day.localeCompare(b.day)),
+  };
+}
+
+export interface BaselineTestSummary {
+  testId: string;
+  name: string;
+  medianDurationMs: number;
+  lastDurationMs: number;
+  sampleCount: number;
+}
+
+/** Slowest and regressed tests from the narrow baseline scalars only — never the recent_* blobs. */
+export function getSlowestAndRegressedTests(
+  projectId: string,
+  limit = 20,
+): { slowest: BaselineTestSummary[]; regressed: BaselineTestSummary[] } {
+  const cap = Math.min(100, Math.max(1, Math.floor(limit)));
+  const read = (where: string): BaselineTestSummary[] =>
+    (
+      db
+        .prepare<{ project_id: string; cap: number }>(
+          `SELECT test_id, name, median_duration_ms, last_duration_ms, sample_count
+           FROM test_perf_baselines
+           WHERE project_id = @project_id ${where}
+           ORDER BY median_duration_ms DESC LIMIT @cap`,
+        )
+        .all({ project_id: projectId, cap }) as Array<{
+        test_id: string;
+        name: string;
+        median_duration_ms: number;
+        last_duration_ms: number;
+        sample_count: number;
+      }>
+    ).map((r) => ({
+      testId: r.test_id,
+      name: r.name,
+      medianDurationMs: r.median_duration_ms,
+      lastDurationMs: r.last_duration_ms,
+      sampleCount: r.sample_count,
+    }));
+  return { slowest: read(''), regressed: read('AND is_regressed = 1') };
+}
+
 /**
  * Project-scoped lane-health rollup over test_request_runs: pass rate,
  * timeout rate, and — critically — queue-wait vs execution-time kept as
@@ -15762,22 +16141,26 @@ export function getLaneHealthRollup(
   // can't also be covered by that index.
   const rows = db
     .prepare<{ project_id: string; limit: number }>(
-      `SELECT state, requested_at, started_at, finished_at, failure_reason
+      `SELECT state, requested_at, started_at, finished_at, failure_reason,
+              oom_killed, coverage_source_run_id, nothing_exercised,
+              ${CLASSIFIER_FAILURE_COUNT_COLUMNS}
        FROM test_request_runs
        WHERE project_id = @project_id AND state NOT IN ('running', 'queued')
        ORDER BY finished_at DESC, rowid DESC
        LIMIT @limit`,
     )
-    .all({ project_id: projectId, limit }) as Array<{
-    state: TestRequestRunState;
-    requested_at: number | null;
-    started_at: number;
-    finished_at: number | null;
-    failure_reason: TestRequestFailureReason | null;
-  }>;
+    .all({ project_id: projectId, limit }) as Array<
+    TestRunClassifierInput & {
+      state: TestRequestRunState;
+      requested_at: number | null;
+      started_at: number;
+      failure_reason: TestRequestFailureReason | null;
+    }
+  >;
 
   const totalRuns = rows.length;
-  const passed = rows.filter((r) => r.state === 'passed').length;
+  const bandCounts = emptyBandCounts();
+  for (const r of rows) bandCounts[classifyTestRequestRun(r).band] += 1;
   const timedOut = rows.filter((r) => r.failure_reason === 'timeout').length;
 
   const queueWaitSamples = rows
@@ -15792,7 +16175,7 @@ export function getLaneHealthRollup(
   return {
     project: projectId,
     totalRuns,
-    passRate: totalRuns > 0 ? passed / totalRuns : null,
+    passRate: passRateOfBands(bandCounts),
     timeoutRate: totalRuns > 0 ? timedOut / totalRuns : null,
     queueWaitMs: percentilesOf(queueWaitSamples),
     executionTimeMs: percentilesOf(executionTimeSamples),
