@@ -1,3 +1,4 @@
+/* eslint-disable security/detect-unsafe-regex -- Reason: verified non-backtracking; every repeated group is delimited by a literal separator (`/`, `\`, `.`, `:`) its body cannot match, so no overlapping-quantifier path exists. */
 /**
  * Failure-message signature used by breadth excusal: two failures of the same
  * test_id are "the same failure" only when their messages match after
