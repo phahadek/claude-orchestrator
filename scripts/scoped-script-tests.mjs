@@ -17,7 +17,9 @@ const TEST_TARGETS = [
 ];
 
 const files = process.argv.slice(2);
-const claimed = files.filter((f) => SCOPE_PREFIXES.some((p) => f.startsWith(p)));
+const claimed = files.filter((f) =>
+  SCOPE_PREFIXES.some((p) => f.startsWith(p)),
+);
 
 const reportRel = '.test-reports/scripts.xml';
 const reportPath = path.resolve(reportRel);
