@@ -31,7 +31,9 @@ function mockHealth(
       return {
         project: 'p',
         windowDays,
-        days: [{ day: '2026-11-01', p50: 100, p90: 400, p99: 500, sampleCount: 3 }],
+        days: [
+          { day: '2026-11-01', p50: 100, p90: 400, p99: 500, sampleCount: 3 },
+        ],
       } as never;
     if (path.includes('slow-and-regressed'))
       return {

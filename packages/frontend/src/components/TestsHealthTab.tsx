@@ -10,7 +10,12 @@ import {
 import styles from './TestsHealthTab.module.css';
 
 const EXCUSAL_HORIZON_DAYS = 14;
-const WINDOW_OPTIONS = [7, DEFAULT_HEALTH_WINDOW_DAYS, 60, MAX_HEALTH_WINDOW_DAYS];
+const WINDOW_OPTIONS = [
+  7,
+  DEFAULT_HEALTH_WINDOW_DAYS,
+  60,
+  MAX_HEALTH_WINDOW_DAYS,
+];
 
 interface Segment {
   key: string;
@@ -147,9 +152,7 @@ function PassRateChart({
 }) {
   const maxTotal = Math.max(
     1,
-    ...days.map((d) =>
-      Object.values(d.bands).reduce((sum, n) => sum + n, 0),
-    ),
+    ...days.map((d) => Object.values(d.bands).reduce((sum, n) => sum + n, 0)),
   );
   const rate = headlineRate(days);
   return (
@@ -191,7 +194,10 @@ function PassRateChart({
         ))}
       </div>
       {windowDays > EXCUSAL_HORIZON_DAYS && (
-        <div className={styles.horizonNote} data-testid="health-excusal-horizon">
+        <div
+          className={styles.horizonNote}
+          data-testid="health-excusal-horizon"
+        >
           Excusal horizon: {EXCUSAL_HORIZON_DAYS} days — failures older than
           this render as "failed (excusal not retained)".
         </div>
