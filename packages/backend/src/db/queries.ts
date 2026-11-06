@@ -920,7 +920,9 @@ export function getTaskPlanningSessionsByKind(
       firstStartedAt: prev ? prev.firstStartedAt : r.started_at,
     });
   }
-  return [...byKind.values()].sort((a, b) => a.firstStartedAt - b.firstStartedAt);
+  return [...byKind.values()].sort(
+    (a, b) => a.firstStartedAt - b.firstStartedAt,
+  );
 }
 
 let _stmtBackfillPrUrlIfNull: Database.Statement | null = null;
