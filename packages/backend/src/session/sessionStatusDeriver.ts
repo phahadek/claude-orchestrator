@@ -128,6 +128,27 @@ export interface SessionStatusDeriverInput {
   ledgerEntries: readonly CompletingSignalLedgerRow[];
 }
 
+/**
+ * The lineage rule behind SessionStatusDeriverInput.hasNewerSessionForTask:
+ * true iff another session of the same task started after `session` and has
+ * moved past 'starting'. `taskSessions` is every session row of the task.
+ */
+export function computeHasNewerSessionForTask(
+  session: { session_id: string; started_at: number },
+  taskSessions: readonly {
+    session_id: string;
+    started_at: number;
+    status: string;
+  }[],
+): boolean {
+  return taskSessions.some(
+    (other) =>
+      other.session_id !== session.session_id &&
+      other.started_at > session.started_at &&
+      other.status !== 'starting',
+  );
+}
+
 /** The most recent ledger row (by recorded_at, then id, as tiebreaker) whose signal_class matches, or undefined if none. */
 function latestMatchingSignal(
   entries: readonly CompletingSignalLedgerRow[],

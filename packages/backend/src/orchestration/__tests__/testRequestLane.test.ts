@@ -5619,7 +5619,12 @@ describe('rebindWorktreeContentHash — pre-test merge hash rebind', () => {
     await vi.waitFor(() => expect(resolvers.length).toBe(2), {
       timeout: 10_000,
     });
+    // The equal-rank scoped run is granted ahead of the full run.
     resolvers[1]({ passed: true, output: '' });
+    await vi.waitFor(() => expect(resolvers.length).toBe(3), {
+      timeout: 10_000,
+    });
+    resolvers[2]({ passed: true, output: '' });
     const res = await full.result;
     expect(res.superseded).toBeUndefined();
     expect(settled).toContain('post');

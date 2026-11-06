@@ -278,6 +278,19 @@ longer verifiable but the behaviour is, treat the item as malformed and verify t
 broadly. If an item fails only on a mis-specified literal threshold, restate it with its derivation
 and put the restatement to the operator rather than recording a fail on the bad number.
 
+**Verify the item's goal before proposing a restatement.** A restatement proposal must first
+record a direct observation of the item's goal behaviour (does the backoff, yield, retry or
+guard actually happen?), not just of the literal the item names. On 2026-11-05 a restatement was
+proposed for "reconcile passes paused while a fast-lane cycle is in flight" without checking
+whether the pause happened; done properly, the yield did run at its 10 s cap, but some fast lane
+held the flag 100% of the time, so the finding was a different one. No observation, no proposal.
+
+**A held restatement is recorded, not kept in scratch files.** There is no restatement
+disposition. Record the proposal as a dispositionless (pure-log) event:
+`event <id> '{"evidence":"restatement-proposed: <proposal text>. observed: <the direct observation of the goal behaviour>"}'`.
+State and runnability are unchanged (the item stays pullable), and the log carries the proposal
+until the operator rules. The evidence MUST contain the goal-behaviour observation.
+
 ---
 
 ## No run budget — stop on items, not the clock
@@ -326,6 +339,11 @@ Beyond the DB-safety rules above, every verifier brief MUST:
 - **Require the agent to write its results as a JSON array to a named file** in the worktree scratch
   area (one entry per item: id, disposition, evidence, trace guide), and return only the path and a
   one-line tally.
+- **Never file tasks; return a fix draft keyed by branch.** Parallel verifiers filed the same root
+  cause independently (eight duplicate tasks retracted, two already In Progress). A verifier's fail
+  entry carries a fix draft (title, the three root-cause locks) keyed by the code branch at fault,
+  and no `filedFollowon`. The parent groups fails by branch across all shards and files **exactly
+  one task per branch**, then records every fail sharing that branch with that one task id.
 - **Carry the refusal procedure.** A refused command covers that action only: the verifier keeps
   working every other item and never stops the shard. It records a refused item as `needs-setup`,
   with evidence starting `refused: <exact command shape> (<classifier reason>)`, plus
@@ -610,8 +628,13 @@ lacks its locks or follow-on, or an item still "not attempted", is a rejected re
 Both sweeps finish before the report; neither is left for a separate session.
 
 **(a) Needs-setup sweep.** `next` skips `needs-setup` items, so pull the milestone's needs-setup
-items explicitly (list the milestone's items by state, e.g. via `readiness`/the client's listing
-command) and, for each, either **perform the named setup and verify it**, or **re-disposition it**
+items explicitly with `node ~/.claude/scripts/gate-state-client.mjs owners --project <P> --milestone <M>`
+— one read that lists every needs-setup and fail item with the current status of its named owner
+(task id parsed from the latest needs-setup evidence) or filed follow-on, and an `ownerDone` flag.
+Never rely on an earlier board read: in the 2026-11-05 run 12 needs-setup items named Done owners
+and 7 fail items had Done follow-ons (ops/investigation tasks the deploy reconciler never reopens)
+by evening. Every `ownerDone: true` item is handled now (re-verify or re-disposition; a Done
+follow-on that never reopens the fail means re-verify it directly). For each item, either **perform the named setup and verify it**, or **re-disposition it**
 to one of the five outcomes with evidence. A needs-setup item may stay only if its setup is owned by
 a named non-Done task. Refusal-derived items (evidence starting `refused:`) are re-run only after
 the operator changes the approval mode; until then they stay with their refusal evidence.
