@@ -40,6 +40,7 @@ import { FlowHealthRegressionSnapshotJob } from './orchestration/FlowHealthRegre
 import { FlakyTestRollupJob } from './orchestration/FlakyTestRollupJob';
 import { startReattributionService } from './orchestration/reattributionService';
 import { analyticsRouter } from './routes/analytics';
+import { createTestHistoryRouter } from './routes/testHistory';
 import { projectsRouter, setAutoMerger } from './routes/projects';
 import { validateWsToken, isLoopbackIp } from './auth/DeviceAuth';
 import { requireDeviceOrSessionRouteAuth } from './auth/SessionRouteAuth';
@@ -415,6 +416,7 @@ app.use(
 );
 app.use('/api', createTasksRouter(sessionManager, reviewOrchestrator));
 app.use('/api/analytics', analyticsRouter);
+app.use('/api', createTestHistoryRouter());
 app.use('/api', projectsRouter);
 app.use('/api', configRouter);
 app.use('/api', createConfigStatusRouter());

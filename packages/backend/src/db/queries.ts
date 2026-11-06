@@ -15757,6 +15757,165 @@ export function percentilesOf(samples: number[]): DurationPercentiles {
 /** How long test_run_results rows are retained before TestRunResultsPruner deletes them. */
 export const TEST_RUN_RESULTS_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 
+interface TestHistorySample {
+  sequencedAt: number;
+  outcome: 'P' | 'F' | null;
+  durationMs: number | null;
+  contentHash: string | null;
+}
+
+interface TestHistoryBucket {
+  weekStart: number;
+  passCount: number;
+  failCount: number;
+  transitionCount: number;
+  durationCount: number;
+  durationSumMs: number;
+  durationMinMs: number | null;
+  durationMaxMs: number | null;
+}
+
+interface TestHistoryFailure {
+  testRequestRunId: string;
+  outcome: string;
+  durationMs: number;
+  failureMessage: string | null;
+  failureTraceExcerpt: string | null;
+  createdAt: number;
+}
+
+export interface TestHistory {
+  testId: string;
+  name: string | null;
+  outcomeSamples: TestHistorySample[];
+  durationSamples: TestHistorySample[];
+  weeklyBuckets: TestHistoryBucket[];
+  failures: TestHistoryFailure[];
+  failureRetentionMs: number;
+  failureHorizonMs: number;
+}
+
+interface TestSampleReadRow {
+  sequenced_at: number;
+  outcome: 'P' | 'F' | null;
+  duration_ms: number | null;
+  content_hash: string | null;
+}
+
+function toHistorySample(r: TestSampleReadRow): TestHistorySample {
+  return {
+    sequencedAt: r.sequenced_at,
+    outcome: r.outcome,
+    durationMs: r.duration_ms,
+    contentHash: r.content_hash,
+  };
+}
+
+/**
+ * Per-test history for one (project, test_id): newest outcome- and
+ * duration-bearing test_sample rows (oldest-first in sequenced_at order),
+ * test_sample_history weekly buckets, and test_run_results failure detail
+ * within its retention window. Never reads the digest recent_* blobs.
+ */
+export function getTestHistory(
+  projectId: string,
+  testId: string,
+  now: number = Date.now(),
+): TestHistory {
+  const outcomeSamples = (
+    db
+      .prepare(
+        `SELECT sequenced_at, outcome, duration_ms, content_hash FROM test_sample
+         WHERE project_id = ? AND test_id = ? AND outcome IS NOT NULL
+         ORDER BY sequenced_at DESC LIMIT 200`,
+      )
+      .all(projectId, testId) as TestSampleReadRow[]
+  )
+    .reverse()
+    .map(toHistorySample);
+  const durationSamples = (
+    db
+      .prepare(
+        `SELECT sequenced_at, outcome, duration_ms, content_hash FROM test_sample
+         WHERE project_id = ? AND test_id = ? AND duration_ms IS NOT NULL
+         ORDER BY sequenced_at DESC LIMIT 32`,
+      )
+      .all(projectId, testId) as TestSampleReadRow[]
+  )
+    .reverse()
+    .map(toHistorySample);
+  const weeklyBuckets = (
+    db
+      .prepare(
+        `SELECT week_start, pass_count, fail_count, transition_count,
+                duration_count, duration_sum_ms, duration_min_ms, duration_max_ms
+         FROM test_sample_history
+         WHERE project_id = ? AND test_id = ? ORDER BY week_start ASC`,
+      )
+      .all(projectId, testId) as Array<{
+      week_start: number;
+      pass_count: number;
+      fail_count: number;
+      transition_count: number;
+      duration_count: number;
+      duration_sum_ms: number;
+      duration_min_ms: number | null;
+      duration_max_ms: number | null;
+    }>
+  ).map((b) => ({
+    weekStart: b.week_start,
+    passCount: b.pass_count,
+    failCount: b.fail_count,
+    transitionCount: b.transition_count,
+    durationCount: b.duration_count,
+    durationSumMs: b.duration_sum_ms,
+    durationMinMs: b.duration_min_ms,
+    durationMaxMs: b.duration_max_ms,
+  }));
+  const horizon = now - TEST_RUN_RESULTS_RETENTION_MS;
+  const failures = (
+    db
+      .prepare(
+        `SELECT test_request_run_id, outcome, duration_ms, failure_message,
+                failure_trace_excerpt, created_at
+         FROM test_run_results
+         WHERE project_id = ? AND test_id = ? AND created_at >= ?
+           AND (failure_message IS NOT NULL OR failure_trace_excerpt IS NOT NULL)
+         ORDER BY created_at DESC LIMIT 50`,
+      )
+      .all(projectId, testId, horizon) as Array<{
+      test_request_run_id: string;
+      outcome: string;
+      duration_ms: number;
+      failure_message: string | null;
+      failure_trace_excerpt: string | null;
+      created_at: number;
+    }>
+  ).map((r) => ({
+    testRequestRunId: r.test_request_run_id,
+    outcome: r.outcome,
+    durationMs: r.duration_ms,
+    failureMessage: r.failure_message,
+    failureTraceExcerpt: r.failure_trace_excerpt,
+    createdAt: r.created_at,
+  }));
+  const nameRow = db
+    .prepare(
+      `SELECT name FROM test_perf_baselines WHERE project_id = ? AND test_id = ?`,
+    )
+    .get(projectId, testId) as { name: string } | undefined;
+  return {
+    testId,
+    name: nameRow?.name ?? null,
+    outcomeSamples,
+    durationSamples,
+    weeklyBuckets,
+    failures,
+    failureRetentionMs: TEST_RUN_RESULTS_RETENTION_MS,
+    failureHorizonMs: horizon,
+  };
+}
+
 type TestRunBand =
   | 'executed_passed'
   | 'executed_failed'
