@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
+const hoisted = vi.hoisted(() => ({ gitExec: vi.fn(), syncExec: vi.fn() }));
+const { gitExec } = hoisted;
+
 vi.mock('child_process', () => ({
   spawn: vi.fn().mockReturnValue({
     stdout: { on: vi.fn() },
@@ -12,8 +15,22 @@ vi.mock('child_process', () => ({
     pid: 12345,
     exitCode: null,
   }),
-  execSync: vi.fn(),
-  execFile: vi.fn(),
+  execSync: hoisted.syncExec,
+  execFile: vi.fn(
+    (
+      file: string,
+      args: string[],
+      opts: unknown,
+      cb: (err: unknown, out?: unknown) => void,
+    ) => {
+      try {
+        const out = hoisted.gitExec(`${file} ${args.join(' ')}`, opts);
+        cb(null, { stdout: out == null ? '' : String(out), stderr: '' });
+      } catch (e) {
+        cb(e);
+      }
+    },
+  ),
 }));
 
 vi.mock('../../db/queries', () => ({
@@ -100,7 +117,6 @@ vi.mock('../../utils/eventFilters', () => ({
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
-import { execSync } from 'child_process';
 import { AgentSession, MAX_REBASE_NUDGES } from '../AgentSession';
 import { setPauseReason, getPRBySessionId } from '../../db/queries';
 
@@ -139,7 +155,7 @@ async function callHandlePushDetected(session: AgentSession): Promise<void> {
 }
 
 function mockDivergedGit(branch: string, behind: number, ahead: number) {
-  vi.mocked(execSync).mockImplementation((cmd: string) => {
+  vi.mocked(gitExec).mockImplementation((cmd: string) => {
     if (cmd.includes('rev-parse --abbrev-ref'))
       return Buffer.from(`${branch}\n`);
     if (cmd.includes('rev-parse HEAD')) return Buffer.from('local111\n');
@@ -188,7 +204,7 @@ describe('AgentSession.handlePushDetected — diverged-branch nudge', () => {
     // local work on top of it, so a subsequent measurement shows behind === 0.
     const branch = 'feature/diverged';
     let rebased = false;
-    vi.mocked(execSync).mockImplementation((cmd: string) => {
+    vi.mocked(gitExec).mockImplementation((cmd: string) => {
       if (cmd.includes('rev-parse --abbrev-ref'))
         return Buffer.from(`${branch}\n`);
       if (cmd.includes('rev-parse HEAD')) return Buffer.from('local111\n');
@@ -215,8 +231,8 @@ describe('AgentSession.handlePushDetected — diverged-branch nudge', () => {
     expect(rebaseMatch?.[1]).toBe(branch);
 
     // Apply the prescribed remedy.
-    execSync(`git rebase origin/${branch}`, { cwd: WORKTREE } as any);
-    const aheadBehind = execSync(
+    gitExec(`git rebase origin/${branch}`, { cwd: WORKTREE } as any);
+    const aheadBehind = gitExec(
       `git rev-list --left-right --count origin/${branch}...HEAD`,
       { cwd: WORKTREE } as any,
     )
@@ -227,7 +243,7 @@ describe('AgentSession.handlePushDetected — diverged-branch nudge', () => {
   });
 
   it('issues no additional git invocations on the ahead>0 && behind===0 fast path', async () => {
-    vi.mocked(execSync).mockImplementation((cmd: string) => {
+    vi.mocked(gitExec).mockImplementation((cmd: string) => {
       if (cmd.includes('rev-parse --abbrev-ref'))
         return Buffer.from('feature/my-branch\n');
       if (cmd.includes('rev-parse HEAD')) return Buffer.from('abc1234\n');
@@ -247,7 +263,7 @@ describe('AgentSession.handlePushDetected — diverged-branch nudge', () => {
 
     // rev-parse --abbrev-ref, rev-parse HEAD, ls-remote, rev-list, git push,
     // plus the unconditional post-signal rev-parse HEAD = 6 calls total.
-    expect(vi.mocked(execSync).mock.calls.length).toBe(6);
+    expect(vi.mocked(gitExec).mock.calls.length).toBe(6);
   });
 
   it('caps rebaseNudgeCount at MAX_REBASE_NUDGES and escalates to diverged_branch_unresolved on exhaustion', async () => {

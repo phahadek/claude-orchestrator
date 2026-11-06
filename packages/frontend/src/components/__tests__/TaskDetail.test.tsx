@@ -1720,4 +1720,99 @@ describe('TaskDetail — Spec section', () => {
     );
     expect(screen.queryByText(/open in/i)).toBeNull();
   });
+
+  describe('Review stage accordion', () => {
+    function stubDetailFields(depthReview: object | null) {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string) =>
+          Promise.resolve(
+            String(url).includes('detail-fields')
+              ? {
+                  ok: true,
+                  json: async () => ({
+                    pr: null,
+                    depthReview,
+                    planningSessions: [],
+                  }),
+                }
+              : { ok: false, status: 404, json: async () => ({}) },
+          ),
+        ),
+      );
+    }
+
+    const depth = {
+      sessionId: 'depth-1',
+      status: 'done',
+      verdict: 'needs_changes',
+    };
+
+    function renderReview(taskId = 'task-1') {
+      return (
+        <TaskDetail
+          task={makeTask({
+            taskId,
+            review: makeReview({ verdict: 'approved' }),
+          })}
+          send={vi.fn()}
+          onClose={vi.fn()}
+        />
+      );
+    }
+
+    function clickHeader(testId: string) {
+      fireEvent.click(
+        screen.getByTestId(testId).querySelector('[role=button]')!,
+      );
+    }
+
+    function expanded(testId: string) {
+      return screen.getByTestId(testId).getAttribute('data-expanded');
+    }
+
+    it('opens the depth review by default and swaps on toggle, keeping both headers and pills', async () => {
+      stubDetailFields(depth);
+      render(renderReview());
+      fireEvent.click(screen.getByTestId('stage-chip-review'));
+      await waitFor(() =>
+        expect(expanded('depth-review-session-section')).toBe('true'),
+      );
+      expect(expanded('review-session-section')).toBe('false');
+
+      clickHeader('review-session-section');
+      expect(expanded('review-session-section')).toBe('true');
+      expect(expanded('depth-review-session-section')).toBe('false');
+      expect(screen.getByText('✅ Approved')).toBeTruthy();
+      expect(screen.getByText('⚠️ Needs Changes')).toBeTruthy();
+    });
+
+    it('opens the review by default when there is no depth review', async () => {
+      stubDetailFields(null);
+      render(renderReview());
+      fireEvent.click(screen.getByTestId('stage-chip-review'));
+      await waitFor(() =>
+        expect(expanded('review-session-section')).toBe('true'),
+      );
+      expect(screen.queryByTestId('depth-review-session-section')).toBeNull();
+    });
+
+    it('restores the default open section when switching tasks', async () => {
+      stubDetailFields(depth);
+      const { rerender } = render(renderReview('task-1'));
+      fireEvent.click(screen.getByTestId('stage-chip-review'));
+      await waitFor(() =>
+        expect(expanded('depth-review-session-section')).toBe('true'),
+      );
+      clickHeader('review-session-section');
+      expect(expanded('review-session-section')).toBe('true');
+
+      rerender(renderReview('task-2'));
+      fireEvent.click(screen.getByTestId('stage-chip-review'));
+      await waitFor(() =>
+        expect(expanded('depth-review-session-section')).toBe('true'),
+      );
+      expect(expanded('review-session-section')).toBe('false');
+    });
+  });
 });

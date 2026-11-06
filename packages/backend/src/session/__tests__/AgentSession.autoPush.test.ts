@@ -2,6 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
+const hoisted = vi.hoisted(() => ({
+  gitExec: vi.fn(),
+  syncExec: vi.fn(),
+  lsRemoteDelayMs: 0,
+}));
+const { gitExec } = hoisted;
+
 vi.mock('child_process', () => ({
   spawn: vi.fn().mockReturnValue({
     stdout: { on: vi.fn() },
@@ -12,13 +19,29 @@ vi.mock('child_process', () => ({
     pid: 12345,
     exitCode: null,
   }),
-  execSync: vi.fn(),
-  execFile: vi.fn((...args: unknown[]) => {
-    (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
-      stdout: '',
-      stderr: '',
-    });
-  }),
+  execSync: hoisted.syncExec,
+  execFile: vi.fn(
+    (
+      file: string,
+      args: string[],
+      opts: unknown,
+      cb: (err: unknown, out?: unknown) => void,
+    ) => {
+      const respond = () => {
+        try {
+          const out = hoisted.gitExec(`${file} ${args.join(' ')}`, opts);
+          cb(null, { stdout: out == null ? '' : String(out), stderr: '' });
+        } catch (e) {
+          cb(e);
+        }
+      };
+      if (args[0] === 'ls-remote' && hoisted.lsRemoteDelayMs > 0) {
+        setTimeout(respond, hoisted.lsRemoteDelayMs);
+      } else {
+        respond();
+      }
+    },
+  ),
   exec: vi.fn((...args: unknown[]) => {
     (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
       stdout: '',
@@ -115,7 +138,6 @@ vi.mock('../../utils/eventFilters', () => ({
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
-import { execSync } from 'child_process';
 import { AgentSession } from '../AgentSession';
 import { setPauseReason, getPRBySessionId } from '../../db/queries';
 
@@ -150,10 +172,33 @@ describe('AgentSession.handlePushDetected — auto-push logic', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getPRBySessionId).mockReturnValue(null);
+    hoisted.lsRemoteDelayMs = 0;
+  });
+
+  it('does not block the event loop on a slow ls-remote and uses no synchronous child-process call', async () => {
+    hoisted.lsRemoteDelayMs = 500;
+    vi.mocked(gitExec).mockImplementation((cmd: string) => {
+      if (cmd.includes('rev-parse --abbrev-ref'))
+        return Buffer.from('feature/slow\n');
+      if (cmd.includes('rev-parse HEAD')) return Buffer.from('abc1234\n');
+      if (cmd.includes('ls-remote'))
+        return Buffer.from('abc1234\tfeature/slow\n');
+      return Buffer.from('');
+    });
+    const session = makeSession();
+    let ticks = 0;
+    const timer = setInterval(() => ticks++, 10);
+    try {
+      await callHandlePushDetected(session);
+    } finally {
+      clearInterval(timer);
+    }
+    expect(ticks).toBeGreaterThan(5);
+    expect(hoisted.syncExec).not.toHaveBeenCalled();
   });
 
   it('pushes when worktree is ahead of origin and emits session_auto_pushed', async () => {
-    vi.mocked(execSync).mockImplementation((cmd: string) => {
+    vi.mocked(gitExec).mockImplementation((cmd: string) => {
       if (cmd.includes('rev-parse --abbrev-ref'))
         return Buffer.from('feature/my-branch\n');
       if (cmd.includes('rev-parse HEAD')) return Buffer.from('abc1234\n');
@@ -179,7 +224,7 @@ describe('AgentSession.handlePushDetected — auto-push logic', () => {
 
     // push was executed
     const pushCall = vi
-      .mocked(execSync)
+      .mocked(gitExec)
       .mock.calls.find(([cmd]) => (cmd as string).includes('git push origin'));
     expect(pushCall).toBeDefined();
     expect(pushCall![0]).toBe('git push origin feature/my-branch');
@@ -204,7 +249,7 @@ describe('AgentSession.handlePushDetected — auto-push logic', () => {
   });
 
   it('carries the local HEAD as headSha when it already equals the ls-remote head', async () => {
-    vi.mocked(execSync).mockImplementation((cmd: string) => {
+    vi.mocked(gitExec).mockImplementation((cmd: string) => {
       if (cmd.includes('rev-parse --abbrev-ref'))
         return Buffer.from('feature/foo\n');
       if (cmd.includes('rev-parse HEAD')) return Buffer.from('abc1234\n');
@@ -220,7 +265,7 @@ describe('AgentSession.handlePushDetected — auto-push logic', () => {
   });
 
   it('emits headSha null when the branch is diverged', async () => {
-    vi.mocked(execSync).mockImplementation((cmd: string) => {
+    vi.mocked(gitExec).mockImplementation((cmd: string) => {
       if (cmd.includes('rev-parse --abbrev-ref'))
         return Buffer.from('feature/diverged\n');
       if (cmd.includes('rev-parse HEAD')) return Buffer.from('local111\n');
@@ -237,7 +282,7 @@ describe('AgentSession.handlePushDetected — auto-push logic', () => {
   });
 
   it('emits headSha null when the auto-push throws', async () => {
-    vi.mocked(execSync).mockImplementation((cmd: string) => {
+    vi.mocked(gitExec).mockImplementation((cmd: string) => {
       if (cmd.includes('rev-parse --abbrev-ref'))
         return Buffer.from('feature/x\n');
       if (cmd.includes('rev-parse HEAD')) return Buffer.from('abc1234\n');
@@ -255,7 +300,7 @@ describe('AgentSession.handlePushDetected — auto-push logic', () => {
 
   it('does not push when worktree HEAD equals origin HEAD', async () => {
     const SHA = 'abc1234';
-    vi.mocked(execSync).mockImplementation((cmd: string) => {
+    vi.mocked(gitExec).mockImplementation((cmd: string) => {
       if (cmd.includes('rev-parse --abbrev-ref'))
         return Buffer.from('feature/foo\n');
       if (cmd.includes('rev-parse HEAD')) return Buffer.from(`${SHA}\n`);
@@ -274,7 +319,7 @@ describe('AgentSession.handlePushDetected — auto-push logic', () => {
     await callHandlePushDetected(session);
 
     const pushCall = vi
-      .mocked(execSync)
+      .mocked(gitExec)
       .mock.calls.find(([cmd]) => (cmd as string).includes('git push'));
     expect(pushCall).toBeUndefined();
     expect(
@@ -286,7 +331,7 @@ describe('AgentSession.handlePushDetected — auto-push logic', () => {
   });
 
   it('skips push and sets diverged_branch pause_reason when branch is diverged', async () => {
-    vi.mocked(execSync).mockImplementation((cmd: string) => {
+    vi.mocked(gitExec).mockImplementation((cmd: string) => {
       if (cmd.includes('rev-parse --abbrev-ref'))
         return Buffer.from('feature/diverged\n');
       if (cmd.includes('rev-parse HEAD')) return Buffer.from('local111\n');
@@ -311,7 +356,7 @@ describe('AgentSession.handlePushDetected — auto-push logic', () => {
 
     // no push
     const pushCall = vi
-      .mocked(execSync)
+      .mocked(gitExec)
       .mock.calls.find(([cmd]) => (cmd as string).includes('git push'));
     expect(pushCall).toBeUndefined();
 
@@ -338,7 +383,7 @@ describe('AgentSession.handlePushDetected — auto-push logic', () => {
   });
 
   it('catches ls-remote failure, logs it, and still emits push_detected', async () => {
-    vi.mocked(execSync).mockImplementation((cmd: string) => {
+    vi.mocked(gitExec).mockImplementation((cmd: string) => {
       if (cmd.includes('rev-parse --abbrev-ref'))
         return Buffer.from('feature/foo\n');
       if (cmd.includes('rev-parse HEAD')) return Buffer.from('abc1234\n');
@@ -365,12 +410,12 @@ describe('AgentSession.handlePushDetected — auto-push logic', () => {
 
     await callHandlePushDetected(session);
 
-    expect(vi.mocked(execSync)).not.toHaveBeenCalled();
+    expect(vi.mocked(gitExec)).not.toHaveBeenCalled();
     expect(pushDetectedEvents).toHaveLength(1);
   });
 
   it('pushes when ls-remote returns empty (new branch not yet on remote)', async () => {
-    vi.mocked(execSync).mockImplementation((cmd: string) => {
+    vi.mocked(gitExec).mockImplementation((cmd: string) => {
       if (cmd.includes('rev-parse --abbrev-ref'))
         return Buffer.from('feature/new\n');
       if (cmd.includes('rev-parse HEAD')) return Buffer.from('abc1234\n');
@@ -392,7 +437,7 @@ describe('AgentSession.handlePushDetected — auto-push logic', () => {
     // localHead='abc1234', remoteHead='' → not equal → proceed to rev-list
     // then ahead=1, behind=0 → push
     const pushCall = vi
-      .mocked(execSync)
+      .mocked(gitExec)
       .mock.calls.find(([cmd]) => (cmd as string).includes('git push origin'));
     expect(pushCall).toBeDefined();
 
@@ -415,7 +460,7 @@ describe('integration: needs_changes → session commits → orchestrator auto-p
   it('auto-pushes committed changes and triggers the re-review pipeline', async () => {
     // Session received "needs_changes" feedback and committed a fix locally,
     // but did not push. The worktree is 1 commit ahead of origin.
-    vi.mocked(execSync).mockImplementation((cmd: string) => {
+    vi.mocked(gitExec).mockImplementation((cmd: string) => {
       if (cmd.includes('rev-parse --abbrev-ref'))
         return Buffer.from('feature/fix\n');
       if (cmd.includes('rev-parse HEAD')) return Buffer.from('newsha1\n');
@@ -449,7 +494,7 @@ describe('integration: needs_changes → session commits → orchestrator auto-p
 
     // Auto-push ran first — git push was called before push_detected fired
     const pushCall = vi
-      .mocked(execSync)
+      .mocked(gitExec)
       .mock.calls.find(([cmd]) => (cmd as string).includes('git push origin'));
     expect(pushCall).toBeDefined();
     expect(pushCall![0]).toBe('git push origin feature/fix');
