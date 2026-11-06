@@ -2063,7 +2063,7 @@ describe('getLatestTestRequestRunForSession — index usage and blob-free sort p
 
     const legacy = typedDb
       .prepare(
-        `SELECT id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result
+        `SELECT id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at, failure_reason, structured_result
          FROM test_request_runs
          WHERE project_id = ? AND session_id = ? AND state != 'running'
          ORDER BY finished_at DESC, rowid DESC LIMIT 1`,

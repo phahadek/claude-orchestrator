@@ -3569,7 +3569,10 @@ describe('admitTestRequest — per-command partial coverage', () => {
     });
     expect(res.passed).toBe(true);
     const row = db
-      .prepare(`SELECT * FROM test_request_runs WHERE id = ?`)
+      .prepare(
+        `SELECT r.*, o.output FROM test_request_runs r
+         LEFT JOIN test_request_run_output o ON o.run_id = r.id WHERE r.id = ?`,
+      )
       .get(res.runId) as {
       state: string;
       commands: string;
