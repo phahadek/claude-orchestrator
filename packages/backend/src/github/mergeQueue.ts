@@ -19,6 +19,28 @@ export type MergeQueueEntry =
   | { kind: 'local'; projectId: string; id: number; enqueuedAt: number };
 
 /**
+ * Rows that cannot merge until someone else acts (conflicting with base, or an
+ * approval that bypassed a failed gate at this head) must not sit at the head
+ * and stall the PRs behind them; they rejoin once the blocker clears.
+ */
+function isHeldOutOfQueue(pr: PullRequestRow): boolean {
+  if (pr.merge_state === 'dirty') return true;
+  try {
+    const parsed = pr.review_result
+      ? (JSON.parse(pr.review_result) as {
+          gateBypassed?: { headSha?: string | null };
+        })
+      : undefined;
+    const bypass = parsed?.gateBypassed;
+    return Boolean(
+      bypass && (!bypass.headSha || bypass.headSha === pr.head_sha),
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Derived per-project FIFO: merge-ready, auto-merge-enabled PRs and local
  * branches ordered by their persisted enqueue timestamp. Not a separate store —
  * a restart rebuilds the same order from the columns. A paused row drops out of
@@ -36,6 +58,7 @@ export function computeMergeQueues(
   };
 
   for (const pr of getApprovedOpenPRs()) {
+    if (isHeldOutOfQueue(pr)) continue;
     const project = getProjectByGithubRepo(pr.repo);
     if (!project?.autoMergeEnabled) continue;
     push({

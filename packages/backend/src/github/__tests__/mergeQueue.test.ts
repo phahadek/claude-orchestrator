@@ -81,6 +81,23 @@ describe('merge queue', () => {
     expect(checkPrQueueHead(1, 'o/r', 200).allowed).toBe(true);
   });
 
+  it('a conflicting or gate-bypassed PR does not stall the PRs behind it', () => {
+    const dirty = { pr_number: 1, repo: 'o/r', merge_state: 'dirty' } as never;
+    const bypassed = {
+      pr_number: 2,
+      repo: 'o/r',
+      head_sha: 'h',
+      review_result: JSON.stringify({
+        verdict: 'approved',
+        gateBypassed: { headSha: 'h' },
+      }),
+    } as never;
+    vi.mocked(getApprovedOpenPRs).mockReturnValue([dirty, bypassed, pr(3)]);
+    const queue = computeMergeQueues(100).get('p1')!;
+    expect(queue.map((e) => (e.kind === 'pr' ? e.prNumber : -1))).toEqual([3]);
+    expect(checkPrQueueHead(3, 'o/r', 200).allowed).toBe(true);
+  });
+
   it('an unqueued PR is not blocked', () => {
     expect(checkPrQueueHead(99, 'o/r')).toEqual({ allowed: true, waitMs: 0 });
   });
