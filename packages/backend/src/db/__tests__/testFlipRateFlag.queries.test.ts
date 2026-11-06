@@ -297,15 +297,14 @@ describe('recordTestPerfDigestSample content hash persistence', () => {
       null,
     );
 
-    const row = db
+    const samples = db
       .prepare(
-        `SELECT recent_outcomes FROM test_perf_baselines WHERE test_id = ?`,
+        `SELECT content_hash FROM test_sample WHERE test_id = ? AND outcome IS NOT NULL ORDER BY sequenced_at`,
       )
-      .get('test-persist-hash') as { recent_outcomes: string };
-    const samples = JSON.parse(row.recent_outcomes);
+      .all('test-persist-hash') as { content_hash: string | null }[];
     expect(samples).toHaveLength(2);
-    expect(samples[0].h).toBe('hash-1');
-    expect('h' in samples[1]).toBe(false);
+    expect(samples[0].content_hash).toBe('hash-1');
+    expect(samples[1].content_hash).toBeNull();
   });
 
   it('appends outcome but not duration samples for concurrent and foreign-concurrent runs, advancing updated_at', () => {
@@ -352,18 +351,20 @@ describe('recordTestPerfDigestSample content hash persistence', () => {
     expect(foreign?.durationAdmitted).toBe(false);
 
     const row = db
+      .prepare(`SELECT updated_at FROM test_perf_baselines WHERE test_id = ?`)
+      .get('test-conc') as { updated_at: number };
+    const outcomes = db
       .prepare(
-        `SELECT recent_outcomes, recent_durations, updated_at FROM test_perf_baselines WHERE test_id = ?`,
+        `SELECT outcome FROM test_sample WHERE test_id = ? AND outcome IS NOT NULL ORDER BY sequenced_at`,
       )
-      .get('test-conc') as {
-      recent_outcomes: string;
-      recent_durations: string;
-      updated_at: number;
-    };
-    expect(
-      JSON.parse(row.recent_outcomes).map((s: { o: string }) => s.o),
-    ).toEqual(['P', 'F', 'P']);
-    expect(JSON.parse(row.recent_durations)).toEqual([100]);
+      .all('test-conc') as { outcome: string }[];
+    const durations = db
+      .prepare(
+        `SELECT duration_ms FROM test_sample WHERE test_id = ? AND duration_ms IS NOT NULL ORDER BY sequenced_at`,
+      )
+      .all('test-conc') as { duration_ms: number }[];
+    expect(outcomes.map((s) => s.outcome)).toEqual(['P', 'F', 'P']);
+    expect(durations.map((s) => s.duration_ms)).toEqual([100]);
     expect(row.updated_at).toBe(30);
   });
 

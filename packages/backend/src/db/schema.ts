@@ -5,6 +5,7 @@ import {
   TEST_SAMPLE_BACKFILL_MARKER,
   backfillTestSamples,
   verifyTestSamples,
+  hasTestPerfDigestColumns,
 } from './testSampleStore';
 
 export function runMigrations(target: Database.Database): void {
@@ -2791,11 +2792,21 @@ export function runMigrations(target: Database.Database): void {
   // Date.now() call from a different writer), so the flip-rate rollup
   // candidate scan can page on (updated_at, test_id) instead of on
   // test_run_results.id like it used to.
+  // The two ring columns are re-added only until their by-value-verified drop
+  // (dropTestPerfDigestColumns) has recorded its marker, so a dropped column
+  // is never resurrected on a later boot.
+  const digestColumnsDropped = !!target
+    .prepare(`SELECT 1 FROM schema_backfills WHERE name = ?`)
+    .get(DROP_TEST_PERF_DIGEST_MARKER);
   for (const columnDdl of [
     `ALTER TABLE test_perf_baselines ADD COLUMN project_id TEXT NOT NULL DEFAULT ''`,
     `ALTER TABLE test_perf_baselines ADD COLUMN name TEXT NOT NULL DEFAULT ''`,
-    `ALTER TABLE test_perf_baselines ADD COLUMN recent_outcomes TEXT NOT NULL DEFAULT '[]'`,
-    `ALTER TABLE test_perf_baselines ADD COLUMN recent_durations TEXT NOT NULL DEFAULT '[]'`,
+    ...(digestColumnsDropped
+      ? []
+      : [
+          `ALTER TABLE test_perf_baselines ADD COLUMN recent_outcomes TEXT NOT NULL DEFAULT '[]'`,
+          `ALTER TABLE test_perf_baselines ADD COLUMN recent_durations TEXT NOT NULL DEFAULT '[]'`,
+        ]),
     // Nullable JSON array of marker/tag strings from the most recent sample
     // that carried any (see recordTestPerfDigestSample) — mirrors
     // test_run_results.markers so a test's slow/fast tier is queryable from
@@ -2849,6 +2860,7 @@ export function runMigrations(target: Database.Database): void {
     );
   `);
   runTestSampleBackfill(target);
+  dropTestPerfDigestColumns(target);
 
   // test_run_summaries: one row per test_request_run holding outcome counts
   // and total duration for the run — the replacement for enumerating every
@@ -4222,6 +4234,42 @@ export function runTestSampleBackfill(
     `[schema] test_sample backfill complete; digest parity mismatches: ${mismatches}`,
     { byProject: result },
   );
+}
+
+export const DROP_TEST_PERF_DIGEST_MARKER =
+  'test_perf_baselines_digest_drop_v1';
+
+/**
+ * Drops test_perf_baselines.recent_outcomes/recent_durations once
+ * verifyTestSamples reports zero mismatches against test_sample. Any non-zero
+ * count logs per-project counts and leaves no marker, so the next boot
+ * retries. Never drops before the check passes.
+ */
+export function dropTestPerfDigestColumns(target: Database.Database): void {
+  const marker = target
+    .prepare(`SELECT 1 FROM schema_backfills WHERE name = ?`)
+    .get(DROP_TEST_PERF_DIGEST_MARKER);
+  if (marker) return;
+  if (hasTestPerfDigestColumns(target)) {
+    const result = verifyTestSamples(target);
+    const mismatches = result.reduce(
+      (n, r) => n + r.outcomeMismatches + r.durationMismatches,
+      0,
+    );
+    if (mismatches !== 0) {
+      logger.warn(
+        `[schema] test_perf_baselines digest column drop skipped: ${mismatches} mismatch(es) vs test_sample; will retry next boot`,
+        { byProject: result },
+      );
+      return;
+    }
+    target.exec(`ALTER TABLE test_perf_baselines DROP COLUMN recent_outcomes`);
+    target.exec(`ALTER TABLE test_perf_baselines DROP COLUMN recent_durations`);
+    target.exec(`PRAGMA incremental_vacuum`);
+  }
+  target
+    .prepare(`INSERT INTO schema_backfills (name, applied_at) VALUES (?, ?)`)
+    .run(DROP_TEST_PERF_DIGEST_MARKER, Date.now());
 }
 
 // ─── structured_result extraction-scoped clear backfill ────────────────────

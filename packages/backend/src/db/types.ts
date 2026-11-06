@@ -1563,12 +1563,8 @@ export interface TestOutcomeCounts {
  * computeTestPerfBaseline in orchestration/testRequestLane.ts. Recomputed
  * inline at ingestion completion for every test_id touched by that run.
  *
- * project_id/name/recent_outcomes/recent_durations are the digest extension
- * (dig-test-results-at-ingest task): recent_outcomes/recent_durations are
- * JSON-encoded, fixed-width, newest-last arrays fed by
- * recordTestPerfDigestSample on every ingested (valid) sample — the durable
- * replacement for the per-test-id windowed reads that used to hit raw
- * test_run_results rows (listRecentValidTestDurations, computeTestFlipRateFlag).
+ * project_id/name/markers/updated_at are the per-test identity row written by
+ * recordTestPerfDigestSample; per-sample history lives in test_sample.
  */
 export interface TestPerfBaselineRow {
   test_id: string;
@@ -1579,8 +1575,6 @@ export interface TestPerfBaselineRow {
   sample_count: number;
   last_duration_ms: number;
   is_regressed: number;
-  recent_outcomes: string;
-  recent_durations: string;
   /** JSON array of marker/tag strings from the most recent sample that carried any, or null. */
   markers: string | null;
   updated_at: number;

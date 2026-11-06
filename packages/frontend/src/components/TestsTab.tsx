@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { apiRequest } from '../api/projects';
 import { cancelTestRun } from '../hooks/useProjectTestRuns';
 import { subscribeToTestRequestRunStatus } from '../hooks/testRequestRunStatusBus';
+import { TestHistoryView } from './TestHistoryView';
 import styles from './TestsTab.module.css';
 
 interface FlipRateFlag {
@@ -113,6 +114,7 @@ interface Props {
 export function TestsTab({ projectId, sessionId }: Props) {
   const [data, setData] = useState<TestRunHistoryResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [historyTestId, setHistoryTestId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const [refreshTick, setRefreshTick] = useState(0);
@@ -203,6 +205,16 @@ export function TestsTab({ projectId, sessionId }: Props) {
           No test runs for this session yet.
         </p>
       </div>
+    );
+  }
+
+  if (historyTestId) {
+    return (
+      <TestHistoryView
+        projectId={projectId}
+        testId={historyTestId}
+        onClose={() => setHistoryTestId(null)}
+      />
     );
   }
 
@@ -338,7 +350,14 @@ export function TestsTab({ projectId, sessionId }: Props) {
                   <div
                     key={t.testId}
                     className={styles.testRow}
+                    style={{ cursor: 'pointer' }}
+                    role="button"
+                    tabIndex={0}
                     data-testid={`test-result-${t.testId}`}
+                    onClick={() => setHistoryTestId(t.testId)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') setHistoryTestId(t.testId);
+                    }}
                   >
                     <span
                       className={`${styles.testOutcome} ${styles[`testOutcome--${t.outcome}`] ?? ''}`}

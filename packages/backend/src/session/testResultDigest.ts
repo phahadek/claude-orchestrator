@@ -130,6 +130,29 @@ export function appendAwaitingDispositionInstruction(
 }
 
 /**
+ * Informational slow-test lines for the session's latest run: one per flagged
+ * test, or a single skipped line for a contended run. Never affects the gate.
+ */
+export function appendSlowTestNotice(
+  digest: string,
+  verdict: {
+    status: 'clean' | 'contended' | 'disabled';
+    flagged: { testId: string; addedMs: number }[];
+  },
+  ceilingSec: number,
+): string {
+  if (verdict.status === 'disabled') return digest;
+  const lines =
+    verdict.status === 'contended'
+      ? ['Slow-test check skipped (contended run).']
+      : verdict.flagged.map(
+          (f) =>
+            `Slow test: \`${f.testId}\` added ${(f.addedMs / 1000).toFixed(1)}s (ceiling ${ceilingSec}s)`,
+        );
+  return lines.length > 0 ? `${digest}\n\n${lines.join('\n')}` : digest;
+}
+
+/**
  * Same digest as buildTestResultDigest, rendered from a run-outcome accessor
  * result (orchestration/runTestOutcomes.ts) so it still works after the
  * run's structured_result has been cleared. Returns null when the run has no
