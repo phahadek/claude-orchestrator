@@ -215,8 +215,7 @@ describe('evaluateF2LaneFlakyDisposition', () => {
     expect(eligible).toBe(false);
   });
 
-  it('takes no changed-files input: evaluateF2LaneFlakyDisposition does not check touched-file', () => {
-    expect(evaluateF2LaneFlakyDisposition.length).toBeLessThanOrEqual(9);
+  it('applies the diff-touched exemption to breadth only, never to the flip-rate signal', () => {
     const src = fs.readFileSync(
       path.resolve(__dirname, '../testRequestLane.ts'),
       'utf8',
@@ -225,8 +224,8 @@ describe('evaluateF2LaneFlakyDisposition', () => {
       src.indexOf('export function evaluateF2LaneFlakyDisposition'),
     );
     const fnSrc = body.slice(0, body.indexOf('\n}\n'));
-    expect(fnSrc).not.toContain('isTestIdTouchedByChangedFiles');
-    expect(fnSrc).not.toContain('changedFiles');
+    expect(fnSrc).toContain('!diffTouched &&');
+    expect(fnSrc).toContain('!flipFlag.flagged && !breadthFlagged');
   });
 
   it("is not eligible when the flip-rate window would only flag using a sample from this PR's own runs", () => {

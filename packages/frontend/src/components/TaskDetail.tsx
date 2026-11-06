@@ -23,6 +23,7 @@ import { TestsTab } from './TestsTab';
 import {
   computeStages,
   selectAutoStage,
+  planningKindLabel,
   type StageId,
 } from '../utils/stageSelection';
 import styles from './TaskDetail.module.css';
@@ -204,17 +205,6 @@ interface Props {
   reviewNotDispatchedReason?: string;
 }
 
-// A concluded grooming session is historical reference; collapse it by default.
-// Design/Ops sessions are the task's primary content and always start expanded.
-function defaultShowPlanningSection(
-  planningSession: TaskView['planningSession'],
-): boolean {
-  return !(
-    planningSession?.sessionType === 'groom' &&
-    ['done', 'error', 'killed'].includes(planningSession.status)
-  );
-}
-
 // ── TaskDetail ────────────────────────────────────────────────────
 
 export function TaskDetail({
@@ -234,9 +224,6 @@ export function TaskDetail({
 }: Props) {
   const [showReviewSection, setShowReviewSection] = useState(true);
   const [showDepthReviewSection, setShowDepthReviewSection] = useState(true);
-  const [showPlanningSection, setShowPlanningSection] = useState(() =>
-    defaultShowPlanningSection(task.planningSession),
-  );
   const [showSpec, setShowSpec] = useState(!task.codeSession);
   const [selectedStage, setSelectedStage] = useState<StageId>(() =>
     selectAutoStage(computeStages(task)),
@@ -276,7 +263,6 @@ export function TaskDetail({
   // operator's manual stage selection away.
   useEffect(() => {
     setShowReviewSection(true);
-    setShowPlanningSection(defaultShowPlanningSection(task.planningSession));
     setSelectedStage(selectAutoStage(computeStages(task)));
     setReviewError(null);
     setFixConflictsInFlight(false);
@@ -323,8 +309,19 @@ export function TaskDetail({
     useResolvedSession(task.review?.sessionId, sessions);
   const { session: depthReviewSession, fetchState: depthReviewFetchState } =
     useResolvedSession(detailFields?.depthReview?.sessionId, sessions);
+  const selectedPlanningKind = selectedStage.startsWith('planning:')
+    ? selectedStage.slice('planning:'.length)
+    : null;
+  const selectedPlanningSessionId =
+    selectedPlanningKind === null
+      ? undefined
+      : task.planningSession?.sessionType === selectedPlanningKind
+        ? task.planningSession.sessionId
+        : detailFields?.planningSessions?.find(
+            (p) => p.sessionType === selectedPlanningKind,
+          )?.sessionId;
   const { session: planningSession, fetchState: planningFetchState } =
-    useResolvedSession(task.planningSession?.sessionId, sessions);
+    useResolvedSession(selectedPlanningSessionId, sessions);
 
   const effectiveDisplayStatus = optimisticDisplayStatus ?? task.displayStatus;
   const displayStatusLabel =
@@ -602,7 +599,7 @@ export function TaskDetail({
     setShowDepthReviewSection((v) => !v);
   }, []);
 
-  const stages = computeStages(task);
+  const stages = computeStages(task, detailFields?.planningSessions);
 
   const handleSpecToggle = useCallback(() => {
     setShowSpec((v) => !v);
@@ -737,59 +734,46 @@ export function TaskDetail({
         )}
 
         {/* ── Planning stage ── */}
-        {selectedStage === 'planning' && !task.planningSession && (
+        {selectedPlanningKind !== null && !selectedPlanningSessionId && (
           <p className={styles.noTranscript}>
             No planning session for this task.
           </p>
         )}
-        {selectedStage === 'planning' && task.planningSession && (
+        {selectedPlanningKind !== null && selectedPlanningSessionId && (
           <div
             className={styles.planningSection}
-            data-expanded={showPlanningSection}
+            data-expanded="true"
             data-testid="planning-session-section"
           >
             <div
               className={styles.planningSectionHeader}
-              onClick={() => setShowPlanningSection((v) => !v)}
-              role="button"
-              aria-expanded={showPlanningSection}
               data-testid="planning-session-header"
             >
-              <span className={styles.planningToggleIcon} aria-hidden="true">
-                {showPlanningSection ? '▼' : '▶'}
-              </span>
               <span className={styles.sectionTitle}>
-                {task.planningSession.sessionType === 'groom'
-                  ? 'Grooming'
-                  : task.planningSession.sessionType === 'design'
-                    ? 'Design'
-                    : 'Ops'}{' '}
-                session
+                {planningKindLabel(selectedPlanningKind)} session
               </span>
             </div>
-            {showPlanningSection && (
-              <div
-                className={styles.planningBody}
-                data-testid="planning-session-body"
-              >
-                {planningSession ? (
-                  <SessionPanel
-                    session={planningSession}
-                    send={send}
-                    setSessionArchived={setSessionArchived}
-                    setSessionFavorited={setSessionFavorited}
-                    project={project}
-                    showTaskName={false}
-                  />
-                ) : (
-                  <p className={styles.noTranscript}>
-                    {planningFetchState === 'loading'
-                      ? 'Transcript not available — loading session…'
-                      : 'Transcript not available — session not found.'}
-                  </p>
-                )}
-              </div>
-            )}
+            <div
+              className={styles.planningBody}
+              data-testid="planning-session-body"
+            >
+              {planningSession ? (
+                <SessionPanel
+                  session={planningSession}
+                  send={send}
+                  setSessionArchived={setSessionArchived}
+                  setSessionFavorited={setSessionFavorited}
+                  project={project}
+                  showTaskName={false}
+                />
+              ) : (
+                <p className={styles.noTranscript}>
+                  {planningFetchState === 'loading'
+                    ? 'Transcript not available — loading session…'
+                    : 'Transcript not available — session not found.'}
+                </p>
+              )}
+            </div>
           </div>
         )}
 

@@ -68,6 +68,8 @@ export interface RunTestOutcomes {
   parseFailed: boolean;
   /** The parsed raw result, for renderers that need per-test detail — only when source is 'structured'. */
   structured: StructuredTestResult | null;
+  /** The run's durable declared nothing-exercised marker (test_request_runs.nothing_exercised). Absent/false means no marker. */
+  nothingExercised?: boolean;
 }
 
 const NONE: RunTestOutcomes = {
@@ -96,6 +98,7 @@ export function outcomesFromStructuredResult(
         name: test.name,
         failure_message: test.failureMessage ?? null,
         failure_trace_excerpt: test.failureTraceExcerpt ?? null,
+        outcome: test.outcome,
       });
     }
   }
@@ -126,6 +129,13 @@ export function outcomesFromStructuredResult(
  * in-flight ingestion — use getRunTestOutcomes when the run just completed.
  */
 export function readRunTestOutcomes(run: TestRequestRunRow): RunTestOutcomes {
+  const outcomes = readRunTestOutcomesUnmarked(run);
+  return run.nothing_exercised === 1
+    ? { ...outcomes, nothingExercised: true }
+    : outcomes;
+}
+
+function readRunTestOutcomesUnmarked(run: TestRequestRunRow): RunTestOutcomes {
   let parseFailed = false;
   if (run.structured_result) {
     try {

@@ -12,7 +12,11 @@ import {
   getLatestTestRequestRun,
   deleteTestRequestRunsForContentHash,
   ingestTestRunResultsTx,
+  getTestRequestRunOutput,
+  copyTestRequestRunOutputBatch,
+  countTestRequestRunOutputMismatches,
 } from '../db/queries.js';
+import { db } from '../db/db.js';
 
 // ── test_request_runs — F2's shared content-hash cache ───────────────────────
 //
@@ -47,7 +51,6 @@ describe('test_request_runs — F2 shared-cache read/invalidate', () => {
       project_id: 'proj-1',
       content_hash: 'hash-a',
       state: 'passed',
-      output: 'all tests passed',
     });
   });
 
@@ -87,7 +90,7 @@ describe('test_request_runs — F2 shared-cache read/invalidate', () => {
 
     const result = getLatestTestRequestRun('proj-1', 'hash-b');
     expect(result?.state).toBe('passed');
-    expect(result?.output).toBe('passed on rerun');
+    expect(getTestRequestRunOutput(result!.id)).toBe('passed on rerun');
   });
 
   it('delete removes every run for the key — the flaky.confirm invalidation path', () => {
@@ -166,5 +169,47 @@ describe('test_request_runs — F2 shared-cache read/invalidate', () => {
     expect(
       getLatestTestRequestRun('proj-1', 'hash-post-sweep-vacuous'),
     ).toBeUndefined();
+  });
+});
+
+describe('test_request_run_output — dual-write, copy, readers', () => {
+  const sideOutput = (id: string): string | undefined =>
+    (
+      db
+        .prepare(`SELECT output FROM test_request_run_output WHERE run_id = ?`)
+        .get(id) as { output: string } | undefined
+    )?.output;
+
+  it('writes the side row alongside the terminal state', () => {
+    const id = nextRunId();
+    insertTestRequestRun(id, 'proj-o', 'hash-o1', null, Date.now());
+    expect(sideOutput(id)).toBe('');
+    completeTestRequestRun(id, 'failed', 'boom');
+    expect(sideOutput(id)).toBe('boom');
+    expect(getTestRequestRunOutput(id)).toBe('boom');
+  });
+
+  it('copy is resumable and idempotent; verification reaches 0; fallback matches', () => {
+    const ids = ['legacy-a', 'legacy-b', 'legacy-c'];
+    for (const [i, id] of ids.entries()) {
+      db.prepare(
+        `INSERT INTO test_request_runs (id, project_id, content_hash, state, output, started_at)
+         VALUES (?, 'proj-o', 'hash-o2', 'failed', ?, 1)`,
+      ).run(id, `legacy output ${i}`);
+    }
+    expect(countTestRequestRunOutputMismatches()).toBe(3);
+    expect(getTestRequestRunOutput('legacy-b')).toBe('legacy output 1');
+
+    let cursor: string | null = null;
+    let done = false;
+    for (let guard = 0; guard < 100 && !done; guard++) {
+      const r = copyTestRequestRunOutputBatch(cursor, 2);
+      cursor = r.nextAfterId;
+      done = r.done;
+    }
+    expect(done).toBe(true);
+    expect(countTestRequestRunOutputMismatches()).toBe(0);
+    expect(getTestRequestRunOutput('legacy-b')).toBe('legacy output 1');
+    expect(copyTestRequestRunOutputBatch(null, 1000).copied).toBe(0);
   });
 });

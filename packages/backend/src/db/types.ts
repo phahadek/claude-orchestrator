@@ -1264,6 +1264,8 @@ export type TestRequestFailureReason =
   | 'interrupted_queued'
   | 'interrupted_running'
   | 'superseded'
+  /** Operator cancelled the run (queued withdraw or running abort): no verdict, never replayed, never triggers the hold. */
+  | 'cancelled'
   | 'tool_infra_failure'
   /**
    * A timed-out run whose output matched a project-declared
@@ -1317,7 +1319,6 @@ export interface TestRequestRunRow {
   /** Originating session's id, when the run was triggered by a test.request staged intent. */
   session_id: string | null;
   state: TestRequestRunState;
-  output: string;
   /** Captured before admission wait / semaphore queueing — independent of started_at, so queue-wait is computable as started_at - requested_at. */
   requested_at: number | null;
   started_at: number;
@@ -1374,6 +1375,10 @@ export interface TestRequestRunRow {
   awaiting_disposition_at: number | null;
   /** 1 when a remote runner executes this row (stamped at admission); 0 for locally executed rows. Only rows with 1 are eligible for the runner-unreachability sweep. */
   runner_executed: number;
+  /** 1 when every command declared and none claimed a changed path (the declared nothing-exercised marker); set once at settle time. Null/0 otherwise. */
+  nothing_exercised?: number | null;
+  /** JSON array of changed paths no command claimed; null when any command did not declare. */
+  unclaimed_paths?: string | null;
   /** Task the run was admitted for, when resolvable; null otherwise and for rows predating this column. */
   task_id: string | null;
   /** Execution-priority group the run ranked in at admission; null for rows predating this column. */
@@ -1482,13 +1487,16 @@ export interface TestRunResultRow {
  * 'flaky_confirm' is a session's own pre-PR flaky.confirm(gate:'test_request')
  * call; 'breadth_corpus'/'flaky_rollup' are the two exclusion buckets the
  * fully-automatic base-attributable filter (baseAttributableFilter.ts)
- * already computes (excludedTests/flakyExcludedTests respectively). Kept as
+ * already computes (excludedTests/flakyExcludedTests respectively);
+ * 'breadth_signature' is a breadth excusal under the signature-matched rule
+ * ('breadth_corpus' rows predate it and are never rewritten). Kept as
  * a plain string column rather than a CHECK constraint so a new source can
  * be added without a migration.
  */
 export type TestExcusalSource =
   | 'flaky_confirm'
   | 'breadth_corpus'
+  | 'breadth_signature'
   | 'flaky_rollup'
   | 'push_reattribution'
   | 'operator_override';

@@ -19,7 +19,11 @@ import type { Scheduler } from '../orchestration/Scheduler';
 import { typedGetSetting } from '../config/settings';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import type { OrchestratorConfig } from '../session/orchestrator-config';
-import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
+import {
+  loadAutofixCommands,
+  runAutofix,
+  getChangedFiles,
+} from '../session/autofix-runner';
 import { computeWholeTreeContentHash } from '../session/analyzeGating';
 import {
   evaluateF2LaneFlakyDisposition,
@@ -86,6 +90,7 @@ import {
   resolveBreadthOwnTree,
   updateTestRequestRunState,
   clearTaskExecuteNow,
+  getTestRequestRunOutput,
 } from '../db/queries';
 import { emitTaskUpdated } from '../routes/tasks';
 import { logger } from '../logger';
@@ -1065,14 +1070,13 @@ export class PRMergeWatcher extends EventEmitter {
                       gate.guardBlocked,
                     )
                   : null;
+              const testOutput = getTestRequestRunOutput(testResult.id);
               const digest = buildTestResultDigestFromOutcomes(
                 readRunTestOutcomes(testResult),
                 {
                   runFailure: {
                     failedCommand: testResult.failed_command,
-                    outputTail: testResult.output
-                      ? tailOfLog(testResult.output, 1000)
-                      : '',
+                    outputTail: testOutput ? tailOfLog(testOutput, 1000) : '',
                   },
                 },
               );
@@ -1083,9 +1087,7 @@ export class PRMergeWatcher extends EventEmitter {
                 gateDigest
                   ? gateDigest.slice(0, 1000)
                   : (digest ??
-                      (testResult.output
-                        ? tailOfLog(testResult.output, 1000)
-                        : undefined)),
+                      (testOutput ? tailOfLog(testOutput, 1000) : undefined)),
               );
               const verifyMsg = formatCIFailureFeedback({
                 source: 'verify',
@@ -1093,8 +1095,8 @@ export class PRMergeWatcher extends EventEmitter {
                 truncatedOutput:
                   gateDigest ??
                   digest ??
-                  (testResult.output
-                    ? truncateLog(testResult.output, CI_LOG_EXCERPT_CAP)
+                  (testOutput
+                    ? truncateLog(testOutput, CI_LOG_EXCERPT_CAP)
                     : undefined),
                 conflicted: pr.merge_state === 'dirty',
                 baseBranch: pr.base_branch ?? undefined,
@@ -1134,7 +1136,9 @@ export class PRMergeWatcher extends EventEmitter {
         : null;
       const reportAcquired =
         reportOutcomes !== null &&
-        (reportOutcomes.source !== 'none' || reportOutcomes.parseFailed);
+        (reportOutcomes.source !== 'none' ||
+          reportOutcomes.parseFailed ||
+          reportOutcomes.nothingExercised === true);
       if (
         testResult &&
         testResult.test_report_acquisition_attempted === 1 &&
@@ -1145,7 +1149,7 @@ export class PRMergeWatcher extends EventEmitter {
           pr.pr_number,
           pr.repo,
           'test_report_acquisition_failed',
-          testResult.output ? testResult.output.slice(0, 1000) : undefined,
+          getTestRequestRunOutput(testResult.id).slice(0, 1000) || undefined,
         );
         // This pause is non-blocking (blocks_merge: false) — if the PR was
         // already GitHub-mergeable before this pause landed, merge_state
@@ -1755,6 +1759,17 @@ export class PRMergeWatcher extends EventEmitter {
     const prCreatedAtMs = pr.created_at ? Date.parse(pr.created_at) : NaN;
     if (!Number.isFinite(prCreatedAtMs)) return false;
 
+    let changedFiles: string[] | null = null;
+    try {
+      changedFiles = await getChangedFiles(
+        testResult.worktree_path ?? worktreePath,
+        pr.base_branch ?? project.baseBranch,
+      );
+    } catch (err) {
+      logger.warn(
+        `[PRMergeWatcher] PR #${pr.pr_number}: changed files unavailable for breadth exemption: ${(err as Error).message}`,
+      );
+    }
     const eligible = evaluateF2LaneFlakyDisposition(
       testResult.id,
       prCreatedAtMs,
@@ -1767,6 +1782,7 @@ export class PRMergeWatcher extends EventEmitter {
         worktreePath: testResult.worktree_path ?? worktreePath,
       }),
       baseExcusedTestIds,
+      changedFiles,
     );
     if (!eligible) return false;
 

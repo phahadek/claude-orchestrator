@@ -73,6 +73,29 @@ describe('isTestIdTouchedByChangedFiles', () => {
     expect(result.touched).toBe(true);
   });
 
+  it('matches a vitest file-derived classname as a path', () => {
+    const touched = isTestIdTouchedByChangedFiles(
+      'src/foo.test.ts.does a thing',
+      'does a thing',
+      ['src/foo.test.ts'],
+    );
+    expect(touched).toEqual({ touched: true, confident: true });
+    const untouched = isTestIdTouchedByChangedFiles(
+      'src/foo.test.ts.does a thing',
+      'does a thing',
+      ['src/bar.test.ts'],
+    );
+    expect(untouched).toEqual({ touched: false, confident: true });
+  });
+
+  it('matches a root-level vitest classname without a directory', () => {
+    expect(
+      isTestIdTouchedByChangedFiles('foo.test.ts.works', 'works', [
+        'foo.test.ts',
+      ]),
+    ).toEqual({ touched: true, confident: true });
+  });
+
   it('is confidently touched when the classname carries a trailing class-name segment beyond the file path (pytest module.Class.method convention)', () => {
     const result = isTestIdTouchedByChangedFiles(
       'tests.unit.test_foo.TestClass.test_bar',
