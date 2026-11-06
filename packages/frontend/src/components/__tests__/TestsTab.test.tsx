@@ -73,6 +73,45 @@ describe('TestsTab', () => {
     );
   });
 
+  it('renders unexercised paths, coverage-unknown for NULL, and nothing for an empty list', async () => {
+    const base = {
+      sessionId: 'sess-1',
+      contentHash: 'h',
+      startedAt: 1000,
+      finishedAt: 2000,
+      durationMs: 1000,
+      concurrentRunCount: 0,
+      outcome: 'passed',
+      nextAction: 'ok',
+      testResults: [],
+    };
+    vi.mocked(apiRequest).mockResolvedValue({
+      cycleCount: 3,
+      cycleLimit: 5,
+      runs: [
+        {
+          ...base,
+          id: 'run-a',
+          unclaimed_paths: JSON.stringify(['web/app.ts', 'docs/x.md']),
+        },
+        { ...base, id: 'run-b', unclaimed_paths: null },
+        { ...base, id: 'run-c', unclaimed_paths: '[]' },
+      ],
+    });
+
+    render(<TestsTab projectId="proj-1" sessionId="sess-1" />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('test-run-unexercised-run-a')).toBeTruthy(),
+    );
+    expect(
+      screen.getByTestId('test-run-unexercised-run-a').textContent,
+    ).toContain('web/app.ts');
+    expect(screen.getByTestId('test-run-coverage-unknown-run-b')).toBeTruthy();
+    expect(screen.queryByTestId('test-run-unexercised-run-c')).toBeNull();
+    expect(screen.queryByTestId('test-run-coverage-unknown-run-c')).toBeNull();
+  });
+
   it('renders a not-yet-run empty state when there is no session', () => {
     render(<TestsTab projectId="proj-1" sessionId={null} />);
     expect(apiRequest).not.toHaveBeenCalled();
