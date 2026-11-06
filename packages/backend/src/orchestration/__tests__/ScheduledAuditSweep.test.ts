@@ -31,7 +31,8 @@ import {
   getAuditWorktreePath,
   ensureAuditWorktree,
   runAuditSweepForProject,
-  parseAuditFindings,
+  parseAuditOutput,
+  parseLicenseCheckerFindings,
   renderDepBumpTaskBody,
   findingIdentity,
   type AuditSweepDeps,
@@ -120,7 +121,7 @@ describe('worktree provisioning and command execution isolation', () => {
     fs.mkdirSync(worktreePath, { recursive: true });
     fs.writeFileSync(
       path.join(worktreePath, '.claude-orchestrator.yml'),
-      'analyze:\n  - "npm audit --json"\n',
+      'scheduled_audit:\n  - "npm audit --json"\n',
     );
 
     const analyzeDeps: AuditSweepDeps = {
@@ -134,6 +135,7 @@ describe('worktree provisioning and command execution isolation', () => {
         return { passed: true, output: '{}' };
       },
       retryCap: 2,
+      bootstrapInstall: async () => {},
     };
 
     (getTaskBackend as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
@@ -188,6 +190,98 @@ describe('renderDepBumpTaskBody', () => {
   });
 });
 
+const parseAuditFindings = (output: string, disallowed: string[] = []) =>
+  parseAuditOutput(output, disallowed).findings;
+
+describe('sweep reads scheduled_audit, not analyze', () => {
+  const advisoryReport = JSON.stringify({
+    vulnerabilities: {
+      'left-pad': {
+        name: 'left-pad',
+        severity: 'high',
+        range: '<1.3.0',
+        fixAvailable: { name: 'left-pad', version: '1.3.0' },
+        via: [{ source: 1234567, url: 'https://x/GHSA', severity: 'high' }],
+      },
+    },
+  });
+
+  function setup(output: string, yml: string) {
+    const project = makeProject();
+    const worktreePath = getAuditWorktreePath(project);
+    fs.mkdirSync(worktreePath, { recursive: true });
+    fs.writeFileSync(path.join(worktreePath, '.claude-orchestrator.yml'), yml);
+    const createTask = vi.fn(async () => ({ id: 'task-1' }));
+    (getTaskBackend as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      type: 'notion',
+      createTask,
+      fetchTaskSummary: vi.fn(),
+    });
+    const ran: string[] = [];
+    const deps: AuditSweepDeps = {
+      listProjects: () => [project],
+      gitRunner: async () => ({ stdout: '', stderr: '' }),
+      runAnalyzeCommand: async (_cwd, command) => {
+        ran.push(command);
+        return { passed: true, output };
+      },
+      retryCap: 0,
+      bootstrapInstall: async () => {},
+    };
+    return { project, deps, createTask, ran };
+  }
+
+  it('files a task for an advisory from scheduled_audit and never runs analyze', async () => {
+    const { project, deps, createTask, ran } = setup(
+      advisoryReport,
+      'analyze:\n  - "npm run lint"\nscheduled_audit:\n  - "npm audit --json"\n',
+    );
+    const result = await runAuditSweepForProject(project, deps);
+    expect(ran).toEqual(['npm audit --json']);
+    expect(result.findingsSeen).toBe(1);
+    expect(createTask).toHaveBeenCalledTimes(1);
+    fs.rmSync(project.projectDir, { recursive: true, force: true });
+  });
+
+  it('records exactly one unparsed event for plain-text output and files nothing', async () => {
+    const { recordEvent } = await import('../../audit/AuditLog.js');
+    const mockRecord = recordEvent as unknown as ReturnType<typeof vi.fn>;
+    mockRecord.mockClear();
+    const { project, deps, createTask } = setup(
+      'no json here',
+      'scheduled_audit:\n  - "npm run audit:licenses"\n',
+    );
+    await runAuditSweepForProject(project, deps);
+    const unparsed = mockRecord.mock.calls.filter(
+      (c) =>
+        (c[0] as { event_type: string }).event_type ===
+        'scheduled_audit_sweep_command_unparsed',
+    );
+    expect(unparsed).toHaveLength(1);
+    expect(createTask).not.toHaveBeenCalled();
+    fs.rmSync(project.projectDir, { recursive: true, force: true });
+  });
+});
+
+describe('parseLicenseCheckerFindings deny filter', () => {
+  const report = {
+    'a@1.0.0': { licenses: 'MIT' },
+    'b@1.0.0': { licenses: 'GPL-3.0' },
+    'c@1.0.0': { licenses: 'ISC' },
+    'd@1.0.0': { licenses: 'Apache-2.0' },
+    'e@1.0.0': { licenses: 'BSD-3-Clause' },
+  };
+
+  it('returns only the package matching the disallowed list', () => {
+    const findings = parseLicenseCheckerFindings(report, ['gpl']);
+    expect(findings.map((f) => f.packageName)).toEqual(['b']);
+  });
+
+  it('returns none for an empty list', () => {
+    expect(parseLicenseCheckerFindings(report, [])).toEqual([]);
+  });
+});
+
 describe('parseAuditFindings', () => {
   it('parses an npm-audit-style vulnerability report', () => {
     const output = `$ npm audit --json\n${JSON.stringify({
@@ -224,7 +318,7 @@ describe('parseAuditFindings', () => {
       'some-gpl-pkg@2.0.0': { licenses: 'GPL-3.0' },
     });
 
-    const findings = parseAuditFindings(output);
+    const findings = parseAuditFindings(output, ['GPL']);
     expect(findings).toHaveLength(1);
     expect(findings[0]).toMatchObject({
       kind: 'license',

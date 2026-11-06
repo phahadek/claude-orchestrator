@@ -256,4 +256,73 @@ describe('PriorityLaneQueue idle guard', () => {
     expect(order).toEqual(['head']);
     expect(q.queueDepth()).toBe(1);
   });
+
+  describe('tier tie-break', () => {
+    const tk = (
+      group: LaneWaiterKey['group'],
+      rankKey: (number | string)[],
+      tier: number | undefined,
+      requestedAt: number,
+    ): LaneWaiterKey => ({ projectId: 'A', group, rankKey, tier, requestedAt });
+
+    async function grantOrder(
+      keys: [string, LaneWaiterKey][],
+    ): Promise<string[]> {
+      const q = new PriorityLaneQueue(1);
+      const order: string[] = [];
+      const rel: Record<string, () => void> = {};
+      const holder = await q.acquire('holder', key('A', 'priority'));
+      for (const [id, k] of keys) enqueue(q, id, k, order, rel);
+      holder();
+      for (let i = 0; i < keys.length; i++) {
+        await flush();
+        const last = order[order.length - 1];
+        if (last) rel[last]();
+      }
+      await flush();
+      return order;
+    }
+
+    it('grants a later scoped run before an earlier equal-rank full run', async () => {
+      expect(
+        await grantOrder([
+          ['full', tk('priority', [1], 1, 1)],
+          ['scoped', tk('priority', [1], 0, 2)],
+        ]),
+      ).toEqual(['scoped', 'full']);
+    });
+
+    it('never lets the tier cross a differing rank or group', async () => {
+      expect(
+        await grantOrder([
+          ['lowScoped', tk('priority', [2], 0, 2)],
+          ['highFull', tk('priority', [1], 1, 1)],
+        ]),
+      ).toEqual(['highFull', 'lowScoped']);
+      expect(
+        await grantOrder([
+          ['prioScoped', tk('priority', [], 0, 2)],
+          ['blockerFull', tk('blocker', [], 1, 1)],
+        ]),
+      ).toEqual(['blockerFull', 'prioScoped']);
+    });
+
+    it('an aged full run (tier 0) goes ahead of a later scoped run', async () => {
+      expect(
+        await grantOrder([
+          ['scoped', tk('priority', [1], 0, 2)],
+          ['agedFull', tk('priority', [1], 0, 1)],
+        ]),
+      ).toEqual(['agedFull', 'scoped']);
+    });
+
+    it('positionOf reflects scoped-first order', async () => {
+      const q = new PriorityLaneQueue(1);
+      await q.acquire('holder', key('A', 'priority'));
+      void q.acquire('full', tk('priority', [1], 1, 1));
+      void q.acquire('scoped', tk('priority', [1], 0, 2));
+      expect(q.positionOf('scoped')).toBe(1);
+      expect(q.positionOf('full')).toBe(2);
+    });
+  });
 });
