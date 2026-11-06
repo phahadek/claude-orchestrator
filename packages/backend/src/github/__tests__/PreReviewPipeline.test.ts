@@ -3270,7 +3270,10 @@ describe('PreReviewPipeline — head ⊕ current base gate tree', () => {
 
   it('resolves the tests content-cache skip by the combined hash', async () => {
     configure({ test: ['npm test'] });
-    mockGetLatestTestRequestRun.mockReturnValue({ id: 'cached', state: 'passed' });
+    mockGetLatestTestRequestRun.mockReturnValue({
+      id: 'cached',
+      state: 'passed',
+    });
     const pipeline = new PreReviewPipeline(makeSessionManager());
 
     await pipeline.run(makeJob(), makeProject());
