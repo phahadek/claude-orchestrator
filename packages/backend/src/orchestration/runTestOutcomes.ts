@@ -124,6 +124,24 @@ export function outcomesFromStructuredResult(
 }
 
 /**
+ * Decodes test_request_runs.unclaimed_paths: null when the column is NULL
+ * (some command did not declare — coverage unknown) or unparsable; otherwise
+ * the (possibly empty) list of changed paths no declaring command claimed.
+ */
+export function parseUnclaimedPaths(
+  raw: string | null | undefined,
+): string[] | null {
+  if (raw == null) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    return parsed.filter((p): p is string => typeof p === 'string');
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Synchronous read of `run`'s per-test outcomes. Does NOT wait for an
  * in-flight ingestion — use getRunTestOutcomes when the run just completed.
  */

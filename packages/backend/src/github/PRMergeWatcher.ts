@@ -62,6 +62,7 @@ import {
   getApprovedDraftPRs,
   updatePRDraftStatus,
   setPauseReason,
+  clearPauseReasonEntry,
   setCiRemediationAttemptedSha,
   getSession,
   addAutofixSha,
@@ -91,7 +92,10 @@ import {
 import { emitTaskUpdated } from '../routes/tasks';
 import { logger } from '../logger';
 import { buildTestResultDigestFromOutcomes } from '../session/testResultDigest';
-import { readRunTestOutcomes } from '../orchestration/runTestOutcomes';
+import {
+  readRunTestOutcomes,
+  parseUnclaimedPaths,
+} from '../orchestration/runTestOutcomes';
 
 /**
  * Emitted by PRMergeWatcher.handleMerged once a merge commit has been
@@ -1168,6 +1172,37 @@ export class PRMergeWatcher extends EventEmitter {
           prNumber: pr.pr_number,
           repo: pr.repo,
         });
+      }
+      // ─────────────────────────────────────────────────────────────────────
+
+      // ── Unexercised changed paths (non-blocking) ──────────────────────────
+      // A passing winning run whose declaring commands left some changed
+      // paths unclaimed. NULL (unknown) and [] (all claimed) both clear.
+      if (testResult && testResult.state !== 'failed') {
+        const unclaimed = parseUnclaimedPaths(testResult.unclaimed_paths);
+        const hasEntry = parsePauseReasonSet(pr.pause_reason).some(
+          (e) => e.reason === 'unexercised_paths',
+        );
+        if (unclaimed && unclaimed.length > 0) {
+          const detail = unclaimed.join(', ').slice(0, 1000);
+          const existing = parsePauseReasonSet(pr.pause_reason).find(
+            (e) => e.reason === 'unexercised_paths',
+          );
+          if (existing?.detail !== detail) {
+            setPauseReason(pr.pr_number, pr.repo, 'unexercised_paths', detail);
+            // Non-blocking pause: re-kick AutoMerger so an already-mergeable
+            // PR is not stranded waiting on a merge_state transition.
+            this.autoMerger?.attempt(pr.pr_number, pr.repo);
+          }
+        } else if (hasEntry) {
+          clearPauseReasonEntry(pr.pr_number, pr.repo, 'unexercised_paths');
+          this.broadcast({
+            type: 'pr_pause_cleared',
+            prNumber: pr.pr_number,
+            repo: pr.repo,
+          });
+          this.autoMerger?.attempt(pr.pr_number, pr.repo);
+        }
       }
       // ─────────────────────────────────────────────────────────────────────
     }

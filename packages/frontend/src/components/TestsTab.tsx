@@ -63,6 +63,17 @@ const OUTCOME_LABELS: Record<TestRunOutcome, string> = {
   running: 'Running…',
 };
 
+function parseUnclaimedPaths(raw: string | null | undefined): string[] | null {
+  if (raw == null) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    return parsed.filter((p): p is string => typeof p === 'string');
+  } catch {
+    return null;
+  }
+}
+
 function formatDuration(ms: number | null): string {
   if (ms == null) return '—';
   if (ms < 1000) return `${ms}ms`;
@@ -72,6 +83,14 @@ function formatDuration(ms: number | null): string {
 function formatTimestamp(ms: number | null): string {
   if (ms == null) return '—';
   return new Date(ms).toLocaleString();
+}
+
+function isPassed(outcome: TestRunOutcome): boolean {
+  return (
+    outcome === 'passed' ||
+    outcome === 'passed-scoped' ||
+    outcome === 'passed-targeted'
+  );
 }
 
 interface Props {
@@ -192,6 +211,36 @@ export function TestsTab({ projectId, sessionId }: Props) {
               )}
             </div>
             <div className={styles.nextAction}>{run.nextAction}</div>
+
+            {isPassed(run.outcome) &&
+              (() => {
+                const unclaimed = parseUnclaimedPaths(run.unclaimed_paths);
+                if (unclaimed === null) {
+                  return (
+                    <p
+                      className={styles.runMeta}
+                      data-testid={`test-run-coverage-unknown-${run.id}`}
+                    >
+                      Coverage unknown — not every test command declared the
+                      paths it covers.
+                    </p>
+                  );
+                }
+                if (unclaimed.length === 0) return null;
+                return (
+                  <div
+                    className={styles.runMeta}
+                    data-testid={`test-run-unexercised-${run.id}`}
+                  >
+                    Unexercised paths (changed, but claimed by no test command):
+                    <ul>
+                      {unclaimed.map((p) => (
+                        <li key={p}>{p}</li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })()}
 
             {run.outcome === 'failed-with-no-report-acquired' && (
               <p
