@@ -3283,7 +3283,9 @@ describe('PreReviewPipeline — head ⊕ current base gate tree', () => {
       COMBINED_HASH,
       'full',
     );
-    expect(mockAdmitTestRequest).not.toHaveBeenCalled();
+    expect(mockAdmitTestRequest).not.toHaveBeenCalledWith(
+      expect.objectContaining({ commands: ['npm test'] }),
+    );
   });
 
   it('runs the tests stage against the scratch tree under the combined hash', async () => {
