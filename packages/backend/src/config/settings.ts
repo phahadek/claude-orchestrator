@@ -42,6 +42,10 @@ const SettingsSchema = z.object({
   session_inert_threshold_seconds: z.coerce.number().int().min(0),
   session_hard_stop_window_seconds: z.coerce.number().int().min(0),
   session_alive_park_escalation_seconds: z.coerce.number().int().min(0),
+  // Auth-resume sweep fan-out: fixed batch size and spacing after the canary.
+  // Deliberately independent of the concurrency caps and human_reserve.
+  auth_resume_batch_size: z.coerce.number().int().min(1),
+  auth_resume_batch_spacing_ms: z.coerce.number().int().min(0),
   ci_poll_interval_seconds: z.coerce.number().int().min(1),
   ci_poll_max_minutes: z.coerce.number().int().min(1),
   max_review_iterations: z.coerce.number().int().min(1),
@@ -57,6 +61,8 @@ const SettingsSchema = z.object({
   test_request_max_concurrent: z.coerce.number().int().min(1),
   // Host-wide cap on PR-pipeline analyze stages executing uncached at once.
   analyze_max_concurrent: z.coerce.number().int().min(1),
+  // Minutes a full/verify run waits before it stops yielding to equal-rank scoped runs.
+  test_lane_long_run_age_cap_min: z.coerce.number().int().min(1),
   // Capacity of the dedicated targeted-retest lane; 0 disables the lane.
   test_targeted_max_concurrent: z.coerce.number().int().min(0),
   test_request_cycle_limit: z.coerce.number().int().min(1),
@@ -208,6 +214,8 @@ export const SETTING_DEFAULTS: Settings = {
   // escalates to teardown. Deliberately well above a normal cleanup so a
   // genuinely-transient park is unaffected; 0 disables escalation entirely.
   session_alive_park_escalation_seconds: 900,
+  auth_resume_batch_size: 3,
+  auth_resume_batch_spacing_ms: 60_000,
   ci_poll_interval_seconds: 30,
   ci_poll_max_minutes: 30,
   max_review_iterations: 3,
@@ -220,6 +228,7 @@ export const SETTING_DEFAULTS: Settings = {
   flake_recovery_max_retries: 2,
   test_request_max_concurrent: 2,
   analyze_max_concurrent: 2,
+  test_lane_long_run_age_cap_min: 10,
   test_targeted_max_concurrent: 1,
   test_request_cycle_limit: 5,
   test_request_memory_ceiling_mb: 0,
