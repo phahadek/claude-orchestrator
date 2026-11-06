@@ -1485,13 +1485,16 @@ export interface TestRunResultRow {
  * 'flaky_confirm' is a session's own pre-PR flaky.confirm(gate:'test_request')
  * call; 'breadth_corpus'/'flaky_rollup' are the two exclusion buckets the
  * fully-automatic base-attributable filter (baseAttributableFilter.ts)
- * already computes (excludedTests/flakyExcludedTests respectively). Kept as
+ * already computes (excludedTests/flakyExcludedTests respectively);
+ * 'breadth_signature' is a breadth excusal under the signature-matched rule
+ * ('breadth_corpus' rows predate it and are never rewritten). Kept as
  * a plain string column rather than a CHECK constraint so a new source can
  * be added without a migration.
  */
 export type TestExcusalSource =
   | 'flaky_confirm'
   | 'breadth_corpus'
+  | 'breadth_signature'
   | 'flaky_rollup'
   | 'push_reattribution'
   | 'operator_override';

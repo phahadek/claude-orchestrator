@@ -123,6 +123,8 @@ export function classnameFromTestId(
   return testId.endsWith(suffix) ? testId.slice(0, -suffix.length) : null;
 }
 
+const SOURCE_FILE_CLASSNAME_RE = /\.(?:[cm]?[jt]sx?|py)$/;
+
 /**
  * The flaky-disposition touched-file masking guard (see
  * testRequestLane.ts's evaluateF2LaneFlakyDisposition): whether `testId`
@@ -140,6 +142,18 @@ export function isTestIdTouchedByChangedFiles(
 ): { touched: boolean; confident: boolean } {
   const classname = classnameFromTestId(testId, name);
   if (!classname) return { touched: true, confident: false };
+
+  // vitest emits the file path itself as the classname (`src/foo.test.ts`);
+  // dotted-module conversion would mangle it, so match it as a path.
+  if (classname.includes('/') || SOURCE_FILE_CLASSNAME_RE.test(classname)) {
+    const touched = changedFiles.some(
+      (f) =>
+        f === classname ||
+        f.endsWith(`/${classname}`) ||
+        classname.endsWith(`/${f}`),
+    );
+    return { touched, confident: true };
+  }
 
   const candidatePath = classname.replace(/\./g, '/');
   const touched = changedFiles.some((f) => {

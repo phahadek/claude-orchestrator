@@ -157,6 +157,7 @@ async function evaluateAttributionWait(
         breadthN,
         now,
         ownTree,
+        t.outcome === 'error' ? null : t.failure_message,
       ),
     }))
     .filter((t) => !t.breadth.flagged)

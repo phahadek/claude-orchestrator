@@ -136,6 +136,8 @@ import {
   trackRunIngestion,
 } from './runTestOutcomes';
 import { logger } from '../logger';
+import { hasFailureMessage } from './failureSignature';
+import { isTestIdTouchedByChangedFiles } from '../session/testReportCollector';
 import { dispatchPreTestMergeConflict } from '../github/conflictNudge';
 import {
   formatPreTestMergeDirtyRefused,
@@ -2705,6 +2707,7 @@ export function evaluateF2LaneFlakyDisposition(
   breadthWindowHours: number,
   ownTree: BreadthOwnTree,
   baseExcusedTestIds: ReadonlySet<string> = new Set(),
+  changedFiles: string[] | null = null,
 ): boolean {
   const failing = getFailingTestIdsForRun(testRequestRunId).filter(
     (t) => !baseExcusedTestIds.has(t.test_id),
@@ -2718,14 +2721,29 @@ export function evaluateF2LaneFlakyDisposition(
       flipRateThresholdK,
       beforeMs,
     );
-    const breadthFlag = computeTestFailureBreadthFlag(
-      test.test_id,
-      breadthWindowHours,
-      breadthN,
-      Date.now(),
-      ownTree,
-    );
-    if (!flipFlag.flagged && !breadthFlag.flagged) return false;
+    const message = test.outcome === 'error' ? null : test.failure_message;
+    const diffTouched =
+      !hasFailureMessage(message) &&
+      changedFiles !== null &&
+      (() => {
+        const r = isTestIdTouchedByChangedFiles(
+          test.test_id,
+          test.name,
+          changedFiles,
+        );
+        return r.confident && r.touched;
+      })();
+    const breadthFlagged =
+      !diffTouched &&
+      computeTestFailureBreadthFlag(
+        test.test_id,
+        breadthWindowHours,
+        breadthN,
+        Date.now(),
+        ownTree,
+        message,
+      ).flagged;
+    if (!flipFlag.flagged && !breadthFlagged) return false;
   }
 
   return true;

@@ -98,6 +98,7 @@ export function outcomesFromStructuredResult(
         name: test.name,
         failure_message: test.failureMessage ?? null,
         failure_trace_excerpt: test.failureTraceExcerpt ?? null,
+        outcome: test.outcome,
       });
     }
   }

@@ -29,9 +29,14 @@ import {
   markTestResultExcused,
   resolveBreadthOwnTree,
   getActiveTestOverrideTestIds,
+  getPRBySessionId,
   type BreadthOwnTree,
 } from '../db/queries';
 import { typedGetSetting } from '../config/settings';
+import { logger } from '../logger';
+import { getChangedFiles } from '../session/autofix-runner';
+import { isTestIdTouchedByChangedFiles } from '../session/testReportCollector';
+import { hasFailureMessage } from './failureSignature';
 import {
   renderUnattributedFailures,
   type UnattributedView,
@@ -51,7 +56,41 @@ export interface FailingTest {
   test_id: string;
   name: string;
   failure_message?: string | null;
+  outcome?: string | null;
 }
+
+/** The message a subject failure is signature-matched on; null for an error outcome or a null/empty message. */
+function subjectFailureMessage(t: FailingTest): string | null {
+  if (t.outcome === 'error') return null;
+  return hasFailureMessage(t.failure_message) ? t.failure_message : null;
+}
+
+/**
+ * The diff's changed files for the run's tree (PR base when the session has a
+ * PR, else the project base branch). Null when unavailable — which grants no
+ * diff-touched exemption.
+ */
+async function resolveChangedFiles(
+  project: ProjectConfig,
+  sessionId: string | null | undefined,
+  worktreePath: string | null | undefined,
+): Promise<string[] | null> {
+  if (!worktreePath) return null;
+  try {
+    const baseBranch =
+      (sessionId ? getPRBySessionId(sessionId)?.base_branch : null) ??
+      project.baseBranch;
+    return await getChangedFiles(worktreePath, baseBranch);
+  } catch (err) {
+    logger.warn(
+      `[baseAttributableFilter] changed files unavailable for ${worktreePath}: ${err instanceof Error ? err.message : err}`,
+    );
+    return null;
+  }
+}
+
+const needsChangedFiles = (tests: FailingTest[]): boolean =>
+  tests.some((t) => subjectFailureMessage(t) === null);
 
 export interface BaseAttributableFilterResult {
   outcome: BaseAttributableFilterOutcome;
@@ -107,10 +146,14 @@ export async function filterBaseAttributableFailures(
     return UNFILTERED(false);
   }
 
+  const changedFiles = needsChangedFiles(sessionFailing)
+    ? await resolveChangedFiles(project, run.session_id, run.worktree_path)
+    : null;
   return attributeFailingTests(
     project.id,
     sessionFailing,
     ownTreeOfRun(project, run),
+    changedFiles,
     run.id,
   );
 }
@@ -140,6 +183,7 @@ function attributeFailingTests(
   projectId: string,
   sessionFailing: FailingTest[],
   ownTree: BreadthOwnTree,
+  changedFiles: string[] | null,
   runId: string | null = null,
 ): BaseAttributableFilterResult {
   const breadthN = typedGetSetting('flip_rate_breadth_n');
@@ -148,16 +192,27 @@ function attributeFailingTests(
 
   const breadthFlaggedIds = new Set(
     sessionFailing
-      .filter(
-        (t) =>
-          computeTestFailureBreadthFlag(
+      .filter((t) => {
+        const message = subjectFailureMessage(t);
+        // A message-less failure is counted by test_id alone, so it must not
+        // be excused when the diff confidently touches its own test file.
+        if (message === null && changedFiles) {
+          const { touched, confident } = isTestIdTouchedByChangedFiles(
             t.test_id,
-            breadthWindowHours,
-            breadthN,
-            asOfMs,
-            ownTree,
-          ).flagged,
-      )
+            t.name,
+            changedFiles,
+          );
+          if (confident && touched) return false;
+        }
+        return computeTestFailureBreadthFlag(
+          t.test_id,
+          breadthWindowHours,
+          breadthN,
+          asOfMs,
+          ownTree,
+          message,
+        ).flagged;
+      })
       .map((t) => t.test_id),
   );
   // Mass breakage is a base/infra signal: past the threshold, overrides are
@@ -249,13 +304,26 @@ export async function filterVerifyFailureByBaseHealth(
   if (failingTests.length === 0) return null;
 
   const sessionFailing: FailingTest[] = failingTests.map(
-    ({ test_id, name }) => ({ test_id, name }),
+    ({ test_id, name, failure_message, outcome }) => ({
+      test_id,
+      name,
+      failure_message,
+      outcome,
+    }),
   );
 
+  const changedFiles = needsChangedFiles(sessionFailing)
+    ? await resolveChangedFiles(
+        project,
+        subject.sessionId,
+        subject.worktreePath,
+      )
+    : null;
   const result = attributeFailingTests(
     project.id,
     sessionFailing,
     resolveBreadthOwnTree(project.id, subject),
+    changedFiles,
     runId ?? null,
   );
   // No masking guards on the verify path, so the filter result is final.
@@ -280,7 +348,7 @@ function writeExcusedMarkers(
     markTestResultExcused(
       runId,
       t.test_id,
-      overrideIds.has(t.test_id) ? 'operator_override' : 'breadth_corpus',
+      overrideIds.has(t.test_id) ? 'operator_override' : 'breadth_signature',
     );
   }
   for (const t of result.flakyExcludedTests) {
