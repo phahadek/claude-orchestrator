@@ -27,7 +27,10 @@ import type {
   PullRequestRow,
   TestRequestRunRow,
 } from '../db/types';
-import { readRunTestOutcomes } from '../orchestration/runTestOutcomes';
+import {
+  readRunTestOutcomes,
+  parseUnclaimedPaths,
+} from '../orchestration/runTestOutcomes';
 import { getCachedType } from '../tasks/TaskWriteCommands';
 import { recordEvent } from '../audit/AuditLog';
 import type { GitHubClient } from './GitHubClient';
@@ -398,6 +401,14 @@ function buildTestRunEvidenceSection(
     run.session_id === null
       ? "Source: the PR pipeline's own full-suite run (run_kind: full)"
       : `Source: the coding session's own run (run_kind: ${run.run_kind})`;
+  const unclaimed = parseUnclaimedPaths(run.unclaimed_paths);
+  let unexercisedLine = '';
+  if (unclaimed === null) {
+    unexercisedLine =
+      '\nUnexercised paths: coverage unknown (not every test command declared the paths it covers).';
+  } else if (unclaimed.length > 0) {
+    unexercisedLine = `\nUnexercised paths (changed files no test command claimed; advisory, non-blocking): ${unclaimed.join(', ')}`;
+  }
   return `\n## Orchestrator-Verified Test Run
 Informational context only: the orchestrator's own F2 test gate ran tests for this PR's
 coding session out-of-band via mcp__orchestrator__test_request. Test execution is the
@@ -405,7 +416,7 @@ orchestrator's job; do not adjudicate this record or ask for further proof a tes
 ${sourceLine}
 Run outcome: ${run.state}
 Finished at: ${finishedAt}
-${commandLines}
+${commandLines}${unexercisedLine}
 `;
 }
 
