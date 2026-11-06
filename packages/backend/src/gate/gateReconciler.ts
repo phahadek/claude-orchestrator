@@ -1119,7 +1119,10 @@ function payloadOf(row: { payload: string }): {
   episodeStart?: number;
 } {
   try {
-    return JSON.parse(row.payload) as { testId?: string; episodeStart?: number };
+    return JSON.parse(row.payload) as {
+      testId?: string;
+      episodeStart?: number;
+    };
   } catch {
     return {};
   }
@@ -1163,8 +1166,12 @@ function reconcileLongExcusedSignals(
     const latest = g.times[g.times.length - 1];
     const opts = { projectId: g.project };
     if (
-      countDistinctOtherOriginPassesSince(g.testId, latest, NO_OWN_TREE, opts) >=
-      breadthN
+      countDistinctOtherOriginPassesSince(
+        g.testId,
+        latest,
+        NO_OWN_TREE,
+        opts,
+      ) >= breadthN
     ) {
       cleared.add(key);
       continue;
