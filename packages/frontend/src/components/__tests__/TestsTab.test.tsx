@@ -1,7 +1,8 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { TestsTab } from '../TestsTab';
 import { apiRequest } from '../../api/projects';
+import { publishTestRequestRunStatus } from '../../hooks/testRequestRunStatusBus';
 
 vi.mock('../../api/projects', () => ({
   apiRequest: vi.fn(),
@@ -122,5 +123,29 @@ describe('TestsTab', () => {
       'PR pipeline (full)',
     );
     expect(screen.queryByTestId('test-run-source-run-own')).not.toBeTruthy();
+  });
+
+  it('refetches history on a matching run-status payload only', async () => {
+    vi.mocked(apiRequest).mockResolvedValue({
+      cycleCount: 0,
+      cycleLimit: 5,
+      runs: [],
+    });
+    render(<TestsTab projectId="proj-1" sessionId="sess-1" />);
+    await waitFor(() => expect(apiRequest).toHaveBeenCalledTimes(1));
+
+    const payload = {
+      runId: 'r',
+      projectId: 'proj-1',
+      contentHash: 'h',
+      status: 'running' as const,
+      sessionId: 'other',
+      startedAt: 1,
+    };
+    act(() => publishTestRequestRunStatus(payload));
+    expect(apiRequest).toHaveBeenCalledTimes(1);
+
+    act(() => publishTestRequestRunStatus({ ...payload, sessionId: 'sess-1' }));
+    await waitFor(() => expect(apiRequest).toHaveBeenCalledTimes(2));
   });
 });
