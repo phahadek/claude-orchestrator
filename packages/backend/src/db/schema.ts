@@ -1,6 +1,11 @@
 import Database from 'better-sqlite3';
 import { logger } from '../logger';
 import { normalizeTaskId } from '../tasks/taskId';
+import {
+  TEST_SAMPLE_BACKFILL_MARKER,
+  backfillTestSamples,
+  verifyTestSamples,
+} from './testSampleStore';
 
 export function runMigrations(target: Database.Database): void {
   target.exec(`
@@ -2795,6 +2800,41 @@ export function runMigrations(target: Database.Database): void {
 
   runTestRunResultsDigestBackfillAndPrune(target);
 
+  // Per-sample history (cutover step 1): dual-written alongside the digest
+  // above; the digest remains the read source until readers are switched.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS test_sample (
+      id            INTEGER PRIMARY KEY,
+      test_id       TEXT    NOT NULL,
+      project_id    TEXT    NOT NULL,
+      run_id        TEXT,
+      sequenced_at  INTEGER NOT NULL,
+      outcome       TEXT,
+      duration_ms   INTEGER,
+      content_hash  TEXT,
+      UNIQUE (test_id, sequenced_at)
+    );
+    CREATE INDEX IF NOT EXISTS idx_test_sample_project_sequenced
+      ON test_sample(project_id, sequenced_at);
+
+    CREATE TABLE IF NOT EXISTS test_sample_history (
+      test_id            TEXT    NOT NULL,
+      project_id         TEXT    NOT NULL,
+      week_start         INTEGER NOT NULL,
+      pass_count         INTEGER NOT NULL DEFAULT 0,
+      fail_count         INTEGER NOT NULL DEFAULT 0,
+      transition_count   INTEGER NOT NULL DEFAULT 0,
+      duration_count     INTEGER NOT NULL DEFAULT 0,
+      duration_sum_ms    INTEGER NOT NULL DEFAULT 0,
+      duration_min_ms    INTEGER,
+      duration_max_ms    INTEGER,
+      last_outcome       TEXT,
+      last_content_hash  TEXT,
+      PRIMARY KEY (test_id, week_start)
+    );
+  `);
+  runTestSampleBackfill(target);
+
   // test_run_summaries: one row per test_request_run holding outcome counts
   // and total duration for the run — the replacement for enumerating every
   // test_run_results row of a run now that only non-passing outcomes get a
@@ -4103,6 +4143,35 @@ export function runTestRunResultsDigestBackfillAndPrune(
       .prepare(`INSERT INTO schema_backfills (name, applied_at) VALUES (?, ?)`)
       .run(TEST_RUN_RESULTS_PASSING_ROWS_DELETE_MARKER, Date.now());
   }
+}
+
+/**
+ * Marker-guarded boot backfill of test_sample from the test_perf_baselines
+ * digest. Unlike runTestRunResultsDigestBackfillAndPrune it deletes no source,
+ * and the marker is written only after the last batch so a crash resumes
+ * (INSERT OR IGNORE makes the rerun a no-op for rows already written).
+ */
+export function runTestSampleBackfill(
+  target: Database.Database,
+  batchSize?: number,
+): void {
+  const marker = target
+    .prepare(`SELECT 1 FROM schema_backfills WHERE name = ?`)
+    .get(TEST_SAMPLE_BACKFILL_MARKER);
+  if (marker) return;
+  backfillTestSamples(target, batchSize);
+  target
+    .prepare(`INSERT INTO schema_backfills (name, applied_at) VALUES (?, ?)`)
+    .run(TEST_SAMPLE_BACKFILL_MARKER, Date.now());
+  const result = verifyTestSamples(target);
+  const mismatches = result.reduce(
+    (n, r) => n + r.outcomeMismatches + r.durationMismatches,
+    0,
+  );
+  logger.info(
+    `[schema] test_sample backfill complete; digest parity mismatches: ${mismatches}`,
+    { byProject: result },
+  );
 }
 
 // ─── structured_result extraction-scoped clear backfill ────────────────────
