@@ -47,6 +47,7 @@ vi.mock('../../db/queries.js', () => ({
   clearTaskPauseReason: vi.fn(),
   getTaskRepoAssignment: vi.fn().mockReturnValue(undefined),
   getUsageDeferral: vi.fn().mockReturnValue(null),
+  getCliAuthLapse: vi.fn().mockReturnValue(null),
   isNoOpSuppressed: vi.fn().mockReturnValue(false),
   listTaskExecutionFlagsForProject: vi.fn().mockReturnValue([]),
 }));

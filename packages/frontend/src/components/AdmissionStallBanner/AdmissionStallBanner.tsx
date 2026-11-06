@@ -4,6 +4,7 @@ export type AdmissionBlockReason =
   | 'memory_admission'
   | 'usage_deferral'
   | 'usage_threshold_paused'
+  | 'cli_auth_lapsed'
   | 'capacity_exhausted';
 
 interface Props {
@@ -16,6 +17,7 @@ const REASON_LABEL: Record<AdmissionBlockReason, string> = {
   memory_admission: 'insufficient host memory headroom',
   usage_deferral: 'plan usage exhausted',
   usage_threshold_paused: 'plan usage threshold reached (proactive pause)',
+  cli_auth_lapsed: 'CLI authentication lapsed',
   capacity_exhausted: 'concurrency cap reached',
 };
 
