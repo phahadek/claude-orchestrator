@@ -2017,7 +2017,8 @@ function testRequestRunRowToApi(
         : row.state === 'passed'
           ? 'passed'
           : 'failed-with-cause',
-    output: row.state === 'failed' ? getTestRequestRunOutput(row.id) : undefined,
+    output:
+      row.state === 'failed' ? getTestRequestRunOutput(row.id) : undefined,
     sessionId: row.session_id,
     requestedAt: row.requested_at ?? undefined,
     startedAt: row.started_at,

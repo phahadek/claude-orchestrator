@@ -10048,7 +10048,8 @@ export function copyTestRequestRunOutputBatch(
         `SELECT id FROM test_request_runs WHERE id > ? ORDER BY id LIMIT ?`,
       )
       .all(afterId ?? '', batchSize) as { id: string }[];
-    if (ids.length === 0) return { copied: 0, nextAfterId: afterId, done: true };
+    if (ids.length === 0)
+      return { copied: 0, nextAfterId: afterId, done: true };
     const info = db
       .prepare(
         `INSERT OR IGNORE INTO test_request_run_output (run_id, output)

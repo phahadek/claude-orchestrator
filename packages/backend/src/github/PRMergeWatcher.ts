@@ -1072,9 +1072,7 @@ export class PRMergeWatcher extends EventEmitter {
                 {
                   runFailure: {
                     failedCommand: testResult.failed_command,
-                    outputTail: testOutput
-                      ? tailOfLog(testOutput, 1000)
-                      : '',
+                    outputTail: testOutput ? tailOfLog(testOutput, 1000) : '',
                   },
                 },
               );
@@ -1085,9 +1083,7 @@ export class PRMergeWatcher extends EventEmitter {
                 gateDigest
                   ? gateDigest.slice(0, 1000)
                   : (digest ??
-                      (testOutput
-                        ? tailOfLog(testOutput, 1000)
-                        : undefined)),
+                      (testOutput ? tailOfLog(testOutput, 1000) : undefined)),
               );
               const verifyMsg = formatCIFailureFeedback({
                 source: 'verify',
