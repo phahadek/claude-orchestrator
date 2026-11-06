@@ -45,9 +45,14 @@ interface DigestRow {
   recent_durations: string;
 }
 
-function digest(): { outcomes: Array<{ o: string; t: number; h?: string }>; durations: number[] } {
+function digest(): {
+  outcomes: Array<{ o: string; t: number; h?: string }>;
+  durations: number[];
+} {
   const row = db
-    .prepare(`SELECT recent_outcomes, recent_durations FROM test_perf_baselines WHERE test_id = 't1'`)
+    .prepare(
+      `SELECT recent_outcomes, recent_durations FROM test_perf_baselines WHERE test_id = 't1'`,
+    )
     .get() as DigestRow;
   return {
     outcomes: JSON.parse(row.recent_outcomes),
@@ -98,9 +103,7 @@ describe('test_sample readers match the digest', () => {
       digestFlip(20, 3, cutoffMs + 1),
     );
     const durs = digest().durations;
-    expect(listRecentValidTestDurations('t1', 32)).toEqual(
-      [...durs].reverse(),
-    );
+    expect(listRecentValidTestDurations('t1', 32)).toEqual([...durs].reverse());
     expect(listRecentValidTestDurations('t1', 5)).toEqual(
       durs.slice(-5).reverse(),
     );
@@ -125,7 +128,9 @@ describe('test_sample readers match the digest', () => {
           const rel = path.relative(root, full).split(path.sep).join('/');
           if (
             !allowed.has(rel) &&
-            /recent_outcomes|recent_durations/.test(fs.readFileSync(full, 'utf8'))
+            /recent_outcomes|recent_durations/.test(
+              fs.readFileSync(full, 'utf8'),
+            )
           ) {
             offenders.push(rel);
           }

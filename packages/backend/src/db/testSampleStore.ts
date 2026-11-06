@@ -273,7 +273,11 @@ export function readRecentTestOutcomes(
 ): TestSampleOutcome[] {
   const before =
     beforeMs === undefined ? Number.MAX_SAFE_INTEGER : sampleMicros(beforeMs);
-  const rows = readStmts(database).outcomes.all(testId, before, limit) as Array<{
+  const rows = readStmts(database).outcomes.all(
+    testId,
+    before,
+    limit,
+  ) as Array<{
     outcome: 'P' | 'F';
     sequenced_at: number;
     content_hash: string | null;
