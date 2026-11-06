@@ -147,16 +147,19 @@ Four rules that make this worth doing:
 **Writing the result back.** The page is a flat list, so a `notion.pageEdit` staged
 intent is the audited path — it fails closed on a stale base and leaves an audit trail:
 
-- Reconstruct the page's **exact** current serialization first. `old_str` is matched
-  against `blocks.map(blockToLine).join('\n')`, where `blockToLine` joins `plain_text`
-  — which **strips bold, inline code and link URLs**. The `notion-page.mjs` export does
-  *not* match this (it preserves them). Rebuild it by replicating `blockToLine`, or the
-  match fails.
+- The apply is **per block**. Stage **one `content_update` per entry block**: each
+  `old_str` must sit inside exactly one block's plain text. A match spanning blocks, or
+  landing on a block with children, is refused (`NotionPageEditUnpatchableTargetError`),
+  and a whole-page `old_str` no longer works.
+- Only the edited blocks' `rich_text` is PATCHed. Untouched blocks keep their formatting;
+  only blocks you edit flatten (bold, inline code and link URLs in them are lost). **Write
+  plain text** in the replacement (`**bold**` is not parsed) and tell the operator the
+  edited entries lose inline formatting.
+- Build each `old_str` from the block's `plain_text` — which **strips bold, inline code
+  and link URLs**. The `notion-page.mjs` export does *not* match this (it preserves
+  them), so copy from plain text, not from the export.
 - `page_id` must be **`notion:`-prefixed**. A bare uuid dies at apply time with
   `Invalid task ID (no colon)` — `applyPageEdit` runs it through `toExternalId`.
-- The apply rewrites the whole page through `markdownToBlocks`, which does **no** inline
-  markdown parsing. `**bold**` renders as literal asterisks. **Write plain text** (emoji
-  anchors work well) and tell the operator the pass flattens inline formatting.
 - Verify by re-reading and diffing against your intended body. Do not trust the 200.
 
 ---
@@ -220,18 +223,24 @@ Depends On RICH_TEXT
 > (`Task Name`, `Status`, `Type`, `Priority`, `Depends On`, `Notes`). Eyeballing the
 > creation response is not the same check — the reader is what has to work.
 
-Record the new **data-source id** (`collection://…`) in the project's `context.md`
-alongside the prior boards; `notion-create-pages` needs it, and the database id will not
-do.
+Record **both** ids of the new board: the **Notion database id** (the id in the board URL)
+and the **data-source id** (`collection://…`). The data-source id is only what
+`notion-create-pages` needs as a parent; the database id is what the milestone is
+registered with. Proposing the `context.md` entry is deferred to `/wrap` (see Step 7).
 
-**Register the milestone.** Once the board and its data-source id are confirmed,
+**Register the milestone.** Once the board and its ids are confirmed,
 create the `milestones` row and the grooming-manifest entry in one call:
 
 ```
 POST /api/projects/<projectId>/milestones
 Authorization: Bearer $ORCHESTRATOR_DEVICE_TOKEN
-{"name": "<milestone display name>", "sourceId": "<new board's data-source id>"}
+{"name": "<milestone display name>", "sourceId": "<new board's Notion database id>"}
 ```
+
+`sourceId` is the **Notion database id**, never the data-source id: every registered
+milestone carries the database id, and the grooming-manifest board key mirrors
+`milestones.source_id`. Registering with the wrong id forces a later
+`PATCH /api/milestones/{id}` plus a hand edit of `grooming.json`.
 
 `displayOrder` defaults to `max(display_order of the project's milestones) + 1` (0 for the
 first), so the newest milestone sorts last and its grooming-manifest neighbour is the prior
@@ -246,7 +255,8 @@ milestone stays inactive until `/milestone-wrap` repoints it.
 
 **Verify by reading it back**, through a different path than the one you wrote it
 with: `GET /api/projects/<projectId>/milestones` and confirm the new row is present
-with the expected `canonicalShortId`.
+with the expected `canonicalShortId` and a `sourceId` equal to the Notion database id, in
+the same shape as the prior milestones' `sourceId`.
 
 ---
 
@@ -305,7 +315,8 @@ separate.
   milestone is seeded and registered (has a `milestones` row + grooming-manifest entry)
   but **not activated**, so a future session knows filing on it is still inert until
   `/milestone-wrap` repoints `auto_launch_milestone_id`. Include the charter's
-  most load-bearing non-goal.
+  most load-bearing non-goal. **`context.md` edits require explicit operator
+  permission** — never write them during the seed; propose the edit at `/wrap`.
 - **The project's 🏁 Project Milestones table** — add one row (one concise sentence). It
   lives wherever this project keeps it (the master Project Context page, or a hub page —
   per `context.md`). **Do not** change the "Active Task Board" callout or the phase line; the
