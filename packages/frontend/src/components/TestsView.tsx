@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import {
+  cancelTestRun,
   useProjectTestRuns,
   type ProjectTestRunEntry,
   type ProjectTestRunOutcome,
@@ -16,6 +18,7 @@ const OUTCOME_LABELS: Record<ProjectTestRunOutcome, string> = {
   'execution-failed': 'Execution failed',
   running: 'Running…',
   queued: 'Queued',
+  cancelled: 'Cancelled',
 };
 
 const PRODUCER_LABELS: Record<ProjectTestRunProducer, string> = {
@@ -41,6 +44,10 @@ function formatTimestamp(ms: number | null): string {
   return new Date(ms).toLocaleString();
 }
 
+function isCancelledRun(run: ProjectTestRunEntry): boolean {
+  return run.outcome === 'cancelled' || run.failureReason === 'cancelled';
+}
+
 function queuePositions(runs: ProjectTestRunEntry[]): Map<string, number> {
   const positions = new Map<string, number>();
   const queued = runs
@@ -59,6 +66,18 @@ interface Props {
 export function TestsView({ activeProjectId }: Props) {
   const { runs, loading, error } = useProjectTestRuns(activeProjectId);
   const queuePosByRunId = queuePositions(runs);
+  const [cancelNotice, setCancelNotice] = useState<string | null>(null);
+
+  const handleCancel = async (runId: string) => {
+    if (!window.confirm('Cancel this test run?')) return;
+    setCancelNotice(null);
+    const result = await cancelTestRun(runId);
+    if (result === 'already-finished') {
+      setCancelNotice('That run already finished.');
+    } else if (result === 'error') {
+      setCancelNotice('Failed to cancel the run.');
+    }
+  };
 
   if (!activeProjectId) {
     return (
@@ -102,6 +121,14 @@ export function TestsView({ activeProjectId }: Props) {
   return (
     <div className={styles.container} data-testid="tests-view">
       <Tier3ErrorRateCard activeProjectId={activeProjectId} />
+      {cancelNotice && (
+        <div
+          className={styles.errorBanner}
+          data-testid="tests-view-cancel-notice"
+        >
+          {cancelNotice}
+        </div>
+      )}
       <div className={styles.runList}>
         {runs.map((run) => (
           <div
@@ -111,10 +138,12 @@ export function TestsView({ activeProjectId }: Props) {
           >
             <div className={styles.runHeader}>
               <span
-                className={`${styles.outcomeBadge} ${styles[`outcome--${run.outcome}`] ?? ''}`}
+                className={`${styles.outcomeBadge} ${styles[`outcome--${isCancelledRun(run) ? 'cancelled' : run.outcome}`] ?? ''}`}
                 data-testid={`project-test-run-outcome-${run.id}`}
               >
-                {OUTCOME_LABELS[run.outcome]}
+                {isCancelledRun(run)
+                  ? 'Cancelled'
+                  : OUTCOME_LABELS[run.outcome]}
               </span>
               {run.producer && (
                 <span
@@ -139,6 +168,24 @@ export function TestsView({ activeProjectId }: Props) {
               <span className={styles.runMeta}>
                 {formatDuration(run.durationMs)}
               </span>
+              {isCancelledRun(run) && run.cancelledBy && (
+                <span
+                  className={styles.runMeta}
+                  data-testid={`project-test-run-cancelled-by-${run.id}`}
+                >
+                  Cancelled by {run.cancelledBy}
+                </span>
+              )}
+              {(run.outcome === 'queued' || run.outcome === 'running') && (
+                <button
+                  type="button"
+                  className={styles.cancelButton}
+                  data-testid={`project-test-run-cancel-${run.id}`}
+                  onClick={() => void handleCancel(run.id)}
+                >
+                  Cancel
+                </button>
+              )}
             </div>
             {run.conflictOutcome && run.conflictOutcome !== 'up_to_date' && (
               <div

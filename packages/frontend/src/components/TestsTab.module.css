@@ -72,6 +72,27 @@
   color: var(--info-fg, #a0cdf0);
 }
 
+.outcome--queued {
+  background: var(--warning-bg, #4d3f1f);
+  color: var(--warning-fg, #f0d0a0);
+}
+
+.outcome--cancelled {
+  background: var(--surface-secondary, #2a2a2a);
+  color: var(--text-secondary);
+}
+
+.cancelButton {
+  margin-left: auto;
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border, #444);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
 .runMeta {
   font-size: 0.75rem;
   color: var(--text-secondary);
