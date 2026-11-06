@@ -4291,9 +4291,9 @@ export function runStructuredResultExtractedClearBackfill(
 }
 
 export function hasInlineRunOutputColumn(target: Database.Database): boolean {
-  const cols = target
-    .prepare(`PRAGMA table_info(test_request_runs)`)
-    .all() as { name: string }[];
+  const cols = target.prepare(`PRAGMA table_info(test_request_runs)`).all() as {
+    name: string;
+  }[];
   return cols.some((c) => c.name === 'output');
 }
 

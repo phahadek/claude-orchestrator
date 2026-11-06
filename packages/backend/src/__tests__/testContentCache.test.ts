@@ -230,7 +230,11 @@ describe('test_request_runs.output drop migration', () => {
         name: string;
       }[]
     ).some((c) => c.name === 'output');
-  const insertLegacy = (d: Database.Database, id: string, out: string): void => {
+  const insertLegacy = (
+    d: Database.Database,
+    id: string,
+    out: string,
+  ): void => {
     d.prepare(
       `INSERT INTO test_request_runs (id, project_id, content_hash, state, output, started_at)
        VALUES (?, 'p', 'h', 'failed', ?, 1)`,
