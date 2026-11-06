@@ -166,7 +166,8 @@ async function awaitResumedSessionInit(
   const deadline = Date.now() + INIT_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const reParked = getPauseIntervalsBySession(sessionId).some(
-      (p) => p.pause_reason.reason === 'auth_failed' && p.paused_at >= resumedAt,
+      (p) =>
+        p.pause_reason.reason === 'auth_failed' && p.paused_at >= resumedAt,
     );
     if (reParked) return 'auth_failed';
     const fresh = getEventsBySession(sessionId).filter(
@@ -174,7 +175,9 @@ async function awaitResumedSessionInit(
     );
     for (const e of fresh) {
       try {
-        if (isAuthFailureEvent(JSON.parse(e.payload) as Record<string, unknown>))
+        if (
+          isAuthFailureEvent(JSON.parse(e.payload) as Record<string, unknown>)
+        )
           return 'auth_failed';
       } catch {
         // unparseable payload carries no auth signal
