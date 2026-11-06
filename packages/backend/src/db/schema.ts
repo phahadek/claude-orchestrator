@@ -4236,7 +4236,8 @@ export function runTestSampleBackfill(
   );
 }
 
-export const DROP_TEST_PERF_DIGEST_MARKER = 'test_perf_baselines_digest_drop_v1';
+export const DROP_TEST_PERF_DIGEST_MARKER =
+  'test_perf_baselines_digest_drop_v1';
 
 /**
  * Drops test_perf_baselines.recent_outcomes/recent_durations once

@@ -325,7 +325,9 @@ function parseArray<T>(json: string): T[] {
 
 /** True while the legacy recent_outcomes/recent_durations columns still exist. */
 export function hasTestPerfDigestColumns(target: Database.Database): boolean {
-  const cols = target.prepare(`PRAGMA table_info(test_perf_baselines)`).all() as {
+  const cols = target
+    .prepare(`PRAGMA table_info(test_perf_baselines)`)
+    .all() as {
     name: string;
   }[];
   return cols.some((c) => c.name === 'recent_outcomes');

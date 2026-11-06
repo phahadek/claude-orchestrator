@@ -156,7 +156,9 @@ describe('test_perf_baselines digest column drop', () => {
     const updatedAt = () =>
       (
         db
-          .prepare(`SELECT updated_at FROM test_perf_baselines WHERE test_id='d1'`)
+          .prepare(
+            `SELECT updated_at FROM test_perf_baselines WHERE test_id='d1'`,
+          )
           .get() as { updated_at: number }
       ).updated_at;
     record('d1', 1, 'passed', 'h');
