@@ -13,10 +13,15 @@ import {
   deleteTestRequestRunsForContentHash,
   ingestTestRunResultsTx,
   getTestRequestRunOutput,
-  copyTestRequestRunOutputBatch,
-  countTestRequestRunOutputMismatches,
+  cancelQueuedTestRequestRun,
 } from '../db/queries.js';
 import { db } from '../db/db.js';
+import Database from 'better-sqlite3';
+import {
+  runMigrations,
+  countRunOutputMismatches,
+  dropInlineRunOutputColumn,
+} from '../db/schema.js';
 
 // ── test_request_runs — F2's shared content-hash cache ───────────────────────
 //
@@ -189,27 +194,84 @@ describe('test_request_run_output — dual-write, copy, readers', () => {
     expect(getTestRequestRunOutput(id)).toBe('boom');
   });
 
-  it('copy is resumable and idempotent; verification reaches 0; fallback matches', () => {
-    const ids = ['legacy-a', 'legacy-b', 'legacy-c'];
-    for (const [i, id] of ids.entries()) {
-      db.prepare(
-        `INSERT INTO test_request_runs (id, project_id, content_hash, state, output, started_at)
-         VALUES (?, 'proj-o', 'hash-o2', 'failed', ?, 1)`,
-      ).run(id, `legacy output ${i}`);
-    }
-    expect(countTestRequestRunOutputMismatches()).toBe(3);
-    expect(getTestRequestRunOutput('legacy-b')).toBe('legacy output 1');
+  it('cancel writes the side row with the column absent', () => {
+    const a = nextRunId();
+    insertTestRequestRun(
+      a,
+      'proj-o',
+      'hash-o3',
+      null,
+      Date.now(),
+      null,
+      undefined,
+      null,
+      'queued',
+    );
+    cancelQueuedTestRequestRun(a, 'cancelled by operator');
+    expect(getTestRequestRunOutput(a)).toBe('cancelled by operator');
+  });
+});
 
-    let cursor: string | null = null;
-    let done = false;
-    for (let guard = 0; guard < 100 && !done; guard++) {
-      const r = copyTestRequestRunOutputBatch(cursor, 2);
-      cursor = r.nextAfterId;
-      done = r.done;
-    }
-    expect(done).toBe(true);
-    expect(countTestRequestRunOutputMismatches()).toBe(0);
-    expect(getTestRequestRunOutput('legacy-b')).toBe('legacy output 1');
-    expect(copyTestRequestRunOutputBatch(null, 1000).copied).toBe(0);
+describe('test_request_runs.output drop migration', () => {
+  function legacyDb(): Database.Database {
+    const d = new Database(':memory:');
+    runMigrations(d);
+    d.exec(
+      `ALTER TABLE test_request_runs ADD COLUMN output TEXT NOT NULL DEFAULT ''`,
+    );
+    d.prepare(`DELETE FROM schema_backfills WHERE name = ?`).run(
+      'test_request_runs_output_drop_v1',
+    );
+    return d;
+  }
+  const hasColumn = (d: Database.Database): boolean =>
+    (
+      d.prepare(`PRAGMA table_info(test_request_runs)`).all() as {
+        name: string;
+      }[]
+    ).some((c) => c.name === 'output');
+  const insertLegacy = (d: Database.Database, id: string, out: string): void => {
+    d.prepare(
+      `INSERT INTO test_request_runs (id, project_id, content_hash, state, output, started_at)
+       VALUES (?, 'p', 'h', 'failed', ?, 1)`,
+    ).run(id, out);
+  };
+
+  it('refuses to drop when a side row is missing or differs, and keeps retrying', () => {
+    const d = legacyDb();
+    insertLegacy(d, 'a', 'out-a');
+    insertLegacy(d, 'b', 'out-b');
+    d.prepare(
+      `INSERT INTO test_request_run_output (run_id, output) VALUES ('b', 'DIFFERENT')`,
+    ).run();
+    expect(countRunOutputMismatches(d)).toBe(2);
+    dropInlineRunOutputColumn(d);
+    expect(hasColumn(d)).toBe(true);
+    expect(
+      d
+        .prepare(`SELECT 1 FROM schema_backfills WHERE name = ?`)
+        .get('test_request_runs_output_drop_v1'),
+    ).toBeUndefined();
+    d.close();
+  });
+
+  it('drops the column and sets the marker once every side row is byte-equal', () => {
+    const d = legacyDb();
+    insertLegacy(d, 'a', 'out-a');
+    insertLegacy(d, 'e', '');
+    d.prepare(
+      `INSERT INTO test_request_run_output (run_id, output) VALUES ('a', 'out-a')`,
+    ).run();
+    expect(countRunOutputMismatches(d)).toBe(0);
+    dropInlineRunOutputColumn(d);
+    expect(hasColumn(d)).toBe(false);
+    expect(
+      d
+        .prepare(`SELECT 1 FROM schema_backfills WHERE name = ?`)
+        .get('test_request_runs_output_drop_v1'),
+    ).toBeDefined();
+    expect(countRunOutputMismatches(d)).toBe(0);
+    dropInlineRunOutputColumn(d);
+    d.close();
   });
 });

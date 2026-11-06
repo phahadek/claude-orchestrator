@@ -3,6 +3,7 @@ import path from 'path';
 import { Worker } from 'worker_threads';
 import { createHash, randomUUID } from 'crypto';
 import { db } from './db';
+import { hasInlineRunOutputColumn } from './schema';
 import { logger } from '../logger';
 import { recordEvent, hasTaskEditSinceTimestamp } from '../audit/AuditLog';
 import {
@@ -9854,8 +9855,8 @@ export function insertTestRequestRun(
   priorityGroup: string | null = null,
 ): void {
   const insertRun = db.prepare(
-    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, concurrent_run_count, run_origin, producer, run_kind, base_sha, worktree_path, commands, breadth_origin, runner_executed, task_id, priority_group)
-     VALUES (?, ?, ?, ?, ?, '', ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at, failure_reason, concurrent_run_count, run_origin, producer, run_kind, base_sha, worktree_path, commands, breadth_origin, runner_executed, task_id, priority_group)
+     VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const insertOutput = db.prepare(
     `INSERT OR REPLACE INTO test_request_run_output (run_id, output) VALUES (?, '')`,
@@ -9943,10 +9944,10 @@ export function insertCoverageTestRequestRun(
   const sourceOutput = getTestRequestRunOutput(source.id);
   const insertRun = db.prepare(
     `INSERT INTO test_request_runs (
-       id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at,
+       id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at,
        failure_reason, structured_result, oom_killed, test_report_acquisition_attempted,
        run_origin, producer, run_kind, base_sha, worktree_path, failed_command, commands, coverage_source_run_id, breadth_origin
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   db.transaction(() => {
     insertRun.run(
@@ -9955,7 +9956,6 @@ export function insertCoverageTestRequestRun(
       contentHash,
       sessionId,
       source.state,
-      sourceOutput,
       requestedAt,
       requestedAt,
       requestedAt,
@@ -9996,11 +9996,14 @@ export function withdrawTestRequestRun(id: string, supersededBy: string): void {
 
 /** Settles a still-queued run as an operator cancel: failed / 'cancelled', no verdict. */
 export function cancelQueuedTestRequestRun(id: string, output: string): void {
-  db.prepare(
+  const update = db.prepare(
     `UPDATE test_request_runs
-     SET state = 'failed', failure_reason = 'cancelled', finished_at = ?, output = ?
+     SET state = 'failed', failure_reason = 'cancelled', finished_at = ?
      WHERE id = ? AND state = 'queued'`,
-  ).run(Date.now(), output, id);
+  );
+  db.transaction(() => {
+    if (update.run(Date.now(), id).changes > 0) upsertRunOutput(id, output);
+  })();
 }
 
 /** Records the pre-test merge's result onto a run row. */
@@ -10093,12 +10096,11 @@ export function completeTestRequestRun(
   unclaimedPaths?: string | null,
 ): void {
   const update = db.prepare(
-    `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ?, failure_reason = ?, structured_result = ?, oom_killed = ?, test_report_acquisition_attempted = ?, failed_command = ?, command_stats = ?, nothing_exercised = ?, unclaimed_paths = ? WHERE id = ?`,
+    `UPDATE test_request_runs SET state = ?, finished_at = ?, failure_reason = ?, structured_result = ?, oom_killed = ?, test_report_acquisition_attempted = ?, failed_command = ?, command_stats = ?, nothing_exercised = ?, unclaimed_paths = ? WHERE id = ?`,
   );
   db.transaction(() => {
     update.run(
       state,
-      output,
       Date.now(),
       failureReason,
       structuredResult ?? null,
@@ -10123,31 +10125,28 @@ function upsertRunOutput(runId: string, output: string): void {
 
 /**
  * The run's captured output, fetched by primary key from the side table.
- * Falls back to the inline column while the background copy has not yet
- * reached the run.
  */
 export function getTestRequestRunOutput(runId: string): string {
   const side = db
     .prepare(`SELECT output FROM test_request_run_output WHERE run_id = ?`)
     .get(runId) as { output: string } | undefined;
-  if (side && side.output !== '') return side.output;
-  const inline = db
-    .prepare(`SELECT output FROM test_request_runs WHERE id = ?`)
-    .get(runId) as { output: string } | undefined;
-  return inline?.output ?? side?.output ?? '';
+  return side?.output ?? '';
 }
 
 const RUN_OUTPUT_COPY_BATCH = 200;
 
 /**
  * Copies one keyset batch of inline output into side rows for runs lacking
- * one (INSERT OR IGNORE — idempotent). Resumable: pass back `nextAfterId`.
- * `done` is true when no runs remain past the cursor.
+ * or whose side row is still empty (idempotent). Resumable: pass back
+ * `nextAfterId`. `done` is true when no runs remain past the cursor, or the
+ * inline column is already dropped.
  */
-export function copyTestRequestRunOutputBatch(
+function copyTestRequestRunOutputBatch(
   afterId: string | null,
   batchSize = RUN_OUTPUT_COPY_BATCH,
 ): { copied: number; nextAfterId: string | null; done: boolean } {
+  if (!hasInlineRunOutputColumn(db))
+    return { copied: 0, nextAfterId: afterId, done: true };
   return db.transaction(() => {
     const ids = db
       .prepare(
@@ -10158,8 +10157,10 @@ export function copyTestRequestRunOutputBatch(
       return { copied: 0, nextAfterId: afterId, done: true };
     const info = db
       .prepare(
-        `INSERT OR IGNORE INTO test_request_run_output (run_id, output)
-         SELECT id, output FROM test_request_runs WHERE id > ? AND id <= ?`,
+        `INSERT INTO test_request_run_output (run_id, output)
+         SELECT id, output FROM test_request_runs WHERE id > ? AND id <= ?
+         ON CONFLICT(run_id) DO UPDATE SET output = excluded.output
+         WHERE test_request_run_output.output = ''`,
       )
       .run(afterId ?? '', ids[ids.length - 1].id);
     return {
@@ -10168,18 +10169,6 @@ export function copyTestRequestRunOutputBatch(
       done: ids.length < batchSize,
     };
   })();
-}
-
-/** Runs whose non-empty inline output has no side row or a differing one — R2 requires 0. */
-export function countTestRequestRunOutputMismatches(): number {
-  const row = db
-    .prepare(
-      `SELECT COUNT(*) AS n FROM test_request_runs r
-       LEFT JOIN test_request_run_output o ON o.run_id = r.id
-       WHERE r.output != '' AND (o.run_id IS NULL OR o.output != r.output)`,
-    )
-    .get() as { n: number };
-  return row.n;
 }
 
 let runOutputCopyTimer: ReturnType<typeof setTimeout> | null = null;
@@ -10420,11 +10409,11 @@ export function failStaleRunnerExecutedTestRequestRun(
 ): boolean {
   const update = db.prepare(
     `UPDATE test_request_runs
-     SET state = 'failed', output = ?, finished_at = ?, failure_reason = 'runner_unreachable'
+     SET state = 'failed', finished_at = ?, failure_reason = 'runner_unreachable'
      WHERE id = ? AND runner_executed = 1 AND state IN ('queued', 'running') AND started_at <= ?`,
   );
   return db.transaction(() => {
-    const info = update.run(output, Date.now(), id, cutoff);
+    const info = update.run(Date.now(), id, cutoff);
     if (info.changes > 0) upsertRunOutput(id, output);
     return info.changes > 0;
   })();

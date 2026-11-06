@@ -1602,8 +1602,8 @@ describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
     typedDb
       .prepare(
         `INSERT INTO test_request_runs
-           (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at)
-         VALUES (@id, @project_id, @content_hash, NULL, 'passed', '', 0, 0, 0)`,
+           (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at)
+         VALUES (@id, @project_id, @content_hash, NULL, 'passed', 0, 0, 0)`,
       )
       .run({
         id: runId,
@@ -1850,8 +1850,8 @@ describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
         fileDb
           .prepare(
             `INSERT INTO test_request_runs
-                 (id, project_id, content_hash, state, output, started_at, finished_at)
-               VALUES (@id, 'proj-wm', @content_hash, 'passed', '', 0, 0)`,
+                 (id, project_id, content_hash, state, started_at, finished_at)
+               VALUES (@id, 'proj-wm', @content_hash, 'passed', 0, 0)`,
           )
           .run({ id: runId, content_hash: `wm-hash-${seqLocal}` });
         fileDb
@@ -1954,8 +1954,8 @@ describe('getLatestTestRequestRunForSession — index usage and blob-free sort p
     typedDb
       .prepare(
         `INSERT INTO test_request_runs
-           (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result)
-         VALUES (@id, 'proj-1', 'hash', @session_id, @state, '', @started_at, @started_at, @finished_at, NULL, @structured_result)`,
+           (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at, failure_reason, structured_result)
+         VALUES (@id, 'proj-1', 'hash', @session_id, @state, @started_at, @started_at, @finished_at, NULL, @structured_result)`,
       )
       .run({
         id: row.id,

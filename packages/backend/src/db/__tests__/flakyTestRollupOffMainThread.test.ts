@@ -57,8 +57,8 @@ describe('replaceFlaggedFlakyTestsRollupOffMainThread', () => {
     const runId = `run-${seq}`;
     db.prepare(
       `INSERT INTO test_request_runs
-         (id, project_id, content_hash, state, output, started_at, finished_at)
-       VALUES (@id, @project_id, @content_hash, 'passed', '', 0, 0)`,
+         (id, project_id, content_hash, state, started_at, finished_at)
+       VALUES (@id, @project_id, @content_hash, 'passed', 0, 0)`,
     ).run({
       id: runId,
       project_id: opts.projectId,

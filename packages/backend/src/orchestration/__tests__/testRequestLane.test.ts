@@ -667,7 +667,8 @@ describe('runProjectTestRequest — coalescing', () => {
 
     const row = db
       .prepare(
-        `SELECT state, output, session_id, failure_reason FROM test_request_runs WHERE project_id = ? AND content_hash = ?`,
+        `SELECT r.state, o.output, r.session_id, r.failure_reason FROM test_request_runs r
+         LEFT JOIN test_request_run_output o ON o.run_id = r.id WHERE r.project_id = ? AND r.content_hash = ?`,
       )
       .get('proj-1', 'hash-c') as {
       state: string;
@@ -1798,7 +1799,8 @@ describe('recoverInterruptedTestRequestRuns', () => {
     expect(listRunningTestRequestRuns()).toHaveLength(0);
     const row = db
       .prepare(
-        `SELECT state, failure_reason, output FROM test_request_runs WHERE id = ?`,
+        `SELECT r.state, r.failure_reason, o.output FROM test_request_runs r
+         LEFT JOIN test_request_run_output o ON o.run_id = r.id WHERE r.id = ?`,
       )
       .get('run-1') as {
       state: string;
@@ -1847,7 +1849,8 @@ describe('recoverInterruptedTestRequestRuns', () => {
 
     const after = db
       .prepare(
-        `SELECT state, failure_reason, output FROM test_request_runs WHERE id = ?`,
+        `SELECT r.state, r.failure_reason, o.output FROM test_request_runs r
+         LEFT JOIN test_request_run_output o ON o.run_id = r.id WHERE r.id = ?`,
       )
       .get('run-queued-1') as {
       state: string;
@@ -4176,7 +4179,8 @@ describe('structured_result acquisition', () => {
 
     const firstRowAfter = db
       .prepare(
-        `SELECT state, output, structured_result FROM test_request_runs WHERE id = ?`,
+        `SELECT r.state, o.output, r.structured_result FROM test_request_runs r
+         LEFT JOIN test_request_run_output o ON o.run_id = r.id WHERE r.id = ?`,
       )
       .get(first.runId) as {
       state: string;

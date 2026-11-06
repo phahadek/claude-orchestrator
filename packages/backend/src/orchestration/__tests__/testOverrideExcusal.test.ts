@@ -87,8 +87,8 @@ function addRun(
   const id = `run-${seq}`;
   db.prepare(
     `INSERT INTO test_request_runs
-       (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, worktree_path, structured_result)
-     VALUES (@id, 'proj-1', @hash, @session_id, @state, '', 0, @at, @at, @worktree, @sr)`,
+       (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at, worktree_path, structured_result)
+     VALUES (@id, 'proj-1', @hash, @session_id, @state, 0, @at, @at, @worktree, @sr)`,
   ).run({
     id,
     hash: `hash-${seq}`,
@@ -185,8 +185,8 @@ describe('test.override excusal', () => {
       const id = `run-${seq}`;
       db.prepare(
         `INSERT INTO test_request_runs
-           (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, worktree_path, structured_result)
-         VALUES (@id, 'proj-1', @hash, @session_id, 'failed', '', 0, @at, @at, @worktree, @sr)`,
+           (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at, worktree_path, structured_result)
+         VALUES (@id, 'proj-1', @hash, @session_id, 'failed', 0, @at, @at, @worktree, @sr)`,
       ).run({
         id,
         hash: `hash-${seq}`,

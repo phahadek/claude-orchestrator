@@ -9,8 +9,8 @@ describe('test_request_runs task_id / priority_group migration', () => {
     db.exec(`ALTER TABLE test_request_runs DROP COLUMN task_id`);
     db.exec(`ALTER TABLE test_request_runs DROP COLUMN priority_group`);
     db.prepare(
-      `INSERT INTO test_request_runs (id, project_id, content_hash, state, output, started_at)
-       VALUES ('r1', 'p', 'h', 'passed', '', 1)`,
+      `INSERT INTO test_request_runs (id, project_id, content_hash, state, started_at)
+       VALUES ('r1', 'p', 'h', 'passed', 1)`,
     ).run();
 
     runMigrations(db);

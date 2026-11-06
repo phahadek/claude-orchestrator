@@ -55,8 +55,8 @@ function insertRun(opts: {
   seq += 1;
   db.prepare(
     `INSERT INTO test_request_runs
-       (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason)
-     VALUES (@id, @project_id, @content_hash, NULL, @state, '', @requested_at, @started_at, @finished_at, @failure_reason)`,
+       (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at, failure_reason)
+     VALUES (@id, @project_id, @content_hash, NULL, @state, @requested_at, @started_at, @finished_at, @failure_reason)`,
   ).run({
     id: `run-${seq}`,
     project_id: opts.projectId,
@@ -121,8 +121,8 @@ describe('getLaneHealthRollup', () => {
   it('includes run_kind=verify rows in totalRuns/passRate alongside full/scoped — the rollup is unfiltered by run_kind', () => {
     db.prepare(
       `INSERT INTO test_request_runs
-         (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, run_kind)
-       VALUES ('verify-1', 'proj-1', 'h-verify', NULL, 'passed', '', 1000, 1000, 1100, NULL, 'verify')`,
+         (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at, failure_reason, run_kind)
+       VALUES ('verify-1', 'proj-1', 'h-verify', NULL, 'passed', 1000, 1000, 1100, NULL, 'verify')`,
     ).run();
     insertRun({
       projectId: 'proj-1',
@@ -141,8 +141,8 @@ describe('getLaneHealthRollup', () => {
   it('excludes still-running runs from every aggregate', () => {
     db.prepare(
       `INSERT INTO test_request_runs
-         (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason)
-       VALUES ('running-1', 'proj-1', 'h', NULL, 'running', '', 1000, 1000, NULL, NULL)`,
+         (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at, failure_reason)
+       VALUES ('running-1', 'proj-1', 'h', NULL, 'running', 1000, 1000, NULL, NULL)`,
     ).run();
 
     const result = getLaneHealthRollup('proj-1');
@@ -152,8 +152,8 @@ describe('getLaneHealthRollup', () => {
   it('excludes still-queued runs from every aggregate', () => {
     db.prepare(
       `INSERT INTO test_request_runs
-         (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason)
-       VALUES ('queued-1', 'proj-1', 'h', NULL, 'queued', '', 1000, 1000, NULL, NULL)`,
+         (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at, failure_reason)
+       VALUES ('queued-1', 'proj-1', 'h', NULL, 'queued', 1000, 1000, NULL, NULL)`,
     ).run();
 
     const result = getLaneHealthRollup('proj-1');
@@ -329,8 +329,8 @@ describe('getLaneHealthRollup', () => {
       const runId = `run-${seq}`;
       db.prepare(
         `INSERT INTO test_request_runs
-           (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at)
-         VALUES (@id, @project_id, @content_hash, NULL, 'passed', '', 0, 0, 0)`,
+           (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at)
+         VALUES (@id, @project_id, @content_hash, NULL, 'passed', 0, 0, 0)`,
       ).run({
         id: runId,
         project_id: opts.projectId,
@@ -557,8 +557,8 @@ describe('getLaneHealthRollup', () => {
     it('still excludes running runs and honours the LIMIT with the new index in play', () => {
       db.prepare(
         `INSERT INTO test_request_runs
-           (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason)
-         VALUES ('running-x', 'proj-1', 'h', NULL, 'running', '', 1000, 1000, NULL, NULL)`,
+           (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at, failure_reason)
+         VALUES ('running-x', 'proj-1', 'h', NULL, 'running', 1000, 1000, NULL, NULL)`,
       ).run();
       for (let i = 0; i < 5; i++) {
         insertRun({

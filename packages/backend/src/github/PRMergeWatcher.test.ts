@@ -4969,8 +4969,8 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
     const id = `hist-run-${seq}`;
     db.prepare(
       `INSERT INTO test_request_runs
-         (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at)
-       VALUES (@id, 'proj-1', @content_hash, NULL, 'passed', '', 0, 0, 0)`,
+         (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at)
+       VALUES (@id, 'proj-1', @content_hash, NULL, 'passed', 0, 0, 0)`,
     ).run({ id, content_hash: `hist-hash-${seq}` });
     return id;
   }
@@ -5019,8 +5019,8 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
   ): void {
     db.prepare(
       `INSERT INTO test_request_runs
-         (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at)
-       VALUES (@id, 'proj-1', 'content-hash-x', NULL, 'failed', '', 0, 0, 0)`,
+         (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at)
+       VALUES (@id, 'proj-1', 'content-hash-x', NULL, 'failed', 0, 0, 0)`,
     ).run({ id: runId });
     for (const t of tests) {
       db.prepare(
@@ -5042,8 +5042,8 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
     const runId = `breadth-run-${seq}`;
     db.prepare(
       `INSERT INTO test_request_runs
-         (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, worktree_path)
-       VALUES (@id, 'proj-1', @content_hash, NULL, 'failed', '', 0, 0, 0, @worktree_path)`,
+         (id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at, worktree_path)
+       VALUES (@id, 'proj-1', @content_hash, NULL, 'failed', 0, 0, 0, @worktree_path)`,
     ).run({
       id: runId,
       content_hash: `breadth-hash-${seq}`,
