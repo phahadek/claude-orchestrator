@@ -4,10 +4,7 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { computeWholeTreeContentHash } from '../../session/analyzeGating';
-import {
-  createGateScratchTree,
-  resolveCombinedTree,
-} from '../combinedTree';
+import { createGateScratchTree, resolveCombinedTree } from '../combinedTree';
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', args, {
