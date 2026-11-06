@@ -28,6 +28,13 @@ describe('.claude-orchestrator.yml test: manifest', () => {
     ].map((m) => m[1]);
 
     expect(ciTestCommands.length).toBeGreaterThan(0);
-    expect(new Set(config.test)).toEqual(new Set(ciTestCommands));
+    // test:scripts is configured here but CI doesn't run it yet (workflow
+    // edit is an operator action); exclude it so adding the CI step later
+    // doesn't require touching this test.
+    const configWorkspaceCommands = config.test.filter(
+      (c) => c !== 'npm run test:scripts',
+    );
+    expect(new Set(configWorkspaceCommands)).toEqual(new Set(ciTestCommands));
+    expect(config.test).toContain('npm run test:scripts');
   });
 });

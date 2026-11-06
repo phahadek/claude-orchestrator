@@ -120,6 +120,7 @@ describe("this repo's .claude-orchestrator.yml test scoping", () => {
     expect(r.commands).toEqual([
       "node scripts/scoped-tests.mjs frontend 'packages/backend/src/routes/foo.ts'",
       "node scripts/scoped-tests.mjs backend 'packages/backend/src/routes/foo.ts'",
+      "node scripts/scoped-script-tests.mjs 'packages/backend/src/routes/foo.ts'",
     ]);
   });
 
