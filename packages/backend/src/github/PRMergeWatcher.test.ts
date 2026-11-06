@@ -4766,14 +4766,14 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
         started_at: 1000,
         finished_at: 2000,
       } as any);
-      const autoMerger = { attempt: vi.fn() };
+      const autoMerger = makeMockAutoMerger();
       const watcher = new PRMergeWatcher(
         github,
         makeMockSessions(),
         makeMockNotion(),
         () => {},
       );
-      watcher.setAutoMerger(autoMerger as any);
+      watcher.setAutoMerger(autoMerger);
       await watcher.poll();
       return { autoMerger };
     }
