@@ -36,7 +36,6 @@ type ProbeExec = () => Promise<ProbeExecResult>;
 
 function defaultExec(): Promise<ProbeExecResult> {
   return new Promise((resolve) => {
-     
     execFile(
       resolveClaudePath(),
       PROBE_ARGS,
