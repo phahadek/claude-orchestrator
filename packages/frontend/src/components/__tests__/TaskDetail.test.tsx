@@ -1761,6 +1761,12 @@ describe('TaskDetail — Spec section', () => {
       );
     }
 
+    function clickHeader(testId: string) {
+      fireEvent.click(
+        screen.getByTestId(testId).querySelector('[role=button]')!,
+      );
+    }
+
     function expanded(testId: string) {
       return screen.getByTestId(testId).getAttribute('data-expanded');
     }
@@ -1774,11 +1780,7 @@ describe('TaskDetail — Spec section', () => {
       );
       expect(expanded('review-session-section')).toBe('false');
 
-      fireEvent.click(
-        screen
-          .getByText('Review', { selector: 'span' })
-          .closest('[role=button]')!,
-      );
+      clickHeader('review-session-section');
       expect(expanded('review-session-section')).toBe('true');
       expect(expanded('depth-review-session-section')).toBe('false');
       expect(screen.getByText('✅ Approved')).toBeTruthy();
@@ -1802,11 +1804,7 @@ describe('TaskDetail — Spec section', () => {
       await waitFor(() =>
         expect(expanded('depth-review-session-section')).toBe('true'),
       );
-      fireEvent.click(
-        screen
-          .getByText('Review', { selector: 'span' })
-          .closest('[role=button]')!,
-      );
+      clickHeader('review-session-section');
       expect(expanded('review-session-section')).toBe('true');
 
       rerender(renderReview('task-2'));
