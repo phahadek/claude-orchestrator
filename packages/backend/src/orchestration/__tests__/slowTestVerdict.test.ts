@@ -14,7 +14,11 @@ vi.mock('../../config/index.js', async (orig) => ({
   getProjectById: () => ({ projectDir: '/base/checkout' }),
 }));
 vi.mock('../../session/test-runner.js', () => ({
-  isTestIdTouchedByChangedFiles: (testId: string, _n: string, files: string[]) => ({
+  isTestIdTouchedByChangedFiles: (
+    testId: string,
+    _n: string,
+    files: string[],
+  ) => ({
     touched: files.includes(testId.split('::')[0]),
     confident: true,
   }),
@@ -130,7 +134,9 @@ describe('evaluateSlowTestVerdict', () => {
     addRun('r1', 's1');
     sample(id('t'), 'old', 1000);
     sample(id('t'), 'r1', 30000);
-    expect(evaluateSlowTestVerdict('r1', 's1', ['src/other.ts'], CFG).flagged).toEqual([]);
+    expect(
+      evaluateSlowTestVerdict('r1', 's1', ['src/other.ts'], CFG).flagged,
+    ).toEqual([]);
   });
 
   it.each([
@@ -155,7 +161,10 @@ describe('evaluateSlowTestVerdict', () => {
     const allow = { ...CFG, slow_test_allow: [id('allowed')] };
     expect(evaluateSlowTestVerdict('r1', 's1', [], allow).flagged).toEqual([]);
     expect(
-      evaluateSlowTestVerdict('r1', 's1', [], { ...CFG, slow_test_ceiling_sec: 0 }),
+      evaluateSlowTestVerdict('r1', 's1', [], {
+        ...CFG,
+        slow_test_ceiling_sec: 0,
+      }),
     ).toEqual({ status: 'disabled', flagged: [] });
   });
 });
@@ -194,19 +203,26 @@ describe('reviewer evidence', () => {
     expect(buildSlowTestsSection(none, CFG)).toContain(
       'no clean run on this tree; slow-test check not evaluated',
     );
-    expect(buildSlowTestsSection({ status: 'clean', flagged: [] }, CFG)).toContain('None');
+    expect(
+      buildSlowTestsSection({ status: 'clean', flagged: [] }, CFG),
+    ).toContain('None');
   });
 });
 
 describe('appendSlowTestNotice', () => {
   it('adds one line per flag, a skipped line when contended, nothing when disabled', () => {
-    const flagged = { status: 'clean' as const, flagged: [{ testId: 'a', addedMs: 6500 }] };
+    const flagged = {
+      status: 'clean' as const,
+      flagged: [{ testId: 'a', addedMs: 6500 }],
+    };
     expect(appendSlowTestNotice('D', flagged, 5)).toBe(
       'D\n\nSlow test: `a` added 6.5s (ceiling 5s)',
     );
     expect(
       appendSlowTestNotice('D', { status: 'contended', flagged: [] }, 5),
     ).toContain('skipped (contended run)');
-    expect(appendSlowTestNotice('D', { status: 'disabled', flagged: [] }, 5)).toBe('D');
+    expect(
+      appendSlowTestNotice('D', { status: 'disabled', flagged: [] }, 5),
+    ).toBe('D');
   });
 });
