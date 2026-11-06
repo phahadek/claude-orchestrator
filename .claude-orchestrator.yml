@@ -87,6 +87,15 @@ analyze:
   - command: npx knip --no-progress --reporter compact
     pre_pr: true
 
+# Commands the scheduled dependency/license audit sweep runs on the base branch
+# (never on PRs). Output must be an `npm audit --json` or `license-checker --json` report.
+scheduled_audit:
+  - npm audit --json
+  - npx --yes license-checker --json --production
+scheduled_audit_disallowed_licenses:
+  - GPL
+  - AGPL
+
 # Timeout in seconds for the analyze phase.
 analyze_timeout_sec: 180
 

@@ -27,6 +27,7 @@ import type { NotionTask } from '../notion/types';
 import { typedGetSetting } from '../config/settings';
 import { CrashBudget } from './crashBudget';
 import { isUsageAdmitted } from './usageAdmission';
+import { isAuthAdmitted } from './authAdmission';
 import {
   isGroomCandidate,
   isOpsCandidate,
@@ -208,6 +209,7 @@ export class DispatchTriggerEvaluator {
       // all this tick — the deferral (persisted by isUsageAdmitted) is
       // re-evaluated automatically on the next tick.
       if (!isUsageAdmitted().allowed) return 0;
+      if (!isAuthAdmitted().allowed) return 0;
 
       const listProjects = this.options.listProjects ?? getAllProjects;
       const projects = listProjects();

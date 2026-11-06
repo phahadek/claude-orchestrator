@@ -241,6 +241,9 @@ export const ALLOWED_TOOLS = [
   // CLI before it reaches the MCP server, same failure mode as every other
   // entry in this block.
   orchestratorMcpToolName('testHealth.getFlakyHistory'),
+  // testHealth.getTestTrace — the bounded per-test failure read the digest's
+  // failure-detail pointer names. Coding sessions only.
+  orchestratorMcpToolName('testHealth.getTestTrace'),
   // The injected Pre-PR Gate tells a code session that test commands are
   // blocked at the permission layer and must run via `test.request`. Without
   // this entry that instruction is unsatisfiable: the tool is registered
@@ -858,6 +861,10 @@ export interface RuntimeSettings {
    * session_events before StuckSessionMonitor escalates to teardown. 0 disables.
    */
   session_alive_park_escalation_seconds: number;
+  /** Auth-resume sweep: sessions resumed per batch after the single canary. */
+  auth_resume_batch_size: number;
+  /** Auth-resume sweep: ms between batches. */
+  auth_resume_batch_spacing_ms: number;
   /** Auto-merger: seconds between CI status polls while waiting for green. */
   ci_poll_interval_seconds: number;
   /** Auto-merger: minutes before the merge attempt gives up and pauses. */
@@ -1076,6 +1083,10 @@ export const runtimeSettings: RuntimeSettings = {
   ),
   session_alive_park_escalation_seconds: Number(
     process.env.SESSION_ALIVE_PARK_ESCALATION_SECONDS ?? 900,
+  ),
+  auth_resume_batch_size: Number(process.env.AUTH_RESUME_BATCH_SIZE ?? 3),
+  auth_resume_batch_spacing_ms: Number(
+    process.env.AUTH_RESUME_BATCH_SPACING_MS ?? 60_000,
   ),
   milestone_attention_aging_threshold_seconds: Number(
     process.env.MILESTONE_ATTENTION_AGING_THRESHOLD_SECONDS ?? 24 * 60 * 60,

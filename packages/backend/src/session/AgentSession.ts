@@ -98,6 +98,7 @@ import {
   toEventType,
 } from './eventTypes';
 import { eventKind, isUsageLimitResult, isAuthFailureEvent } from './eventKind';
+import { recordAuthLapse } from '../orchestration/authAdmission';
 import { recordObservedUsageLimit } from '../orchestration/usageAdmission';
 import { isContextOverflow } from './contextOverflow';
 import { logger } from '../logger';
@@ -1523,6 +1524,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
    */
   private recordAuthFailureTermination(): void {
     insertPauseInterval(this.sessionId, 'auth_failed');
+    recordAuthLapse();
     recordEvent({
       event_type: 'session_auth_failed',
       actor_type: 'system',

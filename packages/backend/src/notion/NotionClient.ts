@@ -1253,14 +1253,35 @@ export class NotionClient {
       dirtyBlockIndices.push(range.blockIndex);
     }
 
+    const writtenBlockIds: string[] = [];
     for (const blockIndex of new Set(dirtyBlockIndices)) {
       const block = blocks[blockIndex];
+      const blockId = block.id as string;
       const type = block.type as string;
       const inner = block[type] as Record<string, unknown>;
       const innerText = lineToInnerText(type, lines[blockIndex]);
-      await notionRequest('PATCH', `/blocks/${block.id as string}`, {
-        [type]: { ...inner, rich_text: toPlainRichText(innerText) },
-      });
+      // Allow-list, not a spread: Notion rejects read-only/nullable keys the
+      // fetch returns (e.g. paragraph.icon: null).
+      const patchInner: Record<string, unknown> = {
+        rich_text: toPlainRichText(innerText),
+      };
+      if (inner.color !== undefined) patchInner.color = inner.color;
+      if (type === 'code' && inner.language !== undefined) {
+        patchInner.language = inner.language;
+      }
+      try {
+        await notionRequest('PATCH', `/blocks/${blockId}`, {
+          [type]: patchInner,
+        });
+      } catch (err) {
+        throw new NotionPageEditPartialApplyError(
+          pageId,
+          writtenBlockIds,
+          blockId,
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+      writtenBlockIds.push(blockId);
     }
 
     deleteTaskCacheRow(taskPageCacheKey(pageId));
@@ -1279,6 +1300,27 @@ export class NotionPageEditStaleBaseError extends Error {
         `the page changed since this edit was staged. Reject and re-stage: ${truncateForError(oldStr)}`,
     );
     this.name = 'NotionPageEditStaleBaseError';
+  }
+}
+
+/**
+ * Thrown by applyPageEdit when a block PATCH fails after earlier blocks were
+ * already written. No rollback is attempted; the error names which blocks
+ * landed so the half-applied state is visible and not mistaken for untouched.
+ */
+export class NotionPageEditPartialApplyError extends Error {
+  constructor(
+    readonly pageId: string,
+    readonly writtenBlockIds: string[],
+    readonly failedBlockId: string,
+    readonly notionMessage: string,
+  ) {
+    super(
+      `[NotionClient] applyPageEdit: partially applied on page ${pageId} — ` +
+        `written blocks: [${writtenBlockIds.join(', ')}]; failed block ${failedBlockId}: ${notionMessage}. ` +
+        `Remaining stale anchors cannot re-apply; do not re-apply this intent as-is.`,
+    );
+    this.name = 'NotionPageEditPartialApplyError';
   }
 }
 

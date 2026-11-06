@@ -7174,6 +7174,33 @@ export function closePauseInterval(sessionId: string): void {
   ).run(Date.now(), sessionId);
 }
 
+/** Session ids whose latest open pause interval is the auth_failed park. */
+export function listAuthParkedSessionIds(): string[] {
+  const rows = db
+    .prepare(
+      `SELECT session_id, pause_reason FROM session_pause_intervals
+       WHERE resumed_at IS NULL ORDER BY paused_at ASC, id ASC`,
+    )
+    .all() as Array<{ session_id: string; pause_reason: string }>;
+  const ids = new Set<string>();
+  for (const row of rows) {
+    if (parsePauseReason(row.pause_reason)?.reason === 'auth_failed') {
+      ids.add(row.session_id);
+    }
+  }
+  return [...ids];
+}
+
+/** Every session row of a task (dash-insensitive id match), any status. */
+export function getAllSessionsForTask(taskId: string): Session[] {
+  return db
+    .prepare<{ task_id: string }>(
+      `SELECT * FROM sessions
+       WHERE REPLACE(COALESCE(task_id, ''), '-', '') = @task_id`,
+    )
+    .all({ task_id: taskId.replace(/-/g, '') }) as Session[];
+}
+
 export function getPauseIntervalsBySession(
   sessionId: string,
 ): SessionPauseInterval[] {
@@ -16260,6 +16287,41 @@ export function clearUsageDeferral(window: UsageDeferralWindow): void {
     `DELETE FROM usage_deferral WHERE window = ?`,
   );
   _stmtDeleteUsageDeferral.run(window);
+}
+
+// ─── cli_auth_lapse ──────────────────────────────────────────────────────────
+// Singleton account-wide "CLI auth lapsed" state; see schema.ts.
+
+/** Returns the ms timestamp the lapse was first recorded, or null when clear. */
+export function getCliAuthLapse(): number | null {
+  const row = db
+    .prepare(`SELECT lapsed_at FROM cli_auth_lapse WHERE id = 1`)
+    .get() as { lapsed_at: number } | undefined;
+  return row ? row.lapsed_at : null;
+}
+
+/** Records the lapse; keeps the original timestamp if already lapsed. */
+export function setCliAuthLapse(lapsedAt: number): void {
+  db.prepare(
+    `INSERT INTO cli_auth_lapse (id, lapsed_at) VALUES (1, ?)
+     ON CONFLICT (id) DO NOTHING`,
+  ).run(lapsedAt);
+}
+
+export function clearCliAuthLapse(): void {
+  db.prepare(`DELETE FROM cli_auth_lapse WHERE id = 1`).run();
+}
+
+/** True when any session currently has an open auth_failed pause interval. */
+export function hasAuthParkedSession(): boolean {
+  const row = db
+    .prepare(
+      `SELECT 1 FROM session_pause_intervals
+       WHERE resumed_at IS NULL AND pause_reason LIKE '%"auth_failed"%'
+       LIMIT 1`,
+    )
+    .get();
+  return row !== undefined;
 }
 
 // ─── completing_signal_ledger ────────────────────────────────────────────────

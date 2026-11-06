@@ -72,6 +72,10 @@ export type CanonicalPauseReason =
   | 'f2_verdict_missing'
   | 'auth_failed';
 
+/** The one message the auth-resume sweep sends to every session it resumes. */
+export const AUTH_RESUME_NOTICE =
+  'Your previous turn ended on a CLI authentication failure — that was not caused by anything you did. Authentication has since been restored. Before repeating your last action (a push, a staged intent, a file write), check whether it actually took effect, then continue your work. Do not take any authentication action (no login, token, or credential steps).';
+
 export interface PauseReasonStruct {
   reason: CanonicalPauseReason;
   source: PauseSource;
