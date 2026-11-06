@@ -40,6 +40,7 @@ autofix_skip_ci: false
 test:
   - npm run test -w packages/frontend
   - npm run test -w packages/backend
+  - npm run test:scripts
 
 # Per-command timeout in seconds for test commands. Default 300 (5 min).
 # Raised 300 -> 900 on 2026-08-23: the backend suite's own measured test time
@@ -61,6 +62,7 @@ test_timeout_sec: 900
 test_scoped:
   - node scripts/scoped-tests.mjs frontend {{changed_files}}
   - node scripts/scoped-tests.mjs backend {{changed_files}}
+  - node scripts/scoped-script-tests.mjs {{changed_files}}
 
 # Glob list forcing the full `test:` command instead of `test_scoped` when
 # the diff touches any of them (shared config/infra a scoped run can't
@@ -74,6 +76,7 @@ test_full_run_paths:
   - packages/backend/test/**
   - packages/backend/src/db/schema.ts
   - scripts/scoped-tests.mjs
+  - scripts/scoped-script-tests.mjs
   - .claude-orchestrator.yml
 
 # Commands the orchestrator runs on each PR before spawning review — catches lint errors, license contamination, and secret leaks.
