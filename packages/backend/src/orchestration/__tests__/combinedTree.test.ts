@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { computeWholeTreeContentHash } from '../../session/analyzeGating';
 import {
   createGateScratchTree,
-  gateScratchPath,
   resolveCombinedTree,
 } from '../combinedTree';
 
@@ -90,7 +89,31 @@ describe('combinedTree', () => {
     expect(git(wt, 'rev-parse', 'HEAD')).toBe(headSha);
     expect(git(wt, 'status', '--porcelain')).toBe('');
     await scratch.dispose();
-    expect(fs.existsSync(gateScratchPath(wt))).toBe(false);
+    expect(fs.existsSync(scratch.path)).toBe(false);
+  });
+
+  it('gives overlapping scratches for one session distinct paths, and disposing one leaves the other intact', async () => {
+    const headSha = git(wt, 'rev-parse', 'HEAD');
+    const result = await resolveCombinedTree({
+      repoDir: wt,
+      headSha,
+      baseBranch: 'dev',
+    });
+    if (result.status !== 'ok') throw new Error('expected ok');
+    const args = {
+      repoDir: wt,
+      projectDir: wt,
+      sessionWorktreePath: wt,
+      headSha,
+      treeOid: result.treeOid,
+    };
+    const a = await createGateScratchTree(args);
+    const b = await createGateScratchTree(args);
+    expect(a.path).not.toBe(b.path);
+    await a.dispose();
+    expect(fs.existsSync(a.path)).toBe(false);
+    expect(fs.existsSync(path.join(b.path, 'a.txt'))).toBe(true);
+    await b.dispose();
   });
 
   it('reports a textual conflict', async () => {

@@ -1,4 +1,4 @@
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { execFile, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
@@ -153,12 +153,12 @@ const BOT_ENV = {
   GIT_COMMITTER_EMAIL: 'bot@claude-code.internal',
 };
 
-/** Deterministic per-session scratch location, a sibling of the session worktree. */
-export function gateScratchPath(sessionWorktreePath: string): string {
+/** Unique per call, so overlapping gate/rerun scratches for one session never collide. */
+function newGateScratchPath(sessionWorktreePath: string): string {
   return path.join(
     path.dirname(sessionWorktreePath),
     '.gate-scratch',
-    path.basename(sessionWorktreePath),
+    `${path.basename(sessionWorktreePath)}-${randomUUID()}`,
   );
 }
 
@@ -187,12 +187,11 @@ export async function createGateScratchTree(args: {
   treeOid: string;
 }): Promise<{ path: string; dispose: () => Promise<void> }> {
   const { repoDir, projectDir, sessionWorktreePath, headSha, treeOid } = args;
-  const dir = gateScratchPath(sessionWorktreePath);
+  const dir = newGateScratchPath(sessionWorktreePath);
   const dispose = (): Promise<void> =>
     removeScratch(repoDir, dir).catch((err) =>
       logger.warn(`[combinedTree] scratch cleanup failed for ${dir}: ${err}`),
     );
-  await removeScratch(repoDir, dir);
   try {
     await fs.promises.mkdir(path.dirname(dir), { recursive: true });
     const { stdout } = await execFileAsync(
