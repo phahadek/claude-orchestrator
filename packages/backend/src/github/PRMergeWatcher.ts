@@ -57,6 +57,7 @@ import {
   CI_LOG_EXCERPT_CAP,
 } from './reviewUtils';
 import { sendConflictNudge } from './conflictNudge';
+import { resolveCombinedTree } from '../orchestration/combinedTree';
 import { isTerminalStalePR } from './pollUtils';
 import {
   getAllOpenPRs,
@@ -66,6 +67,7 @@ import {
   getApprovedDraftPRs,
   updatePRDraftStatus,
   setPauseReason,
+  clearPauseReasonEntry,
   setCiRemediationAttemptedSha,
   getSession,
   addAutofixSha,
@@ -95,7 +97,10 @@ import {
 import { emitTaskUpdated } from '../routes/tasks';
 import { logger } from '../logger';
 import { buildTestResultDigestFromOutcomes } from '../session/testResultDigest';
-import { readRunTestOutcomes } from '../orchestration/runTestOutcomes';
+import {
+  readRunTestOutcomes,
+  parseUnclaimedPaths,
+} from '../orchestration/runTestOutcomes';
 
 /**
  * Emitted by PRMergeWatcher.handleMerged once a merge commit has been
@@ -225,6 +230,7 @@ export class PRMergeWatcher extends EventEmitter {
    * push). auditEmitted makes the pr_f2_verdict_pending audit row and the
    * info log edge-triggered — once per (pr, contentHash), never per tick.
    */
+  private readonly regateRequestedFor = new Map<string, string>();
   private readonly f2PendingVerdicts = new Map<
     string,
     {
@@ -839,6 +845,48 @@ export class PRMergeWatcher extends EventEmitter {
   }
 
   /**
+   * Merge-time freshness: the PR has a certified verdict for some other tree
+   * but none for the current head ⊕ base combined tree, so that verdict is
+   * stale. Requests exactly one re-gate per (pr, combined hash); the caller
+   * declines this tick.
+   */
+  private requestRegateIfStale(
+    pr: PullRequestRow,
+    project: ProjectConfig,
+    combinedHash: string,
+  ): void {
+    if (!this.reviewOrchestrator || !pr.session_id) return;
+    const key = this.prKey(pr);
+    if (this.regateRequestedFor.get(key) === combinedHash) return;
+    if (this.reviewOrchestrator.isReviewInFlight(pr.pr_number, pr.repo)) return;
+    const certified = getLatestTestRequestRunForSession(
+      project.id,
+      pr.session_id,
+    );
+    if (
+      !certified ||
+      certified.state !== 'passed' ||
+      certified.content_hash === combinedHash
+    ) {
+      return;
+    }
+    this.regateRequestedFor.set(key, combinedHash);
+    logger.info(
+      `[PRMergeWatcher] PR #${pr.pr_number}: certified tree ${certified.content_hash.slice(0, 12)} != combined ${combinedHash.slice(0, 12)} — verdict stale, requesting re-gate`,
+    );
+    clearTerminalPRFlags(pr.pr_number, pr.repo, 'head_sha_advance');
+    this.reviewOrchestrator.enqueueReview({
+      prNumber: pr.pr_number,
+      repo: pr.repo,
+      taskId: pr.task_id ?? '',
+      taskUrl: getSession(pr.session_id)?.task_url ?? '',
+      contextUrl: project.contextUrl ?? '',
+      headSha: pr.head_sha,
+      pushTriggered: true,
+    });
+  }
+
+  /**
    * Records that this PR's F2 gate has no settled full-run verdict for its
    * current content hash. Emits the pr_f2_verdict_pending audit row and an
    * info log exactly once per (pr, contentHash) — never per tick — and, once
@@ -934,9 +982,29 @@ export class PRMergeWatcher extends EventEmitter {
       project
     ) {
       const worktreePath = getSession(pr.session_id)?.worktree_path;
-      const contentHash = worktreePath
-        ? await computeWholeTreeContentHash(worktreePath)
+      // The verdict is keyed by the tree that will actually land: PR head
+      // merged with freshly fetched base. A conflict is a stale verdict that
+      // routes to the existing conflict nudge.
+      const combined = worktreePath
+        ? await resolveCombinedTree({
+            repoDir: worktreePath,
+            headSha: pr.head_sha,
+            baseBranch: pr.base_branch ?? project.baseBranch,
+          })
         : null;
+      if (combined?.status === 'conflict') {
+        logger.info(
+          `[PRMergeWatcher] PR #${pr.pr_number}: head conflicts with current base — declining this tick`,
+        );
+        await sendConflictNudge(this.sessions, pr, 'conflict');
+        return;
+      }
+      const contentHash =
+        combined?.status === 'ok'
+          ? combined.contentHash
+          : worktreePath
+            ? await computeWholeTreeContentHash(worktreePath)
+            : null;
       if (contentHash) {
         this.lastContentHashByPR.set(this.prKey(pr), contentHash);
       }
@@ -958,6 +1026,7 @@ export class PRMergeWatcher extends EventEmitter {
         // (join it by reading on a later tick) or the pipeline failed to
         // start it — a pipeline-durability defect to surface, not silently
         // repair by launching a second run from inside the poll.
+        this.requestRegateIfStale(pr, project, contentHash);
         this.recordF2VerdictPending(pr, project, contentHash, config);
         return; // Undecided for this tick — no mergeability decision yet.
       }
@@ -1175,6 +1244,37 @@ export class PRMergeWatcher extends EventEmitter {
           prNumber: pr.pr_number,
           repo: pr.repo,
         });
+      }
+      // ─────────────────────────────────────────────────────────────────────
+
+      // ── Unexercised changed paths (non-blocking) ──────────────────────────
+      // A passing winning run whose declaring commands left some changed
+      // paths unclaimed. NULL (unknown) and [] (all claimed) both clear.
+      if (testResult && testResult.state !== 'failed') {
+        const unclaimed = parseUnclaimedPaths(testResult.unclaimed_paths);
+        const hasEntry = parsePauseReasonSet(pr.pause_reason).some(
+          (e) => e.reason === 'unexercised_paths',
+        );
+        if (unclaimed && unclaimed.length > 0) {
+          const detail = unclaimed.join(', ').slice(0, 1000);
+          const existing = parsePauseReasonSet(pr.pause_reason).find(
+            (e) => e.reason === 'unexercised_paths',
+          );
+          if (existing?.detail !== detail) {
+            setPauseReason(pr.pr_number, pr.repo, 'unexercised_paths', detail);
+            // Non-blocking pause: re-kick AutoMerger so an already-mergeable
+            // PR is not stranded waiting on a merge_state transition.
+            this.autoMerger?.attempt(pr.pr_number, pr.repo);
+          }
+        } else if (hasEntry) {
+          clearPauseReasonEntry(pr.pr_number, pr.repo, 'unexercised_paths');
+          this.broadcast({
+            type: 'pr_pause_cleared',
+            prNumber: pr.pr_number,
+            repo: pr.repo,
+          });
+          this.autoMerger?.attempt(pr.pr_number, pr.repo);
+        }
       }
       // ─────────────────────────────────────────────────────────────────────
     }

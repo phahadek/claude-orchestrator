@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { execSync } from 'child_process';
+import { execSync, execFile } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { GITHUB_REPO, runtimeSettings, getProjectById } from '../config';
@@ -154,6 +154,32 @@ function lastTurnLevelEvent<T extends { event_type: string; payload: string }>(
     if (!isNonBoundaryEvent(events[i])) return events[i];
   }
   return undefined;
+}
+
+const GIT_NETWORK_TIMEOUT_MS = 60_000;
+
+/** Non-blocking git (argv form, no shell); resolves trimmed stdout. */
+function gitAsync(
+  args: string[],
+  cwd: string,
+  timeout?: number,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      'git',
+      args,
+      { cwd, ...(timeout ? { timeout } : {}) },
+      (err, out) => {
+        if (err) return reject(err);
+        const stdout = (out as { stdout?: unknown } | string | undefined) ?? '';
+        resolve(
+          (typeof stdout === 'string' ? stdout : String(stdout.stdout ?? ''))
+            .toString()
+            .trim(),
+        );
+      },
+    );
+  });
 }
 
 const PR_URL_REGEX = /https:\/\/github\.com\/([^/"\\]+\/[^/"\\]+)\/pull\/\d+/;
@@ -1982,33 +2008,34 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       const pr = getPRBySessionId(this.sessionId);
       if (pr?.review_session_id || (pr && isPreReviewBlocked(pr))) {
         // Gate on actual HEAD SHA advance — skip when no new commits were made.
-        let currentHeadSha: string | null = null;
-        if (this.worktreePath) {
-          try {
-            currentHeadSha = execSync('git rev-parse HEAD', {
-              cwd: this.worktreePath,
-            })
-              .toString()
-              .trim();
-          } catch {
-            // git unavailable — proceed unconditionally
+        void (async () => {
+          let currentHeadSha: string | null = null;
+          if (this.worktreePath) {
+            try {
+              currentHeadSha = await gitAsync(
+                ['rev-parse', 'HEAD'],
+                this.worktreePath,
+              );
+            } catch {
+              // git unavailable — proceed unconditionally
+            }
           }
-        }
-        if (
-          currentHeadSha === null ||
-          currentHeadSha !== pr.last_signalled_head_sha
-        ) {
-          sessionLog(
-            this.sessionId,
-            `turn complete — PR #${pr.pr_number} eligible for push signal, signalling push_detected (head=${currentHeadSha?.slice(0, 7) ?? 'unknown'})`,
-          );
-          void this.handlePushDetected();
-        } else {
-          sessionLog(
-            this.sessionId,
-            `turn complete — PR #${pr.pr_number} eligible for push signal, skipping push_detected (head unchanged at ${currentHeadSha.slice(0, 7)})`,
-          );
-        }
+          if (
+            currentHeadSha === null ||
+            currentHeadSha !== pr.last_signalled_head_sha
+          ) {
+            sessionLog(
+              this.sessionId,
+              `turn complete — PR #${pr.pr_number} eligible for push signal, signalling push_detected (head=${currentHeadSha?.slice(0, 7) ?? 'unknown'})`,
+            );
+            await this.handlePushDetected();
+          } else {
+            sessionLog(
+              this.sessionId,
+              `turn complete — PR #${pr.pr_number} eligible for push signal, skipping push_detected (head unchanged at ${currentHeadSha.slice(0, 7)})`,
+            );
+          }
+        })();
       }
 
       // Ack pending review comments on successful turn completion so the
@@ -3225,19 +3252,20 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     // Auto-push any local commits ahead of origin before signalling.
     if (this.worktreePath) {
       try {
-        const branch = execSync('git rev-parse --abbrev-ref HEAD', {
-          cwd: this.worktreePath,
-        })
-          .toString()
-          .trim();
-        const localHead = execSync('git rev-parse HEAD', {
-          cwd: this.worktreePath,
-        })
-          .toString()
-          .trim();
+        const cwd = this.worktreePath;
+        const branch = await gitAsync(
+          ['rev-parse', '--abbrev-ref', 'HEAD'],
+          cwd,
+        );
+        const localHead = await gitAsync(['rev-parse', 'HEAD'], cwd);
         const remoteHead =
-          execSync(`git ls-remote origin ${branch}`, { cwd: this.worktreePath })
-            .toString()
+          (
+            await gitAsync(
+              ['ls-remote', 'origin', branch],
+              cwd,
+              GIT_NETWORK_TIMEOUT_MS,
+            )
+          )
             .split(/\s+/)[0]
             ?.trim() || '';
 
@@ -3245,19 +3273,21 @@ The full task spec and all rules are in your system prompt. Begin implementing d
           confirmedHeadSha = localHead;
         }
         if (localHead && localHead !== remoteHead) {
-          const aheadBehind = execSync(
-            `git rev-list --left-right --count origin/${branch}...HEAD`,
-            { cwd: this.worktreePath },
-          )
-            .toString()
-            .trim();
+          const aheadBehind = await gitAsync(
+            ['rev-list', '--left-right', '--count', `origin/${branch}...HEAD`],
+            cwd,
+          );
           const [behind, ahead] = aheadBehind.split(/\s+/).map(Number);
           if (ahead > 0 && behind === 0) {
             sessionLog(
               this.sessionId,
               `auto-pushing ${ahead} local commit(s) on ${branch} (origin was at ${remoteHead.slice(0, 7)}, local at ${localHead.slice(0, 7)})`,
             );
-            execSync(`git push origin ${branch}`, { cwd: this.worktreePath });
+            await gitAsync(
+              ['push', 'origin', branch],
+              cwd,
+              GIT_NETWORK_TIMEOUT_MS,
+            );
             confirmedHeadSha = localHead;
             this.broadcast({
               type: 'session_auto_pushed',
@@ -3325,11 +3355,10 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     // starts with fresh in-memory state, still sees the last signalled head.
     if (pr && this.worktreePath) {
       try {
-        const headSha = execSync('git rev-parse HEAD', {
-          cwd: this.worktreePath,
-        })
-          .toString()
-          .trim();
+        const headSha = await gitAsync(
+          ['rev-parse', 'HEAD'],
+          this.worktreePath,
+        );
         setLastSignalledHeadSha(pr.pr_number, pr.repo, headSha);
       } catch {
         // non-fatal — leave last_signalled_head_sha unchanged

@@ -591,6 +591,47 @@ describe('PRReviewService.buildPrompt()', () => {
     expect(prompt).toContain('passed');
   });
 
+  it('renders unexercised paths, coverage unknown for NULL, and nothing for empty in the test-run evidence', () => {
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    const mkRun = (unclaimed_paths: string | null) =>
+      ({
+        id: 'run-u',
+        project_id: 'proj-1',
+        content_hash: 'abc',
+        session_id: 'session-xyz',
+        state: 'passed',
+        output: '',
+        requested_at: 1,
+        started_at: 1,
+        finished_at: 2,
+        structured_result: JSON.stringify({
+          format: 'junit-xml',
+          suites: [{ name: 's', tests: [] }],
+          totals: { passed: 1, failed: 0, skipped: 0, errors: 0 },
+          durationMsTotal: 1,
+        }),
+        failure_reason: null,
+        run_kind: 'full',
+        unclaimed_paths,
+      }) as any;
+    const build = (p: string | null) =>
+      service.buildPrompt(mockPR, mockDiff, mockTaskBody, null, mkRun(p));
+
+    const listed = build('["web/a.ts","docs/b.md"]');
+    expect(listed).toContain('Unexercised paths');
+    expect(listed).toContain('web/a.ts, docs/b.md');
+    expect(build(null)).toContain('coverage unknown');
+    const empty = build('[]');
+    expect(empty).not.toContain('Unexercised paths');
+    expect(empty).not.toContain('coverage unknown');
+  });
+
   it('falls back to no orchestrator test-run section when no finished run exists', () => {
     const service = new PRReviewService(
       makeMockGitHub(),

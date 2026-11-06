@@ -26,10 +26,27 @@ function createMockProc() {
 
 let mockProc: ReturnType<typeof createMockProc>;
 
+const hoisted = vi.hoisted(() => ({ gitExec: vi.fn(), syncExec: vi.fn() }));
+const { gitExec } = hoisted;
+
 vi.mock('child_process', () => ({
   spawn: vi.fn(() => mockProc.proc),
-  execSync: vi.fn(),
-  execFile: vi.fn(),
+  execSync: hoisted.syncExec,
+  execFile: vi.fn(
+    (
+      file: string,
+      args: string[],
+      opts: unknown,
+      cb: (err: unknown, out?: unknown) => void,
+    ) => {
+      try {
+        const out = hoisted.gitExec(`${file} ${args.join(' ')}`, opts);
+        cb(null, { stdout: out == null ? '' : String(out), stderr: '' });
+      } catch (e) {
+        cb(e);
+      }
+    },
+  ),
 }));
 
 vi.mock('../db/queries', () =>
@@ -81,7 +98,6 @@ vi.mock('../session/sessionRecovery', () => ({
 }));
 
 import { AgentSession } from '../session/AgentSession';
-import { execSync } from 'child_process';
 import { getPRBySessionId, setLastSignalledHeadSha } from '../db/queries';
 import type { TaskBackend } from '../tasks/TaskBackend';
 
@@ -114,10 +130,10 @@ function fakeTaskBackend(): TaskBackend {
   } as unknown as TaskBackend;
 }
 
-/** Mock execSync to return a fixed HEAD SHA for rev-parse HEAD,
+/** Mock git to return a fixed HEAD SHA for rev-parse HEAD,
  *  and empty for all other git calls so auto-push is skipped. */
 function mockHeadSha(sha: string) {
-  vi.mocked(execSync).mockImplementation((cmd) => {
+  vi.mocked(gitExec).mockImplementation((cmd) => {
     const c = String(cmd);
     if (c.includes('rev-parse HEAD') && !c.includes('--abbrev-ref'))
       return Buffer.from(sha);
@@ -189,10 +205,10 @@ describe('AgentSession — push_detected SHA gate', () => {
 
   it('emits push_detected on each turn that advances HEAD', async () => {
     // currentSha is updated between turns to simulate HEAD advancing.
-    // All execSync calls within a single turn see the same SHA so the
+    // All git calls within a single turn see the same SHA so the
     // auto-push logic (which also calls rev-parse HEAD) stays consistent.
     let currentSha = 'sha-before-000000000000000000000000000000000000';
-    vi.mocked(execSync).mockImplementation((cmd) => {
+    vi.mocked(gitExec).mockImplementation((cmd) => {
       const c = String(cmd);
       if (c.includes('rev-parse HEAD') && !c.includes('--abbrev-ref'))
         return Buffer.from(currentSha);
