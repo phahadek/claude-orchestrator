@@ -83,43 +83,49 @@ export async function runAuthResumeSweep(
   }
   if (result.skipped.length > 0) deps.surfaceSkipped(lapseId, result.skipped);
 
-  // Returns false when the sweep must stop.
-  const resumeOne = async (sessionId: string): Promise<boolean> => {
+  // 'skipped' means the session turned ineligible before any resume was sent.
+  const resumeOne = async (
+    sessionId: string,
+  ): Promise<'resumed' | 'skipped' | 'stop'> => {
     const reason = deps.ineligibleReason(sessionId);
     if (reason) {
       const skip = { sessionId, reason };
       result.skipped.push(skip);
       deps.surfaceSkipped(lapseId, [skip]);
-      return true;
+      return 'skipped';
     }
     const resumedAt = Date.now();
     const resumedId = await deps.resume(sessionId, AUTH_RESUME_NOTICE);
     if (resumedId === null) {
       result.stoppedReason = 'resume_failed';
-      return false;
+      return 'stop';
     }
     const outcome = await deps.awaitInit(sessionId, resumedAt);
     if (outcome === 'auth_failed') {
       deps.markLapsed();
       result.stoppedReason = 'auth_failed_again';
-      return false;
+      return 'stop';
     }
     if (outcome === 'timeout') {
       result.stoppedReason = 'resume_failed';
-      return false;
+      return 'stop';
     }
     deps.clearPark(sessionId);
     result.resumed.push(sessionId);
-    return true;
+    return 'resumed';
   };
 
-  if (eligible.length === 0) return result;
-
-  // Canary: always exactly one session.
-  if (!(await resumeOne(eligible[0]!))) return result;
+  // Canary: exactly one actual resume; a candidate that went ineligible is
+  // skipped and the next one becomes the canary.
+  let next = 0;
+  let canary: 'resumed' | 'skipped' | 'stop' = 'skipped';
+  while (canary === 'skipped' && next < eligible.length) {
+    canary = await resumeOne(eligible[next++]!);
+  }
+  if (canary !== 'resumed') return result;
 
   const size = Math.max(1, deps.batchSize());
-  const rest = eligible.slice(1);
+  const rest = eligible.slice(next);
   for (let i = 0; i < rest.length; i += size) {
     await deps.sleep(deps.batchSpacingMs());
     if (deps.isLapsed()) {
@@ -128,7 +134,7 @@ export async function runAuthResumeSweep(
     }
     const batch = rest.slice(i, i + size);
     const outcomes = await Promise.all(batch.map((id) => resumeOne(id)));
-    if (outcomes.includes(false)) return result;
+    if (outcomes.includes('stop')) return result;
   }
   return result;
 }

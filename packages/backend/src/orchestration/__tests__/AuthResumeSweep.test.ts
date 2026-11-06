@@ -12,13 +12,18 @@ vi.mock('../../db/queries', () => ({
 vi.mock('../../tasks/TaskStatusEngine', () => ({
   deriveDisplayStatusFromDb: vi.fn(),
 }));
-vi.mock('../../config', () => ({ runtimeSettings: {} }));
+const { settings, warn } = vi.hoisted(() => ({
+  settings: {} as Record<string, number>,
+  warn: vi.fn(),
+}));
+vi.mock('../../config', () => ({ runtimeSettings: settings }));
 vi.mock('../../logger', () => ({
-  logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
+  logger: { warn, info: vi.fn(), error: vi.fn() },
 }));
 
 import {
   runAuthResumeSweep,
+  runAuthResumeSweepOnRestore,
   evaluateAuthResumeEligibility,
   type AuthResumeSweepDeps,
   type ResumeInitOutcome,
@@ -116,6 +121,120 @@ describe('runAuthResumeSweep', () => {
     const r = await runAuthResumeSweep('l', t.deps);
     expect(r.stoppedReason).toBe('resume_failed');
     expect(t.deps.clearPark).not.toHaveBeenCalled();
+  });
+});
+
+describe('canary rule', () => {
+  it('promotes the next session to canary when the first goes ineligible at resume time', async () => {
+    const t = makeDeps(['1', '2', '3', '4']);
+    let calls = 0;
+    t.deps.ineligibleReason = (id) => {
+      calls++;
+      // '1' passes the initial scan, then is superseded before its resume.
+      return id === '1' && calls > 4 ? 'superseded' : null;
+    };
+    const inflight: number[] = [];
+    let live = 0;
+    t.deps.resume = async (id) => {
+      live++;
+      inflight.push(live);
+      await new Promise((r) => setTimeout(r, 1));
+      live--;
+      t.calls.push(id);
+      return id;
+    };
+    await runAuthResumeSweep('l', t.deps);
+    expect(t.calls).toEqual(['2', '3', '4']);
+    // canary ran alone: first resume never overlapped another
+    expect(inflight[0]).toBe(1);
+    expect(inflight[1]).toBe(1);
+  });
+});
+
+describe('runAuthResumeSweepOnRestore (production wiring)', () => {
+  const rowFor = (id: string, session_type: string) => ({
+    session_id: id,
+    task_id: null,
+    status: 'idle',
+    started_at: 1,
+    session_type,
+  });
+
+  function setup(rows: Record<string, ReturnType<typeof rowFor> | undefined>) {
+    vi.mocked(queries.listAuthParkedSessionIds).mockReturnValue(
+      Object.keys(rows),
+    );
+    vi.mocked(queries.getSession).mockImplementation(
+      (id: string) => rows[id] as never,
+    );
+    vi.mocked(queries.getPauseIntervalsBySession).mockReturnValue([]);
+    vi.mocked(queries.getEventsBySession).mockReturnValue([
+      {
+        event_type: 'text',
+        payload: '{}',
+        timestamp: Date.now() + 1_000_000,
+      },
+    ] as never);
+    vi.mocked(queries.closePauseInterval).mockClear();
+  }
+
+  it('resumes groom and design sessions through sendOrResume with the fixed notice', async () => {
+    setup({ g1: rowFor('g1', 'groom'), d1: rowFor('d1', 'design') });
+    settings.auth_resume_batch_size = 3;
+    settings.auth_resume_batch_spacing_ms = 0;
+    const sendOrResume = vi.fn(async (id: string) => id);
+    await runAuthResumeSweepOnRestore('lapseG', {
+      sendOrResume,
+      markLapsed: vi.fn(),
+      isLapsed: () => false,
+    });
+    expect(sendOrResume.mock.calls).toEqual([
+      ['g1', AUTH_RESUME_NOTICE],
+      ['d1', AUTH_RESUME_NOTICE],
+    ]);
+    expect(queries.closePauseInterval).toHaveBeenCalledWith('g1');
+    expect(queries.closePauseInterval).toHaveBeenCalledWith('d1');
+  });
+
+  it('batch size is unaffected by concurrency-cap and human_reserve settings', async () => {
+    const ids = ['1', '2', '3', '4', '5'];
+    setup(Object.fromEntries(ids.map((i) => [i, rowFor(i, 'standard')])));
+    settings.max_concurrent_code_sessions = 1;
+    settings.human_reserve = 99;
+    settings.auth_resume_batch_size = 2;
+    settings.auth_resume_batch_spacing_ms = 0;
+    let live = 0;
+    let peak = 0;
+    const sendOrResume = vi.fn(async (id: string) => {
+      live++;
+      peak = Math.max(peak, live);
+      await new Promise((r) => setTimeout(r, 1));
+      live--;
+      return id;
+    });
+    const r = await runAuthResumeSweepOnRestore('lapseC', {
+      sendOrResume,
+      markLapsed: vi.fn(),
+      isLapsed: () => false,
+    });
+    expect(r?.resumed).toEqual(ids);
+    expect(peak).toBe(2);
+  });
+
+  it('surfaces skipped sessions once per lapse, not once per pass', async () => {
+    setup({ gone: undefined });
+    warn.mockClear();
+    const hooks = {
+      sendOrResume: vi.fn(async (id: string) => id),
+      markLapsed: vi.fn(),
+      isLapsed: () => false,
+    };
+    await runAuthResumeSweepOnRestore('lapseA', hooks);
+    await runAuthResumeSweepOnRestore('lapseA', hooks);
+    expect(warn).toHaveBeenCalledTimes(1);
+    await runAuthResumeSweepOnRestore('lapseB', hooks);
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(hooks.sendOrResume).not.toHaveBeenCalled();
   });
 });
 
