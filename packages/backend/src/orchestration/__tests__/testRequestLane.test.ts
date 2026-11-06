@@ -297,6 +297,11 @@ function insertOutcomeSample(
   );
 }
 
+// Admits within one millisecond tie on requestedAt; waiting keeps queue order deterministic.
+function tickMs(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 3));
+}
+
 function baseSpec(
   overrides: Partial<Parameters<typeof runProjectTestRequest>[0]> = {},
 ) {
@@ -2601,11 +2606,7 @@ describe('admitTestRequest — live queue position', () => {
     expect(third.queueDepth).toBe(2);
   });
 
-  // Skipped: fails on dev independent of this PR's diff (admitTestRequest
-  // queue-position logic is untouched here) — confirmed pre-existing
-  // base-branch breakage, tracked separately from task
-  // 3c122f91-52f3-8137-959e-ffdbb591ffb7.
-  it.skip('reports status "queued" with a position/depth, initially', async () => {
+  it('reports status "queued" with a position/depth, initially', async () => {
     insertProject({
       id: 'proj-admit-2',
       name: 'Admit 2',
@@ -2618,19 +2619,33 @@ describe('admitTestRequest — live queue position', () => {
     const resolvers = queueingRunTestCommands();
 
     const first = admitTestRequest(
-      baseSpec({ projectId: 'proj-admit-2', contentHash: 'admit-2-a' }),
+      baseSpec({
+        projectId: 'proj-admit-2',
+        contentHash: 'admit-2-a',
+        worktreePath: '/tmp/wt-admit-2-a',
+      }),
     );
     expect(first.status).toBe('running');
 
+    await tickMs();
     const second = admitTestRequest(
-      baseSpec({ projectId: 'proj-admit-2', contentHash: 'admit-2-b' }),
+      baseSpec({
+        projectId: 'proj-admit-2',
+        contentHash: 'admit-2-b',
+        worktreePath: '/tmp/wt-admit-2-b',
+      }),
     );
     expect(second.status).toBe('queued');
     expect(second.position).toBe(1);
     expect(second.queueDepth).toBe(1);
 
+    await tickMs();
     const third = admitTestRequest(
-      baseSpec({ projectId: 'proj-admit-2', contentHash: 'admit-2-c' }),
+      baseSpec({
+        projectId: 'proj-admit-2',
+        contentHash: 'admit-2-c',
+        worktreePath: '/tmp/wt-admit-2-c',
+      }),
     );
     expect(third.status).toBe('queued');
     expect(third.position).toBe(2);
@@ -2649,10 +2664,7 @@ describe('admitTestRequest — live queue position', () => {
     await Promise.all([first.result, second.result, third.result]);
   });
 
-  // Skipped: fails on dev independent of this PR's diff — confirmed
-  // pre-existing base-branch breakage, tracked separately from task
-  // 3c122f91-52f3-8137-959e-ffdbb591ffb7.
-  it.skip("a re-request from a session with one already queued gets that same request's live position back — which decreases as earlier runs complete", async () => {
+  it("a re-request from a session with one already queued gets that same request's live position back — which decreases as earlier runs complete", async () => {
     insertProject({
       id: 'proj-admit-2b',
       name: 'Admit 2b',
@@ -2671,21 +2683,26 @@ describe('admitTestRequest — live queue position', () => {
         projectId: 'proj-admit-2b',
         contentHash: 'admit-2b-ahead-1',
         sessionId: 'session-ahead-1',
+        worktreePath: '/tmp/wt-2b-ahead-1',
       }),
     );
+    await tickMs();
     admitTestRequest(
       baseSpec({
         projectId: 'proj-admit-2b',
         contentHash: 'admit-2b-ahead-2',
         sessionId: 'session-ahead-2',
+        worktreePath: '/tmp/wt-2b-ahead-2',
       }),
     );
 
+    await tickMs();
     const firstAsk = admitTestRequest(
       baseSpec({
         projectId: 'proj-admit-2b',
         contentHash: 'admit-2b-mine',
         sessionId: 'session-under-test',
+        worktreePath: '/tmp/wt-2b-mine',
       }),
     );
     expect(firstAsk.status).toBe('queued');
@@ -2703,6 +2720,7 @@ describe('admitTestRequest — live queue position', () => {
         projectId: 'proj-admit-2b',
         contentHash: 'admit-2b-mine',
         sessionId: 'session-under-test',
+        worktreePath: '/tmp/wt-2b-mine',
       }),
     );
     expect(secondAsk.reused).toBe(true);
@@ -2721,10 +2739,7 @@ describe('admitTestRequest — live queue position', () => {
     await Promise.all([firstAsk.result, secondAsk.result]);
   });
 
-  // Skipped: fails on dev independent of this PR's diff — confirmed
-  // pre-existing base-branch breakage, tracked separately from task
-  // 3c122f91-52f3-8137-959e-ffdbb591ffb7.
-  it.skip('a second call from the same session against the same tree reuses the pending request instead of admitting a new one', async () => {
+  it('a second call from the same session against the same tree reuses the pending request instead of admitting a new one', async () => {
     mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
 
     const first = admitTestRequest(
@@ -2745,16 +2760,15 @@ describe('admitTestRequest — live queue position', () => {
     expect(first.reused).toBe(false);
     expect(second.reused).toBe(true);
     expect(second.runId).toBe(first.runId);
-    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
 
     const [r1, r2] = await Promise.all([first.result, second.result]);
     expect(r1.runId).toBe(r2.runId);
   });
 
-  // Skipped: fails on dev independent of this PR's diff — confirmed
-  // pre-existing base-branch breakage, tracked separately from task
-  // 3c122f91-52f3-8137-959e-ffdbb591ffb7.
-  it.skip('a re-request against a different tree from the same session supersedes the stale pending request and re-enqueues fresh, rather than returning the stale position', async () => {
+  it('a re-request against a different tree from the same session supersedes the stale pending request and re-enqueues fresh, rather than returning the stale position', async () => {
     mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
 
     const stale = admitTestRequest(
@@ -2776,20 +2790,17 @@ describe('admitTestRequest — live queue position', () => {
 
     expect(fresh.reused).toBe(false);
     expect(fresh.runId).not.toBe(stale.runId);
-    expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
 
     const [staleResult, freshResult] = await Promise.all([
       stale.result,
       fresh.result,
     ]);
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
     expect(staleResult.runId).toBe(stale.runId);
     expect(freshResult.runId).toBe(fresh.runId);
   });
 
-  // Skipped: fails on dev independent of this PR's diff — confirmed
-  // pre-existing base-branch breakage, tracked separately from task
-  // 3c122f91-52f3-8137-959e-ffdbb591ffb7.
-  it.skip('session-scoped dedupe never applies when sessionId is null — content-hash coalescing across two different sessions is unchanged', async () => {
+  it('session-scoped dedupe never applies when sessionId is null — content-hash coalescing across two different sessions is unchanged', async () => {
     let resolveRun: (v: { passed: boolean; output: string }) => void;
     mockRunTestCommands.mockImplementation(
       () =>
@@ -2818,7 +2829,9 @@ describe('admitTestRequest — live queue position', () => {
     // the pre-existing content-hash coalescing, still exercised via `joined`
     // on the eventual result.
     expect(fromSessionB.runId).toBe(fromSessionA.runId);
-    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
 
     resolveRun!({ passed: true, output: 'ok' });
     const [rA, rB] = await Promise.all([
@@ -2916,10 +2929,7 @@ describe('admitTestRequest — settled-run guard', () => {
     expect(replayed.unchangedReplay).toBe(false);
   });
 
-  // Skipped: fails on dev independent of this PR's diff — confirmed
-  // pre-existing base-branch breakage, tracked separately from task
-  // 3c122f91-52f3-8137-959e-ffdbb591ffb7.
-  it.skip('does not advance concurrent content-hash coalescing across two different sessions requesting the same tree while it is still running', async () => {
+  it('does not advance concurrent content-hash coalescing across two different sessions requesting the same tree while it is still running', async () => {
     let resolveRun: (v: { passed: boolean; output: string }) => void;
     mockRunTestCommands.mockImplementation(
       () =>
@@ -2946,7 +2956,9 @@ describe('admitTestRequest — settled-run guard', () => {
     expect(fromSessionA.unchangedReplay).toBe(false);
     expect(fromSessionB.unchangedReplay).toBe(false);
     expect(fromSessionB.runId).toBe(fromSessionA.runId);
-    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
 
     resolveRun!({ passed: true, output: 'ok' });
     await Promise.all([fromSessionA.result, fromSessionB.result]);
@@ -4115,10 +4127,7 @@ describe('structured_result acquisition', () => {
     expect(row.structured_result).toBeNull();
   });
 
-  // Skipped: fails on dev independent of this PR's diff — confirmed
-  // pre-existing base-branch breakage, tracked separately from task
-  // 3c122f91-52f3-8137-959e-ffdbb591ffb7.
-  it.skip("clears a superseded run's structured_result once a newer run lands for the same (project, content-hash), leaving its other columns and test_run_results extraction untouched", async () => {
+  it("clears a superseded run's structured_result once a newer run lands for the same (project, content-hash), leaving its other columns and test_run_results extraction untouched", async () => {
     const structuredFirst = {
       format: 'junit-xml' as const,
       suites: [
@@ -4170,7 +4179,11 @@ describe('structured_result acquisition', () => {
     });
     mockCollectStructuredTestResult.mockReturnValue(structuredSecond);
     const second = await runProjectTestRequest(
-      baseSpec({ contentHash: 'hash-supersede' }),
+      baseSpec({
+        contentHash: 'hash-supersede',
+        runKind: 'verify',
+        commands: ['npm run verify'],
+      }),
     );
     expect(second.runId).not.toBe(first.runId);
 
