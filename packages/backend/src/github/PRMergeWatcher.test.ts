@@ -4724,6 +4724,9 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
         pause_reason: pauseReason,
       });
       vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+      vi.mocked(getSession).mockReturnValue({
+        worktree_path: '/wt/unexercised',
+      } as any);
       const github = makeMockGitHub();
       mockCategorizeClean(github);
       vi.mocked(getProjectByGithubRepo).mockReturnValue({
@@ -4747,7 +4750,17 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
         content_hash: 'content-hash-x',
         state: 'passed',
         output: 'ok',
-        structured_result: JSON.stringify({ suites: [] }),
+        structured_result: JSON.stringify({
+          suites: [
+            {
+              name: 's',
+              tests: [
+                { id: 't1', name: 'ok', outcome: 'passed', durationMs: 1 },
+              ],
+            },
+          ],
+          totals: { passed: 1, failed: 0, skipped: 0, errors: 0 },
+        }),
         test_report_acquisition_attempted: 1,
         unclaimed_paths,
         started_at: 1000,
