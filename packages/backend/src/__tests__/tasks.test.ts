@@ -22,6 +22,7 @@ vi.mock('../db/queries.js', () =>
     getDepthReviewVerdict: vi.fn().mockReturnValue(undefined),
     clearPauseReasonEntry: vi.fn(),
     getTaskRepoAssignment: vi.fn().mockReturnValue(null),
+    getTaskPlanningSessionsByKind: vi.fn().mockReturnValue([]),
   }),
 );
 
@@ -650,7 +651,52 @@ describe('GET /api/tasks/:taskId/detail-fields', () => {
     );
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ pr: null, depthReview: null });
+    expect(res.body).toEqual({
+      pr: null,
+      depthReview: null,
+      planningSessions: [],
+    });
+  });
+
+  it('returns the per-kind planning session list, and the list-shaped TaskView does not carry it', async () => {
+    const perKind = [
+      {
+        sessionId: 'g-1',
+        sessionType: 'groom',
+        status: 'done',
+        startedAt: 1,
+        endedAt: 2,
+        inputTokens: 10,
+        outputTokens: 20,
+        firstStartedAt: 1,
+      },
+      {
+        sessionId: 'd-1',
+        sessionType: 'design',
+        status: 'running',
+        startedAt: 3,
+        endedAt: null,
+        inputTokens: 0,
+        outputTokens: 0,
+        firstStartedAt: 3,
+      },
+    ];
+    vi.mocked(queries.getTaskPlanningSessionsByKind).mockReturnValue(perKind);
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-3', '🔄 In Progress'),
+    ]);
+
+    const detail = await supertest(buildApp()).get(
+      '/api/tasks/task-3/detail-fields',
+    );
+    expect(detail.body.planningSessions).toEqual(perKind);
+
+    const list = await supertest(buildApp()).get('/api/tasks/active');
+    expect(list.status).toBe(200);
+    for (const t of list.body.tasks) {
+      expect(t).not.toHaveProperty('planningSessions');
+    }
+    vi.mocked(queries.getTaskPlanningSessionsByKind).mockReturnValue([]);
   });
 
   it('404s when the task is not found', async () => {

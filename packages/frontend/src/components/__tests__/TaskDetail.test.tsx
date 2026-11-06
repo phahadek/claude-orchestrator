@@ -443,7 +443,7 @@ describe('TaskDetail', () => {
 
   // ── Planning session — embedded, collapsible SessionPanel ──
 
-  it('does not render planning session section when planningSession is null', () => {
+  it('shows one not-started Grooming chip and no session section when there is no planning session', () => {
     render(
       <TaskDetail
         task={makeTask({ planningSession: null })}
@@ -452,9 +452,80 @@ describe('TaskDetail', () => {
       />,
     );
     expect(screen.queryByTestId('planning-session-header')).toBeNull();
+    expect(screen.getByTestId('stage-chip-planning:groom').textContent).toMatch(
+      /Grooming/,
+    );
   });
 
-  it('renders an inline collapsible SessionPanel for a launched planning session', () => {
+  it('renders Grooming then Design chips, each opening its own session', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        pr: null,
+        depthReview: null,
+        planningSessions: [
+          { sessionId: 'g-1', sessionType: 'groom', status: 'done' },
+          { sessionId: 'd-1', sessionType: 'design', status: 'running' },
+        ],
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const sessions: SessionState[] = [
+      makeSessionState({ sessionId: 'g-1', sessionType: 'groom', events: [] }),
+      makeSessionState({ sessionId: 'd-1', sessionType: 'design', events: [] }),
+    ];
+    render(
+      <TaskDetail
+        task={makeTask({
+          planningSession: makePlanningSession({
+            sessionId: 'd-1',
+            sessionType: 'design',
+          }),
+        })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        sessions={sessions}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('stage-chip-planning:groom')).toBeTruthy(),
+    );
+    const chips = screen
+      .getAllByRole('tab')
+      .map((c) => c.getAttribute('data-testid'));
+    expect(chips.slice(0, 2)).toEqual([
+      'stage-chip-planning:groom',
+      'stage-chip-planning:design',
+    ]);
+    expect(screen.getByTestId('planning-session-header').textContent).toMatch(
+      /Design session/,
+    );
+    fireEvent.click(screen.getByTestId('stage-chip-planning:groom'));
+    expect(screen.getByTestId('planning-session-header').textContent).toMatch(
+      /Grooming session/,
+    );
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    ['split', 'Split'],
+    ['docs', 'Docs'],
+  ])('labels a %s session %s, not Ops', (sessionType, label) => {
+    render(
+      <TaskDetail
+        task={makeTask({
+          planningSession: makePlanningSession({ sessionType, status: 'done' }),
+        })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('planning-session-header').textContent).toBe(
+      `${label} session`,
+    );
+  });
+
+  it('renders an expanded inline SessionPanel for a launched planning session', () => {
     const planningSession = makePlanningSession({ sessionId: 'plan-sess-1' });
     const sessions: SessionState[] = [
       makeSessionState({
@@ -472,18 +543,11 @@ describe('TaskDetail', () => {
       />,
     );
 
-    const header = screen.getByTestId('planning-session-header');
     const section = screen.getByTestId('planning-session-section');
-    expect(header.getAttribute('aria-expanded')).toBe('true');
     expect(section.getAttribute('data-expanded')).toBe('true');
     // Rendered as a live SessionPanel (transcript area), not just a banner.
     expect(screen.getByText('No events yet.')).toBeTruthy();
     expect(screen.getByTestId('planning-session-body')).toBeTruthy();
-
-    fireEvent.click(header);
-    expect(header.getAttribute('aria-expanded')).toBe('false');
-    expect(section.getAttribute('data-expanded')).toBe('false');
-    expect(screen.queryByTestId('planning-session-body')).toBeNull();
   });
 
   it('shows placeholder when planningSession is set but not in sessions store', () => {
@@ -499,8 +563,8 @@ describe('TaskDetail', () => {
     expect(screen.getByText(/Transcript not available/)).toBeTruthy();
   });
 
-  it.each(['done', 'error', 'killed'])(
-    'starts collapsed for a groom session in %s state',
+  it.each(['done', 'error', 'killed', 'running'])(
+    'opens a groom session expanded in %s state',
     (status) => {
       const planningSession = makePlanningSession({
         sessionType: 'groom',
@@ -513,79 +577,14 @@ describe('TaskDetail', () => {
           onClose={vi.fn()}
         />,
       );
-      const header = screen.getByTestId('planning-session-header');
-      const section = screen.getByTestId('planning-session-section');
-      expect(header.getAttribute('aria-expanded')).toBe('false');
-      expect(section.getAttribute('data-expanded')).toBe('false');
+      expect(
+        screen
+          .getByTestId('planning-session-section')
+          .getAttribute('data-expanded'),
+      ).toBe('true');
+      expect(screen.getByTestId('planning-session-body')).toBeTruthy();
     },
   );
-
-  it.each(['running', 'idle'])(
-    'starts expanded for a groom session in %s state',
-    (status) => {
-      const planningSession = makePlanningSession({
-        sessionType: 'groom',
-        status,
-      });
-      render(
-        <TaskDetail
-          task={makeTask({ planningSession })}
-          send={vi.fn()}
-          onClose={vi.fn()}
-        />,
-      );
-      const header = screen.getByTestId('planning-session-header');
-      const section = screen.getByTestId('planning-session-section');
-      expect(header.getAttribute('aria-expanded')).toBe('true');
-      expect(section.getAttribute('data-expanded')).toBe('true');
-    },
-  );
-
-  it.each(['design', 'ops'])(
-    'starts expanded for a %s session regardless of status',
-    (sessionType) => {
-      const planningSession = makePlanningSession({
-        sessionType,
-        status: 'done',
-      });
-      render(
-        <TaskDetail
-          task={makeTask({ planningSession })}
-          send={vi.fn()}
-          onClose={vi.fn()}
-        />,
-      );
-      const header = screen.getByTestId('planning-session-header');
-      const section = screen.getByTestId('planning-session-section');
-      expect(header.getAttribute('aria-expanded')).toBe('true');
-      expect(section.getAttribute('data-expanded')).toBe('true');
-    },
-  );
-
-  it('keeps a collapsed done-grooming panel open after toggling and re-rendering', () => {
-    const planningSession = makePlanningSession({
-      sessionType: 'groom',
-      status: 'done',
-    });
-    const task = makeTask({ planningSession });
-    const { rerender } = render(
-      <TaskDetail task={task} send={vi.fn()} onClose={vi.fn()} />,
-    );
-    const header = screen.getByTestId('planning-session-header');
-    expect(header.getAttribute('aria-expanded')).toBe('false');
-
-    fireEvent.click(header);
-    expect(header.getAttribute('aria-expanded')).toBe('true');
-
-    rerender(
-      <TaskDetail task={{ ...task }} send={vi.fn()} onClose={vi.fn()} />,
-    );
-    expect(
-      screen
-        .getByTestId('planning-session-header')
-        .getAttribute('aria-expanded'),
-    ).toBe('true');
-  });
 
   it('has no Overview tab at task level', () => {
     const pr = makePr();
@@ -1127,24 +1126,6 @@ describe('TaskDetail', () => {
     expect(screen.getByTestId('review-session-section')).toBeTruthy();
   });
 
-  it('planning section collapsed still occupies only its header height (flex: 0 0 auto) even with a code session present', () => {
-    const codeSession = makeCodeSession();
-    const planningSession = makePlanningSession();
-    render(
-      <TaskDetail
-        task={makeTask({ codeSession, planningSession })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        sessions={[]}
-      />,
-    );
-    const planningHeader = screen.getByTestId('planning-session-header');
-    fireEvent.click(planningHeader);
-    const section = screen.getByTestId('planning-session-section');
-    expect(section.getAttribute('data-expanded')).toBe('false');
-    expect(screen.queryByTestId('planning-session-body')).toBeNull();
-  });
-
   it('switching from the planning stage to the implementation stage and back leaves each session panel intact', () => {
     const codeSession = makeCodeSession({ sessionId: 'sess-1' });
     const planningSession = makePlanningSession();
@@ -1164,7 +1145,7 @@ describe('TaskDetail', () => {
     fireEvent.click(screen.getByTestId('stage-chip-implementation'));
     expect(screen.getByText('No events yet.')).toBeTruthy();
 
-    fireEvent.click(screen.getByTestId('stage-chip-planning'));
+    fireEvent.click(screen.getByTestId('stage-chip-planning:groom'));
     expect(screen.getByTestId('planning-session-section')).toBeTruthy();
   });
 
@@ -1203,7 +1184,9 @@ describe('TaskDetail', () => {
     );
     // Only the planning stage has content — it auto-selects.
     expect(
-      screen.getByTestId('stage-chip-planning').getAttribute('aria-selected'),
+      screen
+        .getByTestId('stage-chip-planning:groom')
+        .getAttribute('aria-selected'),
     ).toBe('true');
 
     // Operator manually switches to a stage the auto-selector would not have picked.
