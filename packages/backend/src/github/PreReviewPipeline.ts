@@ -54,6 +54,13 @@ import {
   formatToolchainMismatch,
 } from '../orchestration/gateEnv';
 import { runTestCommands } from '../session/test-runner';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+import {
+  createGateScratchTree,
+  resolveCombinedTree,
+} from '../orchestration/combinedTree';
+import { sendConflictNudge } from './conflictNudge';
 import { acquireAnalyzePermit } from './analyzeSemaphore';
 import {
   admitTestRequest,
@@ -77,6 +84,8 @@ import type {
   TestRequestRunRow,
 } from '../db/types';
 import { parsePauseReasonSet } from '../db/pauseReason';
+
+const execFileAsync = promisify(execFile);
 
 interface GateFailureDetail {
   failedCommand?: string;
@@ -139,6 +148,20 @@ interface StageContext {
   autofixNoDiff?: boolean;
   /** Set by a stage whose lane run an operator cancelled; the outer loop stops the pipeline with no verdict. */
   cancelled?: boolean;
+  /**
+   * Gate-owned scratch checkout of head ⊕ current base. When set, verify and
+   * tests run against it and key their verdicts on its content hash instead
+   * of the session worktree's.
+   */
+  gateTree?: {
+    path: string;
+    contentHash: string;
+    combinedNote: string;
+  };
+}
+
+function treePathOf(ctx: StageContext): string {
+  return ctx.gateTree?.path ?? ctx.worktreePath;
 }
 
 export class PreReviewPipeline {
@@ -433,7 +456,9 @@ export class PreReviewPipeline {
 
         let admissions = 0;
         while (admissions < MAX_VERIFY_ADMISSIONS) {
-          contentHash = await computeWholeTreeContentHash(ctx.worktreePath);
+          contentHash =
+            ctx.gateTree?.contentHash ??
+            (await computeWholeTreeContentHash(ctx.worktreePath));
           if (!contentHash) break;
           admissions++;
 
@@ -449,7 +474,7 @@ export class PreReviewPipeline {
           const laneResult = await this.runThroughTestLane(ctx, {
             projectId: ctx.project.id,
             contentHash,
-            worktreePath: ctx.worktreePath,
+            worktreePath: treePathOf(ctx),
             commands: config.verify,
             timeoutSec: config.test_timeout_sec,
             maxRssMb: config.test_max_rss_mb,
@@ -458,7 +483,7 @@ export class PreReviewPipeline {
             producer: 'pr_gate',
             runKind: 'verify',
             failFast: true,
-            env: buildScopedEnv(ctx.worktreePath, config.cache_env),
+            env: buildScopedEnv(treePathOf(ctx), config.cache_env),
             expectedToolVersions: config.expected_tool_versions,
           });
           if (laneResult.cancelled) {
@@ -541,7 +566,7 @@ export class PreReviewPipeline {
         }
         if (!outcome) {
           const gateResult = await runVerifyAsGate(
-            ctx.worktreePath,
+            treePathOf(ctx),
             config.verify,
             config.test_report_glob,
             {
@@ -632,7 +657,7 @@ export class PreReviewPipeline {
           }
           return {
             failedCommand: outcome.failedCommand,
-            truncatedOutput: outcome.truncatedOutput,
+            truncatedOutput: `${ctx.gateTree?.combinedNote ?? ''}${outcome.truncatedOutput}`,
             summary: outcome.failedCommand
               ? `verify failed: ${outcome.failedCommand}`
               : 'verify failed',
@@ -858,7 +883,9 @@ export class PreReviewPipeline {
         let contentHash: string | null = null;
         let result: Awaited<ReturnType<typeof runTestCommands>> | undefined;
         for (let attempt = 0; attempt < 2; attempt++) {
-          contentHash = await computeWholeTreeContentHash(ctx.worktreePath);
+          contentHash =
+            ctx.gateTree?.contentHash ??
+            (await computeWholeTreeContentHash(ctx.worktreePath));
           if (contentHash) {
             if (getLatestTestRequestRun(ctx.project.id, contentHash, 'full')) {
               logger.info(
@@ -885,7 +912,7 @@ export class PreReviewPipeline {
             ? await this.runThroughTestLane(ctx, {
                 projectId: ctx.project.id,
                 contentHash,
-                worktreePath: ctx.worktreePath,
+                worktreePath: treePathOf(ctx),
                 commands: config.test,
                 timeoutSec: config.test_timeout_sec,
                 maxRssMb: config.test_max_rss_mb,
@@ -894,7 +921,7 @@ export class PreReviewPipeline {
                 producer: 'pr_gate',
               })
             : await runTestCommands(
-                ctx.worktreePath,
+                treePathOf(ctx),
                 config.test,
                 config.test_timeout_sec,
                 (msg) =>
@@ -978,7 +1005,7 @@ export class PreReviewPipeline {
     insertExcusedVerifyCoverageRun({
       projectId: ctx.project.id,
       contentHash,
-      worktreePath: ctx.worktreePath,
+      worktreePath: treePathOf(ctx),
       commands: testCommands,
       source: verify,
     });
@@ -1104,8 +1131,41 @@ export class PreReviewPipeline {
     const config = loadOrchestratorConfig(project.projectDir);
     if (!config.test?.length) return null;
 
-    const contentHash = await computeWholeTreeContentHash(worktreePath);
-    if (!contentHash) return null;
+    // Re-key on head ⊕ current base so the rerun lands where the F2 gate
+    // reads; fall back to the session worktree if the combined tree is
+    // unavailable (conflict / git error).
+    let contentHash: string | null = null;
+    let runPath = worktreePath;
+    let dispose: (() => Promise<void>) | undefined;
+    try {
+      const combined = await resolveCombinedTree({
+        repoDir: worktreePath,
+        headSha,
+        baseBranch:
+          getPRByNumber(prNumber, repo)?.base_branch ?? project.baseBranch,
+      });
+      if (combined.status === 'ok' && combined.contentHash) {
+        const handle = await createGateScratchTree({
+          repoDir: worktreePath,
+          projectDir: project.projectDir,
+          sessionWorktreePath: worktreePath,
+          headSha,
+          treeOid: combined.treeOid,
+        });
+        contentHash = combined.contentHash;
+        runPath = handle.path;
+        dispose = handle.dispose;
+      }
+    } catch (err) {
+      logger.warn(
+        `[PreReviewPipeline] flaky re-run PR #${prNumber}: combined tree unavailable — using session worktree: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+    contentHash ??= await computeWholeTreeContentHash(worktreePath);
+    if (!contentHash) {
+      await dispose?.();
+      return null;
+    }
 
     recordEvent({
       event_type: 'flake_recovery_f2_invalidated',
@@ -1124,7 +1184,7 @@ export class PreReviewPipeline {
     admitTestRequest({
       projectId: project.id,
       contentHash,
-      worktreePath,
+      worktreePath: runPath,
       commands: config.test,
       timeoutSec: config.test_timeout_sec,
       maxRssMb: config.test_max_rss_mb,
@@ -1132,11 +1192,13 @@ export class PreReviewPipeline {
       taskId: getPRByNumber(prNumber, repo)?.task_id ?? null,
       runOrigin: 'pr_pipeline',
       producer: 'pr_gate',
-    }).result.catch((err: unknown) => {
-      logger.warn(
-        `[PreReviewPipeline] flaky-rerun enqueue failed for PR #${prNumber}: ${(err as Error).message}`,
-      );
-    });
+    })
+      .result.catch((err: unknown) => {
+        logger.warn(
+          `[PreReviewPipeline] flaky-rerun enqueue failed for PR #${prNumber}: ${(err as Error).message}`,
+        );
+      })
+      .finally(() => dispose?.());
 
     logger.info(
       `[PreReviewPipeline] flaky re-run enqueued for PR #${prNumber} SHA ${headSha.slice(0, 7)}`,
@@ -1435,6 +1497,82 @@ export class PreReviewPipeline {
     job: ReviewJob,
     project: ProjectConfig,
   ): Promise<{ passed: boolean }> {
+    const scratch: { dispose?: () => Promise<void> } = {};
+    try {
+      return await this.runStages(job, project, scratch);
+    } finally {
+      await scratch.dispose?.();
+    }
+  }
+
+  /**
+   * Builds ctx.gateTree for head ⊕ current base. Returns 'conflict' (after
+   * nudging the session) when head and base textually conflict, so no test
+   * run happens; falls back to the session worktree (leaving gateTree unset)
+   * on any other failure to build the combined tree.
+   */
+  private async resolveGateTree(
+    ctx: StageContext,
+    scratch: { dispose?: () => Promise<void> },
+  ): Promise<'ok' | 'conflict'> {
+    const prRow = getPRByNumber(ctx.prNumber, ctx.repo);
+    const baseBranch = prRow?.base_branch ?? ctx.project.baseBranch;
+    try {
+      const headSha = await getHeadSha(ctx.worktreePath);
+      const combined = await resolveCombinedTree({
+        repoDir: ctx.worktreePath,
+        headSha,
+        baseBranch,
+      });
+      if (combined.status === 'conflict') {
+        logger.info(
+          `[PreReviewPipeline] PR #${ctx.prNumber}: head conflicts with ${baseBranch} — nudging, no test run`,
+        );
+        if (prRow) {
+          await sendConflictNudge(this.sessionManager, prRow, 'conflict');
+        }
+        return 'conflict';
+      }
+      if (combined.status !== 'ok' || !combined.contentHash) {
+        logger.warn(
+          `[PreReviewPipeline] PR #${ctx.prNumber}: combined tree unavailable (${combined.status === 'ok' ? 'empty' : combined.detail}) — gating the session worktree`,
+        );
+        return 'ok';
+      }
+      const headTree = (
+        await execFileAsync('git', ['rev-parse', `${headSha}^{tree}`], {
+          cwd: ctx.worktreePath,
+        })
+      ).stdout.trim();
+      const handle = await createGateScratchTree({
+        repoDir: ctx.worktreePath,
+        projectDir: ctx.project.projectDir,
+        sessionWorktreePath: ctx.worktreePath,
+        headSha,
+        treeOid: combined.treeOid,
+      });
+      scratch.dispose = handle.dispose;
+      ctx.gateTree = {
+        path: handle.path,
+        contentHash: combined.contentHash,
+        combinedNote:
+          combined.treeOid === headTree
+            ? ''
+            : `Note: this failure was observed on your head merged with current ${baseBranch} (${combined.baseSha.slice(0, 7)}); the break may appear only against current base.\n\n`,
+      };
+    } catch (err) {
+      logger.warn(
+        `[PreReviewPipeline] PR #${ctx.prNumber}: gate scratch tree setup failed — gating the session worktree: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+    return 'ok';
+  }
+
+  private async runStages(
+    job: ReviewJob,
+    project: ProjectConfig,
+    scratch: { dispose?: () => Promise<void> },
+  ): Promise<{ passed: boolean }> {
     const prRow = getPRByNumber(job.prNumber, job.repo);
     const headSha = prRow?.head_sha ?? '';
     const worktreePath = prRow?.session_id
@@ -1487,6 +1625,17 @@ export class PreReviewPipeline {
           `[PreReviewPipeline] PR #${job.prNumber}: stage=${stage.id} skipped`,
         );
         continue;
+      }
+
+      if (
+        (stage.id === 'verify' || stage.id === 'tests') &&
+        ctx.worktreePath &&
+        !ctx.gateTree &&
+        !scratch.dispose
+      ) {
+        if ((await this.resolveGateTree(ctx, scratch)) === 'conflict') {
+          return { passed: false };
+        }
       }
 
       logger.info(
