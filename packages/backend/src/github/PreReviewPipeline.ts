@@ -1518,7 +1518,11 @@ export class PreReviewPipeline {
     const prRow = getPRByNumber(ctx.prNumber, ctx.repo);
     const baseBranch = prRow?.base_branch ?? ctx.project.baseBranch;
     try {
-      const headSha = await getHeadSha(ctx.worktreePath);
+      const headSha = (
+        await execFileAsync('git', ['rev-parse', 'HEAD'], {
+          cwd: ctx.worktreePath,
+        })
+      ).stdout.trim();
       const combined = await resolveCombinedTree({
         repoDir: ctx.worktreePath,
         headSha,
