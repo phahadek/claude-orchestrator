@@ -29,6 +29,7 @@ import {
   pruneTestSamples,
   readRecentTestDurations,
   readRecentTestOutcomes,
+  type TestSampleOutcome,
 } from './testSampleStore';
 
 interface WorkerTestRow {
@@ -70,34 +71,8 @@ const BASELINE_WINDOW_SAMPLES = 20;
 const MIN_CONSECUTIVE_REGRESSED_SAMPLES = 3;
 const REGRESSION_K = 3;
 
-// Mirrors TEST_DURATION_DIGEST_CAPACITY/TEST_OUTCOME_DIGEST_CAPACITY in
-// db/queries.ts.
-const TEST_DURATION_DIGEST_CAPACITY = 32;
-const TEST_OUTCOME_DIGEST_CAPACITY = 200;
-
-interface DigestOutcomeSample {
-  o: 'P' | 'F';
-  t: number;
-  h?: string;
-}
-
-function parseDigestOutcomes(json: string): DigestOutcomeSample[] {
-  try {
-    const parsed = JSON.parse(json);
-    return Array.isArray(parsed) ? (parsed as DigestOutcomeSample[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-function parseDigestDurations(json: string): number[] {
-  try {
-    const parsed = JSON.parse(json);
-    return Array.isArray(parsed) ? (parsed as number[]) : [];
-  } catch {
-    return [];
-  }
-}
+// Duration window read back from test_sample (its duration retention).
+const BASELINE_DURATION_READ_LIMIT = 32;
 
 interface TestOutcomeCounts {
   passed: number;
@@ -108,7 +83,6 @@ interface TestOutcomeCounts {
 }
 
 let stmtInsertTestRunResult: Database.Statement | null = null;
-let stmtGetTestPerfDigest: Database.Statement | null = null;
 let stmtUpsertTestPerfDigest: Database.Statement | null = null;
 let stmtUpsertTestPerfBaseline: Database.Statement | null = null;
 
@@ -209,48 +183,14 @@ function recordTestPerfDigestSample(
   const outcomeAdmitted = outcome === 'passed' || outcome === 'failed';
   if (!durationAdmitted && !outcomeAdmitted) return null;
 
-  stmtGetTestPerfDigest ??= database.prepare(
-    `SELECT recent_outcomes, recent_durations FROM test_perf_baselines WHERE test_id = @test_id`,
-  );
-  const existing = stmtGetTestPerfDigest.get({ test_id: testId }) as
-    | { recent_outcomes: string; recent_durations: string }
-    | undefined;
-
-  const outcomes = existing
-    ? parseDigestOutcomes(existing.recent_outcomes)
-    : [];
-  if (outcomeAdmitted) {
-    const sample: DigestOutcomeSample = {
-      o: outcome === 'passed' ? 'P' : 'F',
-      t: sequencedAt,
-    };
-    if (contentHash) sample.h = contentHash;
-    outcomes.push(sample);
-    if (outcomes.length > TEST_OUTCOME_DIGEST_CAPACITY) {
-      outcomes.splice(0, outcomes.length - TEST_OUTCOME_DIGEST_CAPACITY);
-    }
-  }
-
-  const durations = existing
-    ? parseDigestDurations(existing.recent_durations)
-    : [];
-  if (durationAdmitted) {
-    durations.push(durationMs);
-    if (durations.length > TEST_DURATION_DIGEST_CAPACITY) {
-      durations.splice(0, durations.length - TEST_DURATION_DIGEST_CAPACITY);
-    }
-  }
-
   stmtUpsertTestPerfDigest ??= database.prepare(`
     INSERT INTO test_perf_baselines
-      (test_id, project_id, name, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, recent_outcomes, recent_durations, markers, updated_at)
+      (test_id, project_id, name, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, markers, updated_at)
     VALUES
-      (@test_id, @project_id, @name, 0, 0, 0, @last_duration_ms, 0, @recent_outcomes, @recent_durations, @markers, @updated_at)
+      (@test_id, @project_id, @name, 0, 0, 0, @last_duration_ms, 0, @markers, @updated_at)
     ON CONFLICT(test_id) DO UPDATE SET
       project_id = excluded.project_id,
       name = excluded.name,
-      recent_outcomes = excluded.recent_outcomes,
-      recent_durations = excluded.recent_durations,
       markers = COALESCE(excluded.markers, test_perf_baselines.markers),
       updated_at = excluded.updated_at
   `);
@@ -259,8 +199,6 @@ function recordTestPerfDigestSample(
     project_id: projectId,
     name,
     last_duration_ms: durationAdmitted ? durationMs : 0,
-    recent_outcomes: JSON.stringify(outcomes),
-    recent_durations: JSON.stringify(durations),
     markers: markers && markers.length > 0 ? JSON.stringify(markers) : null,
     updated_at: sequencedAt,
   });
@@ -377,7 +315,7 @@ function computeTestPerfBaseline(
 /** Mirrors computeTestFlipRateFlagFromOutcomes in db/queries.ts — log-only here, nothing persisted. */
 function logFlipRateFlagIfFlagged(
   testId: string,
-  outcomes: DigestOutcomeSample[],
+  outcomes: TestSampleOutcome[],
   windowN: number,
   thresholdK: number,
 ): void {
@@ -489,7 +427,7 @@ function run(): TestRunIngestionWorkerResult {
                 readRecentTestDurations(
                   database,
                   item.test_id,
-                  TEST_DURATION_DIGEST_CAPACITY,
+                  BASELINE_DURATION_READ_LIMIT,
                 ),
               );
             }

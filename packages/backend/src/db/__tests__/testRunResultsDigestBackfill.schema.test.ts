@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest';
 import Database from 'better-sqlite3';
 import {
   runMigrations,
+  DROP_TEST_PERF_DIGEST_MARKER,
   backfillTestRunResultsDigest,
   deleteSubsumedPassingTestRunResults,
   runTestRunResultsDigestBackfillAndPrune,
@@ -22,6 +23,16 @@ function freshDb(): Database.Database {
   const db = new Database(':memory:');
   db.pragma('foreign_keys = ON');
   runMigrations(db);
+  // These tests exercise the historical digest backfill, which writes the
+  // since-dropped ring columns: restore them and pin the drop marker so a
+  // later runMigrations() leaves them in place.
+  db.exec(
+    `ALTER TABLE test_perf_baselines ADD COLUMN recent_outcomes TEXT NOT NULL DEFAULT '[]';
+     ALTER TABLE test_perf_baselines ADD COLUMN recent_durations TEXT NOT NULL DEFAULT '[]';`,
+  );
+  db.prepare(
+    `INSERT OR IGNORE INTO schema_backfills (name, applied_at) VALUES (?, ?)`,
+  ).run(DROP_TEST_PERF_DIGEST_MARKER, Date.now());
   return db;
 }
 

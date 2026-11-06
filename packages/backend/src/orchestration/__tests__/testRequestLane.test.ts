@@ -171,8 +171,6 @@ import {
   listRecentValidTestDurations,
   computeTestFlipRateFlag,
   computeTestFailureBreadthFlag,
-  TEST_OUTCOME_DIGEST_CAPACITY,
-  TEST_DURATION_DIGEST_CAPACITY,
   countTestRequestRunsNeedingExtraction,
   insertProject,
   getFailingTestIdsForRun,
@@ -358,6 +356,10 @@ function insertBrokenRun(
   completeTestRequestRun(runId, 'failed', 'boom', failureReason);
   return runId;
 }
+
+// test_sample retention (db/testSampleStore.ts).
+const TEST_OUTCOME_WINDOW = 200;
+const TEST_DURATION_WINDOW = 32;
 
 describe('checkTestRequestHold', () => {
   function holdParams(
@@ -5321,52 +5323,28 @@ describe('test_perf_baselines digest', () => {
     expect(flag.flagged).toBe(true);
   });
 
-  it('the retained outcome sequence is fixed-width — ingesting past TEST_OUTCOME_DIGEST_CAPACITY does not grow the stored value', () => {
+  it('the outcome window stays fully served at the test_sample outcome retention after ingesting past it', () => {
     const testId = 'digest-outcome-fixed-width';
-    const overflow = TEST_OUTCOME_DIGEST_CAPACITY + 25;
+    const overflow = TEST_OUTCOME_WINDOW + 25;
     for (let i = 0; i < overflow; i++) {
       insertOutcomeSample(testId, i % 2 === 0 ? 'passed' : 'failed', 1, {
         concurrentRunCount: 0,
       });
     }
 
-    const row = db
-      .prepare(
-        `SELECT recent_outcomes FROM test_perf_baselines WHERE test_id = ?`,
-      )
-      .get(testId) as { recent_outcomes: string };
-    const outcomes = JSON.parse(row.recent_outcomes) as unknown[];
-    expect(outcomes.length).toBe(TEST_OUTCOME_DIGEST_CAPACITY);
-
-    // The window requested at the digest's own cap must still be fully served.
-    const flag = computeTestFlipRateFlag(
-      testId,
-      TEST_OUTCOME_DIGEST_CAPACITY,
-      1,
-    );
-    expect(flag.sampleCount).toBe(TEST_OUTCOME_DIGEST_CAPACITY);
+    const flag = computeTestFlipRateFlag(testId, TEST_OUTCOME_WINDOW, 1);
+    expect(flag.sampleCount).toBe(TEST_OUTCOME_WINDOW);
   });
 
-  it('the retained duration ring is fixed-width — ingesting past TEST_DURATION_DIGEST_CAPACITY does not grow the stored value', () => {
+  it('the duration window stays fully served at the test_sample duration retention after ingesting past it', () => {
     const testId = 'digest-duration-fixed-width';
-    const overflow = TEST_DURATION_DIGEST_CAPACITY + 25;
+    const overflow = TEST_DURATION_WINDOW + 25;
     for (let i = 0; i < overflow; i++) {
       insertSample(testId, i, { concurrentRunCount: 0 });
     }
 
-    const row = db
-      .prepare(
-        `SELECT recent_durations FROM test_perf_baselines WHERE test_id = ?`,
-      )
-      .get(testId) as { recent_durations: string };
-    const durations = JSON.parse(row.recent_durations) as unknown[];
-    expect(durations.length).toBe(TEST_DURATION_DIGEST_CAPACITY);
-
-    const window = listRecentValidTestDurations(
-      testId,
-      TEST_DURATION_DIGEST_CAPACITY,
-    );
-    expect(window).toHaveLength(TEST_DURATION_DIGEST_CAPACITY);
+    const window = listRecentValidTestDurations(testId, TEST_DURATION_WINDOW);
+    expect(window).toHaveLength(TEST_DURATION_WINDOW);
     // Newest-first: the very last ingested sample (overflow - 1) leads.
     expect(window[0]).toBe(overflow - 1);
   });

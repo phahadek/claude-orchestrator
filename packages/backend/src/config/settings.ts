@@ -91,8 +91,8 @@ const SettingsSchema = z.object({
     .number()
     .int()
     .min(0),
-  // Capped at 200 — the outcome-sequence digest on test_perf_baselines
-  // (TEST_OUTCOME_DIGEST_CAPACITY, db/queries.ts) only retains the most
+  // Capped at 200 — test_sample (TEST_SAMPLE_OUTCOME_RETENTION,
+  // db/testSampleStore.ts) only retains the most
   // recent 200 valid outcomes per test. Every production caller passes this
   // setting straight through to computeTestFlipRateFlag as windowN; a value
   // above the digest's capacity would silently degrade flip-rate accuracy

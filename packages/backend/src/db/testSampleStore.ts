@@ -323,11 +323,20 @@ function parseArray<T>(json: string): T[] {
   }
 }
 
+/** True while the legacy recent_outcomes/recent_durations columns still exist. */
+export function hasTestPerfDigestColumns(target: Database.Database): boolean {
+  const cols = target.prepare(`PRAGMA table_info(test_perf_baselines)`).all() as {
+    name: string;
+  }[];
+  return cols.some((c) => c.name === 'recent_outcomes');
+}
+
 /** Idempotent (INSERT OR IGNORE, deterministic synthetic timestamps); never deletes a source. */
 export function backfillTestSamples(
   target: Database.Database,
   batchSize: number = TEST_SAMPLE_BACKFILL_BATCH_SIZE,
 ): void {
+  if (!hasTestPerfDigestColumns(target)) return;
   const page = target.prepare(
     `SELECT test_id, project_id, recent_outcomes, recent_durations, updated_at
      FROM test_perf_baselines WHERE test_id > ? ORDER BY test_id LIMIT ?`,
@@ -400,6 +409,7 @@ export function verifyTestSamples(
   database: Database.Database,
   batchSize: number = TEST_SAMPLE_BACKFILL_BATCH_SIZE,
 ): TestSampleVerificationRow[] {
+  if (!hasTestPerfDigestColumns(database)) return [];
   const page = database.prepare(
     `SELECT test_id, project_id, recent_outcomes, recent_durations
      FROM test_perf_baselines WHERE test_id > ? ORDER BY test_id LIMIT ?`,

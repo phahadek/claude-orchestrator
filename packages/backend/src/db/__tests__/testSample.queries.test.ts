@@ -10,7 +10,13 @@ import {
   recordTestPerfDigestSample,
   verifyTestSampleDigestParity,
 } from '../queries.js';
-import { runTestSampleBackfill } from '../schema.js';
+import {
+  DROP_TEST_PERF_DIGEST_MARKER,
+  dropTestPerfDigestColumns,
+  runMigrations,
+  runTestSampleBackfill,
+} from '../schema.js';
+import { hasTestPerfDigestColumns } from '../testSampleStore.js';
 
 const BASE = 1_700_000_000_000 * 1000;
 
@@ -58,7 +64,6 @@ describe('test_sample dual-write', () => {
   it('projection equals the digest and pruning keeps retention floors', () => {
     for (let i = 0; i < 260; i++)
       record('t1', i, i % 2 ? 'passed' : 'failed', 'h');
-    expect(total()).toBe(0);
     const o = db
       .prepare(`SELECT COUNT(*) c FROM test_sample WHERE outcome IS NOT NULL`)
       .get() as { c: number };
@@ -88,19 +93,81 @@ describe('test_sample dual-write', () => {
   });
 });
 
-describe('test_sample backfill and verification', () => {
-  function seedDigest() {
-    const outcomes = [
-      { o: 'P', t: BASE + 1, h: 'a' },
-      { o: 'F', t: BASE + 2 },
-      { o: 'P', t: BASE + 3, h: 'b' },
-    ];
-    db.prepare(
-      `INSERT INTO test_perf_baselines
+function restoreDigestColumns() {
+  db.prepare(`DELETE FROM schema_backfills WHERE name = ?`).run(
+    DROP_TEST_PERF_DIGEST_MARKER,
+  );
+  if (!hasTestPerfDigestColumns(db)) {
+    db.exec(
+      `ALTER TABLE test_perf_baselines ADD COLUMN recent_outcomes TEXT NOT NULL DEFAULT '[]';
+       ALTER TABLE test_perf_baselines ADD COLUMN recent_durations TEXT NOT NULL DEFAULT '[]';`,
+    );
+  }
+}
+
+function seedDigest() {
+  restoreDigestColumns();
+  const outcomes = [
+    { o: 'P', t: BASE + 1, h: 'a' },
+    { o: 'F', t: BASE + 2 },
+    { o: 'P', t: BASE + 3, h: 'b' },
+  ];
+  db.prepare(
+    `INSERT INTO test_perf_baselines
         (test_id, project_id, name, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, recent_outcomes, recent_durations, updated_at)
        VALUES ('b1','p1','b1',0,0,0,0,0,?,?,?)`,
-    ).run(JSON.stringify(outcomes), JSON.stringify([5, 6, 7]), BASE + 3);
-  }
+  ).run(JSON.stringify(outcomes), JSON.stringify([5, 6, 7]), BASE + 3);
+}
+
+describe('test_perf_baselines digest column drop', () => {
+  const cols = () => hasTestPerfDigestColumns(db);
+
+  it('refuses to drop while the by-value check reports a mismatch, then drops at zero', () => {
+    seedDigest();
+    runTestSampleBackfill(db);
+    db.prepare(`UPDATE test_sample SET outcome='F' WHERE sequenced_at=?`).run(
+      BASE + 1,
+    );
+    dropTestPerfDigestColumns(db);
+    expect(cols()).toBe(true);
+    expect(
+      db
+        .prepare(`SELECT 1 FROM schema_backfills WHERE name = ?`)
+        .get(DROP_TEST_PERF_DIGEST_MARKER),
+    ).toBeUndefined();
+
+    db.prepare(`UPDATE test_sample SET outcome='P' WHERE sequenced_at=?`).run(
+      BASE + 1,
+    );
+    dropTestPerfDigestColumns(db);
+    expect(cols()).toBe(false);
+    expect(
+      db
+        .prepare(`SELECT 1 FROM schema_backfills WHERE name = ?`)
+        .get(DROP_TEST_PERF_DIGEST_MARKER),
+    ).toBeDefined();
+  });
+
+  it('keeps ingestion working and updated_at strictly increasing with the columns absent', () => {
+    restoreDigestColumns();
+    dropTestPerfDigestColumns(db);
+    runMigrations(db);
+    expect(cols()).toBe(false);
+    const updatedAt = () =>
+      (
+        db
+          .prepare(`SELECT updated_at FROM test_perf_baselines WHERE test_id='d1'`)
+          .get() as { updated_at: number }
+      ).updated_at;
+    record('d1', 1, 'passed', 'h');
+    const first = updatedAt();
+    record('d1', 2, 'failed', 'h');
+    expect(updatedAt()).toBeGreaterThan(first);
+    expect(updatedAt()).toBe(BASE + 2);
+  });
+});
+
+describe('test_sample backfill and verification', () => {
   const count = () =>
     (db.prepare(`SELECT COUNT(*) c FROM test_sample`).get() as { c: number }).c;
 
