@@ -456,6 +456,59 @@ export function registerMilestoneInManifest(
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
 }
 
+/**
+ * Re-points an already-registered milestone's manifest board (and any
+ * neighbour entries referencing its old board) after its `sourceId` changes.
+ * Same no-op tolerance as `registerMilestoneInManifest`; writes only when
+ * something actually changed.
+ */
+export function updateMilestoneBoardInManifest(
+  repoRoot: string,
+  change: {
+    canonicalShortId: string;
+    oldBoard: string | null;
+    newBoard: string;
+  },
+  projectKey?: string,
+): void {
+  const configDir = resolveConfigDir(repoRoot);
+  if (!configDir) return;
+  const key = projectKey ?? basename(repoRoot);
+  const manifestPath = join(configDir, 'projects', key, 'grooming.json');
+  if (!existsSync(manifestPath)) return;
+
+  let manifest: GroomManifest;
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as GroomManifest;
+  } catch {
+    return;
+  }
+
+  let changed = false;
+  const entry = manifest.milestones?.[change.canonicalShortId];
+  if (entry && entry.board !== change.newBoard) {
+    entry.board = change.newBoard;
+    changed = true;
+  }
+  if (change.oldBoard) {
+    for (const m of Object.values(manifest.milestones ?? {})) {
+      for (const n of m.neighbours ?? []) {
+        if (
+          n.id === change.canonicalShortId &&
+          n.board === change.oldBoard &&
+          n.board !== change.newBoard
+        ) {
+          n.board = change.newBoard;
+          changed = true;
+        }
+      }
+    }
+  }
+  if (!changed) return;
+
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+}
+
 // ─── git helpers (read-only) ────────────────────────────────────────────────
 
 async function git(
