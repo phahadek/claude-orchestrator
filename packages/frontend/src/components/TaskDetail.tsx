@@ -223,8 +223,11 @@ export function TaskDetail({
   setSessionFavorited = () => {},
   reviewNotDispatchedReason,
 }: Props) {
-  const [showReviewSection, setShowReviewSection] = useState(true);
-  const [showDepthReviewSection, setShowDepthReviewSection] = useState(true);
+  // undefined = operator hasn't toggled; the default (depth review if present,
+  // else review) is derived so it applies once detailFields arrives.
+  const [reviewSectionChoice, setReviewSectionChoice] = useState<
+    'review' | 'depth' | null | undefined
+  >(undefined);
   const [showSpec, setShowSpec] = useState(!task.codeSession);
   const testRunStatus = useTestLaneRunStatus(
     projectId,
@@ -267,7 +270,7 @@ export function TaskDetail({
   // WS update to the same task (e.g. a new demand badge) must not yank the
   // operator's manual stage selection away.
   useEffect(() => {
-    setShowReviewSection(true);
+    setReviewSectionChoice(undefined);
     setSelectedStage(selectAutoStage(computeStages(task)));
     setReviewError(null);
     setFixConflictsInFlight(false);
@@ -594,15 +597,21 @@ export function TaskDetail({
   // The stage bar owns which top-level section (Planning/Implementation/Tests/
   // Review/PR) is on screen; this local toggle only collapses the Review
   // stage's own body once it's the active stage.
-  const isReviewExpanded = showReviewSection;
+  const openReviewSection: 'review' | 'depth' | null =
+    reviewSectionChoice !== undefined
+      ? reviewSectionChoice
+      : detailFields?.depthReview
+        ? 'depth'
+        : 'review';
+  const isReviewExpanded = openReviewSection === 'review';
+  const showDepthReviewSection = openReviewSection === 'depth';
 
-  const handleReviewToggle = useCallback(() => {
-    setShowReviewSection((v) => !v);
-  }, []);
-
-  const handleDepthReviewToggle = useCallback(() => {
-    setShowDepthReviewSection((v) => !v);
-  }, []);
+  const handleReviewSectionToggle = useCallback(
+    (section: 'review' | 'depth') => {
+      setReviewSectionChoice(openReviewSection === section ? null : section);
+    },
+    [openReviewSection],
+  );
 
   const stages = computeStages(
     task,
@@ -895,7 +904,7 @@ export function TaskDetail({
           >
             <div
               className={styles.reviewSectionHeader}
-              onClick={handleReviewToggle}
+              onClick={() => handleReviewSectionToggle('review')}
               role="button"
               aria-expanded={isReviewExpanded}
             >
@@ -963,7 +972,7 @@ export function TaskDetail({
           >
             <div
               className={styles.reviewSectionHeader}
-              onClick={handleDepthReviewToggle}
+              onClick={() => handleReviewSectionToggle('depth')}
               role="button"
               aria-expanded={showDepthReviewSection}
             >
