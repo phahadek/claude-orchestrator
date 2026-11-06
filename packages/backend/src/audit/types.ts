@@ -71,6 +71,7 @@ type EventType =
   | 'stalled_pr_base_recovery_reset'
   | 'scheduled_audit_sweep_command_retry'
   | 'scheduled_audit_sweep_command_escalated'
+  | 'scheduled_audit_sweep_command_unparsed'
   | 'scheduled_audit_sweep_finding_filed'
   | 'task_launch_escalated'
   | 'task_launch_skipped_branch_exists'
