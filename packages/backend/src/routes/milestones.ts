@@ -278,9 +278,7 @@ export function createMilestonesRouter(): Router {
   router.get(
     '/milestones/:project/test-analytics/pass-rate-trend',
     (req: Request, res: Response) => {
-      res.json(
-        getPassRateTrend(String(req.params.project), windowDaysOf(req)),
-      );
+      res.json(getPassRateTrend(String(req.params.project), windowDaysOf(req)));
     },
   );
 
