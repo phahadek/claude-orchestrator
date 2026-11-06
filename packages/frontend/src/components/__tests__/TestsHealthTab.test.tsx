@@ -208,6 +208,6 @@ describe('TestsView tabs', () => {
     expect(screen.queryByTestId('project-test-run-run-1')).toBeNull();
 
     fireEvent.click(screen.getByTestId('tests-tab-runs'));
-    expect(screen.getByTestId('project-test-run-run-1')).toBeTruthy();
+    expect(await screen.findByTestId('project-test-run-run-1')).toBeTruthy();
   });
 });
