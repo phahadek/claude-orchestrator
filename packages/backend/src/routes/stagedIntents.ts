@@ -7087,6 +7087,7 @@ export async function triggerTestRequestExecution(
   const outcomesDigest =
     runId && runOutcomes
       ? buildTestResultDigestFromOutcomes(runOutcomes, {
+          runId,
           ...(unattributedView
             ? { unattributed: { view: unattributedView, knownCount: 0 } }
             : {}),
@@ -7115,6 +7116,7 @@ export async function triggerTestRequestExecution(
               filterResult,
               guardBlocked,
               unattributedView,
+              runId,
             )) ||
           outcomesDigest ||
           truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP);

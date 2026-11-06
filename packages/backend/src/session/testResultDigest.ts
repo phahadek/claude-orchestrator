@@ -13,12 +13,15 @@ export interface TestResultDigestOptions {
   runFailure?: { failedCommand: string | null; outputTail: string };
   /** When set, failing tests render as unattributed (indicator lines / grouped) with `knownCount` collapsed. */
   unattributed?: { view: UnattributedView; knownCount: number };
+  /** The run the digest describes; enables the failure-detail pointer on the plain path. */
+  runId?: string | null;
 }
 
 export interface UnattributedFailure {
   test_id: string;
   name: string;
   failure_message?: string | null;
+  failure_trace_excerpt?: string | null;
 }
 
 /** Per-test breadth/flip numbers plus the thresholds they are shown against. */
@@ -34,8 +37,19 @@ export interface UnattributedView {
 
 const MAX_GROUPS_SHOWN = 5;
 
-const TRACE_PULL_POINTER = (runId: string | null): string =>
-  `trace: testHealth.getTestTrace(${runId ? `runId=${runId}, ` : ''}testId)`;
+/** One pointer line per digest, or null when the run is unknown or no listed failure has stored detail. */
+export function failureDetailPointer(
+  runId: string | null | undefined,
+  tests: UnattributedFailure[],
+): string | null {
+  const hasDetail = tests.some(
+    (t) =>
+      (t.failure_message ?? '').length > 0 ||
+      (t.failure_trace_excerpt ?? '').length > 0,
+  );
+  if (!runId || !hasDetail) return null;
+  return `_Failure detail: call mcp__orchestrator__testHealth_getTestTrace with { runId: "${runId}", testId: "<a test id above>" } — that test's stored message and trace, up to 8 KB._`;
+}
 
 /** Module of a test id: the file part before "::", else everything before the last "/" segment's test name. */
 function testIdModule(testId: string): string {
@@ -88,15 +102,16 @@ export function renderUnattributedFailures(
     if (sorted.length > MAX_GROUPS_SHOWN) {
       lines.push(`- … ${sorted.length - MAX_GROUPS_SHOWN} more module(s)`);
     }
-    lines.push(`_Per-test detail: ${TRACE_PULL_POINTER(view.runId)}_`);
   } else {
     for (const t of tests) {
       const ind = view.indicators.get(t.test_id);
       lines.push(
-        `- \`${t.test_id}\` — ${t.name} [breadth ${ind?.breadth ?? 0}/${view.breadthN}, flips ${ind?.flips ?? 0}/${view.flipWindowW}] (${TRACE_PULL_POINTER(view.runId)})`,
+        `- \`${t.test_id}\` — ${t.name} [breadth ${ind?.breadth ?? 0}/${view.breadthN}, flips ${ind?.flips ?? 0}/${view.flipWindowW}]`,
       );
     }
   }
+  const pointer = failureDetailPointer(view.runId, tests);
+  if (pointer) lines.push(pointer);
   if (knownCount > 0) lines.push('', `+${knownCount} known failures`);
   return lines;
 }
@@ -127,6 +142,7 @@ export function buildTestResultDigestFromOutcomes(
       test_id: string;
       name: string;
       failure_message?: string | null;
+      failure_trace_excerpt?: string | null;
     }[];
     totals: {
       passed: number;
@@ -177,6 +193,8 @@ export function buildTestResultDigestFromOutcomes(
         `_...${elidedCount} more failing test${elidedCount === 1 ? '' : 's'} elided._`,
       );
     }
+    const pointer = failureDetailPointer(opts.runId, shown);
+    if (pointer) lines.push('', pointer);
   }
   if (opts.runFailure && (failedCount === 0 || outcomes.incomplete)) {
     lines.push(
