@@ -137,6 +137,8 @@ interface StageContext {
    * this same tree — re-running it would be deterministic and wasteful.
    */
   autofixNoDiff?: boolean;
+  /** Set by a stage whose lane run an operator cancelled; the outer loop stops the pipeline with no verdict. */
+  cancelled?: boolean;
 }
 
 export class PreReviewPipeline {
@@ -459,6 +461,13 @@ export class PreReviewPipeline {
             env: buildScopedEnv(ctx.worktreePath, config.cache_env),
             expectedToolVersions: config.expected_tool_versions,
           });
+          if (laneResult.cancelled) {
+            await this.handleOperatorCancel(ctx, 'verify');
+            return {
+              summary: 'verify cancelled by operator',
+              stopWithoutVerdict: true,
+            };
+          }
           if (!laneResult.superseded) {
             outcome = outcomeFromRun(getTestRequestRunById(laneResult.runId), {
               passed: laneResult.passed,
@@ -489,6 +498,13 @@ export class PreReviewPipeline {
             visited.add(by);
             const followed = getTestRequestRunById(by);
             if (!followed) break;
+            if (followed.failure_reason === 'cancelled') {
+              await this.handleOperatorCancel(ctx, 'verify');
+              return {
+                summary: 'verify cancelled by operator',
+                stopWithoutVerdict: true,
+              };
+            }
             if (
               followed.state === 'failed' &&
               followed.failure_reason === 'superseded'
@@ -891,6 +907,11 @@ export class PreReviewPipeline {
                 },
               );
 
+          if ((result as TestRequestRunResult).cancelled) {
+            await this.handleOperatorCancel(ctx, 'tests');
+            ctx.cancelled = true;
+            return;
+          }
           if (!(result as TestRequestRunResult).superseded) break;
           logger.info(
             `[PreReviewPipeline] tests run for PR #${ctx.prNumber} was superseded — re-hashing and re-admitting once`,
@@ -1357,6 +1378,35 @@ export class PreReviewPipeline {
     }
   }
 
+  /**
+   * An operator cancelled this stage's lane run: no verdict, no re-admission.
+   * Records the test_cancelled pause (discharged by the pre-review re-run or a
+   * new push) and tells the implementing session not to re-request the run.
+   */
+  private async handleOperatorCancel(
+    ctx: StageContext,
+    stageId: string,
+  ): Promise<void> {
+    setPauseReason(
+      ctx.prNumber,
+      ctx.repo,
+      'test_cancelled',
+      `${stageId} run cancelled by operator`,
+    );
+    const sessionId = getPRByNumber(ctx.prNumber, ctx.repo)?.session_id;
+    if (!sessionId) return;
+    try {
+      await this.sessionManager.sendOrResume(
+        sessionId,
+        `## Test Run Cancelled\n\nAn operator cancelled the ${stageId} test run for this PR, so it produced no result. Do not re-request it without a new reason (for example, a new commit).`,
+      );
+    } catch (e) {
+      logger.warn(
+        `[PreReviewPipeline] operator-cancel routing failed for PR #${ctx.prNumber} stage=${stageId}: ${e}`,
+      );
+    }
+  }
+
   private emitAuditStageEvent(
     eventType:
       | 'pipeline_stage_entered'
@@ -1565,6 +1615,12 @@ export class PreReviewPipeline {
         }
       } else {
         await stage.run(ctx);
+        if (ctx.cancelled) {
+          logger.info(
+            `[PreReviewPipeline] PR #${job.prNumber}: record stage=${stage.id} cancelled by operator — stopping without a verdict`,
+          );
+          return { passed: false };
+        }
         logger.info(
           `[PreReviewPipeline] PR #${job.prNumber}: record stage=${stage.id} complete`,
         );
@@ -1599,6 +1655,7 @@ export class PreReviewPipeline {
       'autofix_git_infra_failure',
       'autofix_tool_infra_failure',
       'gate_timeout_infra_failure',
+      'test_cancelled',
     ]);
     for (const stage of this.stages) {
       if (stage.mode === 'gate' && stage.pauseReason) {

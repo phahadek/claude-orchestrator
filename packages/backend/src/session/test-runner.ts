@@ -27,6 +27,7 @@ import {
   parseJUnitXml,
   clearReportFiles,
   collectStructuredTestResult,
+  collectTestReportDeclaration,
 } from './testReportCollector';
 
 export {
@@ -35,6 +36,7 @@ export {
   parseJUnitXml,
   clearReportFiles,
   collectStructuredTestResult,
+  collectTestReportDeclaration,
 };
 
 export interface CommandStat {
@@ -68,6 +70,8 @@ export interface TestCommandResult {
   teardownVerificationFailed?: boolean;
   /** First command (from the `commands` array) that failed — set once, on the first failure, regardless of failFast. Undefined when every command passed. */
   failedCommand?: string;
+  /** True when the run was aborted via TestRunOptions.signal (operator cancel) — not a verdict on the code under test. */
+  cancelled?: boolean;
   /** True when a declared expected_tool_versions check failed before any command ran — a host toolchain mismatch, not a code defect. Set only by testRequestLane.ts's executeTestRequestRun. */
   isToolInfraFailure?: boolean;
   /** Names the mismatched version_command and versions, for operator triage. Set alongside isToolInfraFailure. */
@@ -95,6 +99,8 @@ export interface TestRunOptions {
    * behavior, unchanged.
    */
   env?: NodeJS.ProcessEnv;
+  /** Aborting escalates the in-flight command (SIGINT, grace, SIGKILL + cgroup kill) and starts no further commands; the result carries cancelled: true. */
+  signal?: AbortSignal;
 }
 
 const OUTPUT_CAP_CHARS = 50_000;
@@ -302,6 +308,7 @@ export interface BoundedCommandResult {
   output: string;
   timedOut: boolean;
   oomKilled: boolean;
+  cancelled: boolean;
   spawnFailed: boolean;
   teardownVerificationFailed: boolean;
   /** Wall time from spawn to settle. */
@@ -329,6 +336,7 @@ export function runCommandWithTimeout(
   maxRssMb: number,
   runId: string,
   baseEnv: NodeJS.ProcessEnv = process.env,
+  signal?: AbortSignal,
 ): Promise<BoundedCommandResult> {
   return new Promise((resolve) => {
     // Strip production data-plane env before the child spawns. A test
@@ -384,6 +392,7 @@ export function runCommandWithTimeout(
     let escalation: {
       timedOut: boolean;
       oomKilled: boolean;
+      cancelled: boolean;
       marker: string;
     } | null = null;
 
@@ -415,6 +424,7 @@ export function runCommandWithTimeout(
       output: string;
       timedOut: boolean;
       oomKilled: boolean;
+      cancelled?: boolean;
       spawnFailed?: boolean;
     }) {
       if (settled) return;
@@ -443,8 +453,10 @@ export function runCommandWithTimeout(
             `[test-runner] teardown verification failed for run ${runId.slice(0, 8)}: a process survived cgroup kill`,
           );
         }
+        signal?.removeEventListener('abort', onAbort);
         resolve({
           spawnFailed: false,
+          cancelled: false,
           teardownVerificationFailed: survived,
           tmpDir: runTmp ?? undefined,
           durationMs: Date.now() - startedAt,
@@ -458,9 +470,14 @@ export function runCommandWithTimeout(
     // teardown (failure summary, report file), keep collecting output for a
     // bounded grace period, then SIGKILL if it hasn't exited by then. Settles
     // only once the process exits or the grace period elapses — never before.
-    function escalate(timedOut: boolean, oomKilled: boolean, marker: string) {
+    function escalate(
+      timedOut: boolean,
+      oomKilled: boolean,
+      marker: string,
+      cancelled = false,
+    ) {
       if (escalation !== null || settled) return;
-      escalation = { timedOut, oomKilled, marker };
+      escalation = { timedOut, oomKilled, cancelled, marker };
 
       if (proc.pid == null) {
         settle({
@@ -468,6 +485,7 @@ export function runCommandWithTimeout(
           output: collectedOutput() + marker,
           timedOut,
           oomKilled,
+          cancelled,
         });
         return;
       }
@@ -480,6 +498,7 @@ export function runCommandWithTimeout(
           output: collectedOutput() + marker,
           timedOut,
           oomKilled,
+          cancelled,
         });
         return;
       }
@@ -492,8 +511,17 @@ export function runCommandWithTimeout(
           output: collectedOutput() + marker,
           timedOut,
           oomKilled,
+          cancelled,
         });
       }, GRACE_PERIOD_MS);
+    }
+
+    function onAbort() {
+      escalate(false, false, '\n[test-runner] CANCELLED by operator', true);
+    }
+    if (signal) {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort, { once: true });
     }
 
     proc.stdout?.on('data', collect);
@@ -527,6 +555,7 @@ export function runCommandWithTimeout(
           output: collectedOutput() + escalation.marker,
           timedOut: escalation.timedOut,
           oomKilled: escalation.oomKilled,
+          cancelled: escalation.cancelled,
         });
         return;
       }
@@ -580,7 +609,14 @@ export async function runTestCommands(
     return { passed: true, output: '' };
   }
 
-  const { maxRssMb = 0, failFast = false, runId = randomUUID(), env } = opts;
+  const {
+    maxRssMb = 0,
+    failFast = false,
+    runId = randomUUID(),
+    env,
+    signal,
+  } = opts;
+  let anyCancelled = false;
   const timeoutMs = timeoutSec * 1000;
   const outputParts: string[] = [];
   let allPassed = true;
@@ -592,12 +628,18 @@ export async function runTestCommands(
   const commandStats: CommandStat[] = [];
 
   for (const cmd of commands) {
+    if (signal?.aborted) {
+      allPassed = false;
+      anyCancelled = true;
+      break;
+    }
     log(`[test-runner] running: ${cmd}\n`);
     const {
       exitCode,
       output,
       timedOut,
       oomKilled,
+      cancelled,
       spawnFailed,
       teardownVerificationFailed,
       durationMs,
@@ -609,11 +651,20 @@ export async function runTestCommands(
       maxRssMb,
       runId,
       env,
+      signal,
     );
     outputParts.push(`$ ${cmd}\n${output}`);
     commandStats.push({ command: cmd, durationMs, peakRssMb });
 
     const wasPassing = allPassed;
+    if (cancelled) {
+      log(`[test-runner] CANCELLED: ${cmd}\n`);
+      allPassed = false;
+      anyCancelled = true;
+      if (teardownVerificationFailed) anyTeardownVerificationFailed = true;
+      if (wasPassing) failedCommand = cmd;
+      break;
+    }
     if (spawnFailed) {
       log(`[test-runner] SPAWN FAILED: ${cmd}\n`);
       allPassed = false;
@@ -654,6 +705,7 @@ export async function runTestCommands(
     teardownVerificationFailed: anyTeardownVerificationFailed,
     failedCommand,
     commandStats,
+    ...(anyCancelled ? { cancelled: true } : {}),
   };
 }
 

@@ -117,6 +117,10 @@ import {
   verifyTestSamples,
   type TestSampleVerificationRow,
 } from './testSampleStore';
+import {
+  hasFailureMessage,
+  normalizeFailureMessage,
+} from '../orchestration/failureSignature';
 
 // ─── asOf reconstruction ────────────────────────────────────────────────────
 // Point-in-time reads for the gate-verify read path (see gate/gateItemVerifier.ts
@@ -9963,6 +9967,15 @@ export function withdrawTestRequestRun(id: string, supersededBy: string): void {
   ).run(Date.now(), supersededBy, id);
 }
 
+/** Settles a still-queued run as an operator cancel: failed / 'cancelled', no verdict. */
+export function cancelQueuedTestRequestRun(id: string, output: string): void {
+  db.prepare(
+    `UPDATE test_request_runs
+     SET state = 'failed', failure_reason = 'cancelled', finished_at = ?, output = ?
+     WHERE id = ? AND state = 'queued'`,
+  ).run(Date.now(), output, id);
+}
+
 /** Records the pre-test merge's result onto a run row. */
 export function recordTestRequestRunMerge(
   id: string,
@@ -10049,9 +10062,11 @@ export function completeTestRequestRun(
   acquisitionAttempted?: boolean,
   failedCommand?: string | null,
   commandStats?: string | null,
+  nothingExercised?: boolean,
+  unclaimedPaths?: string | null,
 ): void {
   const update = db.prepare(
-    `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ?, failure_reason = ?, structured_result = ?, oom_killed = ?, test_report_acquisition_attempted = ?, failed_command = ?, command_stats = ? WHERE id = ?`,
+    `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ?, failure_reason = ?, structured_result = ?, oom_killed = ?, test_report_acquisition_attempted = ?, failed_command = ?, command_stats = ?, nothing_exercised = ?, unclaimed_paths = ? WHERE id = ?`,
   );
   db.transaction(() => {
     update.run(
@@ -10064,6 +10079,8 @@ export function completeTestRequestRun(
       acquisitionAttempted === undefined ? null : acquisitionAttempted ? 1 : 0,
       failedCommand ?? null,
       commandStats ?? null,
+      nothingExercised ? 1 : 0,
+      unclaimedPaths ?? null,
       id,
     );
     upsertRunOutput(id, output);
@@ -10297,7 +10314,7 @@ export function clearAwaitingDisposition(id: string): void {
   ).run(id);
 }
 
-const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at, failure_reason, structured_result, command_stats, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha, foreign_concurrent_run_count, worktree_path, superseded_by, failed_command, commands, coverage_source_run_id, awaiting_disposition_at, runner_executed`;
+const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at, failure_reason, structured_result, command_stats, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha, foreign_concurrent_run_count, worktree_path, superseded_by, failed_command, commands, coverage_source_run_id, awaiting_disposition_at, runner_executed, nothing_exercised, unclaimed_paths`;
 
 const AWAITING_DISPOSITION_COLUMNS = TEST_REQUEST_RUN_COLUMNS.split(', ')
   .map((c) => `test_request_runs.${c}`)
@@ -10331,6 +10348,7 @@ export function listSettledPassedTestRequestRunsForCoverage(
          AND (
            structured_result IS NOT NULL
            OR test_report_acquisition_attempted IS NOT 1
+           OR nothing_exercised = 1
            OR EXISTS (
              SELECT 1 FROM test_run_summaries
              WHERE test_run_summaries.test_request_run_id = test_request_runs.id
@@ -10592,6 +10610,7 @@ export function getLatestTestRequestRun(
        FROM test_request_runs
        WHERE project_id = @project_id AND content_hash = @content_hash AND state NOT IN ('running', 'queued')
          AND failure_reason IS NOT 'superseded'
+         AND failure_reason IS NOT 'cancelled'
          AND (@run_kind IS NULL OR run_kind = @run_kind)
          AND (@base_sha_provided = 0 OR base_sha IS @base_sha)
          AND (
@@ -10609,6 +10628,7 @@ export function getLatestTestRequestRun(
            OR state != 'passed'
            OR structured_result IS NOT NULL
            OR test_report_acquisition_attempted IS NOT 1
+           OR nothing_exercised = 1
            OR EXISTS (
              SELECT 1 FROM test_run_summaries
              WHERE test_run_summaries.test_request_run_id = test_request_runs.id
@@ -10696,7 +10716,7 @@ export function getLatestFinishedTestRequestRunForSession(
     `SELECT id
      FROM test_request_runs
      WHERE project_id = @project_id AND session_id = @session_id AND state NOT IN ('running', 'queued')
-       AND (failure_reason IS NULL OR failure_reason != 'superseded')
+       AND (failure_reason IS NULL OR failure_reason NOT IN ('superseded', 'cancelled'))
      ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
   );
   const finished = _stmtLatestFinishedTestRequestRunIdForSession.get({
@@ -10744,14 +10764,14 @@ export function getAuthoritativeTestRunForPr(
            AND worktree_path = @worktree_path
            AND run_kind = 'full'
            AND state NOT IN ('running', 'queued')
-           AND (failure_reason IS NULL OR failure_reason != 'superseded')
+           AND (failure_reason IS NULL OR failure_reason NOT IN ('superseded', 'cancelled'))
          UNION ALL
          SELECT rowid FROM test_request_runs
          WHERE project_id = @project_id AND session_id IS NULL
            AND worktree_path = @worktree_path
            AND run_kind = 'full'
            AND state NOT IN ('running', 'queued')
-           AND (failure_reason IS NULL OR failure_reason != 'superseded')
+           AND (failure_reason IS NULL OR failure_reason NOT IN ('superseded', 'cancelled'))
        )
        ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
     )
@@ -10832,6 +10852,7 @@ export function listTestRequestRunsForProject(
               r.structured_result, r.command_stats, r.concurrent_run_count, r.oom_killed,
               r.test_report_acquisition_attempted, r.run_origin, r.producer,
               r.run_kind, r.base_sha, r.merged_dev_sha, r.conflict_outcome,
+              r.nothing_exercised, r.unclaimed_paths,
               s.passed_count, s.failed_count, s.skipped_count, s.error_count,
               s.other_count, s.total_count
        FROM test_request_runs r
@@ -11929,6 +11950,7 @@ export interface TestFailureBreadthFlag {
 }
 
 let _stmtTestFailureBreadth: Database.Statement | null = null;
+let _stmtTestFailureBreadthMessages: Database.Statement | null = null;
 let _stmtSessionsForBreadthSeed: Database.Statement | null = null;
 let _stmtSessionsForBreadthTask: Database.Statement | null = null;
 
@@ -12112,22 +12134,14 @@ export function getActiveTestOverrideTestIds(
  * never contribute. A failure appearing across `breadthN` or more distinct
  * other trees cannot be attributable to any single diff — see
  * evaluateF2LaneFlakyDisposition.
+ *
+ * `subjectMessage` makes the count signature-matched: when it is a non-empty
+ * failure message, only other origins whose volatile-token-normalized message
+ * for this test_id equals the subject's normalized message count (message-less
+ * rows are not evidence for it). A null/empty subject message keeps the
+ * test_id-only count.
  */
-export function computeTestFailureBreadthFlag(
-  testId: string,
-  windowHours: number,
-  breadthN: number,
-  asOfMs: number,
-  ownTree: BreadthOwnTree,
-): TestFailureBreadthFlag {
-  _stmtTestFailureBreadth ??= db.prepare<{
-    test_id: string;
-    since_ms: number;
-    before_ms: number;
-    own_sessions: string;
-    own_worktrees: string;
-  }>(`
-    SELECT COUNT(DISTINCT o.origin) AS distinct_hashes
+const BREADTH_FROM_WHERE = `
     FROM test_run_results t
     JOIN (
       SELECT r.*, COALESCE(r.breadth_origin, CASE
@@ -12149,16 +12163,46 @@ export function computeTestFailureBreadthFlag(
       AND (o.session_id IS NULL
            OR o.session_id NOT IN (SELECT value FROM json_each(@own_sessions)))
       AND o.origin NOT IN (SELECT 'session:' || value FROM json_each(@own_sessions))
-  `);
-  const sinceMs = asOfMs - windowHours * 60 * 60 * 1000;
-  const row = _stmtTestFailureBreadth.get({
+`;
+
+export function computeTestFailureBreadthFlag(
+  testId: string,
+  windowHours: number,
+  breadthN: number,
+  asOfMs: number,
+  ownTree: BreadthOwnTree,
+  subjectMessage?: string | null,
+): TestFailureBreadthFlag {
+  const params = {
     test_id: testId,
-    since_ms: sinceMs,
+    since_ms: asOfMs - windowHours * 60 * 60 * 1000,
     before_ms: asOfMs,
     own_sessions: JSON.stringify(ownTree.sessionIds),
     own_worktrees: JSON.stringify(ownTree.worktreePaths),
-  }) as { distinct_hashes: number };
-  const distinctContentHashCount = row.distinct_hashes;
+  };
+  let distinctContentHashCount: number;
+  if (hasFailureMessage(subjectMessage)) {
+    _stmtTestFailureBreadthMessages ??= db.prepare(
+      `SELECT o.origin AS origin, t.failure_message AS message ${BREADTH_FROM_WHERE}
+      AND t.failure_message IS NOT NULL AND TRIM(t.failure_message) <> ''`,
+    );
+    const wanted = normalizeFailureMessage(subjectMessage);
+    const origins = new Set<string>();
+    for (const r of _stmtTestFailureBreadthMessages.all(params) as Array<{
+      origin: string;
+      message: string;
+    }>) {
+      if (normalizeFailureMessage(r.message) === wanted) origins.add(r.origin);
+    }
+    distinctContentHashCount = origins.size;
+  } else {
+    _stmtTestFailureBreadth ??= db.prepare(
+      `SELECT COUNT(DISTINCT o.origin) AS distinct_hashes ${BREADTH_FROM_WHERE}`,
+    );
+    distinctContentHashCount = (
+      _stmtTestFailureBreadth.get(params) as { distinct_hashes: number }
+    ).distinct_hashes;
+  }
   return {
     testId,
     distinctContentHashCount,
@@ -12242,6 +12286,7 @@ export function isRunFailureBreadthAttributable(
         breadthN,
         asOfMs,
         ownTree,
+        t.failure_message,
       ).flagged,
   );
 }
@@ -12266,13 +12311,14 @@ export interface FailingTestForRun {
   name: string;
   failure_message: string | null;
   failure_trace_excerpt: string | null;
+  outcome?: string;
 }
 
 export function getFailingTestIdsForRun(
   testRequestRunId: string,
 ): FailingTestForRun[] {
   _stmtFailingTestIdsForRun ??= db.prepare<{ run_id: string }>(`
-    SELECT test_id, name, failure_message, failure_trace_excerpt FROM test_run_results
+    SELECT test_id, name, failure_message, failure_trace_excerpt, outcome FROM test_run_results
     WHERE test_request_run_id = @run_id
       AND outcome IN ('failed', 'error')
   `);

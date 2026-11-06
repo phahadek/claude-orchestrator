@@ -107,7 +107,8 @@ type TestRequestRunStatus =
   | 'running'
   | 'passed'
   | 'failed-with-cause'
-  | 'withdrawn';
+  | 'withdrawn'
+  | 'cancelled';
 
 export interface TestRequestRunStatusPayload {
   runId: string;

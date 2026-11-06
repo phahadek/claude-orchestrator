@@ -19,7 +19,11 @@ import type { Scheduler } from '../orchestration/Scheduler';
 import { typedGetSetting } from '../config/settings';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import type { OrchestratorConfig } from '../session/orchestrator-config';
-import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
+import {
+  loadAutofixCommands,
+  runAutofix,
+  getChangedFiles,
+} from '../session/autofix-runner';
 import { computeWholeTreeContentHash } from '../session/analyzeGating';
 import {
   evaluateF2LaneFlakyDisposition,
@@ -1132,7 +1136,9 @@ export class PRMergeWatcher extends EventEmitter {
         : null;
       const reportAcquired =
         reportOutcomes !== null &&
-        (reportOutcomes.source !== 'none' || reportOutcomes.parseFailed);
+        (reportOutcomes.source !== 'none' ||
+          reportOutcomes.parseFailed ||
+          reportOutcomes.nothingExercised === true);
       if (
         testResult &&
         testResult.test_report_acquisition_attempted === 1 &&
@@ -1753,6 +1759,17 @@ export class PRMergeWatcher extends EventEmitter {
     const prCreatedAtMs = pr.created_at ? Date.parse(pr.created_at) : NaN;
     if (!Number.isFinite(prCreatedAtMs)) return false;
 
+    let changedFiles: string[] | null = null;
+    try {
+      changedFiles = await getChangedFiles(
+        testResult.worktree_path ?? worktreePath,
+        pr.base_branch ?? project.baseBranch,
+      );
+    } catch (err) {
+      logger.warn(
+        `[PRMergeWatcher] PR #${pr.pr_number}: changed files unavailable for breadth exemption: ${(err as Error).message}`,
+      );
+    }
     const eligible = evaluateF2LaneFlakyDisposition(
       testResult.id,
       prCreatedAtMs,
@@ -1765,6 +1782,7 @@ export class PRMergeWatcher extends EventEmitter {
         worktreePath: testResult.worktree_path ?? worktreePath,
       }),
       baseExcusedTestIds,
+      changedFiles,
     );
     if (!eligible) return false;
 

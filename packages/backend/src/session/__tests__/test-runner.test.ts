@@ -923,6 +923,35 @@ describe('runTestCommands — SIGINT escalation', () => {
     expect(signals).toEqual(['SIGINT', 'SIGKILL']);
   });
 
+  it('abort escalates SIGINT then SIGKILL, starts no further commands, and reports cancelled', async () => {
+    const { proc } = makeControllableProc();
+    const spawned: string[] = [];
+    _spawnHook = (cmd?: string) => {
+      spawned.push(String(cmd));
+      return proc;
+    };
+    const controller = new AbortController();
+
+    const promise = runTestCommands(
+      '/worktree',
+      ['slow-cmd', 'second-cmd'],
+      300,
+      () => {},
+      { signal: controller.signal },
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(11_000);
+    const result = await promise;
+
+    expect(killSpy.mock.calls.map((c) => c[1])).toEqual(['SIGINT', 'SIGKILL']);
+    expect(spawned).toHaveLength(1);
+    expect(result.cancelled).toBe(true);
+    expect(result.passed).toBe(false);
+    expect(result.oomKilled).toBe(false);
+    expect(result.timedOut).toBe(false);
+  });
+
   it('reports timedOut:true when the child exits gracefully on SIGINT', async () => {
     const { proc, emitClose } = makeControllableProc();
     _spawnHook = () => proc;
