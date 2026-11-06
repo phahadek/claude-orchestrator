@@ -20,6 +20,7 @@ import { StagedIntentPanel } from './StagedIntentPanel';
 import type { StagedIntent } from '../api/stagedIntents';
 import { StageBar } from './StageBar';
 import { TestsTab } from './TestsTab';
+import { useTestLaneRunStatus } from '../hooks/useTestLaneRunStatus';
 import {
   computeStages,
   selectAutoStage,
@@ -225,6 +226,10 @@ export function TaskDetail({
   const [showReviewSection, setShowReviewSection] = useState(true);
   const [showDepthReviewSection, setShowDepthReviewSection] = useState(true);
   const [showSpec, setShowSpec] = useState(!task.codeSession);
+  const testRunStatus = useTestLaneRunStatus(
+    projectId,
+    task.codeSession?.sessionId,
+  );
   const [selectedStage, setSelectedStage] = useState<StageId>(() =>
     selectAutoStage(computeStages(task)),
   );
@@ -599,7 +604,11 @@ export function TaskDetail({
     setShowDepthReviewSection((v) => !v);
   }, []);
 
-  const stages = computeStages(task, detailFields?.planningSessions);
+  const stages = computeStages(
+    task,
+    detailFields?.planningSessions,
+    testRunStatus,
+  );
 
   const handleSpecToggle = useCallback(() => {
     setShowSpec((v) => !v);

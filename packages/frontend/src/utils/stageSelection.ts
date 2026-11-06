@@ -1,4 +1,5 @@
 import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
+import type { TestLaneRunStatus } from '../hooks/useTestLaneRunStatus';
 
 /** `implementation` | `tests` | `review` | `pr` | `planning:<kind>`. */
 export type StageId = string;
@@ -93,14 +94,19 @@ function implementationStage(task: TaskView): StageInfo {
   return { ...base, status: 'active', demand: false };
 }
 
-function testsStage(): StageInfo {
-  // No test-result data source exists yet — the Tests tab follow-on task wires this up.
-  return {
-    id: 'tests',
-    label: STAGE_LABELS.tests,
-    status: 'not_started',
-    demand: false,
-  };
+function testsStage(runStatus?: TestLaneRunStatus | null): StageInfo {
+  const base = { id: 'tests' as const, label: STAGE_LABELS.tests };
+  switch (runStatus) {
+    case 'running':
+    case 'queued':
+      return { ...base, status: 'active', demand: false };
+    case 'passed':
+      return { ...base, status: 'done', demand: false };
+    case 'failed-with-cause':
+      return { ...base, status: 'error', demand: true };
+    default:
+      return { ...base, status: 'not_started', demand: false };
+  }
 }
 
 function reviewStage(task: TaskView): StageInfo {
@@ -174,13 +180,14 @@ function planningStages(
 export function computeStages(
   task: TaskView,
   planningSessions: PlanningKindSession[] = [],
+  testRunStatus?: TestLaneRunStatus | null,
 ): StageInfo[] {
   const family = taskTypeFamily(task.taskType);
   const stages = planningStages(task, planningSessions);
   if (family === 'code') {
     stages.push(
       implementationStage(task),
-      testsStage(),
+      testsStage(testRunStatus),
       reviewStage(task),
       prStage(task),
     );
