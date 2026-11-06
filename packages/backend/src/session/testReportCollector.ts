@@ -367,7 +367,7 @@ export function collectTestReportDeclaration(
   let allDeclared =
     expectedReportCount > 0 && matched.length >= expectedReportCount;
   for (const rel of matched) {
-    let parsed: { claimedPaths: string[] } | null = null;
+    let parsed: { claimedPaths: string[] } | null;
     try {
       parsed = parseReportDeclaration(
         readFileSync(path.join(worktreePath, rel), 'utf8'),
