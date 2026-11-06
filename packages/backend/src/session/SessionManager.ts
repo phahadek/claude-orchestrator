@@ -166,6 +166,10 @@ import {
 import { isUsageAdmitted } from '../orchestration/usageAdmission';
 import { CrashBudget } from '../orchestration/crashBudget';
 import { isMergeHeld, onMergeHoldReleased } from '../orchestration/mergeHold';
+import {
+  runAuthResumeSweepOnRestore,
+  type AuthResumeSweepResult,
+} from '../orchestration/AuthResumeSweep';
 import { tryDependencyCachePool } from '../orchestration/dependencyCachePool';
 import {
   countsAgainstConcurrency,
@@ -5580,6 +5584,21 @@ export class SessionManager extends EventEmitter {
       sessionId,
       pending,
     } satisfies ServerMessage);
+  }
+
+  /**
+   * Auth-restored handler: resumes still-current auth-parked sessions in
+   * place through sendOrResume. The auth-lapsed state owner passes its
+   * lapsed-state accessors; the restored event's lapse id keys surface-once.
+   */
+  resumeAuthParkedSessions(
+    lapseId: string,
+    lapsed: { markLapsed(): void; isLapsed(): boolean },
+  ): Promise<AuthResumeSweepResult | null> {
+    return runAuthResumeSweepOnRestore(lapseId, {
+      sendOrResume: (id, text) => this.sendOrResume(id, text),
+      ...lapsed,
+    });
   }
 
   /**

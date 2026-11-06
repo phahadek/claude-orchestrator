@@ -51,6 +51,8 @@ const SETTING_KEYS = [
   'session_inert_threshold_seconds',
   'session_hard_stop_window_seconds',
   'session_alive_park_escalation_seconds',
+  'auth_resume_batch_size',
+  'auth_resume_batch_spacing_ms',
   'ci_poll_interval_seconds',
   'ci_poll_max_minutes',
   'max_review_iterations',
@@ -191,6 +193,12 @@ function applyToRuntime(
       break;
     case 'session_alive_park_escalation_seconds':
       runtimeSettings.session_alive_park_escalation_seconds = value as number;
+      break;
+    case 'auth_resume_batch_size':
+      runtimeSettings.auth_resume_batch_size = value as number;
+      break;
+    case 'auth_resume_batch_spacing_ms':
+      runtimeSettings.auth_resume_batch_spacing_ms = value as number;
       break;
     case 'ci_poll_interval_seconds':
       runtimeSettings.ci_poll_interval_seconds = value as number;
@@ -369,6 +377,10 @@ function runtimeSettingsAsRecord(): {
     ),
     session_alive_park_escalation_seconds: String(
       runtimeSettings.session_alive_park_escalation_seconds,
+    ),
+    auth_resume_batch_size: String(runtimeSettings.auth_resume_batch_size),
+    auth_resume_batch_spacing_ms: String(
+      runtimeSettings.auth_resume_batch_spacing_ms,
     ),
     ci_poll_interval_seconds: String(runtimeSettings.ci_poll_interval_seconds),
     ci_poll_max_minutes: String(runtimeSettings.ci_poll_max_minutes),
