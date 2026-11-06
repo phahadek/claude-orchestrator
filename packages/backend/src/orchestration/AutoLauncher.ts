@@ -36,6 +36,7 @@ import {
   isUsageThresholdAdmitted,
   parseThresholdPercent,
 } from './usageAdmission';
+import { isAuthAdmitted } from './authAdmission';
 import { probeBranchLocally, deriveBranchSlug } from '../session/branchModel';
 import { normalizeTaskId } from '../tasks/taskId';
 import { compareExecutionRank, loadExecutionRanks } from './executionPriority';
@@ -793,6 +794,17 @@ export class AutoLauncher {
           window: usageAdmission.window,
           deferredUntil: usageAdmission.deferredUntil,
         },
+      };
+    }
+    const authAdmission = isAuthAdmitted();
+    if (!authAdmission.allowed) {
+      logger.info(
+        '[AutoLauncher] pausing dispatch — CLI authentication has lapsed account-wide',
+      );
+      return {
+        allowed: false,
+        reason: 'cli_auth_lapsed',
+        detail: { since: authAdmission.since },
       };
     }
     const thresholdAdmission = isUsageThresholdAdmitted(

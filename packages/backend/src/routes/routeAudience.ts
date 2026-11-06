@@ -38,6 +38,12 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
       'invoked directly by the merge-candidates detection flow; result is staged as an intent for operator apply via staged-intents',
   },
 
+  // -- authLapse.ts --------------------------------------------------------
+  'POST /api/auth-lapse/recheck': {
+    audience: 'operator',
+    reason: 'AuthLapsedBanner "Recheck auth now" button',
+  },
+
   // -- settings.ts -----------------------------------------------------------
   'PATCH /api/settings': {
     audience: 'operator',
@@ -403,6 +409,7 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
  */
 export const ROUTE_FILE_MOUNT_PREFIX: Record<string, string> = {
   'mergeCandidates.ts': '/api',
+  'authLapse.ts': '/api',
   'settings.ts': '/api/settings',
   'opsJournal.ts': '/api',
   'milestones.ts': '/api',

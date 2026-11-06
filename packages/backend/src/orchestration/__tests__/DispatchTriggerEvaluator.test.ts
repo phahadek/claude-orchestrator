@@ -414,6 +414,30 @@ describe('DispatchTriggerEvaluator — usage admission gate', () => {
   });
 });
 
+describe('DispatchTriggerEvaluator — CLI auth-lapse gate', () => {
+  it('does not scan or dispatch while lapsed, and scans once cleared', async () => {
+    const { registerUsagePoller } = await import('../usageAdmission.js');
+    const { recordAuthLapse, clearAuthLapse } =
+      await import('../authAdmission.js');
+    registerUsagePoller({ getCache: () => ({ available: false }) });
+    const listProjects = vi.fn().mockReturnValue([]);
+    const evaluator = new DispatchTriggerEvaluator({} as never, {} as never, {
+      listProjects: listProjects as never,
+    });
+
+    recordAuthLapse();
+    try {
+      expect(await evaluator.tickOnce()).toBe(0);
+      expect(listProjects).not.toHaveBeenCalled();
+    } finally {
+      clearAuthLapse();
+    }
+
+    await evaluator.tickOnce();
+    expect(listProjects).toHaveBeenCalledOnce();
+  });
+});
+
 describe('DispatchTriggerEvaluator — poll complete log line', () => {
   it('logs a poll complete line with durationMs once per tick', async () => {
     const { logger } = await import('../../logger.js');
