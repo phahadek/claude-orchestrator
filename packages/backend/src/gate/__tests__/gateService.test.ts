@@ -2176,7 +2176,7 @@ describe('listGateItems', () => {
 
   it('records a held restatement as a pure-log event without changing state or runnability', () => {
     const item = makeItem({ text: 'restate me' });
-    const before = getGateItemDetail(item.id);
+    const before = getGateItemDetail(item.id)?.item;
     const updated = appendGateItemEvent(item.id, {
       evidence:
         'restatement-proposed: reword to the 10 s cap. observed: yield ran at cap',
